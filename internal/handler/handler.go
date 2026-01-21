@@ -49,52 +49,59 @@ type CacheResult struct {
 
 // GetOrFetchArtifact retrieves an artifact from cache or fetches from upstream.
 func (p *Proxy) GetOrFetchArtifact(ctx context.Context, ecosystem, name, version, filename string) (*CacheResult, error) {
-	// Build PURL for lookups
 	pkgPURL := fmt.Sprintf("pkg:%s/%s", ecosystem, name)
 	versionPURL := fmt.Sprintf("pkg:%s/%s@%s", ecosystem, name, version)
 
-	// Check if we have this artifact cached
+	if cached, err := p.checkCache(ctx, pkgPURL, versionPURL, filename); err != nil {
+		return nil, err
+	} else if cached != nil {
+		return cached, nil
+	}
+
+	return p.fetchAndCache(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL)
+}
+
+// checkCache looks up an artifact in the cache. Returns nil if not cached.
+func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename string) (*CacheResult, error) {
 	pkg, err := p.DB.GetPackageByPURL(pkgPURL)
 	if err != nil {
 		return nil, fmt.Errorf("checking package cache: %w", err)
 	}
-
-	if pkg != nil {
-		ver, err := p.DB.GetVersionByPURL(versionPURL)
-		if err != nil {
-			return nil, fmt.Errorf("checking version cache: %w", err)
-		}
-
-		if ver != nil {
-			artifact, err := p.DB.GetArtifact(ver.ID, filename)
-			if err != nil {
-				return nil, fmt.Errorf("checking artifact cache: %w", err)
-			}
-
-			if artifact != nil && artifact.IsCached() {
-				// Serve from cache
-				reader, err := p.Storage.Open(ctx, artifact.StoragePath.String)
-				if err != nil {
-					p.Logger.Warn("cached artifact missing from storage, will refetch",
-						"path", artifact.StoragePath.String, "error", err)
-				} else {
-					// Record hit
-					_ = p.DB.RecordArtifactHit(artifact.ID)
-
-					return &CacheResult{
-						Reader:      reader,
-						Size:        artifact.Size.Int64,
-						ContentType: artifact.ContentType.String,
-						Hash:        artifact.ContentHash.String,
-						Cached:      true,
-					}, nil
-				}
-			}
-		}
+	if pkg == nil {
+		return nil, nil
 	}
 
-	// Not cached, fetch from upstream
-	return p.fetchAndCache(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL)
+	ver, err := p.DB.GetVersionByPURL(versionPURL)
+	if err != nil {
+		return nil, fmt.Errorf("checking version cache: %w", err)
+	}
+	if ver == nil {
+		return nil, nil
+	}
+
+	artifact, err := p.DB.GetArtifact(ver.ID, filename)
+	if err != nil {
+		return nil, fmt.Errorf("checking artifact cache: %w", err)
+	}
+	if artifact == nil || !artifact.IsCached() {
+		return nil, nil
+	}
+
+	reader, err := p.Storage.Open(ctx, artifact.StoragePath.String)
+	if err != nil {
+		p.Logger.Warn("cached artifact missing from storage, will refetch",
+			"path", artifact.StoragePath.String, "error", err)
+		return nil, nil
+	}
+
+	_ = p.DB.RecordArtifactHit(artifact.ID)
+	return &CacheResult{
+		Reader:      reader,
+		Size:        artifact.Size.Int64,
+		ContentType: artifact.ContentType.String,
+		Hash:        artifact.ContentHash.String,
+		Cached:      true,
+	}, nil
 }
 
 func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL string) (*CacheResult, error) {
@@ -222,48 +229,15 @@ func JSONError(w http.ResponseWriter, status int, message string) {
 // GetOrFetchArtifactFromURL retrieves an artifact from cache or fetches from a specific URL.
 // This is useful for registries where download URLs are determined from metadata.
 func (p *Proxy) GetOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, version, filename, downloadURL string) (*CacheResult, error) {
-	// Build PURL for lookups
 	pkgPURL := fmt.Sprintf("pkg:%s/%s", ecosystem, name)
 	versionPURL := fmt.Sprintf("pkg:%s/%s@%s", ecosystem, name, version)
 
-	// Check if we have this artifact cached
-	pkg, err := p.DB.GetPackageByPURL(pkgPURL)
-	if err != nil {
-		return nil, fmt.Errorf("checking package cache: %w", err)
+	if cached, err := p.checkCache(ctx, pkgPURL, versionPURL, filename); err != nil {
+		return nil, err
+	} else if cached != nil {
+		return cached, nil
 	}
 
-	if pkg != nil {
-		ver, err := p.DB.GetVersionByPURL(versionPURL)
-		if err != nil {
-			return nil, fmt.Errorf("checking version cache: %w", err)
-		}
-
-		if ver != nil {
-			artifact, err := p.DB.GetArtifact(ver.ID, filename)
-			if err != nil {
-				return nil, fmt.Errorf("checking artifact cache: %w", err)
-			}
-
-			if artifact != nil && artifact.IsCached() {
-				reader, err := p.Storage.Open(ctx, artifact.StoragePath.String)
-				if err != nil {
-					p.Logger.Warn("cached artifact missing from storage, will refetch",
-						"path", artifact.StoragePath.String, "error", err)
-				} else {
-					_ = p.DB.RecordArtifactHit(artifact.ID)
-					return &CacheResult{
-						Reader:      reader,
-						Size:        artifact.Size.Int64,
-						ContentType: artifact.ContentType.String,
-						Hash:        artifact.ContentHash.String,
-						Cached:      true,
-					}, nil
-				}
-			}
-		}
-	}
-
-	// Not cached, fetch from provided URL
 	return p.fetchAndCacheFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL)
 }
 
