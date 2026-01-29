@@ -69,16 +69,13 @@ func TestPackageCRUD(t *testing.T) {
 			PURL:        "pkg:npm/lodash",
 			Ecosystem:   "npm",
 			Name:        "lodash",
-			UpstreamURL: "https://registry.npmjs.org/lodash",
+			RegistryURL: sql.NullString{String: "https://registry.npmjs.org/lodash", Valid: true},
 			Description: sql.NullString{String: "Lodash library", Valid: true},
 		}
 
-		id, err := db.UpsertPackage(pkg)
+		err := db.UpsertPackage(pkg)
 		if err != nil {
 			t.Fatalf("UpsertPackage failed: %v", err)
-		}
-		if id == 0 {
-			t.Error("expected non-zero ID")
 		}
 
 		got, err := db.GetPackageByPURL("pkg:npm/lodash")
@@ -104,7 +101,7 @@ func TestPackageCRUD(t *testing.T) {
 		}
 
 		pkg.Description = sql.NullString{String: "Updated description", Valid: true}
-		_, err = db.UpsertPackage(pkg)
+		err = db.UpsertPackage(pkg)
 		if err != nil {
 			t.Fatalf("UpsertPackage (update) failed: %v", err)
 		}
@@ -125,26 +122,22 @@ func TestVersionCRUD(t *testing.T) {
 			PURL:        "pkg:npm/lodash",
 			Ecosystem:   "npm",
 			Name:        "lodash",
-			UpstreamURL: "https://registry.npmjs.org/lodash",
+			RegistryURL: sql.NullString{String: "https://registry.npmjs.org/lodash", Valid: true},
 		}
-		pkgID, err := db.UpsertPackage(pkg)
+		err := db.UpsertPackage(pkg)
 		if err != nil {
 			t.Fatalf("UpsertPackage failed: %v", err)
 		}
 
 		v := &Version{
-			PURL:      "pkg:npm/lodash@4.17.21",
-			PackageID: pkgID,
-			Version:   "4.17.21",
-			Integrity: sql.NullString{String: "sha512-abc123", Valid: true},
+			PURL:        "pkg:npm/lodash@4.17.21",
+			PackagePURL: "pkg:npm/lodash",
+			Integrity:   sql.NullString{String: "sha512-abc123", Valid: true},
 		}
 
-		versionID, err := db.UpsertVersion(v)
+		err = db.UpsertVersion(v)
 		if err != nil {
 			t.Fatalf("UpsertVersion failed: %v", err)
-		}
-		if versionID == 0 {
-			t.Error("expected non-zero version ID")
 		}
 
 		got, err := db.GetVersionByPURL("pkg:npm/lodash@4.17.21")
@@ -154,21 +147,13 @@ func TestVersionCRUD(t *testing.T) {
 		if got == nil {
 			t.Fatal("expected version, got nil")
 		}
-		if got.Version != "4.17.21" {
-			t.Errorf("expected version 4.17.21, got %s", got.Version)
+		if got.Version() != "4.17.21" {
+			t.Errorf("expected version 4.17.21, got %s", got.Version())
 		}
 
-		got, err = db.GetVersionByPackageAndVersion(pkgID, "4.17.21")
+		versions, err := db.GetVersionsByPackagePURL("pkg:npm/lodash")
 		if err != nil {
-			t.Fatalf("GetVersionByPackageAndVersion failed: %v", err)
-		}
-		if got == nil {
-			t.Fatal("expected version, got nil")
-		}
-
-		versions, err := db.GetVersionsByPackageID(pkgID)
-		if err != nil {
-			t.Fatalf("GetVersionsByPackageID failed: %v", err)
+			t.Fatalf("GetVersionsByPackagePURL failed: %v", err)
 		}
 		if len(versions) != 1 {
 			t.Errorf("expected 1 version, got %d", len(versions))
@@ -182,32 +167,29 @@ func TestArtifactCRUD(t *testing.T) {
 			PURL:        "pkg:npm/lodash",
 			Ecosystem:   "npm",
 			Name:        "lodash",
-			UpstreamURL: "https://registry.npmjs.org/lodash",
+			RegistryURL: sql.NullString{String: "https://registry.npmjs.org/lodash", Valid: true},
 		}
-		pkgID, _ := db.UpsertPackage(pkg)
+		_ = db.UpsertPackage(pkg)
 
+		versionPURL := "pkg:npm/lodash@4.17.21"
 		v := &Version{
-			PURL:      "pkg:npm/lodash@4.17.21",
-			PackageID: pkgID,
-			Version:   "4.17.21",
+			PURL:        versionPURL,
+			PackagePURL: "pkg:npm/lodash",
 		}
-		versionID, _ := db.UpsertVersion(v)
+		_ = db.UpsertVersion(v)
 
 		a := &Artifact{
-			VersionID:   versionID,
+			VersionPURL: versionPURL,
 			Filename:    "lodash-4.17.21.tgz",
 			UpstreamURL: "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
 		}
 
-		artifactID, err := db.UpsertArtifact(a)
+		err := db.UpsertArtifact(a)
 		if err != nil {
 			t.Fatalf("UpsertArtifact failed: %v", err)
 		}
-		if artifactID == 0 {
-			t.Error("expected non-zero artifact ID")
-		}
 
-		got, err := db.GetArtifact(versionID, "lodash-4.17.21.tgz")
+		got, err := db.GetArtifact(versionPURL, "lodash-4.17.21.tgz")
 		if err != nil {
 			t.Fatalf("GetArtifact failed: %v", err)
 		}
@@ -218,12 +200,12 @@ func TestArtifactCRUD(t *testing.T) {
 			t.Error("expected artifact to not be cached yet")
 		}
 
-		err = db.MarkArtifactCached(artifactID, "/cache/npm/lodash-4.17.21.tgz", "sha256-abc", 12345, "application/gzip")
+		err = db.MarkArtifactCached(versionPURL, "lodash-4.17.21.tgz", "/cache/npm/lodash-4.17.21.tgz", "sha256-abc", 12345, "application/gzip")
 		if err != nil {
 			t.Fatalf("MarkArtifactCached failed: %v", err)
 		}
 
-		got, err = db.GetArtifact(versionID, "lodash-4.17.21.tgz")
+		got, err = db.GetArtifact(versionPURL, "lodash-4.17.21.tgz")
 		if err != nil {
 			t.Fatalf("GetArtifact after cache failed: %v", err)
 		}
@@ -242,12 +224,12 @@ func TestArtifactCRUD(t *testing.T) {
 			t.Fatal("expected artifact by path, got nil")
 		}
 
-		err = db.RecordArtifactHit(artifactID)
+		err = db.RecordArtifactHit(versionPURL, "lodash-4.17.21.tgz")
 		if err != nil {
 			t.Fatalf("RecordArtifactHit failed: %v", err)
 		}
 
-		got, err = db.GetArtifact(versionID, "lodash-4.17.21.tgz")
+		got, err = db.GetArtifact(versionPURL, "lodash-4.17.21.tgz")
 		if err != nil {
 			t.Fatalf("GetArtifact after hit failed: %v", err)
 		}
@@ -263,27 +245,27 @@ func TestCacheManagement(t *testing.T) {
 			PURL:        "pkg:npm/test",
 			Ecosystem:   "npm",
 			Name:        "test",
-			UpstreamURL: "https://registry.npmjs.org/test",
+			RegistryURL: sql.NullString{String: "https://registry.npmjs.org/test", Valid: true},
 		}
-		pkgID, _ := db.UpsertPackage(pkg)
+		_ = db.UpsertPackage(pkg)
 
 		for i := 1; i <= 3; i++ {
+			versionPURL := "pkg:npm/test@1.0." + string(rune('0'+i))
 			v := &Version{
-				PURL:      "pkg:npm/test@1.0." + string(rune('0'+i)),
-				PackageID: pkgID,
-				Version:   "1.0." + string(rune('0'+i)),
+				PURL:        versionPURL,
+				PackagePURL: "pkg:npm/test",
 			}
-			vID, _ := db.UpsertVersion(v)
+			_ = db.UpsertVersion(v)
 
 			a := &Artifact{
-				VersionID:   vID,
+				VersionPURL: versionPURL,
 				Filename:    "test.tgz",
 				UpstreamURL: "https://example.com/test.tgz",
 				StoragePath: sql.NullString{String: "/cache/test" + string(rune('0'+i)) + ".tgz", Valid: true},
 				Size:        sql.NullInt64{Int64: int64(i * 1000), Valid: true},
 				FetchedAt:   sql.NullTime{Time: time.Now(), Valid: true},
 			}
-			_, _ = db.UpsertArtifact(a)
+			_ = db.UpsertArtifact(a)
 		}
 
 		total, err := db.GetTotalCacheSize()
@@ -341,23 +323,24 @@ func TestGetCacheStats(t *testing.T) {
 		for _, eco := range []string{"npm", "cargo"} {
 			for i := 1; i <= 2; i++ {
 				name := eco + "-pkg" + string(rune('0'+i))
+				pkgPURL := "pkg:" + eco + "/" + name
 				pkg := &Package{
-					PURL:        "pkg:" + eco + "/" + name,
+					PURL:        pkgPURL,
 					Ecosystem:   eco,
 					Name:        name,
-					UpstreamURL: "https://example.com/" + name,
+					RegistryURL: sql.NullString{String: "https://example.com/" + name, Valid: true},
 				}
-				pkgID, _ := db.UpsertPackage(pkg)
+				_ = db.UpsertPackage(pkg)
 
+				versionPURL := pkgPURL + "@1.0.0"
 				v := &Version{
-					PURL:      pkg.PURL + "@1.0.0",
-					PackageID: pkgID,
-					Version:   "1.0.0",
+					PURL:        versionPURL,
+					PackagePURL: pkgPURL,
 				}
-				vID, _ := db.UpsertVersion(v)
+				_ = db.UpsertVersion(v)
 
 				a := &Artifact{
-					VersionID:   vID,
+					VersionPURL: versionPURL,
 					Filename:    name + ".tgz",
 					UpstreamURL: "https://example.com/" + name + ".tgz",
 					StoragePath: sql.NullString{String: "/cache/" + name + ".tgz", Valid: true},
@@ -365,7 +348,7 @@ func TestGetCacheStats(t *testing.T) {
 					HitCount:    int64(i),
 					FetchedAt:   sql.NullTime{Time: time.Now(), Valid: true},
 				}
-				_, _ = db.UpsertArtifact(a)
+				_ = db.UpsertArtifact(a)
 			}
 		}
 
@@ -400,30 +383,31 @@ func TestGetCacheStats(t *testing.T) {
 func TestGetMostPopularPackages(t *testing.T) {
 	runWithBothDatabases(t, func(t *testing.T, db *DB) {
 		for i := 1; i <= 3; i++ {
+			pkgPURL := "pkg:npm/pkg" + string(rune('0'+i))
 			pkg := &Package{
-				PURL:        "pkg:npm/pkg" + string(rune('0'+i)),
+				PURL:        pkgPURL,
 				Ecosystem:   "npm",
 				Name:        "pkg" + string(rune('0'+i)),
-				UpstreamURL: "https://example.com",
+				RegistryURL: sql.NullString{String: "https://example.com", Valid: true},
 			}
-			pkgID, _ := db.UpsertPackage(pkg)
+			_ = db.UpsertPackage(pkg)
 
+			versionPURL := pkgPURL + "@1.0.0"
 			v := &Version{
-				PURL:      pkg.PURL + "@1.0.0",
-				PackageID: pkgID,
-				Version:   "1.0.0",
+				PURL:        versionPURL,
+				PackagePURL: pkgPURL,
 			}
-			vID, _ := db.UpsertVersion(v)
+			_ = db.UpsertVersion(v)
 
 			a := &Artifact{
-				VersionID:   vID,
+				VersionPURL: versionPURL,
 				Filename:    "test.tgz",
 				UpstreamURL: "https://example.com/test.tgz",
 				StoragePath: sql.NullString{String: "/cache/test" + string(rune('0'+i)), Valid: true},
 				Size:        sql.NullInt64{Int64: int64(i * 100), Valid: true},
 				HitCount:    int64(i * 10),
 			}
-			_, _ = db.UpsertArtifact(a)
+			_ = db.UpsertArtifact(a)
 		}
 
 		popular, err := db.GetMostPopularPackages(2)
@@ -446,30 +430,31 @@ func TestGetRecentlyCachedPackages(t *testing.T) {
 	runWithBothDatabases(t, func(t *testing.T, db *DB) {
 		now := time.Now()
 		for i := 1; i <= 3; i++ {
+			pkgPURL := "pkg:npm/recent" + string(rune('0'+i))
 			pkg := &Package{
-				PURL:        "pkg:npm/recent" + string(rune('0'+i)),
+				PURL:        pkgPURL,
 				Ecosystem:   "npm",
 				Name:        "recent" + string(rune('0'+i)),
-				UpstreamURL: "https://example.com",
+				RegistryURL: sql.NullString{String: "https://example.com", Valid: true},
 			}
-			pkgID, _ := db.UpsertPackage(pkg)
+			_ = db.UpsertPackage(pkg)
 
+			versionPURL := pkgPURL + "@1.0.0"
 			v := &Version{
-				PURL:      pkg.PURL + "@1.0.0",
-				PackageID: pkgID,
-				Version:   "1.0.0",
+				PURL:        versionPURL,
+				PackagePURL: pkgPURL,
 			}
-			vID, _ := db.UpsertVersion(v)
+			_ = db.UpsertVersion(v)
 
 			a := &Artifact{
-				VersionID:   vID,
+				VersionPURL: versionPURL,
 				Filename:    "test.tgz",
 				UpstreamURL: "https://example.com/test.tgz",
 				StoragePath: sql.NullString{String: "/cache/recent" + string(rune('0'+i)), Valid: true},
 				Size:        sql.NullInt64{Int64: 1000, Valid: true},
 				FetchedAt:   sql.NullTime{Time: now.Add(time.Duration(-i) * time.Hour), Valid: true},
 			}
-			_, _ = db.UpsertArtifact(a)
+			_ = db.UpsertArtifact(a)
 		}
 
 		recent, err := db.GetRecentlyCachedPackages(2)

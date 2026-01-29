@@ -11,9 +11,10 @@ import (
 func (db *DB) GetPackageByPURL(purl string) (*Package, error) {
 	var pkg Package
 	query := db.Rebind(`
-		SELECT id, purl, ecosystem, name, namespace, latest_version, license,
-		       description, homepage, repository_url, upstream_url,
-		       metadata_fetched_at, created_at, updated_at
+		SELECT id, purl, ecosystem, name, latest_version, license,
+		       description, homepage, repository_url, registry_url,
+		       supplier_name, supplier_type, source, enriched_at,
+		       vulns_synced_at, created_at, updated_at
 		FROM packages WHERE purl = ?
 	`)
 	err := db.Get(&pkg, query, purl)
@@ -29,9 +30,10 @@ func (db *DB) GetPackageByPURL(purl string) (*Package, error) {
 func (db *DB) GetPackageByEcosystemName(ecosystem, name string) (*Package, error) {
 	var pkg Package
 	query := db.Rebind(`
-		SELECT id, purl, ecosystem, name, namespace, latest_version, license,
-		       description, homepage, repository_url, upstream_url,
-		       metadata_fetched_at, created_at, updated_at
+		SELECT id, purl, ecosystem, name, latest_version, license,
+		       description, homepage, repository_url, registry_url,
+		       supplier_name, supplier_type, source, enriched_at,
+		       vulns_synced_at, created_at, updated_at
 		FROM packages WHERE ecosystem = ? AND name = ?
 	`)
 	err := db.Get(&pkg, query, ecosystem, name)
@@ -44,70 +46,53 @@ func (db *DB) GetPackageByEcosystemName(ecosystem, name string) (*Package, error
 	return &pkg, nil
 }
 
-func (db *DB) UpsertPackage(pkg *Package) (int64, error) {
+func (db *DB) UpsertPackage(pkg *Package) error {
 	now := time.Now()
 	var query string
 
 	if db.dialect == DialectPostgres {
 		query = `
-			INSERT INTO packages (purl, ecosystem, name, namespace, latest_version, license,
-			                      description, homepage, repository_url, upstream_url,
-			                      metadata_fetched_at, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			INSERT INTO packages (purl, ecosystem, name, latest_version, license,
+			                      description, homepage, repository_url, registry_url,
+			                      enriched_at, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			ON CONFLICT(purl) DO UPDATE SET
 				latest_version = EXCLUDED.latest_version,
 				license = EXCLUDED.license,
 				description = EXCLUDED.description,
 				homepage = EXCLUDED.homepage,
 				repository_url = EXCLUDED.repository_url,
-				metadata_fetched_at = EXCLUDED.metadata_fetched_at,
+				registry_url = EXCLUDED.registry_url,
+				enriched_at = EXCLUDED.enriched_at,
 				updated_at = EXCLUDED.updated_at
-			RETURNING id
 		`
-		var id int64
-		err := db.QueryRow(query,
-			pkg.PURL, pkg.Ecosystem, pkg.Name, pkg.Namespace, pkg.LatestVersion,
-			pkg.License, pkg.Description, pkg.Homepage, pkg.RepositoryURL,
-			pkg.UpstreamURL, pkg.MetadataFetchedAt, now, now,
-		).Scan(&id)
-		if err != nil {
-			return 0, fmt.Errorf("upserting package: %w", err)
-		}
-		return id, nil
+	} else {
+		query = `
+			INSERT INTO packages (purl, ecosystem, name, latest_version, license,
+			                      description, homepage, repository_url, registry_url,
+			                      enriched_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(purl) DO UPDATE SET
+				latest_version = excluded.latest_version,
+				license = excluded.license,
+				description = excluded.description,
+				homepage = excluded.homepage,
+				repository_url = excluded.repository_url,
+				registry_url = excluded.registry_url,
+				enriched_at = excluded.enriched_at,
+				updated_at = excluded.updated_at
+		`
 	}
 
-	query = `
-		INSERT INTO packages (purl, ecosystem, name, namespace, latest_version, license,
-		                      description, homepage, repository_url, upstream_url,
-		                      metadata_fetched_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(purl) DO UPDATE SET
-			latest_version = excluded.latest_version,
-			license = excluded.license,
-			description = excluded.description,
-			homepage = excluded.homepage,
-			repository_url = excluded.repository_url,
-			metadata_fetched_at = excluded.metadata_fetched_at,
-			updated_at = excluded.updated_at
-	`
-	result, err := db.Exec(query,
-		pkg.PURL, pkg.Ecosystem, pkg.Name, pkg.Namespace, pkg.LatestVersion,
+	_, err := db.Exec(query,
+		pkg.PURL, pkg.Ecosystem, pkg.Name, pkg.LatestVersion,
 		pkg.License, pkg.Description, pkg.Homepage, pkg.RepositoryURL,
-		pkg.UpstreamURL, pkg.MetadataFetchedAt, now, now,
+		pkg.RegistryURL, pkg.EnrichedAt, now, now,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("upserting package: %w", err)
+		return fmt.Errorf("upserting package: %w", err)
 	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		existing, err := db.GetPackageByPURL(pkg.PURL)
-		if err != nil {
-			return 0, err
-		}
-		return existing.ID, nil
-	}
-	return id, nil
+	return nil
 }
 
 // Version queries
@@ -115,8 +100,8 @@ func (db *DB) UpsertPackage(pkg *Package) (int64, error) {
 func (db *DB) GetVersionByPURL(purl string) (*Version, error) {
 	var v Version
 	query := db.Rebind(`
-		SELECT id, purl, package_id, version, license, integrity, published_at,
-		       yanked, metadata_fetched_at, created_at, updated_at
+		SELECT id, purl, package_purl, license, integrity, published_at,
+		       yanked, source, enriched_at, created_at, updated_at
 		FROM versions WHERE purl = ?
 	`)
 	err := db.Get(&v, query, purl)
@@ -129,109 +114,74 @@ func (db *DB) GetVersionByPURL(purl string) (*Version, error) {
 	return &v, nil
 }
 
-func (db *DB) GetVersionByPackageAndVersion(packageID int64, version string) (*Version, error) {
-	var v Version
-	query := db.Rebind(`
-		SELECT id, purl, package_id, version, license, integrity, published_at,
-		       yanked, metadata_fetched_at, created_at, updated_at
-		FROM versions WHERE package_id = ? AND version = ?
-	`)
-	err := db.Get(&v, query, packageID, version)
-	if err == sql.ErrNoRows {
-		return nil, nil
-	}
-	if err != nil {
-		return nil, err
-	}
-	return &v, nil
-}
-
-func (db *DB) GetVersionsByPackageID(packageID int64) ([]Version, error) {
+func (db *DB) GetVersionsByPackagePURL(packagePURL string) ([]Version, error) {
 	var versions []Version
 	query := db.Rebind(`
-		SELECT id, purl, package_id, version, license, integrity, published_at,
-		       yanked, metadata_fetched_at, created_at, updated_at
-		FROM versions WHERE package_id = ?
+		SELECT id, purl, package_purl, license, integrity, published_at,
+		       yanked, source, enriched_at, created_at, updated_at
+		FROM versions WHERE package_purl = ?
 		ORDER BY created_at DESC
 	`)
-	err := db.Select(&versions, query, packageID)
+	err := db.Select(&versions, query, packagePURL)
 	if err != nil {
 		return nil, err
 	}
 	return versions, nil
 }
 
-func (db *DB) UpsertVersion(v *Version) (int64, error) {
+func (db *DB) UpsertVersion(v *Version) error {
 	now := time.Now()
 	var query string
 
 	if db.dialect == DialectPostgres {
 		query = `
-			INSERT INTO versions (purl, package_id, version, license, integrity, published_at,
-			                      yanked, metadata_fetched_at, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
+			INSERT INTO versions (purl, package_purl, license, integrity, published_at,
+			                      yanked, enriched_at, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
 			ON CONFLICT(purl) DO UPDATE SET
 				license = EXCLUDED.license,
 				integrity = EXCLUDED.integrity,
 				published_at = EXCLUDED.published_at,
 				yanked = EXCLUDED.yanked,
-				metadata_fetched_at = EXCLUDED.metadata_fetched_at,
+				enriched_at = EXCLUDED.enriched_at,
 				updated_at = EXCLUDED.updated_at
-			RETURNING id
 		`
-		var id int64
-		err := db.QueryRow(query,
-			v.PURL, v.PackageID, v.Version, v.License, v.Integrity,
-			v.PublishedAt, v.Yanked, v.MetadataFetchedAt, now, now,
-		).Scan(&id)
-		if err != nil {
-			return 0, fmt.Errorf("upserting version: %w", err)
-		}
-		return id, nil
+	} else {
+		query = `
+			INSERT INTO versions (purl, package_purl, license, integrity, published_at,
+			                      yanked, enriched_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(purl) DO UPDATE SET
+				license = excluded.license,
+				integrity = excluded.integrity,
+				published_at = excluded.published_at,
+				yanked = excluded.yanked,
+				enriched_at = excluded.enriched_at,
+				updated_at = excluded.updated_at
+		`
 	}
 
-	query = `
-		INSERT INTO versions (purl, package_id, version, license, integrity, published_at,
-		                      yanked, metadata_fetched_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(purl) DO UPDATE SET
-			license = excluded.license,
-			integrity = excluded.integrity,
-			published_at = excluded.published_at,
-			yanked = excluded.yanked,
-			metadata_fetched_at = excluded.metadata_fetched_at,
-			updated_at = excluded.updated_at
-	`
-	result, err := db.Exec(query,
-		v.PURL, v.PackageID, v.Version, v.License, v.Integrity,
-		v.PublishedAt, v.Yanked, v.MetadataFetchedAt, now, now,
+	_, err := db.Exec(query,
+		v.PURL, v.PackagePURL, v.License, v.Integrity,
+		v.PublishedAt, v.Yanked, v.EnrichedAt, now, now,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("upserting version: %w", err)
+		return fmt.Errorf("upserting version: %w", err)
 	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		existing, err := db.GetVersionByPURL(v.PURL)
-		if err != nil {
-			return 0, err
-		}
-		return existing.ID, nil
-	}
-	return id, nil
+	return nil
 }
 
 // Artifact queries
 
-func (db *DB) GetArtifact(versionID int64, filename string) (*Artifact, error) {
+func (db *DB) GetArtifact(versionPURL, filename string) (*Artifact, error) {
 	var a Artifact
 	query := db.Rebind(`
-		SELECT id, version_id, filename, upstream_url, storage_path, content_hash,
+		SELECT id, version_purl, filename, upstream_url, storage_path, content_hash,
 		       size, content_type, fetched_at, hit_count, last_accessed_at,
 		       created_at, updated_at
-		FROM artifacts WHERE version_id = ? AND filename = ?
+		FROM artifacts WHERE version_purl = ? AND filename = ?
 	`)
-	err := db.Get(&a, query, versionID, filename)
+	err := db.Get(&a, query, versionPURL, filename)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
@@ -244,7 +194,7 @@ func (db *DB) GetArtifact(versionID int64, filename string) (*Artifact, error) {
 func (db *DB) GetArtifactByPath(storagePath string) (*Artifact, error) {
 	var a Artifact
 	query := db.Rebind(`
-		SELECT id, version_id, filename, upstream_url, storage_path, content_hash,
+		SELECT id, version_purl, filename, upstream_url, storage_path, content_hash,
 		       size, content_type, fetched_at, hit_count, last_accessed_at,
 		       created_at, updated_at
 		FROM artifacts WHERE storage_path = ?
@@ -259,88 +209,70 @@ func (db *DB) GetArtifactByPath(storagePath string) (*Artifact, error) {
 	return &a, nil
 }
 
-func (db *DB) UpsertArtifact(a *Artifact) (int64, error) {
+func (db *DB) UpsertArtifact(a *Artifact) error {
 	now := time.Now()
 	var query string
 
 	if db.dialect == DialectPostgres {
 		query = `
-			INSERT INTO artifacts (version_id, filename, upstream_url, storage_path, content_hash,
+			INSERT INTO artifacts (version_purl, filename, upstream_url, storage_path, content_hash,
 			                       size, content_type, fetched_at, hit_count, last_accessed_at,
 			                       created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
-			ON CONFLICT(version_id, filename) DO UPDATE SET
+			ON CONFLICT(version_purl, filename) DO UPDATE SET
 				storage_path = EXCLUDED.storage_path,
 				content_hash = EXCLUDED.content_hash,
 				size = EXCLUDED.size,
 				content_type = EXCLUDED.content_type,
 				fetched_at = EXCLUDED.fetched_at,
 				updated_at = EXCLUDED.updated_at
-			RETURNING id
 		`
-		var id int64
-		err := db.QueryRow(query,
-			a.VersionID, a.Filename, a.UpstreamURL, a.StoragePath, a.ContentHash,
-			a.Size, a.ContentType, a.FetchedAt, a.HitCount, a.LastAccessedAt, now, now,
-		).Scan(&id)
-		if err != nil {
-			return 0, fmt.Errorf("upserting artifact: %w", err)
-		}
-		return id, nil
+	} else {
+		query = `
+			INSERT INTO artifacts (version_purl, filename, upstream_url, storage_path, content_hash,
+			                       size, content_type, fetched_at, hit_count, last_accessed_at,
+			                       created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(version_purl, filename) DO UPDATE SET
+				storage_path = excluded.storage_path,
+				content_hash = excluded.content_hash,
+				size = excluded.size,
+				content_type = excluded.content_type,
+				fetched_at = excluded.fetched_at,
+				updated_at = excluded.updated_at
+		`
 	}
 
-	query = `
-		INSERT INTO artifacts (version_id, filename, upstream_url, storage_path, content_hash,
-		                       size, content_type, fetched_at, hit_count, last_accessed_at,
-		                       created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-		ON CONFLICT(version_id, filename) DO UPDATE SET
-			storage_path = excluded.storage_path,
-			content_hash = excluded.content_hash,
-			size = excluded.size,
-			content_type = excluded.content_type,
-			fetched_at = excluded.fetched_at,
-			updated_at = excluded.updated_at
-	`
-	result, err := db.Exec(query,
-		a.VersionID, a.Filename, a.UpstreamURL, a.StoragePath, a.ContentHash,
+	_, err := db.Exec(query,
+		a.VersionPURL, a.Filename, a.UpstreamURL, a.StoragePath, a.ContentHash,
 		a.Size, a.ContentType, a.FetchedAt, a.HitCount, a.LastAccessedAt, now, now,
 	)
 	if err != nil {
-		return 0, fmt.Errorf("upserting artifact: %w", err)
+		return fmt.Errorf("upserting artifact: %w", err)
 	}
-
-	id, err := result.LastInsertId()
-	if err != nil {
-		existing, err := db.GetArtifact(a.VersionID, a.Filename)
-		if err != nil {
-			return 0, err
-		}
-		return existing.ID, nil
-	}
-	return id, nil
+	return nil
 }
 
-func (db *DB) RecordArtifactHit(artifactID int64) error {
+func (db *DB) RecordArtifactHit(versionPURL, filename string) error {
 	now := time.Now()
 	query := db.Rebind(`
 		UPDATE artifacts
 		SET hit_count = hit_count + 1, last_accessed_at = ?, updated_at = ?
-		WHERE id = ?
+		WHERE version_purl = ? AND filename = ?
 	`)
-	_, err := db.Exec(query, now, now, artifactID)
+	_, err := db.Exec(query, now, now, versionPURL, filename)
 	return err
 }
 
-func (db *DB) MarkArtifactCached(artifactID int64, storagePath, contentHash string, size int64, contentType string) error {
+func (db *DB) MarkArtifactCached(versionPURL, filename, storagePath, contentHash string, size int64, contentType string) error {
 	now := time.Now()
 	query := db.Rebind(`
 		UPDATE artifacts
 		SET storage_path = ?, content_hash = ?, size = ?, content_type = ?,
 		    fetched_at = ?, updated_at = ?
-		WHERE id = ?
+		WHERE version_purl = ? AND filename = ?
 	`)
-	_, err := db.Exec(query, storagePath, contentHash, size, contentType, now, now, artifactID)
+	_, err := db.Exec(query, storagePath, contentHash, size, contentType, now, now, versionPURL, filename)
 	return err
 }
 
@@ -349,7 +281,7 @@ func (db *DB) MarkArtifactCached(artifactID int64, storagePath, contentHash stri
 func (db *DB) GetLeastRecentlyUsedArtifacts(limit int) ([]Artifact, error) {
 	var artifacts []Artifact
 	query := db.Rebind(`
-		SELECT id, version_id, filename, upstream_url, storage_path, content_hash,
+		SELECT id, version_purl, filename, upstream_url, storage_path, content_hash,
 		       size, content_type, fetched_at, hit_count, last_accessed_at,
 		       created_at, updated_at
 		FROM artifacts
@@ -382,14 +314,14 @@ func (db *DB) GetCachedArtifactCount() (int64, error) {
 	return count, err
 }
 
-func (db *DB) ClearArtifactCache(artifactID int64) error {
+func (db *DB) ClearArtifactCache(versionPURL, filename string) error {
 	query := db.Rebind(`
 		UPDATE artifacts
 		SET storage_path = NULL, content_hash = NULL, size = NULL,
 		    content_type = NULL, fetched_at = NULL, updated_at = ?
-		WHERE id = ?
+		WHERE version_purl = ? AND filename = ?
 	`)
-	_, err := db.Exec(query, time.Now(), artifactID)
+	_, err := db.Exec(query, time.Now(), versionPURL, filename)
 	return err
 }
 
@@ -417,20 +349,28 @@ func (db *DB) GetCacheStats() (*CacheStats, error) {
 		return nil, err
 	}
 
-	row := db.QueryRow(`
-		SELECT COUNT(*), COALESCE(SUM(size), 0)
-		FROM artifacts WHERE storage_path IS NOT NULL
-	`)
-	if err := row.Scan(&stats.TotalArtifacts, &stats.TotalSize); err != nil {
+	// Check if artifacts table exists (might not if using git-pkgs db without proxy tables)
+	hasArtifacts, err := db.HasTable("artifacts")
+	if err != nil {
 		return nil, err
 	}
 
-	var totalHits sql.NullInt64
-	if err := db.Get(&totalHits, `SELECT SUM(hit_count) FROM artifacts`); err != nil {
-		return nil, err
-	}
-	if totalHits.Valid {
-		stats.TotalHits = totalHits.Int64
+	if hasArtifacts {
+		row := db.QueryRow(`
+			SELECT COUNT(*), COALESCE(SUM(size), 0)
+			FROM artifacts WHERE storage_path IS NOT NULL
+		`)
+		if err := row.Scan(&stats.TotalArtifacts, &stats.TotalSize); err != nil {
+			return nil, err
+		}
+
+		var totalHits sql.NullInt64
+		if err := db.Get(&totalHits, `SELECT SUM(hit_count) FROM artifacts`); err != nil {
+			return nil, err
+		}
+		if totalHits.Valid {
+			stats.TotalHits = totalHits.Int64
+		}
 	}
 
 	rows, err := db.Query(`SELECT ecosystem, COUNT(*) FROM packages GROUP BY ecosystem`)
@@ -459,18 +399,27 @@ type PopularPackage struct {
 }
 
 func (db *DB) GetMostPopularPackages(limit int) ([]PopularPackage, error) {
+	// Check if artifacts table exists
+	hasArtifacts, err := db.HasTable("artifacts")
+	if err != nil {
+		return nil, err
+	}
+	if !hasArtifacts {
+		return nil, nil
+	}
+
 	var packages []PopularPackage
 	query := db.Rebind(`
 		SELECT p.ecosystem, p.name, COALESCE(SUM(a.hit_count), 0) as hits, COALESCE(SUM(a.size), 0) as size
 		FROM packages p
-		JOIN versions v ON v.package_id = p.id
-		JOIN artifacts a ON a.version_id = v.id
+		JOIN versions v ON v.package_purl = p.purl
+		JOIN artifacts a ON a.version_purl = v.purl
 		WHERE a.storage_path IS NOT NULL
-		GROUP BY p.id, p.ecosystem, p.name
+		GROUP BY p.purl, p.ecosystem, p.name
 		ORDER BY hits DESC
 		LIMIT ?
 	`)
-	err := db.Select(&packages, query, limit)
+	err = db.Select(&packages, query, limit)
 	if err != nil {
 		return nil, err
 	}
@@ -486,17 +435,45 @@ type RecentPackage struct {
 }
 
 func (db *DB) GetRecentlyCachedPackages(limit int) ([]RecentPackage, error) {
+	// Check if artifacts table exists
+	hasArtifacts, err := db.HasTable("artifacts")
+	if err != nil {
+		return nil, err
+	}
+	if !hasArtifacts {
+		return nil, nil
+	}
+
 	var packages []RecentPackage
+	// We need to extract version from the purl since there's no separate version column
 	query := db.Rebind(`
-		SELECT p.ecosystem, p.name, v.version, a.fetched_at, COALESCE(a.size, 0) as size
+		SELECT p.ecosystem, p.name,
+		       SUBSTR(v.purl, INSTR(v.purl, '@') + 1) as version,
+		       a.fetched_at, COALESCE(a.size, 0) as size
 		FROM artifacts a
-		JOIN versions v ON v.id = a.version_id
-		JOIN packages p ON p.id = v.package_id
+		JOIN versions v ON v.purl = a.version_purl
+		JOIN packages p ON p.purl = v.package_purl
 		WHERE a.storage_path IS NOT NULL AND a.fetched_at IS NOT NULL
 		ORDER BY a.fetched_at DESC
 		LIMIT ?
 	`)
-	err := db.Select(&packages, query, limit)
+
+	// For postgres, use different string function
+	if db.dialect == DialectPostgres {
+		query = db.Rebind(`
+			SELECT p.ecosystem, p.name,
+			       SUBSTRING(v.purl FROM POSITION('@' IN v.purl) + 1) as version,
+			       a.fetched_at, COALESCE(a.size, 0) as size
+			FROM artifacts a
+			JOIN versions v ON v.purl = a.version_purl
+			JOIN packages p ON p.purl = v.package_purl
+			WHERE a.storage_path IS NOT NULL AND a.fetched_at IS NOT NULL
+			ORDER BY a.fetched_at DESC
+			LIMIT ?
+		`)
+	}
+
+	err = db.Select(&packages, query, limit)
 	if err != nil {
 		return nil, err
 	}

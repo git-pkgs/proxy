@@ -79,7 +79,7 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 		return nil, nil
 	}
 
-	artifact, err := p.DB.GetArtifact(ver.ID, filename)
+	artifact, err := p.DB.GetArtifact(versionPURL, filename)
 	if err != nil {
 		return nil, fmt.Errorf("checking artifact cache: %w", err)
 	}
@@ -94,7 +94,7 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 		return nil, nil
 	}
 
-	_ = p.DB.RecordArtifactHit(artifact.ID)
+	_ = p.DB.RecordArtifactHit(versionPURL, filename)
 	return &CacheResult{
 		Reader:      reader,
 		Size:        artifact.Size.Int64,
@@ -159,32 +159,29 @@ func (p *Proxy) updateCacheDB(ctx context.Context, ecosystem, name, version, fil
 
 	// Upsert package
 	pkg := &database.Package{
-		PURL:        pkgPURL,
-		Ecosystem:   ecosystem,
-		Name:        name,
-		UpstreamURL: upstreamURL,
-		MetadataFetchedAt: sql.NullTime{Time: now, Valid: true},
+		PURL:       pkgPURL,
+		Ecosystem:  ecosystem,
+		Name:       name,
+		RegistryURL: sql.NullString{String: upstreamURL, Valid: true},
+		EnrichedAt: sql.NullTime{Time: now, Valid: true},
 	}
-	pkgID, err := p.DB.UpsertPackage(pkg)
-	if err != nil {
+	if err := p.DB.UpsertPackage(pkg); err != nil {
 		return fmt.Errorf("upserting package: %w", err)
 	}
 
 	// Upsert version
 	ver := &database.Version{
-		PURL:              versionPURL,
-		PackageID:         pkgID,
-		Version:           version,
-		MetadataFetchedAt: sql.NullTime{Time: now, Valid: true},
+		PURL:        versionPURL,
+		PackagePURL: pkgPURL,
+		EnrichedAt:  sql.NullTime{Time: now, Valid: true},
 	}
-	verID, err := p.DB.UpsertVersion(ver)
-	if err != nil {
+	if err := p.DB.UpsertVersion(ver); err != nil {
 		return fmt.Errorf("upserting version: %w", err)
 	}
 
 	// Upsert artifact
 	art := &database.Artifact{
-		VersionID:   verID,
+		VersionPURL: versionPURL,
 		Filename:    filename,
 		UpstreamURL: upstreamURL,
 		StoragePath: sql.NullString{String: storagePath, Valid: true},
@@ -193,8 +190,7 @@ func (p *Proxy) updateCacheDB(ctx context.Context, ecosystem, name, version, fil
 		ContentType: sql.NullString{String: contentType, Valid: true},
 		FetchedAt:   sql.NullTime{Time: now, Valid: true},
 	}
-	_, err = p.DB.UpsertArtifact(art)
-	if err != nil {
+	if err := p.DB.UpsertArtifact(art); err != nil {
 		return fmt.Errorf("upserting artifact: %w", err)
 	}
 
