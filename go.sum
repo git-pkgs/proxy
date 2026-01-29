@@ -73,8 +73,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
-github.com/ecosyste-ms/ecosystems-go v0.0.0-20260115154313-d5f3879b6ec0 h1:Fz/Ly9g7rjh5UlqkkpMyNIIUKpLihLvg9uqG/4YahZU=
-github.com/ecosyste-ms/ecosystems-go v0.0.0-20260115154313-d5f3879b6ec0/go.mod h1:XsvYyfIYrGJLKV7B+kxUJ2UOhSvcfUstunnakSqUw7c=
+github.com/ecosyste-ms/ecosystems-go v0.1.0 h1:jMinQqCsvPhPPmm95KsOOvMZH/GOed6ThIljfMRkQrk=
+github.com/ecosyste-ms/ecosystems-go v0.1.0/go.mod h1:XsvYyfIYrGJLKV7B+kxUJ2UOhSvcfUstunnakSqUw7c=
 github.com/envoyproxy/go-control-plane v0.13.4 h1:zEqyPVyku6IvWCFwux4x9RxkLOMUL+1vC9xUFv5l2/M=
 github.com/envoyproxy/go-control-plane/envoy v1.32.4 h1:jb83lalDRZSpPWW2Z7Mck/8kXZ5CQAFYVjQcdVIr83A=
 github.com/envoyproxy/go-control-plane/envoy v1.32.4/go.mod h1:Gzjc5k8JcJswLjAx1Zm+wSYE20UrLtt7JZMWiWQXQEw=
