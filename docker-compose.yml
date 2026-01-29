@@ -1,0 +1,53 @@
+services:
+  # SQLite configuration (default)
+  proxy:
+    build: .
+    ports:
+      - "8080:8080"
+    volumes:
+      - proxy-data:/data
+    environment:
+      - PROXY_LISTEN=:8080
+      - PROXY_BASE_URL=http://localhost:8080
+      - PROXY_STORAGE_PATH=/data/artifacts
+      - PROXY_DATABASE_PATH=/data/proxy.db
+
+  # PostgreSQL configuration
+  proxy-postgres:
+    build: .
+    ports:
+      - "8081:8080"
+    volumes:
+      - proxy-artifacts:/data/artifacts
+    environment:
+      - PROXY_LISTEN=:8080
+      - PROXY_BASE_URL=http://localhost:8081
+      - PROXY_STORAGE_PATH=/data/artifacts
+      - PROXY_DATABASE_DRIVER=postgres
+      - PROXY_DATABASE_URL=postgres://proxy:proxy@postgres:5432/proxy?sslmode=disable
+    depends_on:
+      postgres:
+        condition: service_healthy
+    profiles:
+      - postgres
+
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_USER=proxy
+      - POSTGRES_PASSWORD=proxy
+      - POSTGRES_DB=proxy
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U proxy"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    profiles:
+      - postgres
+
+volumes:
+  proxy-data:
+  proxy-artifacts:
+  postgres-data:
