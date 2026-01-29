@@ -19,14 +19,14 @@ A caching proxy for package registries. Speeds up package downloads by caching a
 | Conan | C/C++ | Yes | Yes | ✓ |
 | Conda | Python/R | Yes | Yes | ✓ |
 | CRAN | R | Yes | Yes | ✓ |
+| Container | Docker/OCI | Yes | Yes | ✓ |
+| Debian | Debian/Ubuntu | Yes | Yes | ✓ |
+| RPM | RHEL/Fedora | Yes | Yes | ✓ |
 | Alpine | Alpine Linux | No | No | ✗ |
 | Arch | Arch Linux | No | No | ✗ |
 | Chef | Chef | No | No | ✗ |
-| Container | OCI | No | No | ✗ |
-| Debian | Debian/Ubuntu | No | No | ✗ |
 | Generic | Any | No | No | ✗ |
 | Helm | Kubernetes | No | No | ✗ |
-| RPM | RHEL/Fedora | No | No | ✗ |
 | Swift | Swift | No | No | ✗ |
 | Vagrant | Vagrant | No | No | ✗ |
 
@@ -246,6 +246,61 @@ local({
 })
 ```
 
+### Docker / Container Registry
+
+Configure Docker to use the proxy as a registry mirror in `/etc/docker/daemon.json`:
+
+```json
+{
+  "registry-mirrors": ["http://localhost:8080"]
+}
+```
+
+Then restart Docker:
+
+```bash
+sudo systemctl restart docker
+```
+
+Or pull images directly:
+
+```bash
+docker pull localhost:8080/library/nginx:latest
+```
+
+### Debian / APT
+
+Configure APT to use the proxy in `/etc/apt/sources.list.d/proxy.list`:
+
+```
+deb http://localhost:8080/debian stable main contrib
+```
+
+Replace your existing sources.list entries, then:
+
+```bash
+sudo apt update
+```
+
+### RPM / Yum / DNF
+
+Configure yum/dnf to use the proxy in `/etc/yum.repos.d/proxy.repo`:
+
+```ini
+[proxy-fedora]
+name=Fedora via Proxy
+baseurl=http://localhost:8080/rpm/releases/$releasever/Everything/$basearch/os/
+enabled=1
+gpgcheck=0
+```
+
+Then:
+
+```bash
+sudo dnf clean all
+sudo dnf update
+```
+
 ## Configuration
 
 The proxy can be configured via:
@@ -363,6 +418,8 @@ Recently cached:
 
 ## API Endpoints
 
+### Registry Protocols
+
 | Endpoint | Description |
 |----------|-------------|
 | `GET /` | Welcome message and endpoint list |
@@ -381,6 +438,156 @@ Recently cached:
 | `GET /conan/*` | Conan C/C++ protocol |
 | `GET /conda/*` | Conda/Anaconda protocol |
 | `GET /cran/*` | CRAN (R) protocol |
+| `GET /v2/*` | OCI/Docker registry protocol |
+| `GET /debian/*` | Debian/APT repository protocol |
+| `GET /rpm/*` | RPM/Yum repository protocol |
+
+### Enrichment API
+
+The proxy provides REST endpoints for package metadata enrichment, vulnerability scanning, and outdated detection.
+
+| Endpoint | Description |
+|----------|-------------|
+| `GET /api/package/{ecosystem}/{name}` | Get package metadata |
+| `GET /api/package/{ecosystem}/{name}/{version}` | Get version metadata with vulnerabilities |
+| `GET /api/vulns/{ecosystem}/{name}` | Get all vulnerabilities for a package |
+| `GET /api/vulns/{ecosystem}/{name}/{version}` | Get vulnerabilities for a specific version |
+| `POST /api/outdated` | Check multiple packages for outdated versions |
+| `POST /api/bulk` | Bulk package metadata lookup |
+
+#### Get Package Metadata
+
+```bash
+curl http://localhost:8080/api/package/npm/lodash
+```
+
+Response:
+
+```json
+{
+  "ecosystem": "npm",
+  "name": "lodash",
+  "latest_version": "4.17.21",
+  "license": "MIT",
+  "license_category": "permissive",
+  "description": "Lodash modular utilities",
+  "homepage": "https://lodash.com/",
+  "repository": "https://github.com/lodash/lodash",
+  "registry_url": "https://registry.npmjs.org"
+}
+```
+
+#### Get Version with Vulnerabilities
+
+```bash
+curl http://localhost:8080/api/package/npm/lodash/4.17.0
+```
+
+Response:
+
+```json
+{
+  "package": {
+    "ecosystem": "npm",
+    "name": "lodash",
+    "latest_version": "4.17.21",
+    "license": "MIT",
+    "license_category": "permissive"
+  },
+  "version": {
+    "ecosystem": "npm",
+    "name": "lodash",
+    "version": "4.17.0",
+    "license": "MIT",
+    "published_at": "2016-06-17T03:59:56Z",
+    "yanked": false,
+    "is_outdated": true
+  },
+  "vulnerabilities": [
+    {
+      "id": "GHSA-p6mc-m468-83gw",
+      "summary": "Prototype Pollution in lodash",
+      "severity": "HIGH",
+      "cvss_score": 7.4,
+      "fixed_version": "4.17.12"
+    }
+  ],
+  "is_outdated": true,
+  "license_category": "permissive"
+}
+```
+
+#### Check Outdated Packages
+
+```bash
+curl -X POST http://localhost:8080/api/outdated \
+  -H "Content-Type: application/json" \
+  -d '{
+    "packages": [
+      {"ecosystem": "npm", "name": "lodash", "version": "4.17.0"},
+      {"ecosystem": "pypi", "name": "requests", "version": "2.25.0"}
+    ]
+  }'
+```
+
+Response:
+
+```json
+{
+  "results": [
+    {
+      "ecosystem": "npm",
+      "name": "lodash",
+      "version": "4.17.0",
+      "latest_version": "4.17.21",
+      "is_outdated": true
+    },
+    {
+      "ecosystem": "pypi",
+      "name": "requests",
+      "version": "2.25.0",
+      "latest_version": "2.31.0",
+      "is_outdated": true
+    }
+  ]
+}
+```
+
+#### Bulk Package Lookup
+
+```bash
+curl -X POST http://localhost:8080/api/bulk \
+  -H "Content-Type: application/json" \
+  -d '{
+    "purls": [
+      "pkg:npm/lodash@4.17.21",
+      "pkg:pypi/requests@2.28.0"
+    ]
+  }'
+```
+
+Response:
+
+```json
+{
+  "packages": {
+    "pkg:npm/lodash": {
+      "ecosystem": "npm",
+      "name": "lodash",
+      "latest_version": "4.17.21",
+      "license": "MIT",
+      "license_category": "permissive"
+    },
+    "pkg:pypi/requests": {
+      "ecosystem": "pypi",
+      "name": "requests",
+      "latest_version": "2.31.0",
+      "license": "Apache-2.0",
+      "license_category": "permissive"
+    }
+  }
+}
+```
 
 ### Stats Response (HTTP endpoint)
 
@@ -503,10 +710,22 @@ cache/artifacts/
 │   └── lodash/
 │       └── 4.17.21/
 │           └── lodash-4.17.21.tgz
-└── cargo/
-    └── serde/
-        └── 1.0.193/
-            └── serde-1.0.193.crate
+├── cargo/
+│   └── serde/
+│       └── 1.0.193/
+│           └── serde-1.0.193.crate
+├── oci/
+│   └── library/nginx/
+│       └── sha256:abc123.../
+│           └── sha256:abc123...
+├── deb/
+│   └── nginx/
+│       └── 1.18.0-6/
+│           └── nginx_1.18.0-6_amd64.deb
+└── rpm/
+    └── nginx/
+        └── 1.24.0-1.fc39/
+            └── nginx-1.24.0-1.fc39.x86_64.rpm
 ```
 
 Cache metadata is stored in an SQLite database. To clear the cache:

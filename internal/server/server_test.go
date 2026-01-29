@@ -85,6 +85,7 @@ func newTestServer(t *testing.T) *testServer {
 
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /stats", s.handleStats)
+	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	mux.HandleFunc("GET /{$}", s.handleRoot)
 
 	return &testServer{
@@ -253,5 +254,83 @@ func TestGemSpecs(t *testing.T) {
 
 	if w.Code == http.StatusNotFound {
 		t.Error("gem handler should be mounted")
+	}
+}
+
+func TestStaticFiles(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	tests := []struct {
+		path        string
+		contentType string
+	}{
+		{"/static/tailwind.js", "text/javascript"},
+		{"/static/style.css", "text/css"},
+	}
+
+	for _, tc := range tests {
+		req := httptest.NewRequest("GET", tc.path, nil)
+		w := httptest.NewRecorder()
+		ts.handler.ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Errorf("%s: expected status 200, got %d", tc.path, w.Code)
+		}
+
+		contentType := w.Header().Get("Content-Type")
+		if !strings.Contains(contentType, tc.contentType) {
+			t.Errorf("%s: expected Content-Type containing %s, got %q", tc.path, tc.contentType, contentType)
+		}
+	}
+}
+
+func TestCategorizeLicenseCSS(t *testing.T) {
+	tests := []struct {
+		license  string
+		expected string
+	}{
+		{"MIT", "permissive"},
+		{"Apache-2.0", "permissive"},
+		{"BSD-3-Clause", "permissive"},
+		{"ISC", "permissive"},
+		{"GPL-3.0", "copyleft"},
+		{"AGPL-3.0", "copyleft"},
+		{"LGPL-2.1", "copyleft"},
+		{"MPL-2.0", "copyleft"},
+		{"", "unknown"},
+		{"Proprietary", "unknown"},
+	}
+
+	for _, tc := range tests {
+		result := categorizeLicenseCSS(tc.license)
+		if result != tc.expected {
+			t.Errorf("categorizeLicenseCSS(%q) = %q, want %q", tc.license, result, tc.expected)
+		}
+	}
+}
+
+func TestDashboardWithEnrichmentStats(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	ts.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+
+	// Dashboard should link to Tailwind JS
+	if !strings.Contains(body, "/static/tailwind.js") {
+		t.Error("dashboard should link to Tailwind JS")
+	}
+
+	// Dashboard should have dark mode toggle
+	if !strings.Contains(body, "theme-toggle") {
+		t.Error("dashboard should have dark mode toggle")
 	}
 }

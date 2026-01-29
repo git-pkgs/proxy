@@ -479,3 +479,176 @@ func (db *DB) GetRecentlyCachedPackages(limit int) ([]RecentPackage, error) {
 	}
 	return packages, nil
 }
+
+// Vulnerability queries
+
+func (db *DB) GetVulnerabilitiesForPackage(ecosystem, name string) ([]Vulnerability, error) {
+	var vulns []Vulnerability
+	query := db.Rebind(`
+		SELECT id, vuln_id, ecosystem, package_name, severity, summary,
+		       fixed_version, cvss_score, "references", fetched_at, created_at, updated_at
+		FROM vulnerabilities
+		WHERE ecosystem = ? AND package_name = ?
+		ORDER BY cvss_score DESC NULLS LAST
+	`)
+	err := db.Select(&vulns, query, ecosystem, name)
+	if err != nil {
+		return nil, err
+	}
+	return vulns, nil
+}
+
+func (db *DB) UpsertVulnerability(v *Vulnerability) error {
+	now := time.Now()
+	var query string
+
+	if db.dialect == DialectPostgres {
+		query = `
+			INSERT INTO vulnerabilities (vuln_id, ecosystem, package_name, severity, summary,
+			                             fixed_version, cvss_score, "references", fetched_at,
+			                             created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			ON CONFLICT(vuln_id, ecosystem, package_name) DO UPDATE SET
+				severity = EXCLUDED.severity,
+				summary = EXCLUDED.summary,
+				fixed_version = EXCLUDED.fixed_version,
+				cvss_score = EXCLUDED.cvss_score,
+				"references" = EXCLUDED."references",
+				fetched_at = EXCLUDED.fetched_at,
+				updated_at = EXCLUDED.updated_at
+		`
+	} else {
+		query = `
+			INSERT INTO vulnerabilities (vuln_id, ecosystem, package_name, severity, summary,
+			                             fixed_version, cvss_score, "references", fetched_at,
+			                             created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(vuln_id, ecosystem, package_name) DO UPDATE SET
+				severity = excluded.severity,
+				summary = excluded.summary,
+				fixed_version = excluded.fixed_version,
+				cvss_score = excluded.cvss_score,
+				"references" = excluded."references",
+				fetched_at = excluded.fetched_at,
+				updated_at = excluded.updated_at
+		`
+	}
+
+	_, err := db.Exec(query,
+		v.VulnID, v.Ecosystem, v.PackageName, v.Severity, v.Summary,
+		v.FixedVersion, v.CVSSScore, v.References, v.FetchedAt, now, now,
+	)
+	if err != nil {
+		return fmt.Errorf("upserting vulnerability: %w", err)
+	}
+	return nil
+}
+
+func (db *DB) DeleteVulnerabilitiesForPackage(ecosystem, name string) error {
+	query := db.Rebind(`DELETE FROM vulnerabilities WHERE ecosystem = ? AND package_name = ?`)
+	_, err := db.Exec(query, ecosystem, name)
+	return err
+}
+
+func (db *DB) GetVulnsSyncedAt(ecosystem, name string) (time.Time, error) {
+	var syncedAt sql.NullTime
+	query := db.Rebind(`SELECT vulns_synced_at FROM packages WHERE ecosystem = ? AND name = ?`)
+	err := db.Get(&syncedAt, query, ecosystem, name)
+	if err == sql.ErrNoRows || !syncedAt.Valid {
+		return time.Time{}, nil
+	}
+	if err != nil {
+		return time.Time{}, err
+	}
+	return syncedAt.Time, nil
+}
+
+func (db *DB) SetVulnsSyncedAt(ecosystem, name string) error {
+	now := time.Now()
+	query := db.Rebind(`UPDATE packages SET vulns_synced_at = ?, updated_at = ? WHERE ecosystem = ? AND name = ?`)
+	_, err := db.Exec(query, now, now, ecosystem, name)
+	return err
+}
+
+func (db *DB) GetPackagesNeedingVulnSync(limit int, minAge time.Duration) ([]Package, error) {
+	cutoff := time.Now().Add(-minAge)
+	var packages []Package
+	query := db.Rebind(`
+		SELECT id, purl, ecosystem, name, latest_version, license,
+		       description, homepage, repository_url, registry_url,
+		       supplier_name, supplier_type, source, enriched_at,
+		       vulns_synced_at, created_at, updated_at
+		FROM packages
+		WHERE vulns_synced_at IS NULL OR vulns_synced_at < ?
+		ORDER BY vulns_synced_at ASC NULLS FIRST
+		LIMIT ?
+	`)
+	err := db.Select(&packages, query, cutoff, limit)
+	if err != nil {
+		return nil, err
+	}
+	return packages, nil
+}
+
+func (db *DB) GetVulnCountForPackage(ecosystem, name string) (int64, error) {
+	var count int64
+	query := db.Rebind(`SELECT COUNT(*) FROM vulnerabilities WHERE ecosystem = ? AND package_name = ?`)
+	err := db.Get(&count, query, ecosystem, name)
+	return count, err
+}
+
+// Enrichment stats
+
+type EnrichmentStats struct {
+	TotalPackages        int64
+	EnrichedPackages     int64
+	VulnSyncedPackages   int64
+	TotalVulnerabilities int64
+	CriticalVulns        int64
+	HighVulns            int64
+	MediumVulns          int64
+	LowVulns             int64
+}
+
+func (db *DB) GetEnrichmentStats() (*EnrichmentStats, error) {
+	stats := &EnrichmentStats{}
+
+	if err := db.Get(&stats.TotalPackages, `SELECT COUNT(*) FROM packages`); err != nil {
+		return nil, err
+	}
+
+	if err := db.Get(&stats.EnrichedPackages, `SELECT COUNT(*) FROM packages WHERE enriched_at IS NOT NULL`); err != nil {
+		return nil, err
+	}
+
+	if err := db.Get(&stats.VulnSyncedPackages, `SELECT COUNT(*) FROM packages WHERE vulns_synced_at IS NOT NULL`); err != nil {
+		return nil, err
+	}
+
+	// Check if vulnerabilities table exists
+	hasVulns, err := db.HasTable("vulnerabilities")
+	if err != nil {
+		return nil, err
+	}
+
+	if hasVulns {
+		if err := db.Get(&stats.TotalVulnerabilities, `SELECT COUNT(*) FROM vulnerabilities`); err != nil {
+			return nil, err
+		}
+
+		if err := db.Get(&stats.CriticalVulns, `SELECT COUNT(*) FROM vulnerabilities WHERE severity = 'critical'`); err != nil {
+			return nil, err
+		}
+		if err := db.Get(&stats.HighVulns, `SELECT COUNT(*) FROM vulnerabilities WHERE severity = 'high'`); err != nil {
+			return nil, err
+		}
+		if err := db.Get(&stats.MediumVulns, `SELECT COUNT(*) FROM vulnerabilities WHERE severity = 'medium'`); err != nil {
+			return nil, err
+		}
+		if err := db.Get(&stats.LowVulns, `SELECT COUNT(*) FROM vulnerabilities WHERE severity = 'low'`); err != nil {
+			return nil, err
+		}
+	}
+
+	return stats, nil
+}

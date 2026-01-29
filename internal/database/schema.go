@@ -67,6 +67,23 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_version_filename ON artifacts(version_purl, filename);
 CREATE INDEX IF NOT EXISTS idx_artifacts_storage_path ON artifacts(storage_path);
 CREATE INDEX IF NOT EXISTS idx_artifacts_last_accessed ON artifacts(last_accessed_at);
+
+CREATE TABLE IF NOT EXISTS vulnerabilities (
+	id INTEGER PRIMARY KEY,
+	vuln_id TEXT NOT NULL,
+	ecosystem TEXT NOT NULL,
+	package_name TEXT NOT NULL,
+	severity TEXT,
+	summary TEXT,
+	fixed_version TEXT,
+	cvss_score REAL,
+	"references" TEXT,
+	fetched_at DATETIME,
+	created_at DATETIME,
+	updated_at DATETIME
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
+CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
 `
 
 var schemaPostgres = `
@@ -130,6 +147,23 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_version_filename ON artifacts(version_purl, filename);
 CREATE INDEX IF NOT EXISTS idx_artifacts_storage_path ON artifacts(storage_path);
 CREATE INDEX IF NOT EXISTS idx_artifacts_last_accessed ON artifacts(last_accessed_at);
+
+CREATE TABLE IF NOT EXISTS vulnerabilities (
+	id SERIAL PRIMARY KEY,
+	vuln_id TEXT NOT NULL,
+	ecosystem TEXT NOT NULL,
+	package_name TEXT NOT NULL,
+	severity TEXT,
+	summary TEXT,
+	fixed_version TEXT,
+	cvss_score REAL,
+	"references" TEXT,
+	fetched_at TIMESTAMP,
+	created_at TIMESTAMP,
+	updated_at TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
+CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
 `
 
 // schemaArtifactsOnly contains just the artifacts table for adding to existing git-pkgs databases.

@@ -14,10 +14,21 @@
 //   - /conan/*    - Conan C/C++ protocol
 //   - /conda/*    - Conda/Anaconda protocol
 //   - /cran/*     - CRAN (R) protocol
+//   - /v2/*       - OCI/Docker container registry protocol
+//   - /debian/*   - Debian/APT repository protocol
+//   - /rpm/*      - RPM/Yum repository protocol
 //
 // Additional endpoints:
 //   - /health    - Health check endpoint
 //   - /stats     - Cache statistics (JSON)
+//
+// API endpoints for enrichment data:
+//   - GET  /api/package/{ecosystem}/{name}          - Package metadata
+//   - GET  /api/package/{ecosystem}/{name}/{version} - Version metadata with vulns
+//   - GET  /api/vulns/{ecosystem}/{name}            - Package vulnerabilities
+//   - GET  /api/vulns/{ecosystem}/{name}/{version}  - Version vulnerabilities
+//   - POST /api/outdated                            - Check outdated packages
+//   - POST /api/bulk                                - Bulk package lookup
 package server
 
 import (
@@ -30,9 +41,11 @@ import (
 
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/enrichment"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/proxy/internal/upstream"
+	"github.com/git-pkgs/spdx"
 )
 
 // Server is the main proxy server.
@@ -104,6 +117,9 @@ func (s *Server) Start() error {
 	conanHandler := handler.NewConanHandler(proxy, s.cfg.BaseURL)
 	condaHandler := handler.NewCondaHandler(proxy, s.cfg.BaseURL)
 	cranHandler := handler.NewCRANHandler(proxy, s.cfg.BaseURL)
+	containerHandler := handler.NewContainerHandler(proxy, s.cfg.BaseURL)
+	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL)
+	rpmHandler := handler.NewRPMHandler(proxy, s.cfg.BaseURL)
 
 	mux.Handle("GET /npm/{path...}", http.StripPrefix("/npm", npmHandler.Routes()))
 	mux.Handle("GET /cargo/{path...}", http.StripPrefix("/cargo", cargoHandler.Routes()))
@@ -118,11 +134,29 @@ func (s *Server) Start() error {
 	mux.Handle("GET /conan/{path...}", http.StripPrefix("/conan", conanHandler.Routes()))
 	mux.Handle("GET /conda/{path...}", http.StripPrefix("/conda", condaHandler.Routes()))
 	mux.Handle("GET /cran/{path...}", http.StripPrefix("/cran", cranHandler.Routes()))
+	mux.Handle("GET /v2/{path...}", http.StripPrefix("/v2", containerHandler.Routes()))
+	mux.Handle("HEAD /v2/{path...}", http.StripPrefix("/v2", containerHandler.Routes()))
+	mux.Handle("GET /debian/{path...}", http.StripPrefix("/debian", debianHandler.Routes()))
+	mux.Handle("HEAD /debian/{path...}", http.StripPrefix("/debian", debianHandler.Routes()))
+	mux.Handle("GET /rpm/{path...}", http.StripPrefix("/rpm", rpmHandler.Routes()))
+	mux.Handle("HEAD /rpm/{path...}", http.StripPrefix("/rpm", rpmHandler.Routes()))
 
-	// Health and stats endpoints
+	// Health, stats, and static endpoints
 	mux.HandleFunc("GET /health", s.handleHealth)
 	mux.HandleFunc("GET /stats", s.handleStats)
+	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
 	mux.HandleFunc("GET /{$}", s.handleRoot)
+
+	// API endpoints for enrichment data
+	enrichSvc := enrichment.New(s.logger)
+	apiHandler := NewAPIHandler(enrichSvc)
+
+	mux.HandleFunc("GET /api/package/{ecosystem}/{name}", apiHandler.HandleGetPackage)
+	mux.HandleFunc("GET /api/package/{ecosystem}/{name}/{version}", apiHandler.HandleGetVersion)
+	mux.HandleFunc("GET /api/vulns/{ecosystem}/{name}", apiHandler.HandleGetVulns)
+	mux.HandleFunc("GET /api/vulns/{ecosystem}/{name}/{version}", apiHandler.HandleGetVulns)
+	mux.HandleFunc("POST /api/outdated", apiHandler.HandleOutdated)
+	mux.HandleFunc("POST /api/bulk", apiHandler.HandleBulkLookup)
 
 	// Wrap with logging middleware
 	handler := s.loggingMiddleware(mux)
@@ -185,6 +219,13 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		stats = &database.CacheStats{}
 	}
 
+	// Get enrichment statistics
+	enrichStats, err := s.db.GetEnrichmentStats()
+	if err != nil {
+		s.logger.Error("failed to get enrichment stats", "error", err)
+		enrichStats = &database.EnrichmentStats{}
+	}
+
 	// Get popular packages
 	popular, err := s.db.GetMostPopularPackages(10)
 	if err != nil {
@@ -205,26 +246,73 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			TotalPackages:   stats.TotalPackages,
 			TotalVersions:   stats.TotalVersions,
 		},
+		EnrichmentStats: EnrichmentStatsView{
+			EnrichedPackages:     enrichStats.EnrichedPackages,
+			VulnSyncedPackages:   enrichStats.VulnSyncedPackages,
+			TotalVulnerabilities: enrichStats.TotalVulnerabilities,
+			CriticalVulns:        enrichStats.CriticalVulns,
+			HighVulns:            enrichStats.HighVulns,
+			MediumVulns:          enrichStats.MediumVulns,
+			LowVulns:             enrichStats.LowVulns,
+			HasVulns:             enrichStats.TotalVulnerabilities > 0,
+		},
 		Registries: getRegistryConfigs(s.cfg.BaseURL),
 	}
 
 	for _, p := range popular {
-		data.PopularPackages = append(data.PopularPackages, PackageInfo{
+		pkgInfo := PackageInfo{
 			Ecosystem: p.Ecosystem,
 			Name:      p.Name,
 			Hits:      p.Hits,
 			Size:      formatSize(p.Size),
-		})
+		}
+
+		// Fetch enrichment data for this package
+		if pkg, err := s.db.GetPackageByEcosystemName(p.Ecosystem, p.Name); err == nil && pkg != nil {
+			if pkg.License.Valid {
+				pkgInfo.License = pkg.License.String
+				pkgInfo.LicenseCategory = categorizeLicenseCSS(pkg.License.String)
+			}
+			if pkg.LatestVersion.Valid {
+				pkgInfo.LatestVersion = pkg.LatestVersion.String
+			}
+		}
+
+		// Get vulnerability count
+		if vulnCount, err := s.db.GetVulnCountForPackage(p.Ecosystem, p.Name); err == nil {
+			pkgInfo.VulnCount = vulnCount
+		}
+
+		data.PopularPackages = append(data.PopularPackages, pkgInfo)
 	}
 
 	for _, p := range recent {
-		data.RecentPackages = append(data.RecentPackages, PackageInfo{
+		pkgInfo := PackageInfo{
 			Ecosystem: p.Ecosystem,
 			Name:      p.Name,
 			Version:   p.Version,
 			Size:      formatSize(p.Size),
 			CachedAt:  formatTimeAgo(p.CachedAt),
-		})
+		}
+
+		// Fetch enrichment data for this package
+		if pkg, err := s.db.GetPackageByEcosystemName(p.Ecosystem, p.Name); err == nil && pkg != nil {
+			if pkg.License.Valid {
+				pkgInfo.License = pkg.License.String
+				pkgInfo.LicenseCategory = categorizeLicenseCSS(pkg.License.String)
+			}
+			if pkg.LatestVersion.Valid {
+				pkgInfo.LatestVersion = pkg.LatestVersion.String
+				pkgInfo.IsOutdated = p.Version != "" && pkg.LatestVersion.String != "" && p.Version != pkg.LatestVersion.String
+			}
+		}
+
+		// Get vulnerability count
+		if vulnCount, err := s.db.GetVulnCountForPackage(p.Ecosystem, p.Name); err == nil {
+			pkgInfo.VulnCount = vulnCount
+		}
+
+		data.RecentPackages = append(data.RecentPackages, pkgInfo)
 	}
 
 	w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -325,6 +413,23 @@ func formatTimeAgo(t time.Time) string {
 	default:
 		return t.Format("Jan 2")
 	}
+}
+
+// categorizeLicenseCSS returns the CSS class suffix for a license category using the spdx module.
+func categorizeLicenseCSS(license string) string {
+	if license == "" {
+		return "unknown"
+	}
+
+	if spdx.HasCopyleft(license) {
+		return "copyleft"
+	}
+
+	if spdx.IsFullyPermissive(license) {
+		return "permissive"
+	}
+
+	return "unknown"
 }
 
 // responseWriter wraps http.ResponseWriter to capture status code.
