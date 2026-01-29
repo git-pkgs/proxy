@@ -42,9 +42,14 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "empty storage path",
-			modify:  func(c *Config) { c.Storage.Path = "" },
+			name:    "empty storage path and url",
+			modify:  func(c *Config) { c.Storage.Path = ""; c.Storage.URL = "" },
 			wantErr: true,
+		},
+		{
+			name:    "storage url set",
+			modify:  func(c *Config) { c.Storage.Path = ""; c.Storage.URL = "s3://bucket" },
+			wantErr: false,
 		},
 		{
 			name:    "empty database path for sqlite",

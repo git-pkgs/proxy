@@ -10,7 +10,18 @@ base_url: "http://localhost:8080"
 
 # Artifact storage configuration
 storage:
-  # Directory where cached artifacts are stored
+  # Storage backend URL
+  # Supported schemes:
+  #   - file:///path/to/dir - Local filesystem (default)
+  #   - s3://bucket-name - Amazon S3
+  #   - s3://bucket?endpoint=http://localhost:9000 - S3-compatible (MinIO)
+  #
+  # For S3, configure credentials via environment variables:
+  #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+  url: ""
+
+  # Local filesystem path (used when url is empty)
+  # Deprecated: Use url with file:// scheme instead
   path: "./cache/artifacts"
 
   # Maximum cache size (e.g., "10GB", "500MB")

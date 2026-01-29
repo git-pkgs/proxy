@@ -20,8 +20,10 @@
 //	      Address to listen on (default ":8080")
 //	-base-url string
 //	      Public URL of this proxy (default "http://localhost:8080")
-//	-storage string
-//	      Path to artifact storage directory (default "./cache/artifacts")
+//	-storage-url string
+//	      Storage URL (file:// or s3://)
+//	-storage-path string
+//	      Path to artifact storage directory (deprecated, use -storage-url)
 //	-database-driver string
 //	      Database driver: sqlite or postgres (default "sqlite")
 //	-database-path string
@@ -57,7 +59,8 @@
 //
 //	PROXY_LISTEN           - Listen address
 //	PROXY_BASE_URL         - Public URL
-//	PROXY_STORAGE_PATH     - Storage directory
+//	PROXY_STORAGE_URL      - Storage URL (file:// or s3://)
+//	PROXY_STORAGE_PATH     - Storage directory (deprecated)
 //	PROXY_DATABASE_DRIVER  - Database driver (sqlite or postgres)
 //	PROXY_DATABASE_PATH    - SQLite database file path
 //	PROXY_DATABASE_URL     - PostgreSQL connection URL
@@ -149,7 +152,8 @@ func runServe() {
 	configPath := fs.String("config", "", "Path to configuration file (YAML or JSON)")
 	listen := fs.String("listen", "", "Address to listen on")
 	baseURL := fs.String("base-url", "", "Public URL of this proxy")
-	storagePath := fs.String("storage", "", "Path to artifact storage directory")
+	storageURL := fs.String("storage-url", "", "Storage URL (file:// or s3://)")
+	storagePath := fs.String("storage-path", "", "Path to artifact storage directory (deprecated, use -storage-url)")
 	databaseDriver := fs.String("database-driver", "", "Database driver: sqlite or postgres")
 	databasePath := fs.String("database-path", "", "Path to SQLite database file")
 	databaseURL := fs.String("database-url", "", "PostgreSQL connection URL")
@@ -165,7 +169,8 @@ func runServe() {
 		fmt.Fprintf(os.Stderr, "\nEnvironment Variables:\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_LISTEN           Listen address\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_BASE_URL         Public URL\n")
-		fmt.Fprintf(os.Stderr, "  PROXY_STORAGE_PATH     Storage directory\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_STORAGE_URL      Storage URL (file:// or s3://)\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_STORAGE_PATH     Storage directory (deprecated)\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_DATABASE_DRIVER  Database driver (sqlite or postgres)\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_DATABASE_PATH    SQLite database file\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_DATABASE_URL     PostgreSQL connection URL\n")
@@ -196,6 +201,9 @@ func runServe() {
 	}
 	if *baseURL != "" {
 		cfg.BaseURL = *baseURL
+	}
+	if *storageURL != "" {
+		cfg.Storage.URL = *storageURL
 	}
 	if *storagePath != "" {
 		cfg.Storage.Path = *storagePath

@@ -61,7 +61,12 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	}
 
 	// Initialize storage
-	store, err := storage.NewFilesystem(cfg.Storage.Path)
+	storageURL := cfg.Storage.URL
+	if storageURL == "" {
+		// Fall back to file:// with Path
+		storageURL = "file://" + cfg.Storage.Path
+	}
+	store, err := storage.OpenBucket(context.Background(), storageURL)
 	if err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("initializing storage: %w", err)

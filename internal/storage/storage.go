@@ -1,4 +1,12 @@
 // Package storage provides artifact storage backends for the proxy cache.
+//
+// Storage backends are accessed via gocloud.dev/blob URLs:
+//
+//   - file:///path/to/dir - Local filesystem storage
+//   - s3://bucket-name - Amazon S3
+//   - s3://bucket?endpoint=http://localhost:9000 - S3-compatible (MinIO)
+//
+// Use OpenBucket to create a storage backend from a URL.
 package storage
 
 import (

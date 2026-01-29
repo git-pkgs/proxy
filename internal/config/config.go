@@ -5,6 +5,29 @@
 //   - Environment variables (PROXY_ prefix)
 //   - Configuration file (YAML or JSON)
 //
+// Storage Configuration:
+//
+// The proxy supports multiple storage backends via gocloud.dev/blob:
+//
+// Local filesystem (default):
+//
+//	storage:
+//	  url: "file:///var/cache/proxy"
+//
+// Amazon S3:
+//
+//	storage:
+//	  url: "s3://bucket-name"
+//
+// S3-compatible (MinIO, etc.):
+//
+//	storage:
+//	  url: "s3://bucket?endpoint=http://localhost:9000"
+//
+// For S3, configure credentials via AWS environment variables:
+//
+//	AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+//
 // Database Configuration:
 //
 // The proxy supports two database backends:
@@ -20,12 +43,6 @@
 //	database:
 //	  driver: "postgres"
 //	  url: "postgres://user:password@localhost:5432/proxy?sslmode=disable"
-//
-// Environment variables for database configuration:
-//
-//	PROXY_DATABASE_DRIVER  - "sqlite" or "postgres"
-//	PROXY_DATABASE_PATH    - SQLite file path
-//	PROXY_DATABASE_URL     - PostgreSQL connection URL
 //
 // See config.example.yaml in the repository root for a complete example.
 package config
@@ -66,7 +83,17 @@ type Config struct {
 
 // StorageConfig configures artifact storage.
 type StorageConfig struct {
+	// URL is the storage backend URL.
+	// Supported schemes:
+	//   - file:///path/to/dir - Local filesystem (default)
+	//   - s3://bucket-name - Amazon S3
+	//   - s3://bucket?endpoint=http://localhost:9000 - S3-compatible (MinIO)
+	// If empty, defaults to file:// with the Path value.
+	URL string `json:"url" yaml:"url"`
+
 	// Path is the directory where cached artifacts are stored.
+	// Deprecated: Use URL with file:// scheme instead.
+	// If URL is empty, this is used as file://{Path}.
 	Path string `json:"path" yaml:"path"`
 
 	// MaxSize is the maximum cache size (e.g., "10GB", "500MB").
@@ -184,6 +211,9 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("PROXY_BASE_URL"); v != "" {
 		c.BaseURL = v
 	}
+	if v := os.Getenv("PROXY_STORAGE_URL"); v != "" {
+		c.Storage.URL = v
+	}
 	if v := os.Getenv("PROXY_STORAGE_PATH"); v != "" {
 		c.Storage.Path = v
 	}
@@ -215,8 +245,8 @@ func (c *Config) Validate() error {
 	if c.BaseURL == "" {
 		return fmt.Errorf("base_url is required")
 	}
-	if c.Storage.Path == "" {
-		return fmt.Errorf("storage.path is required")
+	if c.Storage.URL == "" && c.Storage.Path == "" {
+		return fmt.Errorf("storage.url or storage.path is required")
 	}
 	switch c.Database.Driver {
 	case "sqlite":
