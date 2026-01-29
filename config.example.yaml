@@ -49,7 +49,7 @@ log:
   # Log format: "text" or "json"
   format: "text"
 
-# Upstream registry URLs (optional overrides)
+# Upstream registry URLs and authentication
 upstream:
   # npm registry URL
   npm: "https://registry.npmjs.org"
@@ -59,3 +59,34 @@ upstream:
 
   # Cargo crate download URL
   cargo_download: "https://static.crates.io/crates"
+
+  # Authentication for upstream registries
+  # Keys are URL prefixes matched against request URLs.
+  # Values can reference environment variables using ${VAR_NAME} syntax.
+  #
+  # Supported auth types:
+  #   - bearer: Authorization header with Bearer token
+  #   - basic: Authorization header with Basic auth (username:password)
+  #   - header: Custom header name and value
+  auth:
+    # Example: npm with bearer token
+    # "https://registry.npmjs.org":
+    #   type: bearer
+    #   token: "${NPM_TOKEN}"
+
+    # Example: GitHub npm registry
+    # "https://npm.pkg.github.com":
+    #   type: bearer
+    #   token: "${GITHUB_TOKEN}"
+
+    # Example: PyPI with basic auth
+    # "https://pypi.org":
+    #   type: basic
+    #   username: "__token__"
+    #   password: "${PYPI_TOKEN}"
+
+    # Example: Custom header for private registry
+    # "https://maven.mycompany.com":
+    #   type: header
+    #   header_name: "X-Auth-Token"
+    #   header_value: "${MAVEN_TOKEN}"

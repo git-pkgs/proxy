@@ -83,7 +83,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 // Start starts the HTTP server.
 func (s *Server) Start() error {
 	// Create shared components
-	fetcher := upstream.New()
+	fetcher := upstream.New(upstream.WithAuthFunc(s.authForURL))
 	resolver := upstream.NewResolver()
 	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
 
@@ -166,6 +166,15 @@ func (s *Server) Shutdown(ctx context.Context) error {
 		return errs[0]
 	}
 	return nil
+}
+
+// authForURL returns the authentication header for a given URL based on config.
+func (s *Server) authForURL(url string) (headerName, headerValue string) {
+	auth := s.cfg.Upstream.AuthForURL(url)
+	if auth == nil {
+		return "", ""
+	}
+	return auth.Header()
 }
 
 func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {

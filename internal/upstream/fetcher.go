@@ -32,6 +32,7 @@ type Fetcher struct {
 	userAgent  string
 	maxRetries int
 	baseDelay  time.Duration
+	authFn     func(url string) (headerName, headerValue string)
 }
 
 // Option configures a Fetcher.
@@ -62,6 +63,15 @@ func WithMaxRetries(n int) Option {
 func WithBaseDelay(d time.Duration) Option {
 	return func(f *Fetcher) {
 		f.baseDelay = d
+	}
+}
+
+// WithAuthFunc sets a function that returns auth headers for a given URL.
+// The function receives the request URL and returns a header name and value.
+// Return empty strings to skip authentication for that URL.
+func WithAuthFunc(fn func(url string) (headerName, headerValue string)) Option {
+	return func(f *Fetcher) {
+		f.authFn = fn
 	}
 }
 
@@ -129,6 +139,13 @@ func (f *Fetcher) doFetch(ctx context.Context, url string) (*Artifact, error) {
 	req.Header.Set("User-Agent", f.userAgent)
 	req.Header.Set("Accept", "*/*")
 
+	// Add authentication header if configured
+	if f.authFn != nil {
+		if name, value := f.authFn(url); name != "" && value != "" {
+			req.Header.Set(name, value)
+		}
+	}
+
 	resp, err := f.client.Do(req)
 	if err != nil {
 		return nil, fmt.Errorf("fetching artifact: %w", err)
@@ -177,6 +194,13 @@ func (f *Fetcher) Head(ctx context.Context, url string) (size int64, contentType
 	}
 
 	req.Header.Set("User-Agent", f.userAgent)
+
+	// Add authentication header if configured
+	if f.authFn != nil {
+		if name, value := f.authFn(url); name != "" && value != "" {
+			req.Header.Set(name, value)
+		}
+	}
 
 	resp, err := f.client.Do(req)
 	if err != nil {

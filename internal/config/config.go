@@ -48,6 +48,7 @@
 package config
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -123,7 +124,7 @@ type LogConfig struct {
 	Format string `json:"format" yaml:"format"`
 }
 
-// UpstreamConfig configures upstream registry URLs.
+// UpstreamConfig configures upstream registry URLs and authentication.
 // Leave empty to use defaults.
 type UpstreamConfig struct {
 	// NPM is the upstream npm registry URL.
@@ -137,6 +138,56 @@ type UpstreamConfig struct {
 	// CargoDownload is the upstream cargo download URL.
 	// Default: https://static.crates.io/crates
 	CargoDownload string `json:"cargo_download" yaml:"cargo_download"`
+
+	// Auth configures authentication for upstream registries.
+	// Keys are URL prefixes that are matched against request URLs.
+	// Example: "https://npm.pkg.github.com" matches all requests to that host.
+	Auth map[string]AuthConfig `json:"auth" yaml:"auth"`
+}
+
+// AuthForURL returns the auth config that matches the given URL.
+// Matches are based on URL prefix - the longest matching prefix wins.
+func (u *UpstreamConfig) AuthForURL(url string) *AuthConfig {
+	if u.Auth == nil {
+		return nil
+	}
+
+	var bestMatch *AuthConfig
+	var bestLen int
+
+	for pattern, auth := range u.Auth {
+		if strings.HasPrefix(url, pattern) && len(pattern) > bestLen {
+			a := auth // copy to avoid loop variable capture
+			bestMatch = &a
+			bestLen = len(pattern)
+		}
+	}
+
+	return bestMatch
+}
+
+// AuthConfig configures authentication for an upstream registry.
+type AuthConfig struct {
+	// Type is the authentication type: "bearer", "basic", or "header".
+	Type string `json:"type" yaml:"type"`
+
+	// Token is used for bearer authentication.
+	// Can reference environment variables with ${VAR_NAME} syntax.
+	Token string `json:"token" yaml:"token"`
+
+	// Username is used for basic authentication.
+	Username string `json:"username" yaml:"username"`
+
+	// Password is used for basic authentication.
+	// Can reference environment variables with ${VAR_NAME} syntax.
+	Password string `json:"password" yaml:"password"`
+
+	// HeaderName is the custom header name (for type "header").
+	HeaderName string `json:"header_name" yaml:"header_name"`
+
+	// HeaderValue is the custom header value (for type "header").
+	// Can reference environment variables with ${VAR_NAME} syntax.
+	HeaderValue string `json:"header_value" yaml:"header_value"`
 }
 
 // Default returns a Config with sensible defaults.
@@ -328,4 +379,42 @@ func ParseSize(s string) (int64, error) {
 		return 0, fmt.Errorf("invalid size %q", s)
 	}
 	return num, nil
+}
+
+// Header returns the HTTP header name and value for this auth config.
+// Returns empty strings if the config is invalid or incomplete.
+func (a *AuthConfig) Header() (name, value string) {
+	switch strings.ToLower(a.Type) {
+	case "bearer":
+		token := expandEnv(a.Token)
+		if token == "" {
+			return "", ""
+		}
+		return "Authorization", "Bearer " + token
+
+	case "basic":
+		username := expandEnv(a.Username)
+		password := expandEnv(a.Password)
+		if username == "" {
+			return "", ""
+		}
+		encoded := base64.StdEncoding.EncodeToString([]byte(username + ":" + password))
+		return "Authorization", "Basic " + encoded
+
+	case "header":
+		name := a.HeaderName
+		value := expandEnv(a.HeaderValue)
+		if name == "" {
+			return "", ""
+		}
+		return name, value
+
+	default:
+		return "", ""
+	}
+}
+
+// expandEnv expands ${VAR_NAME} references in a string.
+func expandEnv(s string) string {
+	return os.Expand(s, os.Getenv)
 }
