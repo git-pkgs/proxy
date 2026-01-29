@@ -82,6 +82,16 @@ github.com/envoyproxy/protoc-gen-validate v1.2.1 h1:DEo3O99U8j4hBFwbJfrz9VtgcDfU
 github.com/envoyproxy/protoc-gen-validate v1.2.1/go.mod h1:d/C80l/jxXLdfEIhX1W2TmLfsJ31lvEjwamM4DxlWXU=
 github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2Wg=
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
+github.com/git-pkgs/purl v0.1.3 h1:ZbsyXjIyvcTfZ5eTl+JwpN3dvrbm3uV94Z3sjuafJy4=
+github.com/git-pkgs/purl v0.1.3/go.mod h1:2lthcr/s+JtSz1KV/M2gp3L98aGx0OqwQ7+23JNokIk=
+github.com/git-pkgs/registries v0.2.3 h1:KE9QQr+aqO06Jqb2lEfwFJ0Alimfdqmgs/QfgxIh0YU=
+github.com/git-pkgs/registries v0.2.3/go.mod h1:nXiMNoaCum0Sx3ltao5X9JNbR35ujlKMMN+vX8GLgt8=
+github.com/git-pkgs/spdx v0.1.0 h1:kBcB2iIc3A8qSAU/MtqywKslEo+FRct2daFLX+pwZdU=
+github.com/git-pkgs/spdx v0.1.0/go.mod h1:Cmpseu5vIhDPnpFXhTVBCJhjZUW3ILck/zhycHHKcXA=
+github.com/git-pkgs/vers v0.2.1 h1:tK63tJIa/v9IWz2hMOTc4Z6McDCQfgDoYfMUQez9+Dw=
+github.com/git-pkgs/vers v0.2.1/go.mod h1:biTbSQK1qdbrsxDEKnqe3Jzclxz8vW6uDcwKjfUGcOo=
+github.com/git-pkgs/vulns v0.1.1-0.20260129164637-92a3b3c5d954 h1:1e/3yliyZ6mUmjVH+C2Y5Km2r7XIbMsOJHS1lWYiN6g=
+github.com/git-pkgs/vulns v0.1.1-0.20260129164637-92a3b3c5d954/go.mod h1:gN6khTduhvexayW/KiQX9C3iKeIHYu5Zs7CyxhFHfkU=
 github.com/github/go-spdx/v2 v2.3.6 h1:9flm625VmmTlWXi0YH5W9V8FdMfulvxalHdYnUfoqxc=
 github.com/github/go-spdx/v2 v2.3.6/go.mod h1:/5rwgS0txhGtRdUZwc02bTglzg6HK3FfuEbECKlK2Sg=
 github.com/go-jose/go-jose/v4 v4.1.1 h1:JYhSgy4mXXzAdF3nUx3ygx347LRXJRrpgyU3adRmkAI=

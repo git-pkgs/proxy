@@ -5,24 +5,16 @@ go 1.25.6
 require (
 	github.com/ecosyste-ms/ecosystems-go v0.0.0-20260115154313-d5f3879b6ec0
 	github.com/git-pkgs/purl v0.1.3
-	github.com/git-pkgs/registries v0.0.0
+	github.com/git-pkgs/registries v0.2.3
 	github.com/git-pkgs/spdx v0.1.0
 	github.com/git-pkgs/vers v0.2.1
-	github.com/git-pkgs/vulns v0.0.0
+	github.com/git-pkgs/vulns v0.1.1-0.20260129164637-92a3b3c5d954
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.11.1
 	github.com/package-url/packageurl-go v0.1.3
 	gocloud.dev v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.44.3
-)
-
-replace (
-	github.com/git-pkgs/purl => ../purl
-	github.com/git-pkgs/registries => ../registries
-	github.com/git-pkgs/spdx => ../spdx
-	github.com/git-pkgs/vers => ../vers
-	github.com/git-pkgs/vulns => ../vulns
 )
 
 require (
