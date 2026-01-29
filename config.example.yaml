@@ -1,0 +1,50 @@
+# Proxy server configuration
+# Copy to config.yaml and modify as needed
+
+# Server listen address
+listen: ":8080"
+
+# Public URL where this proxy is accessible
+# Used for rewriting package metadata URLs
+base_url: "http://localhost:8080"
+
+# Artifact storage configuration
+storage:
+  # Directory where cached artifacts are stored
+  path: "./cache/artifacts"
+
+  # Maximum cache size (e.g., "10GB", "500MB")
+  # When exceeded, least recently used artifacts are evicted
+  # Empty or "0" means unlimited
+  max_size: ""
+
+# Database configuration
+database:
+  # Database driver: "sqlite" (default) or "postgres"
+  driver: "sqlite"
+
+  # SQLite database file path (used when driver is "sqlite")
+  path: "./cache/proxy.db"
+
+  # PostgreSQL connection URL (used when driver is "postgres")
+  # Example: "postgres://user:password@localhost:5432/proxy?sslmode=disable"
+  url: ""
+
+# Logging configuration
+log:
+  # Minimum log level: "debug", "info", "warn", "error"
+  level: "info"
+
+  # Log format: "text" or "json"
+  format: "text"
+
+# Upstream registry URLs (optional overrides)
+upstream:
+  # npm registry URL
+  npm: "https://registry.npmjs.org"
+
+  # Cargo sparse index URL
+  cargo: "https://index.crates.io"
+
+  # Cargo crate download URL
+  cargo_download: "https://static.crates.io/crates"

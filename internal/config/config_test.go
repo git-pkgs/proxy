@@ -47,9 +47,24 @@ func TestValidate(t *testing.T) {
 			wantErr: true,
 		},
 		{
-			name:    "empty database path",
+			name:    "empty database path for sqlite",
 			modify:  func(c *Config) { c.Database.Path = "" },
 			wantErr: true,
+		},
+		{
+			name:    "invalid database driver",
+			modify:  func(c *Config) { c.Database.Driver = "mysql" },
+			wantErr: true,
+		},
+		{
+			name:    "postgres without url",
+			modify:  func(c *Config) { c.Database.Driver = "postgres"; c.Database.URL = "" },
+			wantErr: true,
+		},
+		{
+			name:    "postgres with url",
+			modify:  func(c *Config) { c.Database.Driver = "postgres"; c.Database.URL = "postgres://localhost/test" },
+			wantErr: false,
 		},
 		{
 			name:    "invalid log level",

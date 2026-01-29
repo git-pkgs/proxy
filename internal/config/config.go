@@ -5,17 +5,29 @@
 //   - Environment variables (PROXY_ prefix)
 //   - Configuration file (YAML or JSON)
 //
-// Example configuration file (config.yaml):
+// Database Configuration:
 //
-//	listen: ":8080"
-//	storage:
-//	  path: "/var/cache/proxy"
-//	  max_size: "10GB"
+// The proxy supports two database backends:
+//
+// SQLite (default):
+//
 //	database:
+//	  driver: "sqlite"
 //	  path: "/var/lib/proxy/cache.db"
-//	log:
-//	  level: "info"
-//	  format: "json"
+//
+// PostgreSQL:
+//
+//	database:
+//	  driver: "postgres"
+//	  url: "postgres://user:password@localhost:5432/proxy?sslmode=disable"
+//
+// Environment variables for database configuration:
+//
+//	PROXY_DATABASE_DRIVER  - "sqlite" or "postgres"
+//	PROXY_DATABASE_PATH    - SQLite file path
+//	PROXY_DATABASE_URL     - PostgreSQL connection URL
+//
+// See config.example.yaml in the repository root for a complete example.
 package config
 
 import (
@@ -65,8 +77,14 @@ type StorageConfig struct {
 
 // DatabaseConfig configures the cache database.
 type DatabaseConfig struct {
+	// Driver is the database driver: "sqlite" or "postgres".
+	Driver string `json:"driver" yaml:"driver"`
+
 	// Path is the path to the SQLite database file.
 	Path string `json:"path" yaml:"path"`
+
+	// URL is the PostgreSQL connection string.
+	URL string `json:"url" yaml:"url"`
 }
 
 // LogConfig configures logging.
@@ -104,7 +122,8 @@ func Default() *Config {
 			MaxSize: "",
 		},
 		Database: DatabaseConfig{
-			Path: "./cache/proxy.db",
+			Driver: "sqlite",
+			Path:   "./cache/proxy.db",
 		},
 		Log: LogConfig{
 			Level:  "info",
@@ -171,8 +190,14 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("PROXY_STORAGE_MAX_SIZE"); v != "" {
 		c.Storage.MaxSize = v
 	}
+	if v := os.Getenv("PROXY_DATABASE_DRIVER"); v != "" {
+		c.Database.Driver = v
+	}
 	if v := os.Getenv("PROXY_DATABASE_PATH"); v != "" {
 		c.Database.Path = v
+	}
+	if v := os.Getenv("PROXY_DATABASE_URL"); v != "" {
+		c.Database.URL = v
 	}
 	if v := os.Getenv("PROXY_LOG_LEVEL"); v != "" {
 		c.Log.Level = v
@@ -193,8 +218,17 @@ func (c *Config) Validate() error {
 	if c.Storage.Path == "" {
 		return fmt.Errorf("storage.path is required")
 	}
-	if c.Database.Path == "" {
-		return fmt.Errorf("database.path is required")
+	switch c.Database.Driver {
+	case "sqlite":
+		if c.Database.Path == "" {
+			return fmt.Errorf("database.path is required for sqlite driver")
+		}
+	case "postgres":
+		if c.Database.URL == "" {
+			return fmt.Errorf("database.url is required for postgres driver")
+		}
+	default:
+		return fmt.Errorf("invalid database.driver %q (must be sqlite or postgres)", c.Database.Driver)
 	}
 
 	// Validate log level

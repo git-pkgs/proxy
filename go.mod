@@ -3,6 +3,8 @@ module github.com/git-pkgs/proxy
 go 1.24.0
 
 require (
+	github.com/jmoiron/sqlx v1.4.0
+	github.com/lib/pq v1.11.1
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.44.3
 )

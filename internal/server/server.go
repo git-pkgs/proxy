@@ -47,7 +47,15 @@ type Server struct {
 // New creates a new Server with the given configuration.
 func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	// Initialize database
-	db, err := database.OpenOrCreate(cfg.Database.Path)
+	var db *database.DB
+	var err error
+
+	switch cfg.Database.Driver {
+	case "postgres":
+		db, err = database.OpenPostgresOrCreate(cfg.Database.URL)
+	default:
+		db, err = database.OpenOrCreate(cfg.Database.Path)
+	}
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
