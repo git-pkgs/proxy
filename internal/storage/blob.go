@@ -6,9 +6,9 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
-	"net/url"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 
 	"gocloud.dev/blob"
@@ -35,28 +35,39 @@ type Blob struct {
 func OpenBucket(ctx context.Context, urlStr string) (*Blob, error) {
 	// Handle file:// URLs specially to create the directory
 	if strings.HasPrefix(urlStr, "file://") {
-		parsed, err := url.Parse(urlStr)
-		if err != nil {
-			return nil, fmt.Errorf("parsing URL: %w", err)
+		path := strings.TrimPrefix(urlStr, "file://")
+
+		// Handle file:/// (three slashes) for absolute paths
+		if strings.HasPrefix(path, "/") && runtime.GOOS != "windows" {
+			// Unix: file:///path -> /path
+			// path is already correct
+		} else if strings.HasPrefix(path, "/") && runtime.GOOS == "windows" {
+			// Windows: file:///C:/path -> C:/path
+			path = strings.TrimPrefix(path, "/")
 		}
 
-		path := parsed.Path
-		if path == "" {
-			path = parsed.Opaque
-		}
+		// Convert forward slashes to native path separators for filesystem operations
+		nativePath := filepath.FromSlash(path)
 
 		// Ensure directory exists
-		if err := os.MkdirAll(path, 0755); err != nil {
+		if err := os.MkdirAll(nativePath, 0755); err != nil {
 			return nil, fmt.Errorf("creating directory: %w", err)
 		}
 
-		// fileblob requires an absolute path
-		absPath, err := filepath.Abs(path)
+		// fileblob requires an absolute path with forward slashes
+		absPath, err := filepath.Abs(nativePath)
 		if err != nil {
 			return nil, fmt.Errorf("resolving path: %w", err)
 		}
 
-		urlStr = "file://" + absPath
+		// Convert back to URL format with forward slashes
+		urlPath := filepath.ToSlash(absPath)
+		if runtime.GOOS == "windows" {
+			// Windows needs file:///C:/path format
+			urlStr = "file:///" + urlPath
+		} else {
+			urlStr = "file://" + urlPath
+		}
 	}
 
 	bucket, err := blob.OpenBucket(ctx, urlStr)

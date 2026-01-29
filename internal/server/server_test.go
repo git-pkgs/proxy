@@ -262,11 +262,11 @@ func TestStaticFiles(t *testing.T) {
 	defer ts.close()
 
 	tests := []struct {
-		path        string
-		contentType string
+		path         string
+		contentTypes []string
 	}{
-		{"/static/tailwind.js", "text/javascript"},
-		{"/static/style.css", "text/css"},
+		{"/static/tailwind.js", []string{"text/javascript", "application/javascript"}},
+		{"/static/style.css", []string{"text/css"}},
 	}
 
 	for _, tc := range tests {
@@ -279,8 +279,15 @@ func TestStaticFiles(t *testing.T) {
 		}
 
 		contentType := w.Header().Get("Content-Type")
-		if !strings.Contains(contentType, tc.contentType) {
-			t.Errorf("%s: expected Content-Type containing %s, got %q", tc.path, tc.contentType, contentType)
+		found := false
+		for _, ct := range tc.contentTypes {
+			if strings.Contains(contentType, ct) {
+				found = true
+				break
+			}
+		}
+		if !found {
+			t.Errorf("%s: expected Content-Type containing one of %v, got %q", tc.path, tc.contentTypes, contentType)
 		}
 	}
 }

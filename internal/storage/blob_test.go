@@ -7,6 +7,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -15,7 +17,7 @@ func TestOpenBucket(t *testing.T) {
 	dir := t.TempDir()
 	ctx := context.Background()
 
-	b, err := OpenBucket(ctx, "file://"+dir)
+	b, err := OpenBucket(ctx, fileURLFromPath(dir))
 	if err != nil {
 		t.Fatalf("OpenBucket failed: %v", err)
 	}
@@ -247,10 +249,19 @@ func createTestBlob(t *testing.T) *Blob {
 	dir := t.TempDir()
 	ctx := context.Background()
 
-	b, err := OpenBucket(ctx, "file://"+dir)
+	b, err := OpenBucket(ctx, fileURLFromPath(dir))
 	if err != nil {
 		t.Fatalf("OpenBucket failed: %v", err)
 	}
 	t.Cleanup(func() { _ = b.Close() })
 	return b
+}
+
+func fileURLFromPath(path string) string {
+	if runtime.GOOS == "windows" {
+		// Windows paths need file:///C:/path format
+		path = filepath.ToSlash(path)
+		return "file:///" + path
+	}
+	return "file://" + path
 }
