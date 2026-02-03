@@ -7,9 +7,13 @@ import (
 	"fmt"
 	"io"
 	"math"
+	"math/rand"
+	"net"
 	"net/http"
 	"strconv"
 	"time"
+
+	"github.com/rs/dnscache"
 )
 
 var (
@@ -24,6 +28,12 @@ type Artifact struct {
 	Size        int64  // -1 if unknown
 	ContentType string
 	ETag        string
+}
+
+// FetcherInterface defines the interface for artifact fetchers.
+type FetcherInterface interface {
+	Fetch(ctx context.Context, url string) (*Artifact, error)
+	Head(ctx context.Context, url string) (size int64, contentType string, err error)
 }
 
 // Fetcher downloads artifacts from upstream registries.
@@ -77,9 +87,49 @@ func WithAuthFunc(fn func(url string) (headerName, headerValue string)) Option {
 
 // New creates a new Fetcher with the given options.
 func New(opts ...Option) *Fetcher {
+	// Create DNS cache with 5 minute refresh interval
+	resolver := &dnscache.Resolver{}
+	go func() {
+		ticker := time.NewTicker(5 * time.Minute)
+		defer ticker.Stop()
+		for range ticker.C {
+			resolver.Refresh(true)
+		}
+	}()
+
+	// Create custom dialer with DNS caching
+	dialer := &net.Dialer{
+		Timeout:   30 * time.Second,
+		KeepAlive: 30 * time.Second,
+	}
+
 	f := &Fetcher{
 		client: &http.Client{
 			Timeout: 5 * time.Minute, // Artifacts can be large
+			Transport: &http.Transport{
+				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+					host, port, err := net.SplitHostPort(addr)
+					if err != nil {
+						return nil, err
+					}
+					ips, err := resolver.LookupHost(ctx, host)
+					if err != nil {
+						return nil, err
+					}
+					for _, ip := range ips {
+						conn, err := dialer.DialContext(ctx, network, net.JoinHostPort(ip, port))
+						if err == nil {
+							return conn, nil
+						}
+					}
+					return nil, fmt.Errorf("failed to dial any resolved IP")
+				},
+				MaxIdleConns:          100,
+				MaxIdleConnsPerHost:   10,
+				IdleConnTimeout:       90 * time.Second,
+				TLSHandshakeTimeout:   10 * time.Second,
+				ExpectContinueTimeout: 1 * time.Second,
+			},
 		},
 		userAgent:  "git-pkgs-proxy/1.0",
 		maxRetries: 3,
@@ -98,7 +148,11 @@ func (f *Fetcher) Fetch(ctx context.Context, url string) (*Artifact, error) {
 
 	for attempt := 0; attempt <= f.maxRetries; attempt++ {
 		if attempt > 0 {
+			// Exponential backoff with 10% jitter to prevent thundering herd
 			delay := f.baseDelay * time.Duration(math.Pow(2, float64(attempt-1)))
+			jitter := time.Duration(float64(delay) * (rand.Float64() * 0.1))
+			delay += jitter
+
 			select {
 			case <-ctx.Done():
 				return nil, ctx.Err()

@@ -1,0 +1,199 @@
+{{define "title"}}Browse {{.PackageName}}@{{.Version}} - git-pkgs proxy{{end}}
+
+{{define "content"}}
+<div class="mb-6">
+    <nav class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        <a href="/" class="hover:text-gray-900 dark:hover:text-gray-100">Home</a>
+        <span class="mx-2">/</span>
+        <a href="/package/{{.Ecosystem}}/{{.PackageName}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.PackageName}}</a>
+        <span class="mx-2">/</span>
+        <a href="/package/{{.Ecosystem}}/{{.PackageName}}/{{.Version}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.Version}}</a>
+        <span class="mx-2">/</span>
+        <span>Browse Source</span>
+    </nav>
+    <h1 class="text-3xl font-bold">Browse Source</h1>
+    <p class="text-gray-600 dark:text-gray-400">{{.PackageName}}@{{.Version}}</p>
+</div>
+
+<div class="grid md:grid-cols-4 gap-6">
+    <!-- File Tree -->
+    <div class="md:col-span-1">
+        <div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 sticky top-4">
+            <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-800">
+                <h2 class="font-semibold">Files</h2>
+            </div>
+            <div class="p-2 max-h-[70vh] overflow-y-auto" id="file-tree">
+                <div class="text-center text-gray-500 dark:text-gray-400 py-4">
+                    Loading...
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- File Content -->
+    <div class="md:col-span-3">
+        <div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
+            <div class="px-4 py-3 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+                <h2 class="font-semibold font-mono text-sm" id="file-path">Select a file</h2>
+                <button id="download-btn" class="hidden px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700">
+                    Download
+                </button>
+            </div>
+            <div class="p-4" id="file-content">
+                <div class="text-center text-gray-500 dark:text-gray-400 py-8">
+                    Select a file from the tree to view its contents
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+const ecosystem = '{{.Ecosystem}}';
+const packageName = '{{.PackageName}}';
+const version = '{{.Version}}';
+let currentPath = '';
+
+// Load file tree for a directory
+async function loadFileTree(path = '') {
+    try {
+        const url = `/api/browse/${ecosystem}/${packageName}/${version}?path=${encodeURIComponent(path)}`;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Failed to load directory');
+
+        const data = await response.json();
+        renderFileTree(data.files, path);
+    } catch (error) {
+        console.error('Error loading file tree:', error);
+        document.getElementById('file-tree').innerHTML =
+            '<div class="text-red-600 dark:text-red-400 p-4 text-sm">Error loading files</div>';
+    }
+}
+
+// Render file tree
+function renderFileTree(files, basePath) {
+    const container = document.getElementById('file-tree');
+
+    if (files.length === 0) {
+        container.innerHTML = '<div class="text-gray-500 dark:text-gray-400 p-4 text-sm">Empty directory</div>';
+        return;
+    }
+
+    // Sort: directories first, then alphabetically
+    files.sort((a, b) => {
+        if (a.is_dir && !b.is_dir) return -1;
+        if (!a.is_dir && b.is_dir) return 1;
+        return a.name.localeCompare(b.name);
+    });
+
+    let html = '';
+
+    // Add back button if not at root
+    if (basePath) {
+        const parentPath = basePath.split('/').slice(0, -2).join('/');
+        html += `
+            <div class="px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded cursor-pointer text-sm"
+                 onclick="loadFileTree('${parentPath}'); currentPath='${parentPath}';">
+                <span class="text-gray-500 dark:text-gray-400">📁 ..</span>
+            </div>
+        `;
+    }
+
+    // Render files and directories
+    for (const file of files) {
+        const icon = file.is_dir ? '📁' : '📄';
+        const classes = 'px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded cursor-pointer text-sm truncate';
+
+        if (file.is_dir) {
+            html += `
+                <div class="${classes}" onclick="loadFileTree('${file.path}'); currentPath='${file.path}';">
+                    <span>${icon} ${file.name}</span>
+                </div>
+            `;
+        } else {
+            html += `
+                <div class="${classes}" onclick="loadFile('${file.path}')">
+                    <span>${icon} ${file.name}</span>
+                    <span class="text-xs text-gray-500 dark:text-gray-400 ml-2">${formatSize(file.size)}</span>
+                </div>
+            `;
+        }
+    }
+
+    container.innerHTML = html;
+}
+
+// Load and display file content
+async function loadFile(path) {
+    try {
+        const url = `/api/browse/${ecosystem}/${packageName}/${version}/file/${path}`;
+        const response = await fetch(url);
+        if (!response.ok) throw new Error('Failed to load file');
+
+        const content = await response.text();
+        const contentType = response.headers.get('content-type');
+
+        // Update path display
+        document.getElementById('file-path').textContent = path;
+
+        // Show download button
+        const downloadBtn = document.getElementById('download-btn');
+        downloadBtn.classList.remove('hidden');
+        downloadBtn.onclick = () => {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = path.split('/').pop();
+            a.click();
+        };
+
+        // Render content based on type
+        const container = document.getElementById('file-content');
+
+        if (contentType && contentType.includes('image/')) {
+            container.innerHTML = `<img src="${url}" alt="${path}" class="max-w-full">`;
+        } else if (isTextContent(contentType)) {
+            // Escape HTML and display as code
+            const escaped = content
+                .replace(/&/g, '&amp;')
+                .replace(/</g, '&lt;')
+                .replace(/>/g, '&gt;');
+
+            container.innerHTML = `
+                <pre class="text-sm overflow-x-auto bg-gray-50 dark:bg-gray-950 p-4 rounded"><code>${escaped}</code></pre>
+            `;
+        } else {
+            container.innerHTML = `
+                <div class="text-center text-gray-500 dark:text-gray-400 py-8">
+                    <p class="mb-4">Binary file (${formatSize(content.length)})</p>
+                    <button onclick="window.location.href='${url}'"
+                            class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
+                        Download
+                    </button>
+                </div>
+            `;
+        }
+    } catch (error) {
+        console.error('Error loading file:', error);
+        document.getElementById('file-content').innerHTML =
+            '<div class="text-red-600 dark:text-red-400 p-4">Error loading file</div>';
+    }
+}
+
+function isTextContent(contentType) {
+    if (!contentType) return true;
+    return contentType.includes('text/') ||
+           contentType.includes('application/json') ||
+           contentType.includes('application/javascript') ||
+           contentType.includes('application/xml');
+}
+
+function formatSize(bytes) {
+    if (bytes < 1024) return bytes + ' B';
+    if (bytes < 1024 * 1024) return (bytes / 1024).toFixed(1) + ' KB';
+    return (bytes / (1024 * 1024)).toFixed(1) + ' MB';
+}
+
+// Load root directory on page load
+loadFileTree();
+</script>
+{{end}}

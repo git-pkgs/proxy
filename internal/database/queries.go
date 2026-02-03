@@ -209,6 +209,22 @@ func (db *DB) GetArtifactByPath(storagePath string) (*Artifact, error) {
 	return &a, nil
 }
 
+func (db *DB) GetArtifactsByVersionPURL(versionPURL string) ([]Artifact, error) {
+	var artifacts []Artifact
+	query := db.Rebind(`
+		SELECT id, version_purl, filename, upstream_url, storage_path, content_hash,
+		       size, content_type, fetched_at, hit_count, last_accessed_at,
+		       created_at, updated_at
+		FROM artifacts WHERE version_purl = ?
+		ORDER BY filename
+	`)
+	err := db.Select(&artifacts, query, versionPURL)
+	if err != nil {
+		return nil, err
+	}
+	return artifacts, nil
+}
+
 func (db *DB) UpsertArtifact(a *Artifact) error {
 	now := time.Now()
 	var query string
@@ -480,6 +496,109 @@ func (db *DB) GetRecentlyCachedPackages(limit int) ([]RecentPackage, error) {
 	return packages, nil
 }
 
+type SearchResult struct {
+	Ecosystem     string         `db:"ecosystem"`
+	Name          string         `db:"name"`
+	LatestVersion sql.NullString `db:"latest_version"`
+	License       sql.NullString `db:"license"`
+	Hits          int64          `db:"hits"`
+	Size          int64          `db:"size"`
+	CachedAt      sql.NullString `db:"cached_at"`
+}
+
+func (db *DB) SearchPackages(query string, ecosystem string, limit int, offset int) ([]SearchResult, error) {
+	// Check if artifacts table exists
+	hasArtifacts, err := db.HasTable("artifacts")
+	if err != nil {
+		return nil, err
+	}
+	if !hasArtifacts {
+		return nil, nil
+	}
+
+	var results []SearchResult
+	searchPattern := "%" + query + "%"
+
+	var sqlQuery string
+	var args []any
+
+	if ecosystem != "" {
+		sqlQuery = db.Rebind(`
+			SELECT p.ecosystem, p.name, p.latest_version, p.license,
+			       COALESCE(SUM(a.hit_count), 0) as hits,
+			       COALESCE(SUM(a.size), 0) as size,
+			       MAX(a.fetched_at) as cached_at
+			FROM packages p
+			LEFT JOIN versions v ON v.package_purl = p.purl
+			LEFT JOIN artifacts a ON a.version_purl = v.purl
+			WHERE p.name LIKE ? AND p.ecosystem = ? AND a.storage_path IS NOT NULL
+			GROUP BY p.purl, p.ecosystem, p.name, p.latest_version, p.license
+			ORDER BY hits DESC
+			LIMIT ? OFFSET ?
+		`)
+		args = []any{searchPattern, ecosystem, limit, offset}
+	} else {
+		sqlQuery = db.Rebind(`
+			SELECT p.ecosystem, p.name, p.latest_version, p.license,
+			       COALESCE(SUM(a.hit_count), 0) as hits,
+			       COALESCE(SUM(a.size), 0) as size,
+			       MAX(a.fetched_at) as cached_at
+			FROM packages p
+			LEFT JOIN versions v ON v.package_purl = p.purl
+			LEFT JOIN artifacts a ON a.version_purl = v.purl
+			WHERE p.name LIKE ? AND a.storage_path IS NOT NULL
+			GROUP BY p.purl, p.ecosystem, p.name, p.latest_version, p.license
+			ORDER BY hits DESC
+			LIMIT ? OFFSET ?
+		`)
+		args = []any{searchPattern, limit, offset}
+	}
+
+	err = db.Select(&results, sqlQuery, args...)
+	if err != nil {
+		return nil, err
+	}
+	return results, nil
+}
+
+func (db *DB) CountSearchResults(query string, ecosystem string) (int64, error) {
+	hasArtifacts, err := db.HasTable("artifacts")
+	if err != nil {
+		return 0, err
+	}
+	if !hasArtifacts {
+		return 0, nil
+	}
+
+	searchPattern := "%" + query + "%"
+	var sqlQuery string
+	var args []any
+
+	if ecosystem != "" {
+		sqlQuery = db.Rebind(`
+			SELECT COUNT(DISTINCT p.purl)
+			FROM packages p
+			LEFT JOIN versions v ON v.package_purl = p.purl
+			LEFT JOIN artifacts a ON a.version_purl = v.purl
+			WHERE p.name LIKE ? AND p.ecosystem = ? AND a.storage_path IS NOT NULL
+		`)
+		args = []any{searchPattern, ecosystem}
+	} else {
+		sqlQuery = db.Rebind(`
+			SELECT COUNT(DISTINCT p.purl)
+			FROM packages p
+			LEFT JOIN versions v ON v.package_purl = p.purl
+			LEFT JOIN artifacts a ON a.version_purl = v.purl
+			WHERE p.name LIKE ? AND a.storage_path IS NOT NULL
+		`)
+		args = []any{searchPattern}
+	}
+
+	var count int64
+	err = db.Get(&count, sqlQuery, args...)
+	return count, err
+}
+
 // Vulnerability queries
 
 func (db *DB) GetVulnerabilitiesForPackage(ecosystem, name string) ([]Vulnerability, error) {
@@ -651,4 +770,120 @@ func (db *DB) GetEnrichmentStats() (*EnrichmentStats, error) {
 	}
 
 	return stats, nil
+}
+
+type PackageListItem struct {
+	Ecosystem     string         `db:"ecosystem"`
+	Name          string         `db:"name"`
+	LatestVersion sql.NullString `db:"latest_version"`
+	License       sql.NullString `db:"license"`
+	Hits          int64          `db:"hits"`
+	Size          int64          `db:"size"`
+	CachedAt      sql.NullString `db:"cached_at"`
+	VulnCount     int64          `db:"vuln_count"`
+}
+
+func (db *DB) ListCachedPackages(ecosystem string, sortBy string, limit int, offset int) ([]PackageListItem, error) {
+	hasArtifacts, err := db.HasTable("artifacts")
+	if err != nil {
+		return nil, err
+	}
+	if !hasArtifacts {
+		return nil, nil
+	}
+
+	hasVulns, err := db.HasTable("vulnerabilities")
+	if err != nil {
+		return nil, err
+	}
+
+	vulnJoin := ""
+	vulnSelect := "0 as vuln_count"
+	if hasVulns {
+		vulnJoin = "LEFT JOIN (SELECT ecosystem, package_name, COUNT(*) as vuln_count FROM vulnerabilities GROUP BY ecosystem, package_name) v ON v.ecosystem = p.ecosystem AND v.package_name = p.name"
+		vulnSelect = "COALESCE(v.vuln_count, 0) as vuln_count"
+	}
+
+	orderClause := "ORDER BY hits DESC"
+	switch sortBy {
+	case "name":
+		orderClause = "ORDER BY p.name ASC"
+	case "size":
+		orderClause = "ORDER BY size DESC"
+	case "cached_at":
+		orderClause = "ORDER BY cached_at DESC"
+	case "ecosystem":
+		orderClause = "ORDER BY p.ecosystem ASC, p.name ASC"
+	case "vulns":
+		orderClause = "ORDER BY vuln_count DESC, p.name ASC"
+	}
+
+	whereClause := "WHERE a.storage_path IS NOT NULL"
+	args := []any{}
+	if ecosystem != "" {
+		whereClause += " AND p.ecosystem = ?"
+		args = append(args, ecosystem)
+	}
+
+	groupByClause := "GROUP BY p.purl, p.ecosystem, p.name, p.latest_version, p.license"
+	if hasVulns {
+		groupByClause += ", v.vuln_count"
+	}
+
+	query := fmt.Sprintf(`
+		SELECT p.ecosystem, p.name, p.latest_version, p.license,
+		       COALESCE(SUM(a.hit_count), 0) as hits,
+		       COALESCE(SUM(a.size), 0) as size,
+		       MAX(a.fetched_at) as cached_at,
+		       %s
+		FROM packages p
+		JOIN versions v2 ON v2.package_purl = p.purl
+		JOIN artifacts a ON a.version_purl = v2.purl
+		%s
+		%s
+		%s
+		%s
+		LIMIT ? OFFSET ?
+	`, vulnSelect, vulnJoin, whereClause, groupByClause, orderClause)
+
+	args = append(args, limit, offset)
+	query = db.Rebind(query)
+
+	var packages []PackageListItem
+	err = db.Select(&packages, query, args...)
+	if err != nil {
+		return nil, err
+	}
+	return packages, nil
+}
+
+func (db *DB) CountCachedPackages(ecosystem string) (int64, error) {
+	hasArtifacts, err := db.HasTable("artifacts")
+	if err != nil {
+		return 0, err
+	}
+	if !hasArtifacts {
+		return 0, nil
+	}
+
+	whereClause := "WHERE a.storage_path IS NOT NULL"
+	args := []any{}
+	if ecosystem != "" {
+		whereClause += " AND p.ecosystem = ?"
+		args = append(args, ecosystem)
+	}
+
+	query := fmt.Sprintf(`
+		SELECT COUNT(DISTINCT p.purl)
+		FROM packages p
+		JOIN versions v ON v.package_purl = p.purl
+		JOIN artifacts a ON a.version_purl = v.purl
+		%s
+	`, whereClause)
+
+	query = db.Rebind(query)
+
+	var count int64
+	err = db.Get(&count, query, args...)
+	return count, err
 }

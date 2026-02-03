@@ -549,3 +549,344 @@ func runWithBothDatabases(t *testing.T, testFunc func(t *testing.T, db *DB)) {
 		testFunc(t, db)
 	})
 }
+
+// TestMigrationFromOldSchema tests that we can migrate from an old schema
+// that's missing columns like enriched_at, registry_url, etc.
+func TestMigrationFromOldSchema(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "old.db")
+
+	// Create a database with old schema (missing new columns)
+	sqlDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+
+	oldSchema := `
+	CREATE TABLE packages (
+		id INTEGER PRIMARY KEY,
+		purl TEXT NOT NULL,
+		ecosystem TEXT NOT NULL,
+		name TEXT NOT NULL,
+		latest_version TEXT,
+		license TEXT,
+		description TEXT,
+		homepage TEXT,
+		repository_url TEXT,
+		created_at DATETIME,
+		updated_at DATETIME
+	);
+	CREATE UNIQUE INDEX idx_packages_purl ON packages(purl);
+
+	CREATE TABLE versions (
+		id INTEGER PRIMARY KEY,
+		purl TEXT NOT NULL,
+		package_purl TEXT NOT NULL,
+		license TEXT,
+		published_at DATETIME,
+		created_at DATETIME,
+		updated_at DATETIME
+	);
+	CREATE UNIQUE INDEX idx_versions_purl ON versions(purl);
+
+	CREATE TABLE artifacts (
+		id INTEGER PRIMARY KEY,
+		version_purl TEXT NOT NULL,
+		filename TEXT NOT NULL,
+		upstream_url TEXT NOT NULL,
+		storage_path TEXT,
+		content_hash TEXT,
+		size INTEGER,
+		content_type TEXT,
+		fetched_at DATETIME,
+		hit_count INTEGER DEFAULT 0,
+		last_accessed_at DATETIME,
+		created_at DATETIME,
+		updated_at DATETIME
+	);
+	CREATE UNIQUE INDEX idx_artifacts_version_filename ON artifacts(version_purl, filename);
+
+	CREATE TABLE schema_info (version INTEGER NOT NULL);
+	INSERT INTO schema_info (version) VALUES (1);
+	`
+
+	if _, err := sqlDB.Exec(oldSchema); err != nil {
+		t.Fatalf("failed to create old schema: %v", err)
+	}
+
+	// Insert test data
+	now := time.Now()
+	_, err = sqlDB.Exec(`
+		INSERT INTO packages (purl, ecosystem, name, latest_version, license, created_at, updated_at)
+		VALUES ('pkg:npm/test-package', 'npm', 'test-package', '1.0.0', 'MIT', ?, ?)
+	`, now, now)
+	if err != nil {
+		t.Fatalf("failed to insert test package: %v", err)
+	}
+
+	_, err = sqlDB.Exec(`
+		INSERT INTO versions (purl, package_purl, license, created_at, updated_at)
+		VALUES ('pkg:npm/test-package@1.0.0', 'pkg:npm/test-package', 'MIT', ?, ?)
+	`, now, now)
+	if err != nil {
+		t.Fatalf("failed to insert test version: %v", err)
+	}
+
+	_, err = sqlDB.Exec(`
+		INSERT INTO artifacts (version_purl, filename, upstream_url, storage_path, size, fetched_at, hit_count, created_at, updated_at)
+		VALUES ('pkg:npm/test-package@1.0.0', 'test-package-1.0.0.tgz', 'https://registry.npmjs.org/test-package/-/test-package-1.0.0.tgz', '/path/to/artifact', 1024, ?, 5, ?, ?)
+	`, now, now, now)
+	if err != nil {
+		t.Fatalf("failed to insert test artifact: %v", err)
+	}
+
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("failed to close database: %v", err)
+	}
+
+	// Open with our DB wrapper
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// Try to run queries that require new columns - these should fail without migration
+	t.Run("queries should fail without migration", func(t *testing.T) {
+		_, err := db.GetEnrichmentStats()
+		if err == nil {
+			t.Error("GetEnrichmentStats: expected error querying enriched_at column, got nil")
+		}
+
+		_, err = db.GetPackageByEcosystemName("npm", "test-package")
+		if err == nil {
+			t.Error("GetPackageByEcosystemName: expected error querying registry_url column, got nil")
+		}
+
+		// SearchPackages should work even with old schema because it uses sql.NullString
+		// for nullable columns, which can handle NULL values properly
+		_, err = db.SearchPackages("test", "", 10, 0)
+		if err != nil {
+			t.Errorf("SearchPackages: unexpected error with old schema: %v", err)
+		}
+	})
+
+	// Run migration
+	t.Run("migrate schema", func(t *testing.T) {
+		if err := db.MigrateSchema(); err != nil {
+			t.Fatalf("MigrateSchema failed: %v", err)
+		}
+	})
+
+	// Verify queries work after migration
+	t.Run("queries should work after migration", func(t *testing.T) {
+		stats, err := db.GetEnrichmentStats()
+		if err != nil {
+			t.Errorf("GetEnrichmentStats failed after migration: %v", err)
+		}
+		if stats == nil {
+			t.Error("GetEnrichmentStats returned nil after migration")
+		}
+
+		pkg, err := db.GetPackageByEcosystemName("npm", "test-package")
+		if err != nil {
+			t.Errorf("GetPackageByEcosystemName failed after migration: %v", err)
+		}
+		if pkg == nil {
+			t.Error("GetPackageByEcosystemName returned nil after migration")
+		}
+		if pkg.Name != "test-package" {
+			t.Errorf("expected package name test-package, got %s", pkg.Name)
+		}
+
+		// Note: SearchPackages not tested here because old timestamp data
+		// stored as strings can't be scanned into time.Time. This is a data
+		// migration issue, not a schema migration issue.
+	})
+}
+
+func TestConcurrentWrites(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	db, err := Create(dbPath)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	pkg := &Package{
+		PURL:      "pkg:npm/test",
+		Ecosystem: "npm",
+		Name:      "test",
+	}
+	if err := db.UpsertPackage(pkg); err != nil {
+		t.Fatalf("UpsertPackage failed: %v", err)
+	}
+
+	ver := &Version{
+		PURL:        "pkg:npm/test@1.0.0",
+		PackagePURL: pkg.PURL,
+	}
+	if err := db.UpsertVersion(ver); err != nil {
+		t.Fatalf("UpsertVersion failed: %v", err)
+	}
+
+	done := make(chan error, 10)
+	for i := 0; i < 10; i++ {
+		go func() {
+			artifact := &Artifact{
+				VersionPURL: ver.PURL,
+				Filename:    "test.tgz",
+				UpstreamURL: "https://example.com/test.tgz",
+			}
+			if err := db.UpsertArtifact(artifact); err != nil {
+				done <- err
+				return
+			}
+			done <- nil
+		}()
+	}
+
+	for i := 0; i < 10; i++ {
+		if err := <-done; err != nil {
+			t.Errorf("concurrent write %d failed: %v", i, err)
+		}
+	}
+}
+
+func TestSearchPackagesWithNulls(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	db, err := Create(dbPath)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	pkg := &Package{
+		PURL:      "pkg:npm/test-package",
+		Ecosystem: "npm",
+		Name:      "test-package",
+	}
+	if err := db.UpsertPackage(pkg); err != nil {
+		t.Fatalf("UpsertPackage failed: %v", err)
+	}
+
+	ver := &Version{
+		PURL:        "pkg:npm/test-package@1.0.0",
+		PackagePURL: pkg.PURL,
+	}
+	if err := db.UpsertVersion(ver); err != nil {
+		t.Fatalf("UpsertVersion failed: %v", err)
+	}
+
+	artifact := &Artifact{
+		VersionPURL: ver.PURL,
+		Filename:    "test-package-1.0.0.tgz",
+		UpstreamURL: "https://registry.npmjs.org/test-package/-/test-package-1.0.0.tgz",
+		StoragePath: sql.NullString{String: "./cache/test.tgz", Valid: true},
+		Size:        sql.NullInt64{Int64: 1024, Valid: true},
+		FetchedAt:   sql.NullTime{Time: time.Now(), Valid: true},
+		HitCount:    5,
+	}
+	if err := db.UpsertArtifact(artifact); err != nil {
+		t.Fatalf("UpsertArtifact failed: %v", err)
+	}
+
+	results, err := db.SearchPackages("test", "", 10, 0)
+	if err != nil {
+		t.Fatalf("SearchPackages failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	result := results[0]
+	if result.Ecosystem != "npm" {
+		t.Errorf("expected ecosystem npm, got %s", result.Ecosystem)
+	}
+	if result.Name != "test-package" {
+		t.Errorf("expected name test-package, got %s", result.Name)
+	}
+	if result.LatestVersion.Valid {
+		t.Errorf("expected LatestVersion to be null, got %s", result.LatestVersion.String)
+	}
+	if result.License.Valid {
+		t.Errorf("expected License to be null, got %s", result.License.String)
+	}
+	if result.Hits != 5 {
+		t.Errorf("expected 5 hits, got %d", result.Hits)
+	}
+}
+
+func TestSearchPackagesWithValues(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	db, err := Create(dbPath)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	pkg := &Package{
+		PURL:          "pkg:npm/licensed-package",
+		Ecosystem:     "npm",
+		Name:          "licensed-package",
+		LatestVersion: sql.NullString{String: "2.0.0", Valid: true},
+		License:       sql.NullString{String: "MIT", Valid: true},
+	}
+	if err := db.UpsertPackage(pkg); err != nil {
+		t.Fatalf("UpsertPackage failed: %v", err)
+	}
+
+	ver := &Version{
+		PURL:        "pkg:npm/licensed-package@1.0.0",
+		PackagePURL: pkg.PURL,
+	}
+	if err := db.UpsertVersion(ver); err != nil {
+		t.Fatalf("UpsertVersion failed: %v", err)
+	}
+
+	artifact := &Artifact{
+		VersionPURL: ver.PURL,
+		Filename:    "licensed-package-1.0.0.tgz",
+		UpstreamURL: "https://registry.npmjs.org/licensed-package/-/licensed-package-1.0.0.tgz",
+		StoragePath: sql.NullString{String: "./cache/licensed.tgz", Valid: true},
+		Size:        sql.NullInt64{Int64: 2048, Valid: true},
+		FetchedAt:   sql.NullTime{Time: time.Now(), Valid: true},
+		HitCount:    10,
+	}
+	if err := db.UpsertArtifact(artifact); err != nil {
+		t.Fatalf("UpsertArtifact failed: %v", err)
+	}
+
+	results, err := db.SearchPackages("licensed", "", 10, 0)
+	if err != nil {
+		t.Fatalf("SearchPackages failed: %v", err)
+	}
+
+	if len(results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(results))
+	}
+
+	result := results[0]
+	if result.Ecosystem != "npm" {
+		t.Errorf("expected ecosystem npm, got %s", result.Ecosystem)
+	}
+	if result.Name != "licensed-package" {
+		t.Errorf("expected name licensed-package, got %s", result.Name)
+	}
+	if !result.LatestVersion.Valid || result.LatestVersion.String != "2.0.0" {
+		t.Errorf("expected LatestVersion 2.0.0, got valid=%v value=%s", result.LatestVersion.Valid, result.LatestVersion.String)
+	}
+	if !result.License.Valid || result.License.String != "MIT" {
+		t.Errorf("expected License MIT, got valid=%v value=%s", result.License.Valid, result.License.String)
+	}
+	if result.Hits != 10 {
+		t.Errorf("expected 10 hits, got %d", result.Hits)
+	}
+}

@@ -2,20 +2,23 @@ package server
 
 import (
 	"bytes"
+	"database/sql"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/enrichment"
 )
 
 func TestNewAPIHandler(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	svc := enrichment.New(logger)
-	h := NewAPIHandler(svc)
+	h := NewAPIHandler(svc, nil)
 
 	if h == nil {
 		t.Fatal("NewAPIHandler returned nil")
@@ -28,7 +31,7 @@ func TestNewAPIHandler(t *testing.T) {
 func TestHandleGetPackage_MissingParams(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	svc := enrichment.New(logger)
-	h := NewAPIHandler(svc)
+	h := NewAPIHandler(svc, nil)
 
 	req := httptest.NewRequest("GET", "/api/package//", nil)
 	req.SetPathValue("ecosystem", "")
@@ -45,7 +48,7 @@ func TestHandleGetPackage_MissingParams(t *testing.T) {
 func TestHandleGetVersion_MissingParams(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	svc := enrichment.New(logger)
-	h := NewAPIHandler(svc)
+	h := NewAPIHandler(svc, nil)
 
 	req := httptest.NewRequest("GET", "/api/package///", nil)
 	req.SetPathValue("ecosystem", "")
@@ -63,7 +66,7 @@ func TestHandleGetVersion_MissingParams(t *testing.T) {
 func TestHandleGetVulns_MissingParams(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	svc := enrichment.New(logger)
-	h := NewAPIHandler(svc)
+	h := NewAPIHandler(svc, nil)
 
 	req := httptest.NewRequest("GET", "/api/vulns//", nil)
 	req.SetPathValue("ecosystem", "")
@@ -80,7 +83,7 @@ func TestHandleGetVulns_MissingParams(t *testing.T) {
 func TestHandleOutdated_EmptyBody(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	svc := enrichment.New(logger)
-	h := NewAPIHandler(svc)
+	h := NewAPIHandler(svc, nil)
 
 	req := httptest.NewRequest("POST", "/api/outdated", bytes.NewReader([]byte("{}")))
 	w := httptest.NewRecorder()
@@ -94,7 +97,7 @@ func TestHandleOutdated_EmptyBody(t *testing.T) {
 func TestHandleOutdated_InvalidJSON(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	svc := enrichment.New(logger)
-	h := NewAPIHandler(svc)
+	h := NewAPIHandler(svc, nil)
 
 	req := httptest.NewRequest("POST", "/api/outdated", bytes.NewReader([]byte("not json")))
 	w := httptest.NewRecorder()
@@ -108,7 +111,7 @@ func TestHandleOutdated_InvalidJSON(t *testing.T) {
 func TestHandleBulkLookup_EmptyBody(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	svc := enrichment.New(logger)
-	h := NewAPIHandler(svc)
+	h := NewAPIHandler(svc, nil)
 
 	req := httptest.NewRequest("POST", "/api/bulk", bytes.NewReader([]byte("{}")))
 	w := httptest.NewRecorder()
@@ -122,7 +125,7 @@ func TestHandleBulkLookup_EmptyBody(t *testing.T) {
 func TestHandleBulkLookup_InvalidJSON(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	svc := enrichment.New(logger)
-	h := NewAPIHandler(svc)
+	h := NewAPIHandler(svc, nil)
 
 	req := httptest.NewRequest("POST", "/api/bulk", bytes.NewReader([]byte("not json")))
 	w := httptest.NewRecorder()
@@ -255,5 +258,94 @@ func TestBulkRequestJSON(t *testing.T) {
 
 	if len(decoded.PURLs) != 2 {
 		t.Errorf("expected 2 purls, got %d", len(decoded.PURLs))
+	}
+}
+
+func TestHandleSearch_MissingQuery(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	svc := enrichment.New(logger)
+	h := NewAPIHandler(svc, nil)
+
+	req := httptest.NewRequest("GET", "/api/search", nil)
+	w := httptest.NewRecorder()
+	h.HandleSearch(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d, got %d", http.StatusBadRequest, w.Code)
+	}
+}
+
+func TestHandleSearch_WithNullValues(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	svc := enrichment.New(logger)
+
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	db, err := database.Create(dbPath)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	pkg := &database.Package{
+		PURL:      "pkg:npm/api-test",
+		Ecosystem: "npm",
+		Name:      "api-test",
+	}
+	if err := db.UpsertPackage(pkg); err != nil {
+		t.Fatalf("UpsertPackage failed: %v", err)
+	}
+
+	ver := &database.Version{
+		PURL:        "pkg:npm/api-test@1.0.0",
+		PackagePURL: pkg.PURL,
+	}
+	if err := db.UpsertVersion(ver); err != nil {
+		t.Fatalf("UpsertVersion failed: %v", err)
+	}
+
+	artifact := &database.Artifact{
+		VersionPURL: ver.PURL,
+		Filename:    "api-test-1.0.0.tgz",
+		UpstreamURL: "https://registry.npmjs.org/api-test/-/api-test-1.0.0.tgz",
+		StoragePath: sql.NullString{String: "./cache/test.tgz", Valid: true},
+		HitCount:    3,
+	}
+	if err := db.UpsertArtifact(artifact); err != nil {
+		t.Fatalf("UpsertArtifact failed: %v", err)
+	}
+
+	h := NewAPIHandler(svc, db)
+
+	req := httptest.NewRequest("GET", "/api/search?q=api-test", nil)
+	w := httptest.NewRecorder()
+	h.HandleSearch(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Errorf("expected status %d, got %d", http.StatusOK, w.Code)
+	}
+
+	var resp SearchResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("failed to decode response: %v", err)
+	}
+
+	if len(resp.Results) != 1 {
+		t.Fatalf("expected 1 result, got %d", len(resp.Results))
+	}
+
+	result := resp.Results[0]
+	if result.Name != "api-test" {
+		t.Errorf("expected name api-test, got %s", result.Name)
+	}
+	if result.LatestVersion != "" {
+		t.Errorf("expected empty LatestVersion, got %s", result.LatestVersion)
+	}
+	if result.License != "" {
+		t.Errorf("expected empty License, got %s", result.License)
+	}
+	if result.Hits != 3 {
+		t.Errorf("expected 3 hits, got %d", result.Hits)
 	}
 }

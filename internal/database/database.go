@@ -61,10 +61,14 @@ func Open(path string) (*DB, error) {
 		}
 	}
 
-	sqlDB, err := sqlx.Open("sqlite", path)
+	// Add busy_timeout to handle concurrent writes
+	sqlDB, err := sqlx.Open("sqlite", path+"?_busy_timeout=5000")
 	if err != nil {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
+
+	// Limit connections to 1 for SQLite to serialize writes
+	sqlDB.SetMaxOpenConns(1)
 
 	db := &DB{DB: sqlDB, dialect: DialectSQLite, path: path}
 	if err := db.OptimizeForReads(); err != nil {

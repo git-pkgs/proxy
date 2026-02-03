@@ -1,0 +1,108 @@
+{{define "title"}}{{.Package.Name}}@{{.Version.PURL}} - git-pkgs proxy{{end}}
+
+{{define "content"}}
+<div class="mb-6">
+    <nav class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        <a href="/" class="hover:text-gray-900 dark:hover:text-gray-100">Home</a>
+        <span class="mx-2">/</span>
+        <a href="/package/{{.Package.Ecosystem}}/{{.Package.Name}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.Package.Name}}</a>
+    </nav>
+    <div class="flex items-center gap-3 mb-2">
+        {{template "ecosystem_badge" .Package.Ecosystem}}
+        <h1 class="text-3xl font-bold font-mono">{{.Version.PURL}}</h1>
+        {{if .IsOutdated}}
+        <span class="inline-flex items-center px-2 py-1 rounded text-sm font-medium bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300">outdated</span>
+        {{end}}
+        {{if .Version.Yanked}}
+        <span class="inline-flex items-center px-2 py-1 rounded text-sm font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">yanked</span>
+        {{end}}
+    </div>
+    {{if .Package.LatestVersion.Valid}}
+    <p class="text-sm text-gray-600 dark:text-gray-400">Latest version: <span class="font-mono">{{.Package.LatestVersion.String}}</span></p>
+    {{end}}
+    {{if .HasCachedArtifact}}
+    <div class="mt-4">
+        <a href="/package/{{.Package.Ecosystem}}/{{.Package.Name}}/{{.Version.Version}}/browse"
+           class="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
+            <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>
+            </svg>
+            Browse Source Code
+        </a>
+    </div>
+    {{end}}
+</div>
+
+<div class="grid md:grid-cols-2 gap-6 mb-8">
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-800">
+        <h2 class="text-lg font-semibold mb-4">Version Info</h2>
+        <dl class="space-y-2">
+            {{if .Version.License.Valid}}
+            <div><dt class="inline text-gray-500 dark:text-gray-400">License:</dt> <dd class="inline"><span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-100 text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-700 dark:bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-900 dark:text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-300">{{.Version.License.String}}</span></dd></div>
+            {{end}}
+            {{if .Version.PublishedAt.Valid}}
+            <div><dt class="inline text-gray-500 dark:text-gray-400">Published:</dt> <dd class="inline">{{.Version.PublishedAt.Time.Format "2006-01-02 15:04:05"}}</dd></div>
+            {{end}}
+            {{if .Version.Integrity.Valid}}
+            <div><dt class="inline text-gray-500 dark:text-gray-400">Integrity:</dt> <dd class="inline font-mono text-xs break-all">{{.Version.Integrity.String}}</dd></div>
+            {{end}}
+        </dl>
+    </div>
+
+    {{if .Vulnerabilities}}
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-6 shadow-sm border border-red-200 dark:border-red-900">
+        <h2 class="text-lg font-semibold mb-4 text-red-600 dark:text-red-400">Security Vulnerabilities ({{len .Vulnerabilities}})</h2>
+        <div class="space-y-3">
+            {{range .Vulnerabilities}}
+            <div class="border-l-4 border-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else}}blue{{end}}-500 pl-3">
+                <div class="font-semibold text-sm">{{.VulnID}}</div>
+                {{if .Summary.Valid}}<p class="text-sm text-gray-600 dark:text-gray-400">{{.Summary.String}}</p>{{end}}
+                <div class="flex gap-2 mt-1">
+                    <span class="text-xs uppercase font-medium text-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else}}blue{{end}}-600 dark:text-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else}}blue{{end}}-400">{{.Severity}}</span>
+                    {{if .FixedVersion.Valid}}<span class="text-xs text-gray-500 dark:text-gray-400">Fixed in {{.FixedVersion.String}}</span>{{end}}
+                </div>
+            </div>
+            {{end}}
+        </div>
+    </div>
+    {{end}}
+</div>
+
+{{if .Artifacts}}
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
+    <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800">
+        <h2 class="text-lg font-semibold">Artifacts ({{len .Artifacts}})</h2>
+    </div>
+    <div class="divide-y divide-gray-200 dark:divide-gray-800">
+        {{range .Artifacts}}
+        <div class="px-6 py-4">
+            <div class="flex items-center justify-between mb-2">
+                <div class="font-mono text-sm">{{.Filename}}</div>
+                <div class="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
+                    {{if .Size.Valid}}<span>{{.Size.Int64}} bytes</span>{{end}}
+                    {{if gt .HitCount 0}}<span>{{.HitCount}} cache hits</span>{{end}}
+                </div>
+            </div>
+            {{if .ContentHash.Valid}}
+            <div class="text-xs text-gray-600 dark:text-gray-400">Hash: <span class="font-mono break-all">{{.ContentHash.String}}</span></div>
+            {{end}}
+            {{if .StoragePath.Valid}}
+            <div class="mt-2">
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900 dark:text-green-300">cached</span>
+                {{if .FetchedAt.Valid}}<span class="text-xs text-gray-500 dark:text-gray-400 ml-2">{{.FetchedAt.Time.Format "2006-01-02 15:04"}}</span>{{end}}
+            </div>
+            {{else}}
+            <div class="mt-2">
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">not cached</span>
+            </div>
+            {{end}}
+        </div>
+        {{end}}
+    </div>
+</div>
+{{else}}
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-12 text-center text-gray-500 dark:text-gray-400">
+    No artifacts cached yet
+</div>
+{{end}}
+{{end}}

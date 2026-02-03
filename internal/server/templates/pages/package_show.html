@@ -1,0 +1,136 @@
+{{define "title"}}{{.Package.Name}} - git-pkgs proxy{{end}}
+
+{{define "content"}}
+<div class="mb-6">
+    <div class="flex items-center gap-3 mb-2">
+        {{template "ecosystem_badge" .Package.Ecosystem}}
+        <h1 class="text-3xl font-bold">{{.Package.Name}}</h1>
+    </div>
+    {{if .Package.Description.Valid}}
+    <p class="text-gray-600 dark:text-gray-400">{{.Package.Description.String}}</p>
+    {{end}}
+</div>
+
+<div class="grid md:grid-cols-2 gap-6 mb-8">
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-800">
+        <h2 class="text-lg font-semibold mb-4">Package Info</h2>
+        <dl class="space-y-2">
+            {{if .Package.LatestVersion.Valid}}
+            <div><dt class="inline text-gray-500 dark:text-gray-400">Latest Version:</dt> <dd class="inline font-mono">{{.Package.LatestVersion.String}}</dd></div>
+            {{end}}
+            {{if .Package.License.Valid}}
+            <div><dt class="inline text-gray-500 dark:text-gray-400">License:</dt> <dd class="inline"><span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-100 text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-700 dark:bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-900 dark:text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-300">{{.Package.License.String}}</span></dd></div>
+            {{end}}
+            {{if .Package.Homepage.Valid}}
+            <div><dt class="inline text-gray-500 dark:text-gray-400">Homepage:</dt> <dd class="inline"><a href="{{.Package.Homepage.String}}" class="text-blue-600 dark:text-blue-400 hover:underline" target="_blank">{{.Package.Homepage.String}}</a></dd></div>
+            {{end}}
+            {{if .Package.RepositoryURL.Valid}}
+            <div><dt class="inline text-gray-500 dark:text-gray-400">Repository:</dt> <dd class="inline"><a href="{{.Package.RepositoryURL.String}}" class="text-blue-600 dark:text-blue-400 hover:underline" target="_blank">{{.Package.RepositoryURL.String}}</a></dd></div>
+            {{end}}
+        </dl>
+    </div>
+
+    {{if .Vulnerabilities}}
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-6 shadow-sm border border-red-200 dark:border-red-900">
+        <h2 class="text-lg font-semibold mb-4 text-red-600 dark:text-red-400">Security Vulnerabilities ({{len .Vulnerabilities}})</h2>
+        <div class="space-y-3">
+            {{range .Vulnerabilities}}
+            <div class="border-l-4 border-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else}}blue{{end}}-500 pl-3">
+                <div class="font-semibold text-sm">{{.VulnID}}</div>
+                {{if .Summary.Valid}}<p class="text-sm text-gray-600 dark:text-gray-400">{{.Summary.String}}</p>{{end}}
+                <div class="flex gap-2 mt-1">
+                    <span class="text-xs uppercase font-medium text-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else}}blue{{end}}-600 dark:text-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else}}blue{{end}}-400">{{.Severity}}</span>
+                    {{if .FixedVersion.Valid}}<span class="text-xs text-gray-500 dark:text-gray-400">Fixed in {{.FixedVersion.String}}</span>{{end}}
+                </div>
+            </div>
+            {{end}}
+        </div>
+    </div>
+    {{end}}
+</div>
+
+{{if .Versions}}
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
+    <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
+        <h2 class="text-lg font-semibold">Versions ({{len .Versions}})</h2>
+        {{if gt (len .Versions) 1}}
+        <button id="compare-btn" class="px-3 py-1 text-sm bg-blue-600 text-white rounded hover:bg-blue-700 transition-colors">
+            Compare Versions
+        </button>
+        {{end}}
+    </div>
+    <div class="divide-y divide-gray-200 dark:divide-gray-800">
+        {{range .Versions}}
+        <div class="px-6 py-3 flex items-center justify-between version-row">
+            <div class="flex items-center gap-3">
+                <input type="checkbox" class="version-checkbox hidden" data-version="{{.Version}}" />
+                <a href="/package/{{$.Package.Ecosystem}}/{{$.Package.Name}}/{{.Version}}" class="font-mono text-sm hover:text-blue-600 dark:hover:text-blue-400">{{.PURL}}</a>
+                {{if .Yanked}}<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">yanked</span>{{end}}
+            </div>
+            {{if .PublishedAt.Valid}}<span class="text-sm text-gray-500 dark:text-gray-400">{{.PublishedAt.Time.Format "2006-01-02"}}</span>{{end}}
+        </div>
+        {{end}}
+    </div>
+</div>
+
+{{if gt (len .Versions) 1}}
+<script>
+let compareMode = false;
+const ecosystem = '{{.Package.Ecosystem}}';
+const packageName = '{{.Package.Name}}';
+
+document.getElementById('compare-btn').addEventListener('click', function() {
+    compareMode = !compareMode;
+
+    if (compareMode) {
+        this.textContent = 'Cancel';
+        this.classList.remove('bg-blue-600', 'hover:bg-blue-700');
+        this.classList.add('bg-gray-600', 'hover:bg-gray-700');
+
+        // Show checkboxes
+        document.querySelectorAll('.version-checkbox').forEach(cb => {
+            cb.classList.remove('hidden');
+        });
+
+        // Add instruction
+        const instruction = document.createElement('div');
+        instruction.id = 'compare-instruction';
+        instruction.className = 'px-6 py-3 bg-blue-50 dark:bg-blue-900/20 border-t border-blue-200 dark:border-blue-900 text-sm text-blue-800 dark:text-blue-300';
+        instruction.textContent = 'Select two versions to compare';
+        this.parentElement.parentElement.appendChild(instruction);
+    } else {
+        this.textContent = 'Compare Versions';
+        this.classList.remove('bg-gray-600', 'hover:bg-gray-700');
+        this.classList.add('bg-blue-600', 'hover:bg-blue-700');
+
+        // Hide checkboxes
+        document.querySelectorAll('.version-checkbox').forEach(cb => {
+            cb.classList.add('hidden');
+            cb.checked = false;
+        });
+
+        // Remove instruction
+        document.getElementById('compare-instruction')?.remove();
+    }
+});
+
+// Handle checkbox changes
+document.addEventListener('change', function(e) {
+    if (e.target.classList.contains('version-checkbox')) {
+        const checked = document.querySelectorAll('.version-checkbox:checked');
+
+        if (checked.length === 2) {
+            // Navigate to compare page
+            const v1 = checked[0].dataset.version;
+            const v2 = checked[1].dataset.version;
+            window.location.href = `/package/${ecosystem}/${packageName}/compare/${v1}...${v2}`;
+        } else if (checked.length > 2) {
+            // Uncheck the oldest selection
+            checked[0].checked = false;
+        }
+    }
+});
+</script>
+{{end}}
+{{end}}
+{{end}}

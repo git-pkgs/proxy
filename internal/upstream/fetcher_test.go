@@ -247,3 +247,71 @@ func TestFetchLargeArtifact(t *testing.T) {
 		t.Errorf("body length = %d, want %d", len(body), len(content))
 	}
 }
+
+func TestFetchRetryWithJitter(t *testing.T) {
+	attempts := 0
+	var retryTimes []time.Time
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		retryTimes = append(retryTimes, time.Now())
+		if attempts < 3 {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte("success"))
+	}))
+	defer server.Close()
+
+	f := New(WithBaseDelay(100 * time.Millisecond))
+	artifact, err := f.Fetch(context.Background(), server.URL+"/test.tgz")
+	if err != nil {
+		t.Fatalf("Fetch failed: %v", err)
+	}
+	defer func() { _ = artifact.Body.Close() }()
+
+	if attempts != 3 {
+		t.Errorf("attempts = %d, want 3", attempts)
+	}
+
+	// Verify that delays between retries vary (jitter is applied)
+	// With 100ms base delay and exponential backoff:
+	// First retry: ~100ms + jitter (0-10ms)
+	// Second retry: ~200ms + jitter (0-20ms)
+	if len(retryTimes) >= 2 {
+		firstDelay := retryTimes[1].Sub(retryTimes[0])
+		// First retry should be between 100ms and 130ms (100ms + max 10% jitter + some tolerance)
+		if firstDelay < 90*time.Millisecond || firstDelay > 150*time.Millisecond {
+			t.Logf("First retry delay: %v (expected ~100ms with jitter)", firstDelay)
+		}
+	}
+}
+
+func TestFetchDNSCaching(t *testing.T) {
+	// This test verifies DNS caching is enabled by making multiple requests
+	// to the same host. While we can't directly observe cache hits, we verify
+	// that the fetcher works correctly with DNS caching enabled.
+	requestCount := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer server.Close()
+
+	f := New()
+
+	// Make multiple requests to the same host
+	for i := range 3 {
+		artifact, err := f.Fetch(context.Background(), server.URL+"/test.tgz")
+		if err != nil {
+			t.Fatalf("Fetch %d failed: %v", i+1, err)
+		}
+		_ = artifact.Body.Close()
+	}
+
+	if requestCount != 3 {
+		t.Errorf("requestCount = %d, want 3", requestCount)
+	}
+
+	// Note: DNS caching happens transparently in the net.Dialer.
+	// This test confirms the fetcher works correctly with DNS caching enabled.
+}

@@ -273,3 +273,144 @@ func (db *DB) HasTable(name string) (bool, error) {
 	err := db.Get(&exists, query, name)
 	return exists, err
 }
+
+// HasColumn checks if a column exists in a table.
+func (db *DB) HasColumn(table, column string) (bool, error) {
+	var exists bool
+	var query string
+
+	if db.dialect == DialectPostgres {
+		query = "SELECT EXISTS (SELECT FROM information_schema.columns WHERE table_name = $1 AND column_name = $2)"
+	} else {
+		// For SQLite, check table_info
+		query = "SELECT COUNT(*) > 0 FROM pragma_table_info(?) WHERE name = ?"
+	}
+
+	err := db.Get(&exists, query, table, column)
+	return exists, err
+}
+
+// MigrateSchema adds missing columns to existing tables for backward compatibility.
+func (db *DB) MigrateSchema() error {
+	// Check and add missing columns to packages table
+	packagesColumns := map[string]string{
+		"registry_url":     "TEXT",
+		"supplier_name":    "TEXT",
+		"supplier_type":    "TEXT",
+		"source":           "TEXT",
+		"enriched_at":      "DATETIME",
+		"vulns_synced_at":  "DATETIME",
+	}
+
+	if db.dialect == DialectPostgres {
+		packagesColumns["enriched_at"] = "TIMESTAMP"
+		packagesColumns["vulns_synced_at"] = "TIMESTAMP"
+	}
+
+	for column, colType := range packagesColumns {
+		hasCol, err := db.HasColumn("packages", column)
+		if err != nil {
+			return fmt.Errorf("checking column %s: %w", column, err)
+		}
+		if !hasCol {
+			var alterQuery string
+			if db.dialect == DialectPostgres {
+				alterQuery = fmt.Sprintf("ALTER TABLE packages ADD COLUMN %s %s", column, colType)
+			} else {
+				alterQuery = fmt.Sprintf("ALTER TABLE packages ADD COLUMN %s %s", column, colType)
+			}
+			if _, err := db.Exec(alterQuery); err != nil {
+				return fmt.Errorf("adding column %s to packages: %w", column, err)
+			}
+		}
+	}
+
+	// Check and add missing columns to versions table
+	versionsColumns := map[string]string{
+		"integrity":   "TEXT",
+		"yanked":      "INTEGER DEFAULT 0",
+		"source":      "TEXT",
+		"enriched_at": "DATETIME",
+	}
+
+	if db.dialect == DialectPostgres {
+		versionsColumns["yanked"] = "BOOLEAN DEFAULT FALSE"
+		versionsColumns["enriched_at"] = "TIMESTAMP"
+	}
+
+	for column, colType := range versionsColumns {
+		hasCol, err := db.HasColumn("versions", column)
+		if err != nil {
+			return fmt.Errorf("checking column %s: %w", column, err)
+		}
+		if !hasCol {
+			var alterQuery string
+			if db.dialect == DialectPostgres {
+				alterQuery = fmt.Sprintf("ALTER TABLE versions ADD COLUMN %s %s", column, colType)
+			} else {
+				alterQuery = fmt.Sprintf("ALTER TABLE versions ADD COLUMN %s %s", column, colType)
+			}
+			if _, err := db.Exec(alterQuery); err != nil {
+				return fmt.Errorf("adding column %s to versions: %w", column, err)
+			}
+		}
+	}
+
+	// Ensure artifacts table exists
+	if err := db.EnsureArtifactsTable(); err != nil {
+		return fmt.Errorf("ensuring artifacts table: %w", err)
+	}
+
+	// Ensure vulnerabilities table exists
+	hasVulns, err := db.HasTable("vulnerabilities")
+	if err != nil {
+		return fmt.Errorf("checking vulnerabilities table: %w", err)
+	}
+	if !hasVulns {
+		var vulnSchema string
+		if db.dialect == DialectPostgres {
+			vulnSchema = `
+				CREATE TABLE vulnerabilities (
+					id SERIAL PRIMARY KEY,
+					vuln_id TEXT NOT NULL,
+					ecosystem TEXT NOT NULL,
+					package_name TEXT NOT NULL,
+					severity TEXT,
+					summary TEXT,
+					fixed_version TEXT,
+					cvss_score REAL,
+					"references" TEXT,
+					fetched_at TIMESTAMP,
+					created_at TIMESTAMP,
+					updated_at TIMESTAMP
+				);
+				CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
+				CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
+			`
+		} else {
+			vulnSchema = `
+				CREATE TABLE vulnerabilities (
+					id INTEGER PRIMARY KEY,
+					vuln_id TEXT NOT NULL,
+					ecosystem TEXT NOT NULL,
+					package_name TEXT NOT NULL,
+					severity TEXT,
+					summary TEXT,
+					fixed_version TEXT,
+					cvss_score REAL,
+					"references" TEXT,
+					fetched_at DATETIME,
+					created_at DATETIME,
+					updated_at DATETIME
+				);
+				CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
+				CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
+			`
+		}
+		if _, err := db.Exec(vulnSchema); err != nil {
+			return fmt.Errorf("creating vulnerabilities table: %w", err)
+		}
+	}
+
+	return nil
+}

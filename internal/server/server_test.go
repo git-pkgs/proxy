@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -16,6 +17,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/proxy/internal/upstream"
+	"github.com/go-chi/chi/v5"
 )
 
 type testServer struct {
@@ -60,7 +62,7 @@ func newTestServer(t *testing.T) *testServer {
 		Database: config.DatabaseConfig{Path: dbPath},
 	}
 
-	mux := http.NewServeMux()
+	r := chi.NewRouter()
 
 	// Mount handlers
 	npmHandler := handler.NewNPMHandler(proxy, cfg.BaseURL)
@@ -69,27 +71,44 @@ func newTestServer(t *testing.T) *testServer {
 	goHandler := handler.NewGoHandler(proxy, cfg.BaseURL)
 	pypiHandler := handler.NewPyPIHandler(proxy, cfg.BaseURL)
 
-	mux.Handle("GET /npm/{path...}", http.StripPrefix("/npm", npmHandler.Routes()))
-	mux.Handle("GET /cargo/{path...}", http.StripPrefix("/cargo", cargoHandler.Routes()))
-	mux.Handle("GET /gem/{path...}", http.StripPrefix("/gem", gemHandler.Routes()))
-	mux.Handle("GET /go/{path...}", http.StripPrefix("/go", goHandler.Routes()))
-	mux.Handle("GET /pypi/{path...}", http.StripPrefix("/pypi", pypiHandler.Routes()))
+	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))
+	r.Mount("/cargo", http.StripPrefix("/cargo", cargoHandler.Routes()))
+	r.Mount("/gem", http.StripPrefix("/gem", gemHandler.Routes()))
+	r.Mount("/go", http.StripPrefix("/go", goHandler.Routes()))
+	r.Mount("/pypi", http.StripPrefix("/pypi", pypiHandler.Routes()))
+
+	// Load templates
+	templates, err := NewTemplates()
+	if err != nil {
+		_ = db.Close()
+		_ = os.RemoveAll(tempDir)
+		t.Fatalf("failed to load templates: %v", err)
+	}
 
 	// Create a minimal server struct for the handlers
 	s := &Server{
-		cfg:     cfg,
-		db:      db,
-		storage: store,
-		logger:  logger,
+		cfg:       cfg,
+		db:        db,
+		storage:   store,
+		logger:    logger,
+		templates: templates,
 	}
 
-	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("GET /stats", s.handleStats)
-	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
-	mux.HandleFunc("GET /{$}", s.handleRoot)
+	r.Get("/health", s.handleHealth)
+	r.Get("/stats", s.handleStats)
+	r.Mount("/static", http.StripPrefix("/static/", staticHandler()))
+	r.Get("/search", s.handleSearch)
+	r.Get("/package/{ecosystem}/{name}", s.handlePackageShow)
+	r.Get("/package/{ecosystem}/{name}/{version}", s.handleVersionShow)
+	r.Get("/package/{ecosystem}/{name}/{version}/browse", s.handleBrowseSource)
+	r.Get("/api/browse/{ecosystem}/{name}/{version}", s.handleBrowseList)
+	r.Get("/api/browse/{ecosystem}/{name}/{version}/file/*", s.handleBrowseFile)
+	r.Get("/api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion}", s.handleCompareDiff)
+	r.Get("/package/{ecosystem}/{name}/compare/{versions}", s.handleComparePage)
+	r.Get("/", s.handleRoot)
 
 	return &testServer{
-		handler: mux,
+		handler: r,
 		db:      db,
 		storage: store,
 		tempDir: tempDir,
@@ -164,17 +183,27 @@ func TestDashboard(t *testing.T) {
 	}
 
 	body := w.Body.String()
+	if body == "" {
+		t.Fatal("dashboard returned empty body")
+	}
 	if !strings.Contains(body, "git-pkgs proxy") {
+		t.Logf("Body: %s", body[:min(len(body), 500)])
 		t.Error("dashboard should contain title")
 	}
 	if !strings.Contains(body, "Cached Artifacts") {
 		t.Error("dashboard should contain stats")
 	}
-	if !strings.Contains(body, "Configure Your Package Manager") {
-		t.Error("dashboard should contain configuration section")
+	if !strings.Contains(body, "Popular Packages") {
+		t.Error("dashboard should contain popular packages section")
 	}
 }
 
+func min(a, b int) int {
+	if a < b {
+		return a
+	}
+	return b
+}
 
 func TestNPMPackageMetadata(t *testing.T) {
 	ts := newTestServer(t)
@@ -339,5 +368,103 @@ func TestDashboardWithEnrichmentStats(t *testing.T) {
 	// Dashboard should have dark mode toggle
 	if !strings.Contains(body, "theme-toggle") {
 		t.Error("dashboard should have dark mode toggle")
+	}
+}
+
+func TestVersionShowWithHitCount(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	pkg := &database.Package{
+		PURL:      "pkg:npm/test",
+		Ecosystem: "npm",
+		Name:      "test",
+	}
+	if err := ts.db.UpsertPackage(pkg); err != nil {
+		t.Fatalf("failed to upsert package: %v", err)
+	}
+
+	ver := &database.Version{
+		PURL:        "pkg:npm/test@1.0.0",
+		PackagePURL: pkg.PURL,
+	}
+	if err := ts.db.UpsertVersion(ver); err != nil {
+		t.Fatalf("failed to upsert version: %v", err)
+	}
+
+	artifact := &database.Artifact{
+		VersionPURL: ver.PURL,
+		Filename:    "test-1.0.0.tgz",
+		UpstreamURL: "https://registry.npmjs.org/test/-/test-1.0.0.tgz",
+		HitCount:    42,
+	}
+	if err := ts.db.UpsertArtifact(artifact); err != nil {
+		t.Fatalf("failed to upsert artifact: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/package/npm/test/1.0.0", nil)
+	w := httptest.NewRecorder()
+
+	ts.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "42 cache hits") {
+		t.Error("expected page to show hit count")
+	}
+}
+
+func TestSearchWithNullValues(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	pkg := &database.Package{
+		PURL:      "pkg:npm/test-pkg",
+		Ecosystem: "npm",
+		Name:      "test-pkg",
+	}
+	if err := ts.db.UpsertPackage(pkg); err != nil {
+		t.Fatalf("failed to upsert package: %v", err)
+	}
+
+	ver := &database.Version{
+		PURL:        "pkg:npm/test-pkg@1.0.0",
+		PackagePURL: pkg.PURL,
+	}
+	if err := ts.db.UpsertVersion(ver); err != nil {
+		t.Fatalf("failed to upsert version: %v", err)
+	}
+
+	storagePath := filepath.Join(ts.tempDir, "test.tgz")
+	if err := os.WriteFile(storagePath, []byte("test content"), 0644); err != nil {
+		t.Fatalf("failed to write test file: %v", err)
+	}
+
+	artifact := &database.Artifact{
+		VersionPURL: ver.PURL,
+		Filename:    "test-pkg-1.0.0.tgz",
+		UpstreamURL: "https://registry.npmjs.org/test-pkg/-/test-pkg-1.0.0.tgz",
+		StoragePath: sql.NullString{String: storagePath, Valid: true},
+		HitCount:    5,
+	}
+	if err := ts.db.UpsertArtifact(artifact); err != nil {
+		t.Fatalf("failed to upsert artifact: %v", err)
+	}
+
+	req := httptest.NewRequest("GET", "/search?q=test", nil)
+	w := httptest.NewRecorder()
+
+	ts.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d", w.Code)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "test-pkg") {
+		t.Error("expected search results to contain package name")
 	}
 }

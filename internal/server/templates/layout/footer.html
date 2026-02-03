@@ -1,0 +1,38 @@
+{{define "footer"}}
+<footer class="border-t border-gray-200 dark:border-gray-800 bg-white dark:bg-gray-900 mt-16">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+        <div class="grid md:grid-cols-3 gap-8">
+            <div>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">About</h3>
+                <p class="text-sm text-gray-600 dark:text-gray-400">
+                    git-pkgs proxy is a caching proxy for package registries supporting 16+ ecosystems.
+                </p>
+            </div>
+            <div>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">Resources</h3>
+                <ul class="space-y-2 text-sm">
+                    <li><a href="/install" class="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">Configuration Guide</a></li>
+                    <li><a href="/health" class="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">Health Check</a></li>
+                    <li><a href="/stats" class="text-gray-600 dark:text-gray-400 hover:text-gray-900 dark:hover:text-gray-100">API Stats</a></li>
+                </ul>
+            </div>
+            <div>
+                <h3 class="text-sm font-semibold text-gray-900 dark:text-gray-100 mb-3">Supported Ecosystems</h3>
+                <div class="flex flex-wrap gap-1">
+                    <span class="ecosystem-npm px-2 py-0.5 rounded text-xs">npm</span>
+                    <span class="ecosystem-cargo px-2 py-0.5 rounded text-xs">cargo</span>
+                    <span class="ecosystem-gem px-2 py-0.5 rounded text-xs">gem</span>
+                    <span class="ecosystem-go px-2 py-0.5 rounded text-xs">go</span>
+                    <span class="ecosystem-pypi px-2 py-0.5 rounded text-xs">pypi</span>
+                    <span class="ecosystem-maven px-2 py-0.5 rounded text-xs">maven</span>
+                </div>
+            </div>
+        </div>
+        <div class="mt-8 pt-8 border-t border-gray-200 dark:border-gray-800">
+            <p class="text-xs text-center text-gray-500 dark:text-gray-400">
+                Powered by <a href="https://github.com/git-pkgs" class="hover:text-gray-900 dark:hover:text-gray-100" target="_blank">git-pkgs</a>
+            </p>
+        </div>
+    </div>
+</footer>
+{{end}}

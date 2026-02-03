@@ -5,6 +5,8 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/enrichment"
 )
 
@@ -12,12 +14,22 @@ import (
 type APIHandler struct {
 	enrichment *enrichment.Service
 	ecosystems *enrichment.EcosystemsClient
+	db         DBSearcher
+}
+
+// DBSearcher defines the interface for database search operations.
+type DBSearcher interface {
+	SearchPackages(query string, ecosystem string, limit int, offset int) ([]database.SearchResult, error)
+	CountSearchResults(query string, ecosystem string) (int64, error)
+	ListCachedPackages(ecosystem string, sortBy string, limit int, offset int) ([]database.PackageListItem, error)
+	CountCachedPackages(ecosystem string) (int64, error)
 }
 
 // NewAPIHandler creates a new API handler with enrichment services.
-func NewAPIHandler(svc *enrichment.Service) *APIHandler {
+func NewAPIHandler(svc *enrichment.Service, db DBSearcher) *APIHandler {
 	h := &APIHandler{
 		enrichment: svc,
+		db:         db,
 	}
 	// Try to initialize ecosystems client for bulk lookups
 	if client, err := enrichment.NewEcosystemsClient(); err == nil {
@@ -117,8 +129,8 @@ type BulkResponse struct {
 
 // HandleGetPackage handles GET /api/package/{ecosystem}/{name}
 func (h *APIHandler) HandleGetPackage(w http.ResponseWriter, r *http.Request) {
-	ecosystem := r.PathValue("ecosystem")
-	name := r.PathValue("name")
+	ecosystem := chi.URLParam(r, "ecosystem")
+	name := chi.URLParam(r, "name")
 
 	if ecosystem == "" || name == "" {
 		http.Error(w, "ecosystem and name are required", http.StatusBadRequest)
@@ -128,7 +140,7 @@ func (h *APIHandler) HandleGetPackage(w http.ResponseWriter, r *http.Request) {
 	// Handle scoped npm packages (e.g., @scope/name)
 	if strings.HasPrefix(name, "@") {
 		// The path is split, so we need to get the rest
-		rest := r.PathValue("rest")
+		rest := chi.URLParam(r, "rest")
 		if rest != "" {
 			name = name + "/" + rest
 		}
@@ -162,9 +174,9 @@ func (h *APIHandler) HandleGetPackage(w http.ResponseWriter, r *http.Request) {
 
 // HandleGetVersion handles GET /api/package/{ecosystem}/{name}/{version}
 func (h *APIHandler) HandleGetVersion(w http.ResponseWriter, r *http.Request) {
-	ecosystem := r.PathValue("ecosystem")
-	name := r.PathValue("name")
-	version := r.PathValue("version")
+	ecosystem := chi.URLParam(r, "ecosystem")
+	name := chi.URLParam(r, "name")
+	version := chi.URLParam(r, "version")
 
 	if ecosystem == "" || name == "" || version == "" {
 		http.Error(w, "ecosystem, name, and version are required", http.StatusBadRequest)
@@ -227,9 +239,9 @@ func (h *APIHandler) HandleGetVersion(w http.ResponseWriter, r *http.Request) {
 
 // HandleGetVulns handles GET /api/vulns/{ecosystem}/{name}
 func (h *APIHandler) HandleGetVulns(w http.ResponseWriter, r *http.Request) {
-	ecosystem := r.PathValue("ecosystem")
-	name := r.PathValue("name")
-	version := r.PathValue("version")
+	ecosystem := chi.URLParam(r, "ecosystem")
+	name := chi.URLParam(r, "name")
+	version := chi.URLParam(r, "version")
 
 	if ecosystem == "" || name == "" {
 		http.Error(w, "ecosystem and name are required", http.StatusBadRequest)
@@ -385,9 +397,187 @@ func (h *APIHandler) HandleBulkLookup(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// SearchResponse contains search results.
+type SearchResponse struct {
+	Results []SearchPackageResult `json:"results"`
+	Query   string                `json:"query"`
+	Count   int                   `json:"count"`
+}
+
+// SearchPackageResult represents a single search result.
+type SearchPackageResult struct {
+	Ecosystem     string `json:"ecosystem"`
+	Name          string `json:"name"`
+	LatestVersion string `json:"latest_version,omitempty"`
+	License       string `json:"license,omitempty"`
+	Hits          int64  `json:"hits"`
+	Size          int64  `json:"size"`
+	CachedAt      string `json:"cached_at,omitempty"`
+}
+
+// HandleSearch handles GET /api/search
+func (h *APIHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	ecosystem := r.URL.Query().Get("ecosystem")
+
+	if query == "" {
+		http.Error(w, "query parameter 'q' is required", http.StatusBadRequest)
+		return
+	}
+
+	page := 1
+	limit := 50
+
+	// Search in database
+	results, err := h.db.SearchPackages(query, ecosystem, limit, (page-1)*limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	total, err := h.db.CountSearchResults(query, ecosystem)
+	if err != nil {
+		total = 0
+	}
+
+	resp := &SearchResponse{
+		Query:   query,
+		Count:   int(total),
+		Results: make([]SearchPackageResult, 0, len(results)),
+	}
+
+	for _, result := range results {
+		latestVersion := ""
+		if result.LatestVersion.Valid {
+			latestVersion = result.LatestVersion.String
+		}
+		license := ""
+		if result.License.Valid {
+			license = result.License.String
+		}
+		searchResult := SearchPackageResult{
+			Ecosystem:     result.Ecosystem,
+			Name:          result.Name,
+			LatestVersion: latestVersion,
+			License:       license,
+			Hits:          result.Hits,
+			Size:          result.Size,
+		}
+		if result.CachedAt.Valid {
+			searchResult.CachedAt = result.CachedAt.String
+		}
+		resp.Results = append(resp.Results, searchResult)
+	}
+
+	writeJSON(w, resp)
+}
+
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
 		http.Error(w, "failed to encode response", http.StatusInternalServerError)
 	}
+}
+
+// PackagesListResponse contains a list of cached packages.
+type PackagesListResponse struct {
+	Results   []PackageListResult `json:"results"`
+	Count     int                 `json:"count"`
+	Total     int64               `json:"total"`
+	Ecosystem string              `json:"ecosystem,omitempty"`
+	SortBy    string              `json:"sort_by"`
+	Page      int                 `json:"page"`
+	PerPage   int                 `json:"per_page"`
+}
+
+// PackageListResult represents a single package in the list.
+type PackageListResult struct {
+	Ecosystem       string `json:"ecosystem"`
+	Name            string `json:"name"`
+	LatestVersion   string `json:"latest_version,omitempty"`
+	License         string `json:"license,omitempty"`
+	LicenseCategory string `json:"license_category,omitempty"`
+	Hits            int64  `json:"hits"`
+	Size            int64  `json:"size"`
+	CachedAt        string `json:"cached_at,omitempty"`
+	VulnCount       int64  `json:"vuln_count"`
+}
+
+// HandlePackagesList handles GET /api/packages
+func (h *APIHandler) HandlePackagesList(w http.ResponseWriter, r *http.Request) {
+	ecosystem := r.URL.Query().Get("ecosystem")
+	sortBy := r.URL.Query().Get("sort")
+	if sortBy == "" {
+		sortBy = "hits"
+	}
+
+	validSorts := map[string]bool{
+		"hits":      true,
+		"name":      true,
+		"size":      true,
+		"cached_at": true,
+		"ecosystem": true,
+		"vulns":     true,
+	}
+	if !validSorts[sortBy] {
+		http.Error(w, "invalid sort parameter", http.StatusBadRequest)
+		return
+	}
+
+	page := 1
+	limit := 50
+
+	packages, err := h.db.ListCachedPackages(ecosystem, sortBy, limit, (page-1)*limit)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusInternalServerError)
+		return
+	}
+
+	total, err := h.db.CountCachedPackages(ecosystem)
+	if err != nil {
+		total = 0
+	}
+
+	resp := &PackagesListResponse{
+		Results:   make([]PackageListResult, 0, len(packages)),
+		Count:     len(packages),
+		Total:     total,
+		Ecosystem: ecosystem,
+		SortBy:    sortBy,
+		Page:      page,
+		PerPage:   limit,
+	}
+
+	for _, pkg := range packages {
+		latestVersion := ""
+		if pkg.LatestVersion.Valid {
+			latestVersion = pkg.LatestVersion.String
+		}
+		license := ""
+		licenseCategory := "unknown"
+		if pkg.License.Valid {
+			license = pkg.License.String
+			if h.enrichment != nil {
+				licenseCategory = string(h.enrichment.CategorizeLicense(license))
+			}
+		}
+		cachedAt := ""
+		if pkg.CachedAt.Valid {
+			cachedAt = pkg.CachedAt.String
+		}
+
+		resp.Results = append(resp.Results, PackageListResult{
+			Ecosystem:       pkg.Ecosystem,
+			Name:            pkg.Name,
+			LatestVersion:   latestVersion,
+			License:         license,
+			LicenseCategory: licenseCategory,
+			Hits:            pkg.Hits,
+			Size:            pkg.Size,
+			CachedAt:        cachedAt,
+			VulnCount:       pkg.VulnCount,
+		})
+	}
+
+	writeJSON(w, resp)
 }

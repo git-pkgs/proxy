@@ -1,0 +1,43 @@
+{{define "title"}}Configure Package Managers - git-pkgs proxy{{end}}
+
+{{define "content"}}
+<div class="mb-8">
+    <h1 class="text-3xl font-bold mb-2">Configure Your Package Manager</h1>
+    <p class="text-gray-600 dark:text-gray-400">
+        Point your package manager to this proxy to cache downloads and improve reliability.
+    </p>
+</div>
+
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
+    <div class="divide-y divide-gray-200 dark:divide-gray-800">
+        {{range .Registries}}
+        <details class="group">
+            <summary class="px-6 py-4 cursor-pointer flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+                <div class="flex items-center gap-3">
+                    {{template "ecosystem_badge" .ID}}
+                    <span class="font-medium">{{.Name}}</span>
+                    <span class="text-sm text-gray-500 dark:text-gray-400">{{.Language}}</span>
+                </div>
+                <div class="flex items-center gap-3">
+                    <code class="text-sm text-gray-600 dark:text-gray-400 font-mono">{{.Endpoint}}</code>
+                    <svg class="w-5 h-5 text-gray-400 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
+                    </svg>
+                </div>
+            </summary>
+            <div class="px-6 pb-4 prose prose-sm dark:prose-invert max-w-none">
+                {{.Instructions}}
+            </div>
+        </details>
+        {{end}}
+    </div>
+</div>
+
+<div class="mt-8 p-6 bg-blue-50 dark:bg-blue-950 border border-blue-200 dark:border-blue-900 rounded-xl">
+    <h2 class="text-lg font-semibold mb-2 text-blue-900 dark:text-blue-100">Need Help?</h2>
+    <p class="text-sm text-blue-800 dark:text-blue-200">
+        After configuring your package manager, install packages as usual. The proxy will automatically cache them.
+        Check the <a href="/" class="underline hover:no-underline">dashboard</a> to see cached packages.
+    </p>
+</div>
+{{end}}

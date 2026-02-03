@@ -1,0 +1,102 @@
+{{define "title"}}Search: {{.Query}} - git-pkgs proxy{{end}}
+
+{{define "content"}}
+<div class="mb-8">
+    <h1 class="text-3xl font-bold mb-2">Search Results</h1>
+    <p class="text-gray-600 dark:text-gray-400">
+        {{.Count}} results for "{{.Query}}"{{if .Ecosystem}} in {{.Ecosystem}}{{end}}
+    </p>
+</div>
+
+<div class="mb-6 flex items-center gap-4">
+    <div class="flex-1">
+        <label for="ecosystem-filter" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Filter by ecosystem</label>
+        <select id="ecosystem-filter" class="w-full max-w-xs px-4 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400">
+            <option value="">All ecosystems</option>
+            <option value="npm"{{if eq .Ecosystem "npm"}} selected{{end}}>npm</option>
+            <option value="cargo"{{if eq .Ecosystem "cargo"}} selected{{end}}>cargo</option>
+            <option value="gem"{{if eq .Ecosystem "gem"}} selected{{end}}>gem</option>
+            <option value="go"{{if eq .Ecosystem "go"}} selected{{end}}>go</option>
+            <option value="hex"{{if eq .Ecosystem "hex"}} selected{{end}}>hex</option>
+            <option value="pub"{{if eq .Ecosystem "pub"}} selected{{end}}>pub</option>
+            <option value="pypi"{{if eq .Ecosystem "pypi"}} selected{{end}}>pypi</option>
+            <option value="maven"{{if eq .Ecosystem "maven"}} selected{{end}}>maven</option>
+            <option value="nuget"{{if eq .Ecosystem "nuget"}} selected{{end}}>nuget</option>
+            <option value="composer"{{if eq .Ecosystem "composer"}} selected{{end}}>composer</option>
+            <option value="conan"{{if eq .Ecosystem "conan"}} selected{{end}}>conan</option>
+            <option value="conda"{{if eq .Ecosystem "conda"}} selected{{end}}>conda</option>
+            <option value="cran"{{if eq .Ecosystem "cran"}} selected{{end}}>cran</option>
+        </select>
+    </div>
+</div>
+
+{{if .Results}}
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
+    <div class="divide-y divide-gray-200 dark:divide-gray-800">
+        {{range .Results}}
+        <div class="px-6 py-4 flex items-center justify-between">
+            <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                    {{template "ecosystem_badge" .Ecosystem}}
+                    <a href="/package/{{.Ecosystem}}/{{.Name}}" class="font-medium truncate hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
+                    {{if .LatestVersion}}
+                    <span class="text-gray-500 dark:text-gray-400">@{{.LatestVersion}}</span>
+                    {{end}}
+                </div>
+                {{if .License}}
+                <div class="flex items-center gap-2 mt-1">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">{{.License}}</span>
+                </div>
+                {{end}}
+            </div>
+            <div class="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
+                <span>{{.Hits}} cache hits</span>
+                <span>{{.SizeFormatted}}</span>
+            </div>
+        </div>
+        {{end}}
+    </div>
+</div>
+{{else}}
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-12 text-center">
+    <p class="text-gray-500 dark:text-gray-400">No packages found matching "{{.Query}}"</p>
+    <a href="/" class="mt-4 inline-block text-sm text-blue-600 dark:text-blue-400 hover:underline">Return to dashboard</a>
+</div>
+{{end}}
+
+{{if gt .TotalPages 1}}
+<div class="mt-6 flex items-center justify-center gap-2">
+    {{if gt .Page 1}}
+    <a href="?q={{.Query}}{{if .Ecosystem}}&ecosystem={{.Ecosystem}}{{end}}&page={{sub .Page 1}}"
+       class="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700">
+        Previous
+    </a>
+    {{end}}
+
+    <span class="px-4 py-2 text-sm text-gray-600 dark:text-gray-400">
+        Page {{.Page}} of {{.TotalPages}}
+    </span>
+
+    {{if lt .Page .TotalPages}}
+    <a href="?q={{.Query}}{{if .Ecosystem}}&ecosystem={{.Ecosystem}}{{end}}&page={{add .Page 1}}"
+       class="px-4 py-2 text-sm font-medium text-gray-700 dark:text-gray-300 bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg hover:bg-gray-50 dark:hover:bg-gray-700">
+        Next
+    </a>
+    {{end}}
+</div>
+{{end}}
+
+<script>
+document.getElementById('ecosystem-filter').addEventListener('change', function(e) {
+    const ecosystem = e.target.value;
+    const params = new URLSearchParams(window.location.search);
+    if (ecosystem) {
+        params.set('ecosystem', ecosystem);
+    } else {
+        params.delete('ecosystem');
+    }
+    params.delete('page'); // Reset to page 1 when changing filter
+    window.location.href = '?' + params.toString();
+});
+</script>
+{{end}}

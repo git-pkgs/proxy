@@ -1,0 +1,211 @@
+{{define "title"}}Compare {{.FromVersion}} → {{.ToVersion}} - {{.PackageName}} - git-pkgs proxy{{end}}
+
+{{define "content"}}
+<div class="mb-6">
+    <nav class="text-sm text-gray-600 dark:text-gray-400 mb-4">
+        <a href="/" class="hover:text-gray-900 dark:hover:text-gray-100">Home</a>
+        <span class="mx-2">/</span>
+        <a href="/package/{{.Ecosystem}}/{{.PackageName}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.PackageName}}</a>
+        <span class="mx-2">/</span>
+        <span>Compare Versions</span>
+    </nav>
+    <h1 class="text-3xl font-bold mb-2">Version Comparison</h1>
+    <div class="flex items-center gap-3 text-lg">
+        <span class="font-mono text-red-600 dark:text-red-400">{{.FromVersion}}</span>
+        <svg class="w-6 h-6 text-gray-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M13 7l5 5m0 0l-5 5m5-5H6"></path>
+        </svg>
+        <span class="font-mono text-green-600 dark:text-green-400">{{.ToVersion}}</span>
+    </div>
+</div>
+
+<!-- Loading State -->
+<div id="loading" class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-12 text-center">
+    <div class="inline-block animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
+    <p class="mt-4 text-gray-600 dark:text-gray-400">Generating diff...</p>
+</div>
+
+<!-- Error State -->
+<div id="error" class="hidden bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-red-200 dark:border-red-900 p-12 text-center">
+    <svg class="mx-auto h-12 w-12 text-red-600 dark:text-red-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+        <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 8v4m0 4h.01M21 12a9 9 0 11-18 0 9 9 0 0118 0z"></path>
+    </svg>
+    <p class="mt-4 text-red-600 dark:text-red-400" id="error-message"></p>
+</div>
+
+<!-- Stats -->
+<div id="stats" class="hidden grid grid-cols-2 md:grid-cols-5 gap-4 mb-6">
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-800">
+        <div class="text-sm text-gray-500 dark:text-gray-400">Files Changed</div>
+        <div class="text-2xl font-bold mt-1" id="stat-changed">0</div>
+    </div>
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-800">
+        <div class="text-sm text-gray-500 dark:text-gray-400">Files Added</div>
+        <div class="text-2xl font-bold text-green-600 dark:text-green-400 mt-1" id="stat-added">0</div>
+    </div>
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-800">
+        <div class="text-sm text-gray-500 dark:text-gray-400">Files Deleted</div>
+        <div class="text-2xl font-bold text-red-600 dark:text-red-400 mt-1" id="stat-deleted">0</div>
+    </div>
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-800">
+        <div class="text-sm text-gray-500 dark:text-gray-400">Lines Added</div>
+        <div class="text-2xl font-bold text-green-600 dark:text-green-400 mt-1" id="stat-lines-added">0</div>
+    </div>
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-4 shadow-sm border border-gray-200 dark:border-gray-800">
+        <div class="text-sm text-gray-500 dark:text-gray-400">Lines Deleted</div>
+        <div class="text-2xl font-bold text-red-600 dark:text-red-400 mt-1" id="stat-lines-deleted">0</div>
+    </div>
+</div>
+
+<!-- Diff Content -->
+<div id="diff-container" class="hidden bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
+    <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800">
+        <h2 class="text-lg font-semibold">Changes</h2>
+    </div>
+    <div id="diff-content" class="p-6"></div>
+</div>
+
+<!-- diff2html CSS -->
+<link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/diff2html/bundles/css/diff2html.min.css" />
+
+<!-- diff2html JS -->
+<script src="https://cdn.jsdelivr.net/npm/diff2html/bundles/js/diff2html-ui.min.js"></script>
+
+<script>
+const ecosystem = '{{.Ecosystem}}';
+const packageName = '{{.PackageName}}';
+const fromVersion = '{{.FromVersion}}';
+const toVersion = '{{.ToVersion}}';
+
+async function loadDiff() {
+    try {
+        const url = `/api/compare/${ecosystem}/${packageName}/${fromVersion}/${toVersion}`;
+        const response = await fetch(url);
+
+        if (!response.ok) {
+            throw new Error(await response.text());
+        }
+
+        const data = await response.json();
+
+        // Hide loading, show content
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('stats').classList.remove('hidden');
+        document.getElementById('diff-container').classList.remove('hidden');
+
+        // Update stats
+        document.getElementById('stat-changed').textContent = data.files_changed || 0;
+        document.getElementById('stat-added').textContent = data.files_added || 0;
+        document.getElementById('stat-deleted').textContent = data.files_deleted || 0;
+        document.getElementById('stat-lines-added').textContent = data.total_added || 0;
+        document.getElementById('stat-lines-deleted').textContent = data.total_deleted || 0;
+
+        // Convert to unified diff format for diff2html
+        let unifiedDiff = '';
+        for (const file of data.files) {
+            if (file.diff) {
+                unifiedDiff += file.diff + '\n';
+            } else if (file.type === 'deleted') {
+                unifiedDiff += `--- a/${file.path}\n+++ /dev/null\n`;
+            } else if (file.type === 'added' && !file.is_binary) {
+                // diff field should already be populated for added files
+                if (!file.diff) {
+                    unifiedDiff += `--- /dev/null\n+++ b/${file.path}\n`;
+                }
+            }
+
+            // Add note for binary files
+            if (file.is_binary) {
+                unifiedDiff += `diff --git a/${file.path} b/${file.path}\n`;
+                unifiedDiff += `Binary file ${file.path} has changed\n\n`;
+            }
+        }
+
+        if (unifiedDiff) {
+            // Render diff with diff2html
+            const targetElement = document.getElementById('diff-content');
+            const configuration = {
+                drawFileList: true,
+                fileListToggle: true,
+                fileListStartVisible: true,
+                fileContentToggle: true,
+                matching: 'lines',
+                outputFormat: 'side-by-side',
+                synchronisedScroll: true,
+                highlight: true,
+                renderNothingWhenEmpty: false,
+            };
+
+            const diff2htmlUi = new Diff2HtmlUI(targetElement, unifiedDiff, configuration);
+            diff2htmlUi.draw();
+        } else {
+            document.getElementById('diff-content').innerHTML =
+                '<p class="text-center text-gray-500 dark:text-gray-400 py-8">No changes detected between these versions</p>';
+        }
+
+    } catch (error) {
+        console.error('Error loading diff:', error);
+        document.getElementById('loading').classList.add('hidden');
+        document.getElementById('error').classList.remove('hidden');
+        document.getElementById('error-message').textContent =
+            'Failed to load diff: ' + error.message;
+    }
+}
+
+// Load diff on page load
+loadDiff();
+</script>
+
+<style>
+/* Dark mode adjustments for diff2html */
+.dark .d2h-wrapper {
+    background-color: rgb(17 24 39);
+    color: rgb(243 244 246);
+}
+
+.dark .d2h-file-header {
+    background-color: rgb(31 41 55);
+    border-color: rgb(55 65 81);
+}
+
+.dark .d2h-file-stats {
+    color: rgb(156 163 175);
+}
+
+.dark .d2h-code-line {
+    background-color: rgb(17 24 39);
+    color: rgb(243 244 246);
+}
+
+.dark .d2h-ins {
+    background-color: rgb(5 46 22);
+}
+
+.dark .d2h-del {
+    background-color: rgb(69 10 10);
+}
+
+.dark .d2h-code-line-ctn {
+    color: rgb(243 244 246);
+}
+
+.dark .d2h-code-linenumber {
+    background-color: rgb(31 41 55);
+    border-color: rgb(55 65 81);
+    color: rgb(156 163 175);
+}
+
+.dark .d2h-file-list-wrapper {
+    background-color: rgb(31 41 55);
+    border-color: rgb(55 65 81);
+}
+
+.dark .d2h-file-list-line {
+    border-color: rgb(55 65 81);
+}
+
+.dark .d2h-file-list-line:hover {
+    background-color: rgb(55 65 81);
+}
+</style>
+{{end}}

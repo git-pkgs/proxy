@@ -21,6 +21,8 @@
 // Additional endpoints:
 //   - /health    - Health check endpoint
 //   - /stats     - Cache statistics (JSON)
+//   - /packages  - List all cached packages (HTML)
+//   - /search    - Search packages (HTML)
 //
 // API endpoints for enrichment data:
 //   - GET  /api/package/{ecosystem}/{name}          - Package metadata
@@ -29,20 +31,26 @@
 //   - GET  /api/vulns/{ecosystem}/{name}/{version}  - Version vulnerabilities
 //   - POST /api/outdated                            - Check outdated packages
 //   - POST /api/bulk                                - Bulk package lookup
+//   - GET  /api/packages                            - List cached packages (JSON)
 package server
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
+	"github.com/go-chi/chi/v5"
+	"github.com/go-chi/chi/v5/middleware"
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/enrichment"
 	"github.com/git-pkgs/proxy/internal/handler"
+	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/proxy/internal/upstream"
 	"github.com/git-pkgs/spdx"
@@ -50,11 +58,12 @@ import (
 
 // Server is the main proxy server.
 type Server struct {
-	cfg     *config.Config
-	db      *database.DB
-	storage storage.Storage
-	logger  *slog.Logger
-	http    *http.Server
+	cfg       *config.Config
+	db        *database.DB
+	storage   storage.Storage
+	logger    *slog.Logger
+	http      *http.Server
+	templates *Templates
 }
 
 // New creates a new Server with the given configuration.
@@ -73,6 +82,12 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("opening database: %w", err)
 	}
 
+	// Run schema migration to add missing columns
+	if err := db.MigrateSchema(); err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("migrating database schema: %w", err)
+	}
+
 	// Initialize storage
 	storageURL := cfg.Storage.URL
 	if storageURL == "" {
@@ -85,23 +100,48 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("initializing storage: %w", err)
 	}
 
+	// Load templates
+	templates, err := NewTemplates()
+	if err != nil {
+		_ = db.Close()
+		return nil, fmt.Errorf("loading templates: %w", err)
+	}
+
 	return &Server{
-		cfg:     cfg,
-		db:      db,
-		storage: store,
-		logger:  logger,
+		cfg:       cfg,
+		db:        db,
+		storage:   store,
+		logger:    logger,
+		templates: templates,
 	}, nil
 }
 
 // Start starts the HTTP server.
 func (s *Server) Start() error {
-	// Create shared components
-	fetcher := upstream.New(upstream.WithAuthFunc(s.authForURL))
+	// Create shared components with circuit breaker
+	baseFetcher := upstream.New(upstream.WithAuthFunc(s.authForURL))
+	fetcher := upstream.NewCircuitBreakerFetcher(baseFetcher)
 	resolver := upstream.NewResolver()
 	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
 
-	// Create router
-	mux := http.NewServeMux()
+	// Create router with Chi
+	r := chi.NewRouter()
+
+	// Add middleware
+	r.Use(middleware.RequestID)
+	r.Use(RequestIDMiddleware)
+	r.Use(middleware.RealIP)
+	r.Use(s.LoggerMiddleware)
+	r.Use(middleware.Recoverer)
+	r.Use(func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path != "/metrics" {
+				metrics.IncrementActiveRequests()
+				defer metrics.DecrementActiveRequests()
+			}
+			next.ServeHTTP(w, r)
+		})
+	})
 
 	// Mount protocol handlers
 	npmHandler := handler.NewNPMHandler(proxy, s.cfg.BaseURL)
@@ -121,49 +161,62 @@ func (s *Server) Start() error {
 	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL)
 	rpmHandler := handler.NewRPMHandler(proxy, s.cfg.BaseURL)
 
-	mux.Handle("GET /npm/{path...}", http.StripPrefix("/npm", npmHandler.Routes()))
-	mux.Handle("GET /cargo/{path...}", http.StripPrefix("/cargo", cargoHandler.Routes()))
-	mux.Handle("GET /gem/{path...}", http.StripPrefix("/gem", gemHandler.Routes()))
-	mux.Handle("GET /go/{path...}", http.StripPrefix("/go", goHandler.Routes()))
-	mux.Handle("GET /hex/{path...}", http.StripPrefix("/hex", hexHandler.Routes()))
-	mux.Handle("GET /pub/{path...}", http.StripPrefix("/pub", pubHandler.Routes()))
-	mux.Handle("GET /pypi/{path...}", http.StripPrefix("/pypi", pypiHandler.Routes()))
-	mux.Handle("GET /maven/{path...}", http.StripPrefix("/maven", mavenHandler.Routes()))
-	mux.Handle("GET /nuget/{path...}", http.StripPrefix("/nuget", nugetHandler.Routes()))
-	mux.Handle("GET /composer/{path...}", http.StripPrefix("/composer", composerHandler.Routes()))
-	mux.Handle("GET /conan/{path...}", http.StripPrefix("/conan", conanHandler.Routes()))
-	mux.Handle("GET /conda/{path...}", http.StripPrefix("/conda", condaHandler.Routes()))
-	mux.Handle("GET /cran/{path...}", http.StripPrefix("/cran", cranHandler.Routes()))
-	mux.Handle("GET /v2/{path...}", http.StripPrefix("/v2", containerHandler.Routes()))
-	mux.Handle("HEAD /v2/{path...}", http.StripPrefix("/v2", containerHandler.Routes()))
-	mux.Handle("GET /debian/{path...}", http.StripPrefix("/debian", debianHandler.Routes()))
-	mux.Handle("HEAD /debian/{path...}", http.StripPrefix("/debian", debianHandler.Routes()))
-	mux.Handle("GET /rpm/{path...}", http.StripPrefix("/rpm", rpmHandler.Routes()))
-	mux.Handle("HEAD /rpm/{path...}", http.StripPrefix("/rpm", rpmHandler.Routes()))
+	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))
+	r.Mount("/cargo", http.StripPrefix("/cargo", cargoHandler.Routes()))
+	r.Mount("/gem", http.StripPrefix("/gem", gemHandler.Routes()))
+	r.Mount("/go", http.StripPrefix("/go", goHandler.Routes()))
+	r.Mount("/hex", http.StripPrefix("/hex", hexHandler.Routes()))
+	r.Mount("/pub", http.StripPrefix("/pub", pubHandler.Routes()))
+	r.Mount("/pypi", http.StripPrefix("/pypi", pypiHandler.Routes()))
+	r.Mount("/maven", http.StripPrefix("/maven", mavenHandler.Routes()))
+	r.Mount("/nuget", http.StripPrefix("/nuget", nugetHandler.Routes()))
+	r.Mount("/composer", http.StripPrefix("/composer", composerHandler.Routes()))
+	r.Mount("/conan", http.StripPrefix("/conan", conanHandler.Routes()))
+	r.Mount("/conda", http.StripPrefix("/conda", condaHandler.Routes()))
+	r.Mount("/cran", http.StripPrefix("/cran", cranHandler.Routes()))
+	r.Mount("/v2", http.StripPrefix("/v2", containerHandler.Routes()))
+	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
+	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 
 	// Health, stats, and static endpoints
-	mux.HandleFunc("GET /health", s.handleHealth)
-	mux.HandleFunc("GET /stats", s.handleStats)
-	mux.Handle("GET /static/", http.StripPrefix("/static/", staticHandler()))
-	mux.HandleFunc("GET /{$}", s.handleRoot)
+	r.Get("/health", s.handleHealth)
+	r.Get("/stats", s.handleStats)
+	r.Get("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		metrics.Handler().ServeHTTP(w, r)
+	})
+	r.Mount("/static", http.StripPrefix("/static/", staticHandler()))
+	r.Get("/", s.handleRoot)
+	r.Get("/install", s.handleInstall)
+	r.Get("/search", s.handleSearch)
+	r.Get("/packages", s.handlePackagesList)
+	r.Get("/package/{ecosystem}/{name}", s.handlePackageShow)
+	r.Get("/package/{ecosystem}/{name}/{version}", s.handleVersionShow)
+	r.Get("/package/{ecosystem}/{name}/{version}/browse", s.handleBrowseSource)
 
 	// API endpoints for enrichment data
 	enrichSvc := enrichment.New(s.logger)
-	apiHandler := NewAPIHandler(enrichSvc)
+	apiHandler := NewAPIHandler(enrichSvc, s.db)
 
-	mux.HandleFunc("GET /api/package/{ecosystem}/{name}", apiHandler.HandleGetPackage)
-	mux.HandleFunc("GET /api/package/{ecosystem}/{name}/{version}", apiHandler.HandleGetVersion)
-	mux.HandleFunc("GET /api/vulns/{ecosystem}/{name}", apiHandler.HandleGetVulns)
-	mux.HandleFunc("GET /api/vulns/{ecosystem}/{name}/{version}", apiHandler.HandleGetVulns)
-	mux.HandleFunc("POST /api/outdated", apiHandler.HandleOutdated)
-	mux.HandleFunc("POST /api/bulk", apiHandler.HandleBulkLookup)
+	r.Get("/api/package/{ecosystem}/{name}", apiHandler.HandleGetPackage)
+	r.Get("/api/package/{ecosystem}/{name}/{version}", apiHandler.HandleGetVersion)
+	r.Get("/api/vulns/{ecosystem}/{name}", apiHandler.HandleGetVulns)
+	r.Get("/api/vulns/{ecosystem}/{name}/{version}", apiHandler.HandleGetVulns)
+	r.Post("/api/outdated", apiHandler.HandleOutdated)
+	r.Post("/api/bulk", apiHandler.HandleBulkLookup)
+	r.Get("/api/search", apiHandler.HandleSearch)
+	r.Get("/api/packages", apiHandler.HandlePackagesList)
 
-	// Wrap with logging middleware
-	handler := s.loggingMiddleware(mux)
+	// Archive browsing endpoints
+	r.Get("/api/browse/{ecosystem}/{name}/{version}", s.handleBrowseList)
+	r.Get("/api/browse/{ecosystem}/{name}/{version}/file/*", s.handleBrowseFile)
+
+	// Version comparison endpoints
+	r.Get("/api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion}", s.handleCompareDiff)
+	r.Get("/package/{ecosystem}/{name}/compare/{versions}", s.handleComparePage)
 
 	s.http = &http.Server{
 		Addr:         s.cfg.Listen,
-		Handler:      handler,
+		Handler:      r,
 		ReadTimeout:  30 * time.Second,
 		WriteTimeout: 5 * time.Minute, // Large artifacts need time
 		IdleTimeout:  60 * time.Second,
@@ -175,7 +228,32 @@ func (s *Server) Start() error {
 		"storage", s.cfg.Storage.Path,
 		"database", s.cfg.Database.Path)
 
+	// Start background goroutine to update cache stats metrics
+	go s.updateCacheStatsMetrics()
+
 	return s.http.ListenAndServe()
+}
+
+// updateCacheStatsMetrics periodically updates cache statistics in Prometheus metrics.
+func (s *Server) updateCacheStatsMetrics() {
+	ticker := time.NewTicker(1 * time.Minute)
+	defer ticker.Stop()
+
+	// Update once immediately
+	s.updateCacheStats()
+
+	for range ticker.C {
+		s.updateCacheStats()
+	}
+}
+
+func (s *Server) updateCacheStats() {
+	stats, err := s.db.GetCacheStats()
+	if err != nil {
+		s.logger.Warn("failed to get cache stats for metrics", "error", err)
+		return
+	}
+	metrics.UpdateCacheStats(stats.TotalSize, stats.TotalArtifacts)
 }
 
 // Shutdown gracefully shuts down the server.
@@ -256,7 +334,6 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			LowVulns:             enrichStats.LowVulns,
 			HasVulns:             enrichStats.TotalVulnerabilities > 0,
 		},
-		Registries: getRegistryConfigs(s.cfg.BaseURL),
 	}
 
 	for _, p := range popular {
@@ -315,9 +392,273 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		data.RecentPackages = append(data.RecentPackages, pkgInfo)
 	}
 
-	w.Header().Set("Content-Type", "text/html; charset=utf-8")
-	if err := dashboardTemplate.Execute(w, data); err != nil {
+	if err := s.templates.Render(w, "dashboard", data); err != nil {
 		s.logger.Error("failed to render dashboard", "error", err)
+	}
+}
+
+func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
+	data := struct {
+		Registries []RegistryConfig
+	}{
+		Registries: getRegistryConfigs(s.cfg.BaseURL),
+	}
+
+	if err := s.templates.Render(w, "install", data); err != nil {
+		s.logger.Error("failed to render install page", "error", err)
+	}
+}
+
+func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
+	query := r.URL.Query().Get("q")
+	ecosystem := r.URL.Query().Get("ecosystem")
+
+	if query == "" {
+		http.Redirect(w, r, "/", http.StatusSeeOther)
+		return
+	}
+
+	page := 1
+	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+	limit := 50
+
+	results, err := s.db.SearchPackages(query, ecosystem, limit, (page-1)*limit)
+	if err != nil {
+		s.logger.Error("search failed", "error", err)
+		http.Error(w, "search failed", http.StatusInternalServerError)
+		return
+	}
+
+	total, err := s.db.CountSearchResults(query, ecosystem)
+	if err != nil {
+		s.logger.Error("failed to count search results", "error", err)
+		total = 0
+	}
+
+	items := make([]SearchResultItem, len(results))
+	for i, result := range results {
+		latestVersion := ""
+		if result.LatestVersion.Valid {
+			latestVersion = result.LatestVersion.String
+		}
+		license := ""
+		if result.License.Valid {
+			license = result.License.String
+		}
+		items[i] = SearchResultItem{
+			Ecosystem:     result.Ecosystem,
+			Name:          result.Name,
+			LatestVersion: latestVersion,
+			License:       license,
+			Hits:          result.Hits,
+			Size:          result.Size,
+			SizeFormatted: formatSize(result.Size),
+		}
+	}
+
+	totalPages := int((total + int64(limit) - 1) / int64(limit))
+
+	data := SearchPageData{
+		Query:      query,
+		Ecosystem:  ecosystem,
+		Results:    items,
+		Count:      int(total),
+		Page:       page,
+		PerPage:    limit,
+		TotalPages: totalPages,
+	}
+
+	if err := s.templates.Render(w, "search", data); err != nil {
+		s.logger.Error("failed to render search page", "error", err)
+	}
+}
+
+func (s *Server) handlePackagesList(w http.ResponseWriter, r *http.Request) {
+	ecosystem := r.URL.Query().Get("ecosystem")
+	sortBy := r.URL.Query().Get("sort")
+	if sortBy == "" {
+		sortBy = "hits"
+	}
+
+	page := 1
+	if pageStr := r.URL.Query().Get("page"); pageStr != "" {
+		if p, err := strconv.Atoi(pageStr); err == nil && p > 0 {
+			page = p
+		}
+	}
+	limit := 50
+
+	packages, err := s.db.ListCachedPackages(ecosystem, sortBy, limit, (page-1)*limit)
+	if err != nil {
+		s.logger.Error("failed to list packages", "error", err)
+		http.Error(w, "failed to list packages", http.StatusInternalServerError)
+		return
+	}
+
+	total, err := s.db.CountCachedPackages(ecosystem)
+	if err != nil {
+		s.logger.Error("failed to count packages", "error", err)
+		total = 0
+	}
+
+	items := make([]SearchResultItem, len(packages))
+	for i, pkg := range packages {
+		latestVersion := ""
+		if pkg.LatestVersion.Valid {
+			latestVersion = pkg.LatestVersion.String
+		}
+		license := ""
+		if pkg.License.Valid {
+			license = pkg.License.String
+		}
+		cachedAt := ""
+		if pkg.CachedAt.Valid && pkg.CachedAt.String != "" {
+			if t, err := time.Parse("2006-01-02 15:04:05.999999999-07:00", pkg.CachedAt.String); err == nil {
+				cachedAt = formatTimeAgo(t)
+			}
+		}
+		items[i] = SearchResultItem{
+			Ecosystem:      pkg.Ecosystem,
+			Name:           pkg.Name,
+			LatestVersion:  latestVersion,
+			License:        license,
+			LicenseCategory: categorizeLicenseCSS(license),
+			Hits:           pkg.Hits,
+			Size:           pkg.Size,
+			SizeFormatted:  formatSize(pkg.Size),
+			CachedAt:       cachedAt,
+			VulnCount:      pkg.VulnCount,
+		}
+	}
+
+	totalPages := int((total + int64(limit) - 1) / int64(limit))
+
+	data := PackagesListPageData{
+		Ecosystem:  ecosystem,
+		SortBy:     sortBy,
+		Results:    items,
+		Count:      int(total),
+		Page:       page,
+		PerPage:    limit,
+		TotalPages: totalPages,
+	}
+
+	if err := s.templates.Render(w, "packages_list", data); err != nil {
+		s.logger.Error("failed to render packages list page", "error", err)
+	}
+}
+
+func (s *Server) handlePackageShow(w http.ResponseWriter, r *http.Request) {
+	ecosystem := chi.URLParam(r, "ecosystem")
+	name := chi.URLParam(r, "name")
+
+	if ecosystem == "" || name == "" {
+		http.Error(w, "ecosystem and name required", http.StatusBadRequest)
+		return
+	}
+
+	pkg, err := s.db.GetPackageByEcosystemName(ecosystem, name)
+	if err != nil {
+		s.logger.Error("failed to get package", "error", err, "ecosystem", ecosystem, "name", name)
+		http.Error(w, "package not found", http.StatusNotFound)
+		return
+	}
+	if pkg == nil {
+		http.Error(w, "package not found", http.StatusNotFound)
+		return
+	}
+
+	versions, err := s.db.GetVersionsByPackagePURL(pkg.PURL)
+	if err != nil {
+		s.logger.Error("failed to get versions", "error", err)
+		versions = []database.Version{}
+	}
+
+	vulns, err := s.db.GetVulnerabilitiesForPackage(ecosystem, name)
+	if err != nil {
+		s.logger.Error("failed to get vulnerabilities", "error", err)
+		vulns = []database.Vulnerability{}
+	}
+
+	data := PackageShowData{
+		Package:         pkg,
+		Versions:        versions,
+		Vulnerabilities: vulns,
+		LicenseCategory: categorizeLicense(pkg.License),
+	}
+
+	if err := s.templates.Render(w, "package_show", data); err != nil {
+		s.logger.Error("failed to render package show", "error", err)
+	}
+}
+
+func (s *Server) handleVersionShow(w http.ResponseWriter, r *http.Request) {
+	ecosystem := chi.URLParam(r, "ecosystem")
+	name := chi.URLParam(r, "name")
+	version := chi.URLParam(r, "version")
+
+	if ecosystem == "" || name == "" || version == "" {
+		http.Error(w, "ecosystem, name, and version required", http.StatusBadRequest)
+		return
+	}
+
+	pkg, err := s.db.GetPackageByEcosystemName(ecosystem, name)
+	if err != nil || pkg == nil {
+		s.logger.Error("failed to get package", "error", err)
+		http.Error(w, "package not found", http.StatusNotFound)
+		return
+	}
+
+	purl := fmt.Sprintf("pkg:%s/%s@%s", ecosystem, name, version)
+	ver, err := s.db.GetVersionByPURL(purl)
+	if err != nil || ver == nil {
+		s.logger.Error("failed to get version", "error", err)
+		http.Error(w, "version not found", http.StatusNotFound)
+		return
+	}
+
+	artifacts, err := s.db.GetArtifactsByVersionPURL(purl)
+	if err != nil {
+		s.logger.Error("failed to get artifacts", "error", err)
+		artifacts = []database.Artifact{}
+	}
+
+	vulns, err := s.db.GetVulnerabilitiesForPackage(ecosystem, name)
+	if err != nil {
+		s.logger.Error("failed to get vulnerabilities", "error", err)
+		vulns = []database.Vulnerability{}
+	}
+
+	isOutdated := false
+	if pkg.LatestVersion.Valid && pkg.LatestVersion.String != version {
+		isOutdated = true
+	}
+
+	// Check if any artifact is cached
+	hasCached := false
+	for _, art := range artifacts {
+		if art.StoragePath.Valid {
+			hasCached = true
+			break
+		}
+	}
+
+	data := VersionShowData{
+		Package:           pkg,
+		Version:           ver,
+		Artifacts:         artifacts,
+		Vulnerabilities:   vulns,
+		IsOutdated:        isOutdated,
+		LicenseCategory:   categorizeLicense(ver.License),
+		HasCachedArtifact: hasCached,
+	}
+
+	if err := s.templates.Render(w, "version_show", data); err != nil {
+		s.logger.Error("failed to render version show", "error", err)
 	}
 }
 
@@ -432,6 +773,14 @@ func categorizeLicenseCSS(license string) string {
 	return "unknown"
 }
 
+// categorizeLicense is a helper that handles sql.NullString.
+func categorizeLicense(license sql.NullString) string {
+	if !license.Valid {
+		return "unknown"
+	}
+	return categorizeLicenseCSS(license.String)
+}
+
 // responseWriter wraps http.ResponseWriter to capture status code.
 type responseWriter struct {
 	http.ResponseWriter
@@ -443,7 +792,8 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-func (s *Server) loggingMiddleware(next http.Handler) http.Handler {
+// chiLogger is a middleware that logs requests using Chi's middleware pattern.
+func (s *Server) chiLogger(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
 

@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/proxy/internal/upstream"
 )
@@ -19,13 +20,13 @@ import (
 type Proxy struct {
 	DB       *database.DB
 	Storage  storage.Storage
-	Fetcher  *upstream.Fetcher
+	Fetcher  upstream.FetcherInterface
 	Resolver *upstream.Resolver
 	Logger   *slog.Logger
 }
 
 // NewProxy creates a new Proxy with the given dependencies.
-func NewProxy(db *database.DB, store storage.Storage, fetcher *upstream.Fetcher, resolver *upstream.Resolver, logger *slog.Logger) *Proxy {
+func NewProxy(db *database.DB, store storage.Storage, fetcher upstream.FetcherInterface, resolver *upstream.Resolver, logger *slog.Logger) *Proxy {
 	if logger == nil {
 		logger = slog.Default()
 	}
@@ -87,14 +88,22 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 		return nil, nil
 	}
 
+	start := time.Now()
 	reader, err := p.Storage.Open(ctx, artifact.StoragePath.String)
+	metrics.RecordStorageOperation("read", time.Since(start))
 	if err != nil {
+		metrics.RecordStorageError("read")
 		p.Logger.Warn("cached artifact missing from storage, will refetch",
 			"path", artifact.StoragePath.String, "error", err)
 		return nil, nil
 	}
 
 	_ = p.DB.RecordArtifactHit(versionPURL, filename)
+
+	// Extract ecosystem from pkgPURL for metrics
+	ecosystem := extractEcosystem(pkgPURL)
+	metrics.RecordCacheHit(ecosystem)
+
 	return &CacheResult{
 		Reader:      reader,
 		Size:        artifact.Size.Int64,
@@ -105,6 +114,9 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 }
 
 func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL string) (*CacheResult, error) {
+	// Record cache miss
+	metrics.RecordCacheMiss(ecosystem)
+
 	// Resolve download URL
 	info, err := p.Resolver.Resolve(ctx, ecosystem, name, version)
 	if err != nil {
@@ -119,17 +131,27 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 	p.Logger.Info("fetching from upstream",
 		"ecosystem", ecosystem, "name", name, "version", version, "url", info.URL)
 
-	// Fetch from upstream
+	// Fetch from upstream with timing
+	fetchStart := time.Now()
 	artifact, err := p.Fetcher.Fetch(ctx, info.URL)
+	fetchDuration := time.Since(fetchStart)
+
 	if err != nil {
+		metrics.RecordUpstreamFetch(ecosystem, fetchDuration)
+		metrics.RecordUpstreamError(ecosystem, "fetch_failed")
 		return nil, fmt.Errorf("fetching from upstream: %w", err)
 	}
+	metrics.RecordUpstreamFetch(ecosystem, fetchDuration)
 
 	// Store in cache
 	storagePath := storage.ArtifactPath(ecosystem, "", name, version, filename)
+	storeStart := time.Now()
 	size, hash, err := p.Storage.Store(ctx, storagePath, artifact.Body)
 	_ = artifact.Body.Close()
+	metrics.RecordStorageOperation("write", time.Since(storeStart))
+
 	if err != nil {
+		metrics.RecordStorageError("write")
 		return nil, fmt.Errorf("storing artifact: %w", err)
 	}
 
@@ -140,8 +162,12 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 	}
 
 	// Open the stored file to return
+	readStart := time.Now()
 	reader, err := p.Storage.Open(ctx, storagePath)
+	metrics.RecordStorageOperation("read", time.Since(readStart))
+
 	if err != nil {
+		metrics.RecordStorageError("read")
 		return nil, fmt.Errorf("opening cached artifact: %w", err)
 	}
 
@@ -269,4 +295,30 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 		Hash:        hash,
 		Cached:      false,
 	}, nil
+}
+
+// extractEcosystem extracts the ecosystem from a package PURL.
+// PURL format: pkg:ecosystem/name[@version]
+func extractEcosystem(purl string) string {
+	if len(purl) < 5 || !startsWith(purl, "pkg:") {
+		return "unknown"
+	}
+	rest := purl[4:] // Skip "pkg:"
+	if idx := indexOf(rest, "/"); idx != -1 {
+		return rest[:idx]
+	}
+	return "unknown"
+}
+
+func startsWith(s, prefix string) bool {
+	return len(s) >= len(prefix) && s[:len(prefix)] == prefix
+}
+
+func indexOf(s, substr string) int {
+	for i := 0; i+len(substr) <= len(s); i++ {
+		if s[i:i+len(substr)] == substr {
+			return i
+		}
+	}
+	return -1
 }
