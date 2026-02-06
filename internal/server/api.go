@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	shared "github.com/git-pkgs/enrichment"
 	"github.com/go-chi/chi/v5"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/enrichment"
@@ -13,7 +14,7 @@ import (
 // APIHandler provides REST endpoints for package enrichment data.
 type APIHandler struct {
 	enrichment *enrichment.Service
-	ecosystems *enrichment.EcosystemsClient
+	ecosystems *shared.EcosystemsClient
 	db         DBSearcher
 }
 
@@ -32,7 +33,7 @@ func NewAPIHandler(svc *enrichment.Service, db DBSearcher) *APIHandler {
 		db:         db,
 	}
 	// Try to initialize ecosystems client for bulk lookups
-	if client, err := enrichment.NewEcosystemsClient(); err == nil {
+	if client, err := shared.NewEcosystemsClient(); err == nil {
 		h.ecosystems = client
 	}
 	return h

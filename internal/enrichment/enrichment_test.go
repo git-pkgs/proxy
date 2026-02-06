@@ -96,16 +96,3 @@ func TestNormalizeLicense(t *testing.T) {
 		}
 	}
 }
-
-func TestNewEcosystemsClient(t *testing.T) {
-	client, err := NewEcosystemsClient()
-	if err != nil {
-		t.Fatalf("NewEcosystemsClient() error = %v", err)
-	}
-	if client == nil {
-		t.Fatal("NewEcosystemsClient() returned nil")
-	}
-	if client.client == nil {
-		t.Error("client.client is nil")
-	}
-}
