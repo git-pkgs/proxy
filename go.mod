@@ -11,13 +11,14 @@ require (
 	github.com/git-pkgs/spdx v0.1.0
 	github.com/git-pkgs/vers v0.2.2
 	github.com/git-pkgs/vulns v0.1.1-0.20260129164637-92a3b3c5d954
-	github.com/go-chi/chi/v5 v5.2.4
+	github.com/go-chi/chi/v5 v5.2.5
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.11.1
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/rs/dnscache v0.0.0-20230804202142-fc85eb664529
 	github.com/rubyist/circuitbreaker v2.2.1+incompatible
+	github.com/ulikunitz/xz v0.5.15
 	gocloud.dev v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.44.3
@@ -66,7 +67,6 @@ require (
 	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
-	github.com/ulikunitz/xz v0.5.15 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.40.0 // indirect
 	go.opentelemetry.io/otel/metric v1.40.0 // indirect
