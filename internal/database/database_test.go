@@ -693,7 +693,7 @@ func TestMigrationFromOldSchema(t *testing.T) {
 			t.Errorf("GetPackageByEcosystemName failed after migration: %v", err)
 		}
 		if pkg == nil {
-			t.Error("GetPackageByEcosystemName returned nil after migration")
+			t.Fatal("GetPackageByEcosystemName returned nil after migration")
 		}
 		if pkg.Name != "test-package" {
 			t.Errorf("expected package name test-package, got %s", pkg.Name)

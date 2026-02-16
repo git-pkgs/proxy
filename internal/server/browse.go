@@ -8,7 +8,7 @@ import (
 	"path"
 	"strings"
 
-	"github.com/git-pkgs/proxy/internal/archive"
+	"github.com/git-pkgs/archives"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/diff"
 	"github.com/go-chi/chi/v5"
@@ -25,13 +25,13 @@ func getStripPrefix(ecosystem string) string {
 	}
 }
 
-// BrowseListResponse contains the file listing for a directory in an archive.
+// BrowseListResponse contains the file listing for a directory in an archives.
 type BrowseListResponse struct {
 	Path  string           `json:"path"`
 	Files []BrowseFileInfo `json:"files"`
 }
 
-// BrowseFileInfo contains metadata about a file in an archive.
+// BrowseFileInfo contains metadata about a file in an archives.
 type BrowseFileInfo struct {
 	Path    string `json:"path"`
 	Name    string `json:"name"`
@@ -82,17 +82,17 @@ func (s *Server) handleBrowseList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read artifact", http.StatusInternalServerError)
 		return
 	}
-	defer artifactReader.Close()
+	defer func() { _ = artifactReader.Close() }()
 
 	// Open archive with appropriate prefix stripping
 	stripPrefix := getStripPrefix(ecosystem)
-	archiveReader, err := archive.OpenWithPrefix(cachedArtifact.Filename, artifactReader, stripPrefix)
+	archiveReader, err := archives.OpenWithPrefix(cachedArtifact.Filename, artifactReader, stripPrefix)
 	if err != nil {
 		s.logger.Error("failed to open archive", "error", err, "filename", cachedArtifact.Filename)
 		http.Error(w, "failed to open archive", http.StatusInternalServerError)
 		return
 	}
-	defer archiveReader.Close()
+	defer func() { _ = archiveReader.Close() }()
 
 	// List files in the directory
 	files, err := archiveReader.ListDir(dirPath)
@@ -119,7 +119,7 @@ func (s *Server) handleBrowseList(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(response)
+	_ = json.NewEncoder(w).Encode(response)
 }
 
 // handleBrowseFile returns the contents of a specific file within an archived package version.
@@ -170,17 +170,17 @@ func (s *Server) handleBrowseFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read artifact", http.StatusInternalServerError)
 		return
 	}
-	defer artifactReader.Close()
+	defer func() { _ = artifactReader.Close() }()
 
 	// Open archive with appropriate prefix stripping
 	stripPrefix := getStripPrefix(ecosystem)
-	archiveReader, err := archive.OpenWithPrefix(cachedArtifact.Filename, artifactReader, stripPrefix)
+	archiveReader, err := archives.OpenWithPrefix(cachedArtifact.Filename, artifactReader, stripPrefix)
 	if err != nil {
 		s.logger.Error("failed to open archive", "error", err, "filename", cachedArtifact.Filename)
 		http.Error(w, "failed to open archive", http.StatusInternalServerError)
 		return
 	}
-	defer archiveReader.Close()
+	defer func() { _ = archiveReader.Close() }()
 
 	// Extract the file
 	fileReader, err := archiveReader.Extract(filePath)
@@ -193,7 +193,7 @@ func (s *Server) handleBrowseFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to extract file", http.StatusInternalServerError)
 		return
 	}
-	defer fileReader.Close()
+	defer func() { _ = fileReader.Close() }()
 
 	// Set content type based on file extension
 	contentType := detectContentType(filePath)
@@ -204,7 +204,7 @@ func (s *Server) handleBrowseFile(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", filename))
 
 	// Stream the file
-	io.Copy(w, fileReader)
+	_, _ = io.Copy(w, fileReader)
 }
 
 // detectContentType returns an appropriate content type based on file extension.
@@ -387,7 +387,7 @@ func (s *Server) handleCompareDiff(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read from version", http.StatusInternalServerError)
 		return
 	}
-	defer fromReader.Close()
+	defer func() { _ = fromReader.Close() }()
 
 	toReader, err := s.storage.Open(r.Context(), toArtifact.StoragePath.String)
 	if err != nil {
@@ -395,25 +395,25 @@ func (s *Server) handleCompareDiff(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to read to version", http.StatusInternalServerError)
 		return
 	}
-	defer toReader.Close()
+	defer func() { _ = toReader.Close() }()
 
 	stripPrefix := getStripPrefix(ecosystem)
 
-	fromArchive, err := archive.OpenWithPrefix(fromArtifact.Filename, fromReader, stripPrefix)
+	fromArchive, err := archives.OpenWithPrefix(fromArtifact.Filename, fromReader, stripPrefix)
 	if err != nil {
 		s.logger.Error("failed to open from archive", "error", err)
 		http.Error(w, "failed to open from archive", http.StatusInternalServerError)
 		return
 	}
-	defer fromArchive.Close()
+	defer func() { _ = fromArchive.Close() }()
 
-	toArchive, err := archive.OpenWithPrefix(toArtifact.Filename, toReader, stripPrefix)
+	toArchive, err := archives.OpenWithPrefix(toArtifact.Filename, toReader, stripPrefix)
 	if err != nil {
 		s.logger.Error("failed to open to archive", "error", err)
 		http.Error(w, "failed to open to archive", http.StatusInternalServerError)
 		return
 	}
-	defer toArchive.Close()
+	defer func() { _ = toArchive.Close() }()
 
 	// Generate diff
 	result, err := diff.Compare(fromArchive, toArchive)
@@ -424,7 +424,7 @@ func (s *Server) handleCompareDiff(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	json.NewEncoder(w).Encode(result)
+	_ = json.NewEncoder(w).Encode(result)
 }
 
 // ComparePageData contains data for the version comparison page.

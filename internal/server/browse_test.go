@@ -251,8 +251,12 @@ func createTestArchive(t *testing.T) []byte {
 		}
 	}
 
-	tw.Close()
-	gw.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("failed to close tar writer: %v", err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatalf("failed to close gzip writer: %v", err)
+	}
 
 	return buf.Bytes()
 }
@@ -405,11 +409,17 @@ func TestHandleCompareDiff(t *testing.T) {
 	})
 
 	artifactsDir := filepath.Join(ts.tempDir, "artifacts")
-	os.MkdirAll(artifactsDir, 0755)
+	if err := os.MkdirAll(artifactsDir, 0755); err != nil {
+		t.Fatalf("failed to create artifacts dir: %v", err)
+	}
 
 	// Write archives
-	os.WriteFile(filepath.Join(artifactsDir, "v1.tar.gz"), archive1Data, 0644)
-	os.WriteFile(filepath.Join(artifactsDir, "v2.tar.gz"), archive2Data, 0644)
+	if err := os.WriteFile(filepath.Join(artifactsDir, "v1.tar.gz"), archive1Data, 0644); err != nil {
+		t.Fatalf("failed to write v1 archive: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(artifactsDir, "v2.tar.gz"), archive2Data, 0644); err != nil {
+		t.Fatalf("failed to write v2 archive: %v", err)
+	}
 
 	// Setup package and versions
 	pkg := &database.Package{
@@ -417,19 +427,25 @@ func TestHandleCompareDiff(t *testing.T) {
 		Ecosystem: "npm",
 		Name:      "test-compare",
 	}
-	ts.db.UpsertPackage(pkg)
+	if err := ts.db.UpsertPackage(pkg); err != nil {
+		t.Fatalf("failed to upsert package: %v", err)
+	}
 
 	ver1 := &database.Version{
 		PURL:        "pkg:npm/test-compare@1.0.0",
 		PackagePURL: pkg.PURL,
 	}
-	ts.db.UpsertVersion(ver1)
+	if err := ts.db.UpsertVersion(ver1); err != nil {
+		t.Fatalf("failed to upsert version: %v", err)
+	}
 
 	ver2 := &database.Version{
 		PURL:        "pkg:npm/test-compare@2.0.0",
 		PackagePURL: pkg.PURL,
 	}
-	ts.db.UpsertVersion(ver2)
+	if err := ts.db.UpsertVersion(ver2); err != nil {
+		t.Fatalf("failed to upsert version: %v", err)
+	}
 
 	artifact1 := &database.Artifact{
 		VersionPURL: ver1.PURL,
@@ -437,7 +453,9 @@ func TestHandleCompareDiff(t *testing.T) {
 		UpstreamURL: "https://registry.npmjs.org/test-compare/-/test-compare-1.0.0.tgz",
 		StoragePath: sql.NullString{String: "v1.tar.gz", Valid: true},
 	}
-	ts.db.UpsertArtifact(artifact1)
+	if err := ts.db.UpsertArtifact(artifact1); err != nil {
+		t.Fatalf("failed to upsert artifact: %v", err)
+	}
 
 	artifact2 := &database.Artifact{
 		VersionPURL: ver2.PURL,
@@ -445,7 +463,9 @@ func TestHandleCompareDiff(t *testing.T) {
 		UpstreamURL: "https://registry.npmjs.org/test-compare/-/test-compare-2.0.0.tgz",
 		StoragePath: sql.NullString{String: "v2.tar.gz", Valid: true},
 	}
-	ts.db.UpsertArtifact(artifact2)
+	if err := ts.db.UpsertArtifact(artifact2); err != nil {
+		t.Fatalf("failed to upsert artifact: %v", err)
+	}
 
 	// Test the compare endpoint
 	req := httptest.NewRequest("GET", "/api/compare/npm/test-compare/1.0.0/2.0.0", nil)
@@ -504,8 +524,12 @@ func createArchiveWithContent(t *testing.T, files map[string]string) []byte {
 		}
 	}
 
-	tw.Close()
-	gw.Close()
+	if err := tw.Close(); err != nil {
+		t.Fatalf("failed to close tar writer: %v", err)
+	}
+	if err := gw.Close(); err != nil {
+		t.Fatalf("failed to close gzip writer: %v", err)
+	}
 
 	return buf.Bytes()
 }

@@ -7,7 +7,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/git-pkgs/proxy/internal/archive"
+	"github.com/git-pkgs/archives"
 )
 
 func createTestArchiveWithFiles(files map[string]string) []byte {
@@ -21,12 +21,12 @@ func createTestArchiveWithFiles(files map[string]string) []byte {
 			Size: int64(len(content)),
 			Mode: 0644,
 		}
-		tw.WriteHeader(header)
-		tw.Write([]byte(content))
+		_ = tw.WriteHeader(header)
+		_, _ = tw.Write([]byte(content))
 	}
 
-	tw.Close()
-	gw.Close()
+	_ = tw.Close()
+	_ = gw.Close()
 	return buf.Bytes()
 }
 
@@ -44,17 +44,17 @@ func TestCompare(t *testing.T) {
 		"added.txt":    "this is new",
 	}
 
-	oldArchive, err := archive.Open("old.tar.gz", bytes.NewReader(createTestArchiveWithFiles(oldFiles)))
+	oldArchive, err := archives.Open("old.tar.gz", bytes.NewReader(createTestArchiveWithFiles(oldFiles)))
 	if err != nil {
 		t.Fatalf("failed to open old archive: %v", err)
 	}
-	defer oldArchive.Close()
+	defer func() { _ = oldArchive.Close() }()
 
-	newArchive, err := archive.Open("new.tar.gz", bytes.NewReader(createTestArchiveWithFiles(newFiles)))
+	newArchive, err := archives.Open("new.tar.gz", bytes.NewReader(createTestArchiveWithFiles(newFiles)))
 	if err != nil {
 		t.Fatalf("failed to open new archive: %v", err)
 	}
-	defer newArchive.Close()
+	defer func() { _ = newArchive.Close() }()
 
 	// Compare
 	result, err := Compare(oldArchive, newArchive)
@@ -200,11 +200,11 @@ func TestCompareIdentical(t *testing.T) {
 		"main.go":   "package main\n",
 	}
 
-	archive1, _ := archive.Open("test1.tar.gz", bytes.NewReader(createTestArchiveWithFiles(files)))
-	defer archive1.Close()
+	archive1, _ := archives.Open("test1.tar.gz", bytes.NewReader(createTestArchiveWithFiles(files)))
+	defer func() { _ = archive1.Close() }()
 
-	archive2, _ := archive.Open("test2.tar.gz", bytes.NewReader(createTestArchiveWithFiles(files)))
-	defer archive2.Close()
+	archive2, _ := archives.Open("test2.tar.gz", bytes.NewReader(createTestArchiveWithFiles(files)))
+	defer func() { _ = archive2.Close() }()
 
 	result, err := Compare(archive1, archive2)
 	if err != nil {
@@ -229,11 +229,11 @@ func TestCompareBinaryFiles(t *testing.T) {
 		"image.png": string([]byte{0x89, 0x50, 0x4E, 0x47, 0x01}), // Different binary
 	}
 
-	oldArchive, _ := archive.Open("old.tar.gz", bytes.NewReader(createTestArchiveWithFiles(oldFiles)))
-	defer oldArchive.Close()
+	oldArchive, _ := archives.Open("old.tar.gz", bytes.NewReader(createTestArchiveWithFiles(oldFiles)))
+	defer func() { _ = oldArchive.Close() }()
 
-	newArchive, _ := archive.Open("new.tar.gz", bytes.NewReader(createTestArchiveWithFiles(newFiles)))
-	defer newArchive.Close()
+	newArchive, _ := archives.Open("new.tar.gz", bytes.NewReader(createTestArchiveWithFiles(newFiles)))
+	defer func() { _ = newArchive.Close() }()
 
 	result, err := Compare(oldArchive, newArchive)
 	if err != nil {

@@ -633,10 +633,7 @@ func (s *Server) handleVersionShow(w http.ResponseWriter, r *http.Request) {
 		vulns = []database.Vulnerability{}
 	}
 
-	isOutdated := false
-	if pkg.LatestVersion.Valid && pkg.LatestVersion.String != version {
-		isOutdated = true
-	}
+	isOutdated := pkg.LatestVersion.Valid && pkg.LatestVersion.String != version
 
 	// Check if any artifact is cached
 	hasCached := false
@@ -792,19 +789,3 @@ func (rw *responseWriter) WriteHeader(code int) {
 	rw.ResponseWriter.WriteHeader(code)
 }
 
-// chiLogger is a middleware that logs requests using Chi's middleware pattern.
-func (s *Server) chiLogger(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-
-		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
-		next.ServeHTTP(rw, r)
-
-		s.logger.Info("request",
-			"method", r.Method,
-			"path", r.URL.Path,
-			"status", rw.status,
-			"duration", time.Since(start).String(),
-			"remote", r.RemoteAddr)
-	})
-}

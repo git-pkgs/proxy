@@ -9,7 +9,7 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/git-pkgs/proxy/internal/archive"
+	"github.com/git-pkgs/archives"
 )
 
 // FileDiff represents the diff for a single file.
@@ -34,7 +34,7 @@ type CompareResult struct {
 }
 
 // Compare generates a diff between two archive readers.
-func Compare(oldReader, newReader archive.Reader) (*CompareResult, error) {
+func Compare(oldReader, newReader archives.Reader) (*CompareResult, error) {
 	// Get file listings
 	oldFiles, err := oldReader.List()
 	if err != nil {
@@ -47,8 +47,8 @@ func Compare(oldReader, newReader archive.Reader) (*CompareResult, error) {
 	}
 
 	// Create maps for quick lookup
-	oldMap := make(map[string]archive.FileInfo)
-	newMap := make(map[string]archive.FileInfo)
+	oldMap := make(map[string]archives.FileInfo)
+	newMap := make(map[string]archives.FileInfo)
 
 	for _, f := range oldFiles {
 		if !f.IsDir {
@@ -151,12 +151,12 @@ func Compare(oldReader, newReader archive.Reader) (*CompareResult, error) {
 }
 
 // readFileContent reads a file's content from an archive reader.
-func readFileContent(reader archive.Reader, path string) ([]byte, error) {
+func readFileContent(reader archives.Reader, path string) ([]byte, error) {
 	rc, err := reader.Extract(path)
 	if err != nil {
 		return nil, err
 	}
-	defer rc.Close()
+	defer func() { _ = rc.Close() }()
 
 	return io.ReadAll(rc)
 }
@@ -286,7 +286,7 @@ func generateSimpleDiff(path string, oldContent, newContent []byte) (string, int
 // generateAddedDiff generates a diff for a newly added file.
 func generateAddedDiff(path string, content []byte) string {
 	var buf strings.Builder
-	buf.WriteString(fmt.Sprintf("--- /dev/null\n"))
+	buf.WriteString("--- /dev/null\n")
 	buf.WriteString(fmt.Sprintf("+++ b/%s\n", path))
 
 	lines := bytes.Split(content, []byte("\n"))
