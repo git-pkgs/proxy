@@ -79,8 +79,8 @@ github.com/davecgh/go-spew v1.1.1 h1:vj9j/u1bqnvCEfJOwUhtlOARqs3+rkHYY13jYWTU97c
 github.com/davecgh/go-spew v1.1.1/go.mod h1:J7Y8YcW2NihsgmVo/mv3lAwl/skON4iLHjSsI+c5H38=
 github.com/dustin/go-humanize v1.0.1 h1:GzkhY7T5VNhEkwH0PVJgjz+fX1rhBrR7pRT3mDkpeCY=
 github.com/dustin/go-humanize v1.0.1/go.mod h1:Mu1zIs6XwVuF/gI1OepvI0qD18qycQx+mFykh5fBlto=
-github.com/ecosyste-ms/ecosystems-go v0.1.0 h1:jMinQqCsvPhPPmm95KsOOvMZH/GOed6ThIljfMRkQrk=
-github.com/ecosyste-ms/ecosystems-go v0.1.0/go.mod h1:XsvYyfIYrGJLKV7B+kxUJ2UOhSvcfUstunnakSqUw7c=
+github.com/ecosyste-ms/ecosystems-go v0.1.1 h1:YYiBK9TCCTeE+BtmpN2FssaRFcmF+T0v4LrupIOjehQ=
+github.com/ecosyste-ms/ecosystems-go v0.1.1/go.mod h1:VczXs1CO9nL8XbL1NwvgmwIaqzMsAxcsXnTpRtwi9gU=
 github.com/envoyproxy/go-control-plane v0.13.5-0.20251024222203-75eaa193e329 h1:K+fnvUM0VZ7ZFJf0n4L/BRlnsb9pL/GuDG6FqaH+PwM=
 github.com/envoyproxy/go-control-plane/envoy v1.35.0 h1:ixjkELDE+ru6idPxcHLj8LBVc2bFP7iBytj353BoHUo=
 github.com/envoyproxy/go-control-plane/envoy v1.35.0/go.mod h1:09qwbGVuSWWAyN5t/b3iyVfz5+z8QWGrzkoqm/8SbEs=
@@ -92,10 +92,12 @@ github.com/felixge/httpsnoop v1.0.4 h1:NFTV2Zj1bL4mc9sqWACXbQFVBBg2W3GPvqp8/ESS2
 github.com/felixge/httpsnoop v1.0.4/go.mod h1:m8KPJKqk1gH5J9DgRY2ASl2lWCfGKXixSwevea8zH2U=
 github.com/git-pkgs/archives v0.1.0 h1:xql9RD/DmbRItMZgU3m7aSCx+rYQOY1UhdDMWMwx1SY=
 github.com/git-pkgs/archives v0.1.0/go.mod h1:LTJ1iQVFA7otizWMOyiI82NYVmyBWAPRzwu/e30rcXU=
-github.com/git-pkgs/enrichment v0.1.0 h1:t7Zya45Dkjh8a1ULQ4lEY8UqvKHnM63nrhdIm79smDg=
-github.com/git-pkgs/enrichment v0.1.0/go.mod h1:xdy8+jZ5TCbYwG/LOPD1QBkjzpRlE5Wuv4//guXrGjw=
-github.com/git-pkgs/purl v0.1.5 h1:OsOHkhFPEzVaro+mtEajlYn88vRuRF34wtH5JtLaXH0=
-github.com/git-pkgs/purl v0.1.5/go.mod h1:4RPpP/nJBGljfUiSpyIcFsieXLUahEoH0gSwjWfjhUQ=
+github.com/git-pkgs/enrichment v0.1.3 h1:gp+CZUobo5seqsIX6tpl01lPIdOiFhhooXFwAnJ+kc8=
+github.com/git-pkgs/enrichment v0.1.3/go.mod h1:UvGotO2LrkmVHhpDlanulFQFwp1DK4wcaAv5OTaPcmM=
+github.com/git-pkgs/packageurl-go v0.2.1 h1:j6VnjJiYS9b1nTLfJGsG6SLaA7Nk6Io+ta8grOyTa4o=
+github.com/git-pkgs/packageurl-go v0.2.1/go.mod h1:rcIxiG37BlQLB6FZfgdj9Fm7yjhRQd3l+5o7J0QPAk4=
+github.com/git-pkgs/purl v0.1.6 h1:WDganE1yjSA2BYjXPpz9NVdsh/YRrGj2CkZ6ScyzIKs=
+github.com/git-pkgs/purl v0.1.6/go.mod h1:ihlHw3bnSLXat+9Nl9MsJZBYiG7s3NkwmvE3L/Es/sI=
 github.com/git-pkgs/registries v0.2.3 h1:KE9QQr+aqO06Jqb2lEfwFJ0Alimfdqmgs/QfgxIh0YU=
 github.com/git-pkgs/registries v0.2.3/go.mod h1:nXiMNoaCum0Sx3ltao5X9JNbR35ujlKMMN+vX8GLgt8=
 github.com/git-pkgs/spdx v0.1.0 h1:kBcB2iIc3A8qSAU/MtqywKslEo+FRct2daFLX+pwZdU=
@@ -166,8 +168,6 @@ github.com/ncruces/go-strftime v1.0.0 h1:HMFp8mLCTPp341M/ZnA4qaf7ZlsbTc+miZjCLOF
 github.com/ncruces/go-strftime v1.0.0/go.mod h1:Fwc5htZGVVkseilnfgOVb9mKy6w1naJmn9CehxcKcls=
 github.com/oapi-codegen/runtime v1.1.2 h1:P2+CubHq8fO4Q6fV1tqDBZHCwpVpvPg7oKiYzQgXIyI=
 github.com/oapi-codegen/runtime v1.1.2/go.mod h1:SK9X900oXmPWilYR5/WKPzt3Kqxn/uS/+lbpREv+eCg=
-github.com/package-url/packageurl-go v0.1.3 h1:4juMED3hHiz0set3Vq3KeQ75KD1avthoXLtmE3I0PLs=
-github.com/package-url/packageurl-go v0.1.3/go.mod h1:nKAWB8E6uk1MHqiS/lQb9pYBGH2+mdJ2PJc2s50dQY0=
 github.com/pandatix/go-cvss v0.6.2 h1:TFiHlzUkT67s6UkelHmK6s1INKVUG7nlKYiWWDTITGI=
 github.com/pandatix/go-cvss v0.6.2/go.mod h1:jDXYlQBZrc8nvrMUVVvTG8PhmuShOnKrxP53nOFkt8Q=
 github.com/peterbourgon/g2s v0.0.0-20170223122336-d4e7ad98afea h1:sKwxy1H95npauwu8vtF95vG/syrL0p8fSZo/XlDg5gk=
