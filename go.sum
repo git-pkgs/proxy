@@ -96,8 +96,8 @@ github.com/git-pkgs/enrichment v0.1.0 h1:t7Zya45Dkjh8a1ULQ4lEY8UqvKHnM63nrhdIm79
 github.com/git-pkgs/enrichment v0.1.0/go.mod h1:xdy8+jZ5TCbYwG/LOPD1QBkjzpRlE5Wuv4//guXrGjw=
 github.com/git-pkgs/purl v0.1.5 h1:OsOHkhFPEzVaro+mtEajlYn88vRuRF34wtH5JtLaXH0=
 github.com/git-pkgs/purl v0.1.5/go.mod h1:4RPpP/nJBGljfUiSpyIcFsieXLUahEoH0gSwjWfjhUQ=
-github.com/git-pkgs/registries v0.2.3 h1:KE9QQr+aqO06Jqb2lEfwFJ0Alimfdqmgs/QfgxIh0YU=
-github.com/git-pkgs/registries v0.2.3/go.mod h1:nXiMNoaCum0Sx3ltao5X9JNbR35ujlKMMN+vX8GLgt8=
+github.com/git-pkgs/registries v0.2.4 h1:iA4qJyBBrD0paq4UhCg2VGXtTsKZS+3cswKnDTyJ5Do=
+github.com/git-pkgs/registries v0.2.4/go.mod h1:4GHqXWq+aRwaTwHl/BNXkUUnRF6qIDLnQIzbINJm79M=
 github.com/git-pkgs/spdx v0.1.0 h1:kBcB2iIc3A8qSAU/MtqywKslEo+FRct2daFLX+pwZdU=
 github.com/git-pkgs/spdx v0.1.0/go.mod h1:Cmpseu5vIhDPnpFXhTVBCJhjZUW3ILck/zhycHHKcXA=
 github.com/git-pkgs/vers v0.2.2 h1:42QkiIURhGN2wM8AuYYU+FbzS1YV6jmdGd1RiFp7gXs=
