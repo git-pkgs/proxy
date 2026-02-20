@@ -13,20 +13,20 @@ import (
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
-	"github.com/git-pkgs/proxy/internal/upstream"
+	"github.com/git-pkgs/registries/fetch"
 )
 
 // Proxy provides shared functionality for protocol handlers.
 type Proxy struct {
 	DB       *database.DB
 	Storage  storage.Storage
-	Fetcher  upstream.FetcherInterface
-	Resolver *upstream.Resolver
+	Fetcher  fetch.FetcherInterface
+	Resolver *fetch.Resolver
 	Logger   *slog.Logger
 }
 
 // NewProxy creates a new Proxy with the given dependencies.
-func NewProxy(db *database.DB, store storage.Storage, fetcher upstream.FetcherInterface, resolver *upstream.Resolver, logger *slog.Logger) *Proxy {
+func NewProxy(db *database.DB, store storage.Storage, fetcher fetch.FetcherInterface, resolver *fetch.Resolver, logger *slog.Logger) *Proxy {
 	if logger == nil {
 		logger = slog.Default()
 	}

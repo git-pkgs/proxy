@@ -16,7 +16,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/storage"
-	"github.com/git-pkgs/proxy/internal/upstream"
+	"github.com/git-pkgs/registries/fetch"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -52,8 +52,8 @@ func newTestServer(t *testing.T) *testServer {
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	fetcher := upstream.New()
-	resolver := upstream.NewResolver()
+	fetcher := fetch.NewFetcher()
+	resolver := fetch.NewResolver()
 	proxy := handler.NewProxy(db, store, fetcher, resolver, logger)
 
 	cfg := &config.Config{
