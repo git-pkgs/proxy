@@ -195,8 +195,8 @@ func generateSimpleDiff(path string, oldContent, newContent []byte) (string, int
 
 	// Simple line-by-line comparison (can be improved with Myers algorithm)
 	var buf strings.Builder
-	buf.WriteString(fmt.Sprintf("--- a/%s\n", path))
-	buf.WriteString(fmt.Sprintf("+++ b/%s\n", path))
+	fmt.Fprintf(&buf, "--- a/%s\n", path)
+	fmt.Fprintf(&buf, "+++ b/%s\n", path)
 
 	linesAdded := 0
 	linesDeleted := 0
@@ -277,7 +277,7 @@ func generateSimpleDiff(path string, oldContent, newContent []byte) (string, int
 	hunkNewCount := (newStart - hunkNewStart) + newCount + contextAfter
 
 	// Write hunk header
-	buf.WriteString(fmt.Sprintf("@@ -%d,%d +%d,%d @@\n", hunkOldStart+1, hunkOldCount, hunkNewStart+1, hunkNewCount))
+	fmt.Fprintf(&buf, "@@ -%d,%d +%d,%d @@\n", hunkOldStart+1, hunkOldCount, hunkNewStart+1, hunkNewCount)
 	buf.WriteString(hunk.String())
 
 	return buf.String(), linesAdded, linesDeleted
@@ -287,10 +287,10 @@ func generateSimpleDiff(path string, oldContent, newContent []byte) (string, int
 func generateAddedDiff(path string, content []byte) string {
 	var buf strings.Builder
 	buf.WriteString("--- /dev/null\n")
-	buf.WriteString(fmt.Sprintf("+++ b/%s\n", path))
+	fmt.Fprintf(&buf, "+++ b/%s\n", path)
 
 	lines := bytes.Split(content, []byte("\n"))
-	buf.WriteString(fmt.Sprintf("@@ -0,0 +1,%d @@\n", len(lines)))
+	fmt.Fprintf(&buf, "@@ -0,0 +1,%d @@\n", len(lines))
 
 	for _, line := range lines {
 		buf.WriteString("+" + string(line) + "\n")
