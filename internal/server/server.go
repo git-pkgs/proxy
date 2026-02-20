@@ -52,7 +52,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
-	"github.com/git-pkgs/proxy/internal/upstream"
+	"github.com/git-pkgs/registries/fetch"
 	"github.com/git-pkgs/spdx"
 )
 
@@ -119,9 +119,9 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 // Start starts the HTTP server.
 func (s *Server) Start() error {
 	// Create shared components with circuit breaker
-	baseFetcher := upstream.New(upstream.WithAuthFunc(s.authForURL))
-	fetcher := upstream.NewCircuitBreakerFetcher(baseFetcher)
-	resolver := upstream.NewResolver()
+	baseFetcher := fetch.NewFetcher(fetch.WithAuthFunc(s.authForURL))
+	fetcher := fetch.NewCircuitBreakerFetcher(baseFetcher)
+	resolver := fetch.NewResolver()
 	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
 
 	// Create router with Chi

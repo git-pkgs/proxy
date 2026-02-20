@@ -3,11 +3,10 @@ module github.com/git-pkgs/proxy
 go 1.25.6
 
 require (
-	github.com/cenk/backoff v2.2.1+incompatible
 	github.com/git-pkgs/archives v0.1.0
 	github.com/git-pkgs/enrichment v0.1.4
 	github.com/git-pkgs/purl v0.1.8
-	github.com/git-pkgs/registries v0.2.6
+	github.com/git-pkgs/registries v0.3.0
 	github.com/git-pkgs/spdx v0.1.0
 	github.com/git-pkgs/vers v0.2.2
 	github.com/git-pkgs/vulns v0.1.3
@@ -16,8 +15,6 @@ require (
 	github.com/lib/pq v1.11.2
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
-	github.com/rs/dnscache v0.0.0-20230804202142-fc85eb664529
-	github.com/rubyist/circuitbreaker v2.2.1+incompatible
 	gocloud.dev v0.44.0
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.46.1
@@ -84,6 +81,7 @@ require (
 	github.com/butuzov/mirror v1.3.0 // indirect
 	github.com/catenacyber/perfsprint v0.10.1 // indirect
 	github.com/ccojocar/zxcvbn-go v1.0.4 // indirect
+	github.com/cenk/backoff v2.2.1+incompatible // indirect
 	github.com/cespare/xxhash/v2 v2.3.0 // indirect
 	github.com/charithe/durationcheck v0.0.11 // indirect
 	github.com/charmbracelet/colorprofile v0.2.3-0.20250311203215-f60798e515dc // indirect
@@ -194,7 +192,6 @@ require (
 	github.com/pandatix/go-cvss v0.6.2 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.2.4 // indirect
-	github.com/peterbourgon/g2s v0.0.0-20170223122336-d4e7ad98afea // indirect
 	github.com/pmezard/go-difflib v1.0.0 // indirect
 	github.com/prometheus/common v0.67.5 // indirect
 	github.com/prometheus/procfs v0.19.2 // indirect
@@ -207,6 +204,8 @@ require (
 	github.com/remyoudompheng/bigfft v0.0.0-20230129092748-24d4a6f8daec // indirect
 	github.com/rivo/uniseg v0.4.7 // indirect
 	github.com/rogpeppe/go-internal v1.14.1 // indirect
+	github.com/rs/dnscache v0.0.0-20230804202142-fc85eb664529 // indirect
+	github.com/rubyist/circuitbreaker v2.2.1+incompatible // indirect
 	github.com/ryancurrah/gomodguard v1.4.1 // indirect
 	github.com/ryanrolds/sqlclosecheck v0.5.1 // indirect
 	github.com/sanposhiho/wastedassign/v2 v2.1.0 // indirect
