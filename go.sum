@@ -215,6 +215,8 @@ github.com/ghostiam/protogetter v0.3.20 h1:oW7OPFit2FxZOpmMRPP9FffU4uUpfeE/rEdE1
 github.com/ghostiam/protogetter v0.3.20/go.mod h1:FjIu5Yfs6FT391m+Fjp3fbAYJ6rkL/J6ySpZBfnODuI=
 github.com/git-pkgs/archives v0.1.0 h1:xql9RD/DmbRItMZgU3m7aSCx+rYQOY1UhdDMWMwx1SY=
 github.com/git-pkgs/archives v0.1.0/go.mod h1:LTJ1iQVFA7otizWMOyiI82NYVmyBWAPRzwu/e30rcXU=
+github.com/git-pkgs/archives v0.1.1-0.20260227105146-119e84065dfa h1:VrLUPmeWMt/CZAEt05B4EDwb3YR1yAtJyGvvWdDr8oQ=
+github.com/git-pkgs/archives v0.1.1-0.20260227105146-119e84065dfa/go.mod h1:LTJ1iQVFA7otizWMOyiI82NYVmyBWAPRzwu/e30rcXU=
 github.com/git-pkgs/enrichment v0.1.4 h1:Fr5vqZ92ScurKdkhsNZNKoZ7Yk8mODGnwfoS1u9hkd4=
 github.com/git-pkgs/enrichment v0.1.4/go.mod h1:iuMAUPMCGdrYsGchhH8rifNJcf2H43j4LDWXnDTV0gU=
 github.com/git-pkgs/packageurl-go v0.2.1 h1:j6VnjJiYS9b1nTLfJGsG6SLaA7Nk6Io+ta8grOyTa4o=
