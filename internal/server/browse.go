@@ -10,7 +10,7 @@ import (
 
 	"github.com/git-pkgs/archives"
 	"github.com/git-pkgs/proxy/internal/database"
-	"github.com/git-pkgs/proxy/internal/diff"
+	"github.com/git-pkgs/archives/diff"
 	"github.com/go-chi/chi/v5"
 )
 
