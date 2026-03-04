@@ -2,6 +2,26 @@
 
 A caching proxy for package registries. Speeds up package downloads by caching artifacts locally, reducing bandwidth usage and improving reliability.
 
+## Version Cooldown
+
+Most supply chain attacks rely on speed: a malicious version gets published and consumed by automated pipelines within minutes, before anyone notices. The cooldown feature adds a quarantine period to newly published versions. When enabled, the proxy strips versions from metadata responses until they've aged past a configurable threshold.
+
+```yaml
+cooldown:
+  default: "3d"              # hide versions published less than 3 days ago
+  ecosystems:
+    npm: "7d"                # npm gets a longer window
+    cargo: "0"               # disable for cargo
+  packages:
+    "pkg:npm/lodash": "0"    # exempt trusted packages
+```
+
+A 3-day cooldown means that when `lodash` publishes version `4.18.0`, your builds keep using `4.17.21` until 3 days have passed. If the new release turns out to be compromised, you were never exposed.
+
+Resolution order: package override, then ecosystem override, then global default. This lets you set a conservative default and carve out exceptions for packages where you need faster updates.
+
+Currently works with npm, PyPI, pub.dev, and Composer, which all include publish timestamps in their metadata. See [docs/configuration.md](docs/configuration.md) for the full config reference.
+
 ## Supported Registries
 
 | Registry | Language/Platform | URL Resolution | Handler | Completed |
@@ -353,6 +373,10 @@ log:
 upstream:
   npm: "https://registry.npmjs.org"
   cargo: "https://index.crates.io"
+
+# Optional: version cooldown (see above)
+cooldown:
+  default: "3d"
 ```
 
 Run with config file:

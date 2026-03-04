@@ -233,6 +233,62 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadCooldownConfig(t *testing.T) {
+	dir := t.TempDir()
+	path := filepath.Join(dir, "config.yaml")
+
+	content := `
+listen: ":8080"
+base_url: "http://localhost:8080"
+storage:
+  path: "/data/cache"
+database:
+  path: "/data/proxy.db"
+cooldown:
+  default: "3d"
+  ecosystems:
+    npm: "7d"
+    cargo: "0"
+  packages:
+    "pkg:npm/lodash": "0"
+    "pkg:npm/@babel/core": "14d"
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing config file: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	if cfg.Cooldown.Default != "3d" {
+		t.Errorf("Cooldown.Default = %q, want %q", cfg.Cooldown.Default, "3d")
+	}
+	if cfg.Cooldown.Ecosystems["npm"] != "7d" {
+		t.Errorf("Cooldown.Ecosystems[npm] = %q, want %q", cfg.Cooldown.Ecosystems["npm"], "7d")
+	}
+	if cfg.Cooldown.Ecosystems["cargo"] != "0" {
+		t.Errorf("Cooldown.Ecosystems[cargo] = %q, want %q", cfg.Cooldown.Ecosystems["cargo"], "0")
+	}
+	if cfg.Cooldown.Packages["pkg:npm/lodash"] != "0" {
+		t.Errorf("Cooldown.Packages[lodash] = %q, want %q", cfg.Cooldown.Packages["pkg:npm/lodash"], "0")
+	}
+	if cfg.Cooldown.Packages["pkg:npm/@babel/core"] != "14d" {
+		t.Errorf("Cooldown.Packages[@babel/core] = %q, want %q", cfg.Cooldown.Packages["pkg:npm/@babel/core"], "14d")
+	}
+}
+
+func TestLoadCooldownFromEnv(t *testing.T) {
+	cfg := Default()
+	t.Setenv("PROXY_COOLDOWN_DEFAULT", "5d")
+	cfg.LoadFromEnv()
+
+	if cfg.Cooldown.Default != "5d" {
+		t.Errorf("Cooldown.Default = %q, want %q", cfg.Cooldown.Default, "5d")
+	}
+}
+
 func TestLoadFileNotFound(t *testing.T) {
 	_, err := Load("/nonexistent/config.yaml")
 	if err == nil {

@@ -10,6 +10,9 @@ import (
 	"net/url"
 	"regexp"
 	"strings"
+	"time"
+
+	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -95,21 +98,97 @@ func (h *PyPIHandler) handleSimplePackage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	rewritten := h.rewriteSimpleHTML(body)
+	// When cooldown is enabled, fetch JSON metadata to get version timestamps
+	var filteredVersions map[string]bool
+	if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
+		filteredVersions = h.fetchFilteredVersions(r, name)
+	}
+
+	rewritten := h.rewriteSimpleHTML(body, filteredVersions)
 
 	w.Header().Set("Content-Type", "text/html")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(rewritten)
 }
 
+// fetchFilteredVersions fetches JSON metadata and returns a set of version strings
+// that should be filtered out due to cooldown.
+func (h *PyPIHandler) fetchFilteredVersions(r *http.Request, name string) map[string]bool {
+	jsonURL := fmt.Sprintf("%s/pypi/%s/json", h.upstreamURL, name)
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, jsonURL, nil)
+	if err != nil {
+		return nil
+	}
+	req.Header.Set("Accept", "application/json")
+
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		return nil
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return nil
+	}
+
+	var metadata map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+		return nil
+	}
+
+	releases, ok := metadata["releases"].(map[string]any)
+	if !ok {
+		return nil
+	}
+
+	packagePURL := purl.MakePURLString("pypi", name, "")
+	filtered := make(map[string]bool)
+
+	for version, files := range releases {
+		filesArr, ok := files.([]any)
+		if !ok {
+			continue
+		}
+		publishedAt := h.newestUploadTime(filesArr)
+		if !publishedAt.IsZero() && !h.proxy.Cooldown.IsAllowed("pypi", packagePURL, publishedAt) {
+			filtered[version] = true
+		}
+	}
+
+	if len(filtered) == 0 {
+		return nil
+	}
+	return filtered
+}
+
 // rewriteSimpleHTML rewrites package URLs in simple API HTML to point at this proxy.
-func (h *PyPIHandler) rewriteSimpleHTML(body []byte) []byte {
+// If filteredVersions is non-nil, links for those versions are removed entirely.
+func (h *PyPIHandler) rewriteSimpleHTML(body []byte, filteredVersions map[string]bool) []byte {
+	// If cooldown filtering is active, remove entire <a> tags for filtered versions
+	if len(filteredVersions) > 0 {
+		// Match full anchor tags: <a ...href="...">filename</a>
+		linkRe := regexp.MustCompile(`<a[^>]+href="[^"]*"[^>]*>[^<]+</a>`)
+		body = linkRe.ReplaceAllFunc(body, func(match []byte) []byte {
+			// Extract filename from between tags
+			innerRe := regexp.MustCompile(`>([^<]+)</a>`)
+			innerMatch := innerRe.FindSubmatch(match)
+			if len(innerMatch) < 2 {
+				return match
+			}
+			filename := string(innerMatch[1])
+			_, version := h.parseFilename(strings.TrimSpace(filename))
+			if version != "" && filteredVersions[version] {
+				return nil
+			}
+			return match
+		})
+	}
+
 	// Match href attributes pointing to packages
 	// PyPI URLs look like: https://files.pythonhosted.org/packages/...
 	re := regexp.MustCompile(`href="(https://files\.pythonhosted\.org/packages/[^"]+)"`)
 
 	return re.ReplaceAllFunc(body, func(match []byte) []byte {
-		// Extract the URL
 		submatch := re.FindSubmatch(match)
 		if len(submatch) < 2 {
 			return match
@@ -117,13 +196,11 @@ func (h *PyPIHandler) rewriteSimpleHTML(body []byte) []byte {
 
 		origURL := string(submatch[1])
 
-		// Parse the URL to get the path
 		u, err := url.Parse(origURL)
 		if err != nil {
 			return match
 		}
 
-		// Rewrite to our proxy
 		newURL := fmt.Sprintf("%s/pypi/packages%s", h.proxyURL, u.Path)
 		return []byte(fmt.Sprintf(`href="%s"`, newURL))
 	})
@@ -201,24 +278,36 @@ func (h *PyPIHandler) proxyAndRewriteJSON(w http.ResponseWriter, r *http.Request
 }
 
 // rewriteJSONMetadata rewrites download URLs in PyPI JSON metadata.
+// If cooldown is enabled, versions published too recently are filtered out.
 func (h *PyPIHandler) rewriteJSONMetadata(body []byte) ([]byte, error) {
 	var metadata map[string]any
 	if err := json.Unmarshal(body, &metadata); err != nil {
 		return nil, err
 	}
 
-	// Rewrite URLs in urls array
-	if urls, ok := metadata["urls"].([]any); ok {
-		for _, u := range urls {
-			if umap, ok := u.(map[string]any); ok {
-				h.rewriteURLEntry(umap)
-			}
-		}
+	// Determine package name for cooldown lookup
+	packageName, _ := extractPyPIName(metadata)
+	packagePURL := ""
+	if packageName != "" {
+		packagePURL = purl.MakePURLString("pypi", packageName, "")
 	}
 
-	// Rewrite URLs in releases map
+	// Filter and rewrite URLs in releases map
 	if releases, ok := metadata["releases"].(map[string]any); ok {
-		for _, files := range releases {
+		for version, files := range releases {
+			if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() && packagePURL != "" {
+				if filesArr, ok := files.([]any); ok {
+					if publishedAt := h.newestUploadTime(filesArr); !publishedAt.IsZero() {
+						if !h.proxy.Cooldown.IsAllowed("pypi", packagePURL, publishedAt) {
+							h.proxy.Logger.Info("cooldown: filtering pypi version",
+								"package", packageName, "version", version)
+							delete(releases, version)
+							continue
+						}
+					}
+				}
+			}
+
 			if filesArr, ok := files.([]any); ok {
 				for _, f := range filesArr {
 					if fmap, ok := f.(map[string]any); ok {
@@ -229,7 +318,59 @@ func (h *PyPIHandler) rewriteJSONMetadata(body []byte) ([]byte, error) {
 		}
 	}
 
+	// Filter and rewrite URLs in urls array (current version files)
+	if urls, ok := metadata["urls"].([]any); ok {
+		if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() && packagePURL != "" {
+			if publishedAt := h.newestUploadTime(urls); !publishedAt.IsZero() {
+				if !h.proxy.Cooldown.IsAllowed("pypi", packagePURL, publishedAt) {
+					metadata["urls"] = []any{}
+				}
+			}
+		}
+
+		if urls, ok := metadata["urls"].([]any); ok {
+			for _, u := range urls {
+				if umap, ok := u.(map[string]any); ok {
+					h.rewriteURLEntry(umap)
+				}
+			}
+		}
+	}
+
 	return json.Marshal(metadata)
+}
+
+// extractPyPIName extracts the package name from PyPI JSON metadata.
+func extractPyPIName(metadata map[string]any) (string, bool) {
+	info, ok := metadata["info"].(map[string]any)
+	if !ok {
+		return "", false
+	}
+	name, ok := info["name"].(string)
+	return name, ok
+}
+
+// newestUploadTime returns the most recent upload_time_iso_8601 from a list of file entries.
+func (h *PyPIHandler) newestUploadTime(files []any) time.Time {
+	var newest time.Time
+	for _, f := range files {
+		fmap, ok := f.(map[string]any)
+		if !ok {
+			continue
+		}
+		ts, ok := fmap["upload_time_iso_8601"].(string)
+		if !ok {
+			continue
+		}
+		t, err := time.Parse(time.RFC3339, ts)
+		if err != nil {
+			continue
+		}
+		if t.After(newest) {
+			newest = t
+		}
+	}
+	return newest
 }
 
 // rewriteURLEntry rewrites a single URL entry in PyPI metadata.

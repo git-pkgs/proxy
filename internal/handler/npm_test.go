@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"github.com/git-pkgs/proxy/internal/cooldown"
 )
 
 func testProxy() *Proxy {
@@ -174,6 +177,116 @@ func TestNPMHandlerMetadataProxy(t *testing.T) {
 
 	if tarball != "http://proxy.local/npm/testpkg/-/testpkg-1.0.0.tgz" {
 		t.Errorf("tarball URL not rewritten correctly: %s", tarball)
+	}
+}
+
+func TestNPMRewriteMetadataCooldown(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-10 * 24 * time.Hour).Format(time.RFC3339)
+	recent := now.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	proxy := testProxy()
+	proxy.Cooldown = &cooldown.Config{Default: "3d"}
+
+	h := &NPMHandler{
+		proxy:    proxy,
+		proxyURL: "http://localhost:8080",
+	}
+
+	input := `{
+		"name": "testpkg",
+		"dist-tags": {"latest": "2.0.0"},
+		"time": {
+			"1.0.0": "` + old + `",
+			"2.0.0": "` + recent + `"
+		},
+		"versions": {
+			"1.0.0": {
+				"name": "testpkg",
+				"version": "1.0.0",
+				"dist": {
+					"tarball": "https://registry.npmjs.org/testpkg/-/testpkg-1.0.0.tgz"
+				}
+			},
+			"2.0.0": {
+				"name": "testpkg",
+				"version": "2.0.0",
+				"dist": {
+					"tarball": "https://registry.npmjs.org/testpkg/-/testpkg-2.0.0.tgz"
+				}
+			}
+		}
+	}`
+
+	output, err := h.rewriteMetadata("testpkg", []byte(input))
+	if err != nil {
+		t.Fatalf("rewriteMetadata failed: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	versions := result["versions"].(map[string]any)
+
+	// Old version should remain
+	if _, ok := versions["1.0.0"]; !ok {
+		t.Error("version 1.0.0 should not be filtered")
+	}
+
+	// Recent version should be filtered
+	if _, ok := versions["2.0.0"]; ok {
+		t.Error("version 2.0.0 should be filtered by cooldown")
+	}
+
+	// dist-tags.latest should be updated to 1.0.0
+	distTags := result["dist-tags"].(map[string]any)
+	if distTags["latest"] != "1.0.0" {
+		t.Errorf("dist-tags.latest = %q, want %q", distTags["latest"], "1.0.0")
+	}
+}
+
+func TestNPMRewriteMetadataCooldownExemptPackage(t *testing.T) {
+	now := time.Now()
+	recent := now.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	proxy := testProxy()
+	proxy.Cooldown = &cooldown.Config{
+		Default:  "3d",
+		Packages: map[string]string{"pkg:npm/testpkg": "0"},
+	}
+
+	h := &NPMHandler{
+		proxy:    proxy,
+		proxyURL: "http://localhost:8080",
+	}
+
+	input := `{
+		"name": "testpkg",
+		"time": {"1.0.0": "` + recent + `"},
+		"versions": {
+			"1.0.0": {
+				"name": "testpkg",
+				"version": "1.0.0",
+				"dist": {"tarball": "https://registry.npmjs.org/testpkg/-/testpkg-1.0.0.tgz"}
+			}
+		}
+	}`
+
+	output, err := h.rewriteMetadata("testpkg", []byte(input))
+	if err != nil {
+		t.Fatalf("rewriteMetadata failed: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	versions := result["versions"].(map[string]any)
+	if _, ok := versions["1.0.0"]; !ok {
+		t.Error("exempt package version should not be filtered")
 	}
 }
 

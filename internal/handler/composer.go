@@ -6,6 +6,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -124,6 +127,7 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 }
 
 // rewriteMetadata rewrites dist URLs in Composer metadata to point at this proxy.
+// If cooldown is enabled, versions published too recently are filtered out.
 func (h *ComposerHandler) rewriteMetadata(body []byte) ([]byte, error) {
 	var metadata map[string]any
 	if err := json.Unmarshal(body, &metadata); err != nil {
@@ -141,6 +145,9 @@ func (h *ComposerHandler) rewriteMetadata(body []byte) ([]byte, error) {
 			continue
 		}
 
+		packagePURL := purl.MakePURLString("composer", packageName, "")
+
+		filtered := versionList[:0]
 		for _, v := range versionList {
 			vmap, ok := v.(map[string]any)
 			if !ok {
@@ -148,20 +155,33 @@ func (h *ComposerHandler) rewriteMetadata(body []byte) ([]byte, error) {
 			}
 
 			version, _ := vmap["version"].(string)
+
+			// Apply cooldown filtering
+			if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
+				if timeStr, ok := vmap["time"].(string); ok {
+					if publishedAt, err := time.Parse(time.RFC3339, timeStr); err == nil {
+						if !h.proxy.Cooldown.IsAllowed("composer", packagePURL, publishedAt) {
+							h.proxy.Logger.Info("cooldown: filtering composer version",
+								"package", packageName, "version", version)
+							continue
+						}
+					}
+				}
+			}
+
 			dist, ok := vmap["dist"].(map[string]any)
 			if !ok {
+				filtered = append(filtered, v)
 				continue
 			}
 
 			// Rewrite the dist URL
 			if url, ok := dist["url"].(string); ok && url != "" {
-				// Extract filename from URL
 				filename := "package.zip"
 				if idx := strings.LastIndex(url, "/"); idx >= 0 {
 					filename = url[idx+1:]
 				}
 
-				// Build new URL through our proxy
 				parts := strings.SplitN(packageName, "/", 2)
 				if len(parts) == 2 {
 					newURL := fmt.Sprintf("%s/composer/files/%s/%s/%s/%s",
@@ -169,7 +189,11 @@ func (h *ComposerHandler) rewriteMetadata(body []byte) ([]byte, error) {
 					dist["url"] = newURL
 				}
 			}
+
+			filtered = append(filtered, v)
 		}
+
+		packages[packageName] = filtered
 	}
 
 	return json.Marshal(metadata)

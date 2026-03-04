@@ -80,6 +80,22 @@ type Config struct {
 
 	// Upstream configures upstream registry URLs (optional overrides).
 	Upstream UpstreamConfig `json:"upstream" yaml:"upstream"`
+
+	// Cooldown configures version age filtering to mitigate supply chain attacks.
+	Cooldown CooldownConfig `json:"cooldown" yaml:"cooldown"`
+}
+
+// CooldownConfig configures version cooldown periods.
+// Versions published more recently than the cooldown are hidden from metadata responses.
+type CooldownConfig struct {
+	// Default is the global default cooldown (e.g., "3d", "48h", "0" to disable).
+	Default string `json:"default" yaml:"default"`
+
+	// Ecosystems overrides the default for specific ecosystems.
+	Ecosystems map[string]string `json:"ecosystems" yaml:"ecosystems"`
+
+	// Packages overrides the cooldown for specific packages (keyed by PURL).
+	Packages map[string]string `json:"packages" yaml:"packages"`
 }
 
 // StorageConfig configures artifact storage.
@@ -285,6 +301,9 @@ func (c *Config) LoadFromEnv() {
 	}
 	if v := os.Getenv("PROXY_LOG_FORMAT"); v != "" {
 		c.Log.Format = v
+	}
+	if v := os.Getenv("PROXY_COOLDOWN_DEFAULT"); v != "" {
+		c.Cooldown.Default = v
 	}
 }
 

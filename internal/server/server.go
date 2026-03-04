@@ -45,6 +45,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/enrichment"
 	"github.com/git-pkgs/proxy/internal/handler"
@@ -123,7 +124,13 @@ func (s *Server) Start() error {
 	baseFetcher := fetch.NewFetcher(fetch.WithAuthFunc(s.authForURL))
 	fetcher := fetch.NewCircuitBreakerFetcher(baseFetcher)
 	resolver := fetch.NewResolver()
+	cd := &cooldown.Config{
+		Default:    s.cfg.Cooldown.Default,
+		Ecosystems: s.cfg.Cooldown.Ecosystems,
+		Packages:   s.cfg.Cooldown.Packages,
+	}
 	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
+	proxy.Cooldown = cd
 
 	// Create router with Chi
 	r := chi.NewRouter()

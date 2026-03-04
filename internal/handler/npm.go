@@ -6,7 +6,11 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"sort"
 	"strings"
+	"time"
+
+	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -111,6 +115,7 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 }
 
 // rewriteMetadata rewrites tarball URLs in npm package metadata to point at this proxy.
+// If cooldown is enabled, versions published too recently are filtered out.
 func (h *NPMHandler) rewriteMetadata(packageName string, body []byte) ([]byte, error) {
 	var metadata map[string]any
 	if err := json.Unmarshal(body, &metadata); err != nil {
@@ -121,6 +126,46 @@ func (h *NPMHandler) rewriteMetadata(packageName string, body []byte) ([]byte, e
 	versions, ok := metadata["versions"].(map[string]any)
 	if !ok {
 		return body, nil // No versions to rewrite
+	}
+
+	// Apply cooldown filtering
+	if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
+		timeMap, _ := metadata["time"].(map[string]any)
+		packagePURL := purl.MakePURLString("npm", packageName, "")
+
+		for version := range versions {
+			if timeMap == nil {
+				continue
+			}
+			publishedStr, ok := timeMap[version].(string)
+			if !ok {
+				continue
+			}
+			publishedAt, err := time.Parse(time.RFC3339, publishedStr)
+			if err != nil {
+				continue
+			}
+			if !h.proxy.Cooldown.IsAllowed("npm", packagePURL, publishedAt) {
+				h.proxy.Logger.Info("cooldown: filtering npm version",
+					"package", packageName, "version", version,
+					"published", publishedStr)
+				delete(versions, version)
+				delete(timeMap, version)
+			}
+		}
+
+		// Update dist-tags.latest if it was filtered
+		if distTags, ok := metadata["dist-tags"].(map[string]any); ok {
+			if latest, ok := distTags["latest"].(string); ok {
+				if _, exists := versions[latest]; !exists {
+					// Find newest remaining version from the time map
+					newLatest := h.findNewestVersion(versions, timeMap)
+					if newLatest != "" {
+						distTags["latest"] = newLatest
+					}
+				}
+			}
+		}
 	}
 
 	for version, vdata := range versions {
@@ -153,6 +198,38 @@ func (h *NPMHandler) rewriteMetadata(packageName string, body []byte) ([]byte, e
 	}
 
 	return json.Marshal(metadata)
+}
+
+// findNewestVersion returns the version string with the most recent timestamp
+// from the remaining versions, using the time map.
+func (h *NPMHandler) findNewestVersion(versions map[string]any, timeMap map[string]any) string {
+	if timeMap == nil {
+		return ""
+	}
+
+	type versionTime struct {
+		version string
+		t       time.Time
+	}
+
+	var vts []versionTime
+	for v := range versions {
+		if ts, ok := timeMap[v].(string); ok {
+			if t, err := time.Parse(time.RFC3339, ts); err == nil {
+				vts = append(vts, versionTime{v, t})
+			}
+		}
+	}
+
+	if len(vts) == 0 {
+		return ""
+	}
+
+	sort.Slice(vts, func(i, j int) bool {
+		return vts[i].t.After(vts[j].t)
+	})
+
+	return vts[0].version
 }
 
 // handleDownload serves a package tarball, fetching and caching from upstream if needed.

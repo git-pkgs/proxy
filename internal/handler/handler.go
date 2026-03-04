@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
@@ -24,6 +25,7 @@ type Proxy struct {
 	Fetcher  fetch.FetcherInterface
 	Resolver *fetch.Resolver
 	Logger   *slog.Logger
+	Cooldown *cooldown.Config
 }
 
 // NewProxy creates a new Proxy with the given dependencies.

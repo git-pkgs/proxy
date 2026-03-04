@@ -184,6 +184,33 @@ upstream:
       token: "${PRIVATE_TOKEN}"
 ```
 
+## Cooldown
+
+The cooldown feature hides package versions published too recently, giving the community time to spot malicious releases before they reach your projects. When a version is within its cooldown period, it's stripped from metadata responses so package managers won't install it.
+
+```yaml
+cooldown:
+  default: "3d"
+  ecosystems:
+    npm: "7d"
+    cargo: "0"
+  packages:
+    "pkg:npm/lodash": "0"
+    "pkg:npm/@babel/core": "14d"
+```
+
+| Config | Environment | Description |
+|--------|-------------|-------------|
+| `cooldown.default` | `PROXY_COOLDOWN_DEFAULT` | Global default cooldown |
+| `cooldown.ecosystems` | - | Per-ecosystem overrides |
+| `cooldown.packages` | - | Per-package overrides (keyed by PURL) |
+
+Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to disable.
+
+Resolution order: package override, then ecosystem override, then global default. This lets you set a conservative default while exempting trusted packages.
+
+Currently supported for npm, PyPI, pub.dev, and Composer. These ecosystems include publish timestamps in their metadata. Other ecosystems (Go, Cargo, RubyGems) would require extra API calls and are not yet supported.
+
 ## Docker
 
 ### SQLite with Local Storage

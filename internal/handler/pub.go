@@ -6,6 +6,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -127,6 +130,7 @@ func (h *PubHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 }
 
 // rewriteMetadata rewrites archive_url fields to point at this proxy.
+// If cooldown is enabled, versions published too recently are filtered out.
 func (h *PubHandler) rewriteMetadata(name string, body []byte) ([]byte, error) {
 	var metadata map[string]any
 	if err := json.Unmarshal(body, &metadata); err != nil {
@@ -139,6 +143,10 @@ func (h *PubHandler) rewriteMetadata(name string, body []byte) ([]byte, error) {
 		return body, nil
 	}
 
+	packagePURL := purl.MakePURLString("pub", name, "")
+
+	// Filter and rewrite versions
+	filtered := versions[:0]
 	for _, vdata := range versions {
 		vmap, ok := vdata.(map[string]any)
 		if !ok {
@@ -150,12 +158,49 @@ func (h *PubHandler) rewriteMetadata(name string, body []byte) ([]byte, error) {
 			continue
 		}
 
+		// Apply cooldown filtering
+		if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
+			if publishedStr, ok := vmap["published"].(string); ok {
+				if publishedAt, err := time.Parse(time.RFC3339, publishedStr); err == nil {
+					if !h.proxy.Cooldown.IsAllowed("pub", packagePURL, publishedAt) {
+						h.proxy.Logger.Info("cooldown: filtering pub version",
+							"package", name, "version", version)
+						continue
+					}
+				}
+			}
+		}
+
 		// Rewrite archive_url
 		newURL := fmt.Sprintf("%s/pub/packages/%s/versions/%s.tar.gz", h.proxyURL, name, version)
 		vmap["archive_url"] = newURL
+		filtered = append(filtered, vdata)
 
 		h.proxy.Logger.Debug("rewrote archive URL",
 			"package", name, "version", version, "new", newURL)
+	}
+
+	metadata["versions"] = filtered
+
+	// Update latest if it points to a filtered version
+	if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
+		if latest, ok := metadata["latest"].(map[string]any); ok {
+			if latestVer, ok := latest["version"].(string); ok {
+				found := false
+				for _, vdata := range filtered {
+					if vmap, ok := vdata.(map[string]any); ok {
+						if vmap["version"] == latestVer {
+							found = true
+							break
+						}
+					}
+				}
+				if !found && len(filtered) > 0 {
+					// Use the last entry (most recent remaining)
+					metadata["latest"] = filtered[len(filtered)-1]
+				}
+			}
+		}
 	}
 
 	return json.Marshal(metadata)

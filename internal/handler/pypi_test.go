@@ -1,8 +1,12 @@
 package handler
 
 import (
+	"encoding/json"
 	"log/slog"
 	"testing"
+	"time"
+
+	"github.com/git-pkgs/proxy/internal/cooldown"
 )
 
 func TestPyPIParseFilename(t *testing.T) {
@@ -34,6 +38,54 @@ func TestPyPIParseFilename(t *testing.T) {
 			t.Errorf("parseFilename(%q) = (%q, %q), want (%q, %q)",
 				tt.filename, name, version, tt.wantName, tt.wantVersion)
 		}
+	}
+}
+
+func TestPyPIRewriteJSONMetadataCooldown(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-10 * 24 * time.Hour).Format(time.RFC3339)
+	recent := now.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	proxy := &Proxy{Logger: slog.Default()}
+	proxy.Cooldown = &cooldown.Config{Default: "3d"}
+
+	h := &PyPIHandler{
+		proxy:    proxy,
+		proxyURL: "http://localhost:8080",
+	}
+
+	input := `{
+		"info": {"name": "requests"},
+		"releases": {
+			"2.30.0": [{"url": "https://files.pythonhosted.org/packages/ab/cd/requests-2.30.0.tar.gz", "upload_time_iso_8601": "` + old + `"}],
+			"2.31.0": [{"url": "https://files.pythonhosted.org/packages/ab/cd/requests-2.31.0.tar.gz", "upload_time_iso_8601": "` + recent + `"}]
+		},
+		"urls": [{"url": "https://files.pythonhosted.org/packages/ab/cd/requests-2.31.0.tar.gz", "upload_time_iso_8601": "` + recent + `"}]
+	}`
+
+	output, err := h.rewriteJSONMetadata([]byte(input))
+	if err != nil {
+		t.Fatalf("rewriteJSONMetadata failed: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	releases := result["releases"].(map[string]any)
+
+	if _, ok := releases["2.30.0"]; !ok {
+		t.Error("version 2.30.0 should not be filtered")
+	}
+	if _, ok := releases["2.31.0"]; ok {
+		t.Error("version 2.31.0 should be filtered by cooldown")
+	}
+
+	// urls array should be empty since the current version is filtered
+	urls := result["urls"].([]any)
+	if len(urls) != 0 {
+		t.Errorf("urls should be empty, got %d entries", len(urls))
 	}
 }
 
