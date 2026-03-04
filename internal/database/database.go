@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 
+	gitpkgsdb "github.com/git-pkgs/git-pkgs/database"
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
 	_ "modernc.org/sqlite"
@@ -29,10 +30,8 @@ func (db *DB) Dialect() Dialect {
 	return db.dialect
 }
 
-func Exists(path string) bool {
-	_, err := os.Stat(path)
-	return err == nil
-}
+// Exists checks if a database file exists at the given path.
+var Exists = gitpkgsdb.Exists
 
 func Create(path string) (*DB, error) {
 	if Exists(path) {
@@ -54,6 +53,8 @@ func Create(path string) (*DB, error) {
 	return db, nil
 }
 
+// Open opens a SQLite database using the shared git-pkgs connection
+// settings (WAL mode, busy timeout, single connection).
 func Open(path string) (*DB, error) {
 	if dir := filepath.Dir(path); dir != "." && dir != "/" {
 		if err := os.MkdirAll(dir, 0755); err != nil {
@@ -61,22 +62,12 @@ func Open(path string) (*DB, error) {
 		}
 	}
 
-	// Add busy_timeout to handle concurrent writes
-	sqlDB, err := sqlx.Open("sqlite", path+"?_busy_timeout=5000")
+	sharedDB, err := gitpkgsdb.Open(path)
 	if err != nil {
-		return nil, fmt.Errorf("opening database: %w", err)
+		return nil, err
 	}
 
-	// Limit connections to 1 for SQLite to serialize writes
-	sqlDB.SetMaxOpenConns(1)
-
-	db := &DB{DB: sqlDB, dialect: DialectSQLite, path: path}
-	if err := db.OptimizeForReads(); err != nil {
-		_ = sqlDB.Close()
-		return nil, fmt.Errorf("optimizing database: %w", err)
-	}
-
-	return db, nil
+	return &DB{DB: sharedDB.SQLX(), dialect: DialectSQLite, path: path}, nil
 }
 
 func OpenOrCreate(path string) (*DB, error) {
