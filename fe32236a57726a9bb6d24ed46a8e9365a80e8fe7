@@ -1,0 +1,35 @@
+internal/server/templates/pages/packages_list.html
+  8b7384548763a737 16-18
+internal/server/dashboard.go
+  8b7384548763a737 116-186
+internal/server/templates.go
+  8b7384548763a737 26-28
+internal/server/server_test.go
+  8b7384548763a737 199-209
+internal/server/templates/components/ecosystem_badge.html
+  8b7384548763a737 2
+internal/server/templates/layout/footer.html
+  8b7384548763a737 22-24
+internal/server/templates/pages/search.html
+  8b7384548763a737 16-18
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "fe32236a57726a9bb6d24ed46a8e9365a80e8fe7",
+  "prompts": {
+    "8b7384548763a737": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019cdddc-cee5-7f81-be63-e6550dfbd243",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 100,
+      "total_deletions": 58,
+      "accepted_lines": 96,
+      "overriden_lines": 0
+    }
+  }
+}
