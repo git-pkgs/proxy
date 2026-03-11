@@ -1,0 +1,51 @@
+README.md
+  98f5e9f5ce41173b 68-80
+  8b7384548763a737 81-86
+internal/server/server.go
+  8b7384548763a737 24,48,194,411-415
+  98f5e9f5ce41173b 678-684,706-712
+internal/server/api.go
+  98f5e9f5ce41173b 133-143,189-199,265-276,320-328,365-373,464-472,561-569
+cmd/proxy/main.go
+  98f5e9f5ce41173b 3-7
+internal/server/browse.go
+  98f5e9f5ce41173b 46-57,140-152,367-378
+internal/server/swagger_gen.go
+  8b7384548763a737 1
+  98f5e9f5ce41173b 2-3
+tools.go
+  98f5e9f5ce41173b 1-7
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "22c29ff4265fbece4c0893a706f50e9ff949581f",
+  "prompts": {
+    "8b7384548763a737": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019cdddc-cee5-7f81-be63-e6550dfbd243",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 46,
+      "total_deletions": 32,
+      "accepted_lines": 15,
+      "overriden_lines": 0
+    },
+    "98f5e9f5ce41173b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019cddcb-ffe1-7373-bea2-f44ea0e2cf10",
+        "model": "gpt-5.2-codex"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 843,
+      "total_deletions": 1,
+      "accepted_lines": 842,
+      "overriden_lines": 0
+    }
+  }
+}
