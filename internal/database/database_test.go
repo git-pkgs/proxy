@@ -147,8 +147,8 @@ func TestVersionCRUD(t *testing.T) {
 		if got == nil {
 			t.Fatal("expected version, got nil")
 		}
-		if got.Version() != "4.17.21" {
-			t.Errorf("expected version 4.17.21, got %s", got.Version())
+		if got.VersionString() != "4.17.21" {
+			t.Errorf("expected version 4.17.21, got %s", got.VersionString())
 		}
 
 		versions, err := db.GetVersionsByPackagePURL("pkg:npm/lodash")
