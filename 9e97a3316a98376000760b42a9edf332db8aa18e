@@ -1,0 +1,25 @@
+internal/server/templates/pages/browse_source.html
+  d604d3e652fd4151 57-64,104,117-118,123-124,161,176
+internal/server/browse_test.go
+  d604d3e652fd4151 378-390
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "9e97a3316a98376000760b42a9edf332db8aa18e",
+  "prompts": {
+    "d604d3e652fd4151": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9550a2b8-329a-4acf-8276-ce3364de850a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 28,
+      "total_deletions": 7,
+      "accepted_lines": 28,
+      "overriden_lines": 0
+    }
+  }
+}
