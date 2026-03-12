@@ -7,29 +7,24 @@ This document describes the internal architecture of the git-pkgs proxy.
 The proxy is a caching HTTP server that sits between package manager clients and upstream registries. It intercepts requests, checks a local cache, and either serves cached content or fetches from upstream.
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         HTTP Server                              │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                    Router (ServeMux)                     │    │
-│  │  /npm/*  -> NPMHandler                                   │    │
-│  │  /cargo/* -> CargoHandler                                │    │
-│  │  /health -> healthHandler                                │    │
-│  │  /stats  -> statsHandler                                 │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│                              │                                   │
-│                              ▼                                   │
-│  ┌─────────────────────────────────────────────────────────┐    │
-│  │                         Proxy                            │    │
-│  │  - GetOrFetchArtifact()                                  │    │
-│  │  - Coordinates DB, Storage, Fetcher                      │    │
-│  └─────────────────────────────────────────────────────────┘    │
-│         │                    │                    │              │
-│         ▼                    ▼                    ▼              │
+┌──────────────────────────────────────────────────────────────────┐
+│                          HTTP Server                              │
+│  ┌──────────────────────────────────────────────────────────┐    │
+│  │                     Router (Chi)                          │    │
+│  │  /npm/*     -> NPMHandler      /health  -> healthHandler  │    │
+│  │  /cargo/*   -> CargoHandler    /stats   -> statsHandler   │    │
+│  │  /gem/*     -> GemHandler      /metrics -> prometheus     │    │
+│  │  ...16 ecosystems              /api/*   -> APIHandler     │    │
+│  │                                /        -> Web UI         │    │
+│  └──────────────────────────────────────────────────────────┘    │
+│         │                    │                    │               │
+│         ▼                    ▼                    ▼               │
 │  ┌───────────┐       ┌─────────────┐      ┌─────────────┐       │
-│  │  Database │       │   Storage   │      │   Upstream  │       │
-│  │  (SQLite) │       │ (Filesystem)│      │  (Fetcher)  │       │
+│  │ Database  │       │   Storage   │      │   Upstream  │       │
+│  │ SQLite or │       │ Filesystem  │      │  Registries │       │
+│  │ Postgres  │       │  or S3      │      │  (Fetcher)  │       │
 │  └───────────┘       └─────────────┘      └─────────────┘       │
-└─────────────────────────────────────────────────────────────────┘
+└──────────────────────────────────────────────────────────────────┘
 ```
 
 ## Request Flow
@@ -91,28 +86,86 @@ Metadata is not cached - always fetched fresh. This ensures clients see new vers
 
 ### `internal/database`
 
-SQLite database for cache metadata. Uses `modernc.org/sqlite` (pure Go, no CGO).
+SQLite or PostgreSQL database for cache metadata. SQLite uses `modernc.org/sqlite` (pure Go, no CGO). PostgreSQL uses `lib/pq`.
+
+The schema is compatible with [git-pkgs](https://github.com/git-pkgs) databases. The proxy adds the `artifacts` and `vulnerabilities` tables on top of the shared `packages` and `versions` tables, so both tools can point at the same database.
 
 **Tables:**
 
 ```sql
 packages (
-    id, purl, ecosystem, name, namespace, latest_version,
-    license, description, homepage, repository_url, upstream_url,
-    metadata_fetched_at, created_at, updated_at
+    id          INTEGER PRIMARY KEY,  -- SERIAL on Postgres
+    purl        TEXT NOT NULL,        -- unique, e.g. pkg:npm/lodash
+    ecosystem   TEXT NOT NULL,
+    name        TEXT NOT NULL,
+    latest_version  TEXT,
+    license         TEXT,
+    description     TEXT,
+    homepage        TEXT,
+    repository_url  TEXT,
+    registry_url    TEXT,
+    supplier_name   TEXT,
+    supplier_type   TEXT,
+    source          TEXT,
+    enriched_at     DATETIME,
+    vulns_synced_at DATETIME,
+    created_at      DATETIME,
+    updated_at      DATETIME
 )
+-- indexes: purl (unique), (ecosystem, name)
 
 versions (
-    id, purl, package_id, version, license, integrity,
-    published_at, yanked, metadata_fetched_at, created_at, updated_at
+    id           INTEGER PRIMARY KEY,
+    purl         TEXT NOT NULL,       -- unique, e.g. pkg:npm/lodash@4.17.21
+    package_purl TEXT NOT NULL,       -- FK to packages.purl
+    license      TEXT,
+    published_at DATETIME,
+    integrity    TEXT,                -- subresource integrity hash
+    yanked       INTEGER DEFAULT 0,  -- BOOLEAN on Postgres
+    source       TEXT,
+    enriched_at  DATETIME,
+    created_at   DATETIME,
+    updated_at   DATETIME
 )
+-- indexes: purl (unique), package_purl
 
 artifacts (
-    id, version_id, filename, upstream_url, storage_path,
-    content_hash, size, content_type, fetched_at,
-    hit_count, last_accessed_at, created_at, updated_at
+    id             INTEGER PRIMARY KEY,
+    version_purl   TEXT NOT NULL,
+    filename       TEXT NOT NULL,
+    upstream_url   TEXT NOT NULL,
+    storage_path   TEXT,              -- null until cached
+    content_hash   TEXT,              -- SHA-256
+    size           INTEGER,           -- BIGINT on Postgres
+    content_type   TEXT,
+    fetched_at     DATETIME,
+    hit_count      INTEGER DEFAULT 0, -- BIGINT on Postgres
+    last_accessed_at DATETIME,
+    created_at     DATETIME,
+    updated_at     DATETIME
 )
+-- indexes: (version_purl, filename) unique, storage_path, last_accessed_at
+
+vulnerabilities (
+    id            INTEGER PRIMARY KEY,
+    vuln_id       TEXT NOT NULL,      -- e.g. CVE-2021-1234
+    ecosystem     TEXT NOT NULL,
+    package_name  TEXT NOT NULL,
+    severity      TEXT,
+    summary       TEXT,
+    fixed_version TEXT,
+    cvss_score    REAL,
+    "references"  TEXT,               -- JSON array
+    fetched_at    DATETIME,
+    created_at    DATETIME,
+    updated_at    DATETIME
+)
+-- indexes: (vuln_id, ecosystem, package_name) unique, (ecosystem, package_name)
 ```
+
+On PostgreSQL, `INTEGER PRIMARY KEY` becomes `SERIAL`, `DATETIME` becomes `TIMESTAMP`, `INTEGER DEFAULT 0` booleans become `BOOLEAN DEFAULT FALSE`, and size/count columns use `BIGINT`.
+
+The `MigrateSchema()` function handles backward compatibility with older git-pkgs databases by adding missing columns via `ALTER TABLE` as needed.
 
 **Key operations:**
 - `GetPackageByPURL()` - Look up package by PURL
@@ -121,6 +174,7 @@ artifacts (
 - `UpsertPackage/Version/Artifact()` - Insert or update records
 - `RecordArtifactHit()` - Increment hit counter, update access time
 - `GetLeastRecentlyUsedArtifacts()` - For cache eviction
+- `SearchPackages()` - Full-text search across cached packages
 
 ### `internal/storage`
 
@@ -201,12 +255,27 @@ HTTP protocol handlers for each registry type.
 
 ### `internal/server`
 
-HTTP server setup.
+HTTP server setup, web UI, and API handlers.
 
 - Creates and wires together all components
-- Mounts handlers at appropriate paths
-- Adds logging middleware
-- Health and stats endpoints
+- Mounts protocol handlers at ecosystem-specific paths
+- Middleware: request ID, real IP, logging, panic recovery, active request tracking
+- Web UI: dashboard, package browser, source browser, version comparison
+- Templates are embedded in the binary via `//go:embed`
+- Enrichment API for package metadata, vulnerability scanning, and outdated detection
+- Health, stats, and Prometheus metrics endpoints
+
+### `internal/metrics`
+
+Prometheus metrics for cache performance, upstream latency, storage operations, and active requests. See the Monitoring section of the README for the full metric list.
+
+### `internal/cooldown`
+
+Version age filtering for supply chain attack mitigation. Configurable at global, ecosystem, and per-package levels. Supported by npm, PyPI, pub.dev, and Composer handlers.
+
+### `internal/enrichment`
+
+Package metadata enrichment. Fetches license, description, homepage, repository URL, and vulnerability data from upstream registries. Powers the `/api/` endpoints and the web UI's package detail pages.
 
 ### `internal/config`
 

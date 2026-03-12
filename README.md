@@ -24,31 +24,33 @@ Currently works with npm, PyPI, pub.dev, and Composer, which all include publish
 
 ## Supported Registries
 
-| Registry | Language/Platform | URL Resolution | Handler | Completed |
-|----------|-------------------|:--------------:|:-------:|:---------:|
-| npm | JavaScript | Yes | Yes | ✓ |
-| Cargo | Rust | Yes | Yes | ✓ |
-| RubyGems | Ruby | Yes | Yes | ✓ |
-| Go proxy | Go | Yes | Yes | ✓ |
-| Hex | Elixir | Yes | Yes | ✓ |
-| pub.dev | Dart | Yes | Yes | ✓ |
-| PyPI | Python | Yes | Yes | ✓ |
-| Maven | Java | Yes | Yes | ✓ |
-| NuGet | .NET | Yes | Yes | ✓ |
-| Composer | PHP | Yes | Yes | ✓ |
-| Conan | C/C++ | Yes | Yes | ✓ |
-| Conda | Python/R | Yes | Yes | ✓ |
-| CRAN | R | Yes | Yes | ✓ |
-| Container | Docker/OCI | Yes | Yes | ✓ |
-| Debian | Debian/Ubuntu | Yes | Yes | ✓ |
-| RPM | RHEL/Fedora | Yes | Yes | ✓ |
-| Alpine | Alpine Linux | No | No | ✗ |
-| Arch | Arch Linux | No | No | ✗ |
-| Chef | Chef | No | No | ✗ |
-| Generic | Any | No | No | ✗ |
-| Helm | Kubernetes | No | No | ✗ |
-| Swift | Swift | No | No | ✗ |
-| Vagrant | Vagrant | No | No | ✗ |
+| Registry | Language/Platform | Cooldown | Completed |
+|----------|-------------------|:--------:|:---------:|
+| npm | JavaScript | Yes | ✓ |
+| Cargo | Rust | | ✓ |
+| RubyGems | Ruby | | ✓ |
+| Go proxy | Go | | ✓ |
+| Hex | Elixir | | ✓ |
+| pub.dev | Dart | Yes | ✓ |
+| PyPI | Python | Yes | ✓ |
+| Maven | Java | | ✓ |
+| NuGet | .NET | | ✓ |
+| Composer | PHP | Yes | ✓ |
+| Conan | C/C++ | | ✓ |
+| Conda | Python/R | | ✓ |
+| CRAN | R | | ✓ |
+| Container | Docker/OCI | | ✓ |
+| Debian | Debian/Ubuntu | | ✓ |
+| RPM | RHEL/Fedora | | ✓ |
+| Alpine | Alpine Linux | | ✗ |
+| Arch | Arch Linux | | ✗ |
+| Chef | Chef | | ✗ |
+| Generic | Any | | ✗ |
+| Helm | Kubernetes | | ✗ |
+| Swift | Swift | | ✗ |
+| Vagrant | Vagrant | | ✗ |
+
+Cooldown requires publish timestamps in metadata. Registries without a "Yes" in the cooldown column either don't expose timestamps or haven't been wired up yet.
 
 ## Quick Start
 
@@ -465,9 +467,10 @@ Recently cached:
 
 | Endpoint | Description |
 |----------|-------------|
-| `GET /` | Welcome message and endpoint list |
+| `GET /` | Dashboard (web UI) |
 | `GET /health` | Health check (returns "ok" if healthy) |
 | `GET /stats` | Cache statistics (JSON) |
+| `GET /metrics` | Prometheus metrics |
 | `GET /npm/*` | npm registry protocol |
 | `GET /cargo/*` | Cargo sparse index protocol |
 | `GET /gem/*` | RubyGems protocol |
@@ -665,6 +668,46 @@ Response:
                     │  cache  │
                     │ storage │
                     └─────────┘
+```
+
+## Web Interface
+
+The proxy serves a web UI at the root URL. No separate frontend build is needed -- templates and assets are embedded in the binary.
+
+- **Dashboard** (`/`) -- cache stats, popular packages, recently cached artifacts, and vulnerability overview.
+- **Install guide** (`/install`) -- per-ecosystem configuration instructions, so you don't have to look them up here.
+- **Package browser** (`/packages`) -- browse all cached packages with filtering by ecosystem and sorting by hits, size, name, or vulnerability count.
+- **Search** (`/search?q=...`) -- search cached packages by name.
+- **Package detail** (`/package/{ecosystem}/{name}`) -- metadata, license, vulnerabilities, and version list for a package. You can select two versions to compare.
+- **Version detail** (`/package/{ecosystem}/{name}/{version}`) -- per-version metadata, integrity hash, artifact cache status, and hit counts.
+- **Source browser** (`/package/{ecosystem}/{name}/{version}/browse`) -- browse files inside cached archives with syntax highlighting for text files and image previews.
+- **Version diff** (`/package/{ecosystem}/{name}/compare/{v1}...{v2}`) -- side-by-side diff of two cached versions showing added, removed, and changed files.
+
+## Monitoring
+
+The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are prefixed with `proxy_`.
+
+| Metric | Type | Labels | Description |
+|--------|------|--------|-------------|
+| `proxy_cache_hits_total` | counter | `ecosystem` | Cache hits |
+| `proxy_cache_misses_total` | counter | `ecosystem` | Cache misses |
+| `proxy_cache_size_bytes` | gauge | | Total size of cached artifacts |
+| `proxy_cached_artifacts_total` | gauge | | Number of cached artifacts |
+| `proxy_upstream_fetch_duration_seconds` | histogram | `ecosystem` | Time spent fetching from upstream |
+| `proxy_upstream_errors_total` | counter | `ecosystem`, `error_type` | Upstream fetch failures |
+| `proxy_storage_operation_duration_seconds` | histogram | `operation` | Storage read/write latency |
+| `proxy_storage_errors_total` | counter | `operation` | Storage read/write failures |
+| `proxy_active_requests` | gauge | | In-flight requests |
+
+Cache size and artifact count are refreshed every 60 seconds. The remaining metrics update on each request.
+
+Scrape config for Prometheus:
+
+```yaml
+scrape_configs:
+  - job_name: git-pkgs-proxy
+    static_configs:
+      - targets: ["localhost:8080"]
 ```
 
 ## Production Deployment
