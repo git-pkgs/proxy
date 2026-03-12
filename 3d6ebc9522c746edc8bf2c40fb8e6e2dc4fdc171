@@ -1,0 +1,25 @@
+internal/server/server.go
+  d604d3e652fd4151 689
+internal/server/api.go
+  d604d3e652fd4151 164,212,294,488,595
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "3d6ebc9522c746edc8bf2c40fb8e6e2dc4fdc171",
+  "prompts": {
+    "d604d3e652fd4151": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9550a2b8-329a-4acf-8276-ce3364de850a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 67,
+      "total_deletions": 6,
+      "accepted_lines": 67,
+      "overriden_lines": 0
+    }
+  }
+}
