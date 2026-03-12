@@ -1,0 +1,33 @@
+internal/handler/rpm_test.go
+  d604d3e652fd4151 89-97
+internal/handler/path_traversal_test.go
+  d604d3e652fd4151 1-27
+internal/handler/rpm.go
+  d604d3e652fd4151 44-48
+internal/handler/debian.go
+  d604d3e652fd4151 43-47
+internal/handler/handler.go
+  d604d3e652fd4151 11,22-32
+internal/handler/debian_test.go
+  d604d3e652fd4151 89-97
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "bf7e83efe35115780f66088267172ce1a8105f74",
+  "prompts": {
+    "d604d3e652fd4151": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9550a2b8-329a-4acf-8276-ce3364de850a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 67,
+      "total_deletions": 0,
+      "accepted_lines": 67,
+      "overriden_lines": 0
+    }
+  }
+}
