@@ -1,0 +1,25 @@
+docs/architecture.md
+  d604d3e652fd4151 10,12-19,24-25,27,89,91,97-113,115,118-128,130,133-161,163,166-168,177,258,261-278
+README.md
+  d604d3e652fd4151 27,52-53,470,473,673-712
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "ade64386a624c517c43f5b721b528fc39ec18858",
+  "prompts": {
+    "d604d3e652fd4151": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9550a2b8-329a-4acf-8276-ce3364de850a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 172,
+      "total_deletions": 60,
+      "accepted_lines": 144,
+      "overriden_lines": 0
+    }
+  }
+}
