@@ -54,6 +54,14 @@ const packageName = '{{.PackageName}}';
 const version = '{{.Version}}';
 let currentPath = '';
 
+// Escape a string for safe interpolation into HTML attributes and content.
+// Prevents XSS when file paths contain quotes, angle brackets, or other special characters.
+function escapeHTML(str) {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML.replace(/'/g, '&#39;').replace(/"/g, '&quot;');
+}
+
 // Load file tree for a directory
 async function loadFileTree(path = '') {
     try {
@@ -93,7 +101,7 @@ function renderFileTree(files, basePath) {
         const parentPath = basePath.split('/').slice(0, -2).join('/');
         html += `
             <div class="px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded cursor-pointer text-sm"
-                 onclick="loadFileTree('${parentPath}'); currentPath='${parentPath}';">
+                 onclick="loadFileTree('${escapeHTML(parentPath)}'); currentPath='${escapeHTML(parentPath)}';">
                 <span class="text-gray-500 dark:text-gray-400">📁 ..</span>
             </div>
         `;
@@ -106,14 +114,14 @@ function renderFileTree(files, basePath) {
 
         if (file.is_dir) {
             html += `
-                <div class="${classes}" onclick="loadFileTree('${file.path}'); currentPath='${file.path}';">
-                    <span>${icon} ${file.name}</span>
+                <div class="${classes}" onclick="loadFileTree('${escapeHTML(file.path)}'); currentPath='${escapeHTML(file.path)}';">
+                    <span>${icon} ${escapeHTML(file.name)}</span>
                 </div>
             `;
         } else {
             html += `
-                <div class="${classes}" onclick="loadFile('${file.path}')">
-                    <span>${icon} ${file.name}</span>
+                <div class="${classes}" onclick="loadFile('${escapeHTML(file.path)}')">
+                    <span>${icon} ${escapeHTML(file.name)}</span>
                     <span class="text-xs text-gray-500 dark:text-gray-400 ml-2">${formatSize(file.size)}</span>
                 </div>
             `;
@@ -150,7 +158,7 @@ async function loadFile(path) {
         const container = document.getElementById('file-content');
 
         if (contentType && contentType.includes('image/')) {
-            container.innerHTML = `<img src="${url}" alt="${path}" class="max-w-full">`;
+            container.innerHTML = `<img src="${escapeHTML(url)}" alt="${escapeHTML(path)}" class="max-w-full">`;
         } else if (isTextContent(contentType)) {
             // Escape HTML and display as code
             const escaped = content
@@ -165,7 +173,7 @@ async function loadFile(path) {
             container.innerHTML = `
                 <div class="text-center text-gray-500 dark:text-gray-400 py-8">
                     <p class="mb-4">Binary file (${formatSize(content.length)})</p>
-                    <button onclick="window.location.href='${url}'"
+                    <button onclick="window.location.href='${escapeHTML(url)}'"
                             class="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700">
                         Download
                     </button>

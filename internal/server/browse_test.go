@@ -375,6 +375,19 @@ func TestHandleBrowseSourcePage(t *testing.T) {
 		}
 	}
 
+	// Check that the escapeHTML function is present for XSS protection
+	if !strings.Contains(body, "function escapeHTML(str)") {
+		t.Error("browse source page missing escapeHTML function for XSS protection")
+	}
+
+	// Check that onclick handlers use escapeHTML
+	if strings.Contains(body, "onclick=\"loadFileTree('${file.path}')") {
+		t.Error("browse source page has unescaped file.path in onclick handler")
+	}
+	if strings.Contains(body, "onclick=\"loadFile('${file.path}')") {
+		t.Error("browse source page has unescaped file.path in onclick handler")
+	}
+
 	// Check that ecosystem, package name, and version are set in JavaScript
 	if !strings.Contains(body, "const ecosystem = 'npm'") {
 		t.Error("browse source page missing ecosystem variable")
