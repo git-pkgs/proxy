@@ -1,0 +1,27 @@
+internal/server/templates_test.go
+  6702463e5e3429f4 1-426
+internal/handler/handler_test.go
+  6702463e5e3429f4 1-438
+internal/server/server_test.go
+  6702463e5e3429f4 110-111
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "5ff69bfd93a1d4377d1f2d80508a03d5aaa06bf1",
+  "prompts": {
+    "6702463e5e3429f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "94c22121-0e88-4727-a3c1-6ae2ad5f0462",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 891,
+      "total_deletions": 25,
+      "accepted_lines": 866,
+      "overriden_lines": 0
+    }
+  }
+}
