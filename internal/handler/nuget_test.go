@@ -12,7 +12,8 @@ import (
 
 func nugetTestProxy() *Proxy {
 	return &Proxy{
-		Logger: slog.Default(),
+		Logger:     slog.Default(),
+		HTTPClient: http.DefaultClient,
 	}
 }
 
