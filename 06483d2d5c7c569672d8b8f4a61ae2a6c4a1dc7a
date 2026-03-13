@@ -1,0 +1,25 @@
+internal/handler/conan_test.go
+  6702463e5e3429f4 1-473
+internal/handler/nuget_test.go
+  6702463e5e3429f4 1-769
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "06483d2d5c7c569672d8b8f4a61ae2a6c4a1dc7a",
+  "prompts": {
+    "6702463e5e3429f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "94c22121-0e88-4727-a3c1-6ae2ad5f0462",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 1242,
+      "total_deletions": 0,
+      "accepted_lines": 1242,
+      "overriden_lines": 0
+    }
+  }
+}
