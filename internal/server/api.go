@@ -327,6 +327,7 @@ func (h *APIHandler) HandleGetVulns(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string
 // @Router /api/outdated [post]
 func (h *APIHandler) HandleOutdated(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
 	var req OutdatedRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -372,6 +373,7 @@ func (h *APIHandler) HandleOutdated(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string
 // @Router /api/bulk [post]
 func (h *APIHandler) HandleBulkLookup(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
 	var req BulkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)

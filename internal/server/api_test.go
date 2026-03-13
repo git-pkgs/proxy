@@ -94,6 +94,25 @@ func TestHandleOutdated_EmptyBody(t *testing.T) {
 	}
 }
 
+func TestHandleOutdated_OversizedBody(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	svc := enrichment.New(logger)
+	h := NewAPIHandler(svc, nil)
+
+	// Send a body larger than 1 MB
+	body := make([]byte, 2<<20)
+	for i := range body {
+		body[i] = 'x'
+	}
+	req := httptest.NewRequest("POST", "/api/outdated", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.HandleOutdated(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("expected status %d for oversized body, got %d", http.StatusBadRequest, w.Code)
+	}
+}
+
 func TestHandleOutdated_InvalidJSON(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	svc := enrichment.New(logger)

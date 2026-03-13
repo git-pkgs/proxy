@@ -30,6 +30,17 @@ func containsPathTraversal(path string) bool {
 	return false
 }
 
+// maxMetadataSize is the maximum size of upstream metadata responses (50 MB).
+// Package metadata (e.g. npm with many versions) can be large, but unbounded
+// reads risk OOM if an upstream misbehaves.
+const maxMetadataSize = 50 << 20
+
+// ReadMetadata reads an upstream response body with a size limit to prevent OOM
+// from unexpectedly large responses.
+func ReadMetadata(r io.Reader) ([]byte, error) {
+	return io.ReadAll(io.LimitReader(r, maxMetadataSize))
+}
+
 // Proxy provides shared functionality for protocol handlers.
 type Proxy struct {
 	DB       *database.DB

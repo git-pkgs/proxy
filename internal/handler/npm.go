@@ -3,7 +3,6 @@ package handler
 import (
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"sort"
@@ -93,7 +92,7 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 	}
 
 	// Parse and rewrite tarball URLs
-	body, err := io.ReadAll(resp.Body)
+	body, err := ReadMetadata(resp.Body)
 	if err != nil {
 		JSONError(w, http.StatusInternalServerError, "failed to read response")
 		return

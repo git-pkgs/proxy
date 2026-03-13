@@ -108,7 +108,7 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	body, err := io.ReadAll(resp.Body)
+	body, err := ReadMetadata(resp.Body)
 	if err != nil {
 		http.Error(w, "failed to read response", http.StatusInternalServerError)
 		return
