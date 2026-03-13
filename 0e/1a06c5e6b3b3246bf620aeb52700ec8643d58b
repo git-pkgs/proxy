@@ -1,0 +1,39 @@
+internal/handler/composer.go
+  d604d3e652fd4151 111
+internal/handler/handler.go
+  d604d3e652fd4151 21-31,33-43
+internal/handler/pub.go
+  d604d3e652fd4151 112
+internal/server/api_test.go
+  d604d3e652fd4151 97-115
+internal/handler/read_metadata_test.go
+  d604d3e652fd4151 1-34
+internal/handler/npm.go
+  d604d3e652fd4151 95
+internal/handler/nuget.go
+  d604d3e652fd4151 80
+internal/handler/pypi.go
+  d604d3e652fd4151 95,262
+internal/server/api.go
+  d604d3e652fd4151 330,376
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.10",
+  "base_commit_sha": "0e1a06c5e6b3b3246bf620aeb52700ec8643d58b",
+  "prompts": {
+    "d604d3e652fd4151": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9550a2b8-329a-4acf-8276-ce3364de850a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 172,
+      "total_deletions": 60,
+      "accepted_lines": 83,
+      "overriden_lines": 0
+    }
+  }
+}
