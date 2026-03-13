@@ -1,0 +1,25 @@
+internal/handler/conan_test.go
+  b98de1153b11134e 15
+internal/handler/nuget_test.go
+  b98de1153b11134e 16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.12",
+  "base_commit_sha": "357cf626bc885a9eb49bdc80aabdd012cabd0135",
+  "prompts": {
+    "b98de1153b11134e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d063a445-d283-4db3-a728-573ea639306c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 2,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
