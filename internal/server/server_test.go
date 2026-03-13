@@ -107,6 +107,8 @@ func newTestServer(t *testing.T) *testServer {
 	r.Get("/api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion}", s.handleCompareDiff)
 	r.Get("/package/{ecosystem}/{name}/compare/{versions}", s.handleComparePage)
 	r.Get("/", s.handleRoot)
+	r.Get("/install", s.handleInstall)
+	r.Get("/packages", s.handlePackagesList)
 
 	return &testServer{
 		handler: r,
