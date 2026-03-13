@@ -1,0 +1,44 @@
+internal/handler/conan_test.go
+  b98de1153b11134e 15
+internal/server/templates_test.go
+  6702463e5e3429f4 1-426
+internal/server/server_test.go
+  6702463e5e3429f4 110-111
+internal/handler/handler_test.go
+  6702463e5e3429f4 1-425
+internal/handler/nuget_test.go
+  b98de1153b11134e 16
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.12",
+  "base_commit_sha": "d820f75fa63f58839c9bffeac0a8e5ebb1e7c865",
+  "prompts": {
+    "6702463e5e3429f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "94c22121-0e88-4727-a3c1-6ae2ad5f0462",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 853,
+      "overriden_lines": 0
+    },
+    "b98de1153b11134e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d063a445-d283-4db3-a728-573ea639306c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 2,
+      "overriden_lines": 0
+    }
+  }
+}
