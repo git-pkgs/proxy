@@ -161,7 +161,7 @@ func (h *APIHandler) HandleGetPackage(w http.ResponseWriter, r *http.Request) {
 
 	info, err := h.enrichment.EnrichPackage(r.Context(), ecosystem, name)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to enrich package", http.StatusInternalServerError)
 		return
 	}
 
@@ -209,7 +209,7 @@ func (h *APIHandler) HandleGetVersion(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.enrichment.EnrichFull(r.Context(), ecosystem, name, version)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to enrich version", http.StatusInternalServerError)
 		return
 	}
 
@@ -291,7 +291,7 @@ func (h *APIHandler) HandleGetVulns(w http.ResponseWriter, r *http.Request) {
 
 	vulns, err := h.enrichment.CheckVulnerabilities(r.Context(), ecosystem, name, version)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to check vulnerabilities", http.StatusInternalServerError)
 		return
 	}
 
@@ -485,7 +485,7 @@ func (h *APIHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	// Search in database
 	results, err := h.db.SearchPackages(query, ecosystem, limit, (page-1)*limit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "search failed", http.StatusInternalServerError)
 		return
 	}
 
@@ -592,7 +592,7 @@ func (h *APIHandler) HandlePackagesList(w http.ResponseWriter, r *http.Request) 
 
 	packages, err := h.db.ListCachedPackages(ecosystem, sortBy, limit, (page-1)*limit)
 	if err != nil {
-		http.Error(w, err.Error(), http.StatusInternalServerError)
+		http.Error(w, "failed to list packages", http.StatusInternalServerError)
 		return
 	}
 

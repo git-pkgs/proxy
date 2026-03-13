@@ -686,7 +686,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	// Check database connectivity
 	if _, err := s.db.SchemaVersion(); err != nil {
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = fmt.Fprintf(w, "database error: %v", err)
+		_, _ = fmt.Fprint(w, "database error")
 		return
 	}
 
