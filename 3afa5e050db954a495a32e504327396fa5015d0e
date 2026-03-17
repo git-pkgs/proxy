@@ -1,0 +1,29 @@
+internal/handler/download_test.go
+  da15eed9d48e8570 1-804
+internal/server/middleware_test.go
+  da15eed9d48e8570 5-6,97-149
+internal/server/server_test.go
+  da15eed9d48e8570 6,15,513-886
+internal/server/api_test.go
+  da15eed9d48e8570 16,372-477
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.12",
+  "base_commit_sha": "3afa5e050db954a495a32e504327396fa5015d0e",
+  "prompts": {
+    "da15eed9d48e8570": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ccda35cc-0641-4388-a7cf-d5ad2f635141",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 1366,
+      "total_deletions": 24,
+      "accepted_lines": 1342,
+      "overriden_lines": 0
+    }
+  }
+}
