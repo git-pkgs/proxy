@@ -352,14 +352,17 @@ The proxy can be configured via:
 ### Command Line Flags
 
 ```
--config string      Path to configuration file
--listen string      Address to listen on (default ":8080")
--base-url string    Public URL of this proxy (default "http://localhost:8080")
--storage string     Path to artifact storage directory (default "./cache/artifacts")
--database string    Path to SQLite database file (default "./cache/proxy.db")
--log-level string   Log level: debug, info, warn, error (default "info")
--log-format string  Log format: text, json (default "text")
--version            Print version and exit
+-config string           Path to configuration file
+-listen string           Address to listen on (default ":8080")
+-base-url string         Public URL of this proxy (default "http://localhost:8080")
+-storage-url string      Storage URL (file:// or s3://)
+-storage-path string     Path to artifact storage directory (deprecated, use -storage-url)
+-database-driver string  Database driver: sqlite or postgres (default "sqlite")
+-database-path string    Path to SQLite database file (default "./cache/proxy.db")
+-database-url string     PostgreSQL connection URL
+-log-level string        Log level: debug, info, warn, error (default "info")
+-log-format string       Log format: text, json (default "text")
+-version                 Print version and exit
 ```
 
 ### Environment Variables
@@ -367,8 +370,10 @@ The proxy can be configured via:
 ```bash
 PROXY_LISTEN=:8080
 PROXY_BASE_URL=http://localhost:8080
-PROXY_STORAGE_PATH=./cache/artifacts
+PROXY_STORAGE_URL=file:///var/cache/proxy/artifacts
+PROXY_DATABASE_DRIVER=sqlite
 PROXY_DATABASE_PATH=./cache/proxy.db
+PROXY_DATABASE_URL=postgres://user:pass@localhost/proxy?sslmode=disable
 PROXY_LOG_LEVEL=info
 PROXY_LOG_FORMAT=text
 ```
@@ -380,10 +385,11 @@ listen: ":8080"
 base_url: "http://localhost:8080"
 
 storage:
-  path: "/var/cache/proxy/artifacts"
+  url: "file:///var/cache/proxy/artifacts"
   max_size: "10GB"  # Optional: evict LRU when exceeded
 
 database:
+  driver: "sqlite"
   path: "/var/lib/proxy/cache.db"
 
 log:
@@ -405,6 +411,43 @@ Run with config file:
 ```bash
 ./proxy -config /etc/proxy/config.yaml
 ```
+
+### PostgreSQL
+
+SQLite is the default and works well for single-node deployments. For multi-node setups or if you prefer a managed database, switch to Postgres:
+
+```yaml
+database:
+  driver: "postgres"
+  url: "postgres://user:password@localhost:5432/proxy?sslmode=disable"
+```
+
+Or via environment variables:
+
+```bash
+PROXY_DATABASE_DRIVER=postgres
+PROXY_DATABASE_URL=postgres://user:password@localhost:5432/proxy?sslmode=disable
+```
+
+The proxy creates tables automatically on first run.
+
+### S3 Storage
+
+The proxy can store cached artifacts in S3 or any S3-compatible service (MinIO, R2, etc.) instead of the local filesystem.
+
+```yaml
+storage:
+  url: "s3://my-bucket-name?region=us-east-1"
+```
+
+For S3-compatible services like MinIO:
+
+```yaml
+storage:
+  url: "s3://my-bucket?endpoint=http://localhost:9000&disableSSL=true&s3ForcePathStyle=true"
+```
+
+Set credentials via standard AWS environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`).
 
 ## CLI Commands
 
@@ -429,7 +472,10 @@ proxy stats
 proxy stats -json
 
 # Custom database path
-proxy stats -database /var/lib/proxy/cache.db
+proxy stats -database-path /var/lib/proxy/cache.db
+
+# With PostgreSQL
+proxy stats -database-driver postgres -database-url postgres://user:pass@localhost/proxy
 
 # Show top 20 most popular packages
 proxy stats -popular 20
@@ -741,25 +787,23 @@ sudo systemctl start proxy
 
 ### Docker
 
-```dockerfile
-FROM golang:1.23-alpine AS build
-WORKDIR /app
-COPY . .
-RUN go build -o proxy ./cmd/proxy
-
-FROM alpine:latest
-RUN apk --no-cache add ca-certificates
-COPY --from=build /app/proxy /usr/local/bin/
-EXPOSE 8080
-VOLUME ["/data"]
-CMD ["proxy", "-storage", "/data/artifacts", "-database", "/data/proxy.db"]
-```
-
-Build and run:
+A Dockerfile is included in the repo. Build and run:
 
 ```bash
 docker build -t proxy .
 docker run -p 8080:8080 -v proxy-data:/data proxy
+```
+
+With Postgres and S3:
+
+```bash
+docker run -p 8080:8080 \
+  -e PROXY_DATABASE_DRIVER=postgres \
+  -e PROXY_DATABASE_URL=postgres://user:pass@db:5432/proxy \
+  -e PROXY_STORAGE_URL=s3://my-bucket?region=us-east-1 \
+  -e AWS_ACCESS_KEY_ID=... \
+  -e AWS_SECRET_ACCESS_KEY=... \
+  proxy
 ```
 
 ### Behind a Reverse Proxy
@@ -814,7 +858,7 @@ cache/artifacts/
             └── nginx-1.24.0-1.fc39.x86_64.rpm
 ```
 
-Cache metadata is stored in an SQLite database. To clear the cache:
+Cache metadata is stored in SQLite (default) or PostgreSQL. To clear a local cache:
 
 ```bash
 rm -rf ./cache/artifacts/*
@@ -826,7 +870,7 @@ The proxy will recreate the database on next start.
 ## Building from Source
 
 Requirements:
-- Go 1.23 or later
+- Go 1.25 or later
 
 ```bash
 git clone https://github.com/git-pkgs/proxy.git
