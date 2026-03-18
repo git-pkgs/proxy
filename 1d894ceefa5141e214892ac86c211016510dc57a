@@ -1,0 +1,103 @@
+internal/handler/container.go
+  2112945b1d5b767c 15-17,353,365,377
+internal/handler/npm.go
+  2112945b1d5b767c 17,131-132,134-135,137-146,148-149,151-154,156-158,166-177,180-189,194-195,207-209,212-214,220,224,341
+internal/server/templates_test.go
+  2112945b1d5b767c 65
+internal/server/api.go
+  2112945b1d5b767c 15-20,336,382,582,586,628
+internal/handler/cran.go
+  2112945b1d5b767c 155
+internal/storage/filesystem.go
+  2112945b1d5b767c 26,41
+internal/storage/storage_test.go
+  2112945b1d5b767c 4-5,61-90
+internal/storage/blob_test.go
+  2112945b1d5b767c 188,234
+cmd/proxy/main.go
+  2112945b1d5b767c 106-107,270,275,289-290,336-343,348,351,353,356,358,361,366
+internal/handler/debian_test.go
+  2112945b1d5b767c 10-17,22
+internal/handler/rpm.go
+  2112945b1d5b767c 13,98,103,124
+internal/handler/handler_test.go
+  2112945b1d5b767c 163-217
+internal/storage/filesystem_test.go
+  2112945b1d5b767c 236
+internal/config/config.go
+  2112945b1d5b767c 113-114
+internal/handler/maven.go
+  2112945b1d5b767c 12,102,139
+internal/server/server_test.go
+  2112945b1d5b767c 128-160,704,855
+internal/handler/pypi.go
+  2112945b1d5b767c 20,179,197,298-299,301-314,316-317,319-320,322,324-348,350-351,353-363,368,437,476,506
+internal/server/browse_test.go
+  2112945b1d5b767c 19-20,31,36,104,109,155,174-175,183-186,318,322
+internal/handler/download_test.go
+  2112945b1d5b767c 62-93,160,260,277,294,331,403,412-415,489-492,574-577,685,703,736
+internal/handler/pub.go
+  2112945b1d5b767c 16,53,147-148,150-153,155-157,170-171,182-199,201-225,229-230,235-237
+internal/handler/rpm_test.go
+  2112945b1d5b767c 10-17,22
+internal/config/config_test.go
+  2112945b1d5b767c 9-14,72,77,82,87,92,185-186,224,237-238
+internal/handler/go.go
+  2112945b1d5b767c 11,111,120
+internal/database/schema.go
+  2112945b1d5b767c 5-6,308-309,318,335,344
+internal/handler/conan_test.go
+  2112945b1d5b767c 12-13,49,70,377-378,384,386-387
+internal/handler/cargo.go
+  2112945b1d5b767c 14-17,132,134,136
+internal/database/queries_packages_list_test.go
+  2112945b1d5b767c 9-13,19,21,24-25,27-28,30,32-36,39-48,51-53,57-60,63-64,66,68-71,78-80,87-89,95-96,98-102,104,106-112,120,133,138,145,152,167
+internal/handler/npm_test.go
+  2112945b1d5b767c 14-15,177,237,248-249,291
+internal/handler/composer.go
+  2112945b1d5b767c 17,78-79,149,151-164,167-170,173-174,177-195,199-216,221-224
+internal/server/packages_list_test.go
+  2112945b1d5b767c 31,106,126
+internal/server/server.go
+  2112945b1d5b767c 63-70,239-241,327,333,508,777,783-784,797,808,814
+internal/storage/storage.go
+  2112945b1d5b767c 20-21
+internal/server/browse.go
+  2112945b1d5b767c 18-19,245,287,312,487,489
+internal/database/database.go
+  2112945b1d5b767c 15-16,61
+internal/handler/debian.go
+  2112945b1d5b767c 12,96,101,120
+internal/storage/blob.go
+  2112945b1d5b767c 20-21,43,46,55,67
+internal/handler/handler.go
+  2112945b1d5b767c 33-34,69,277-372
+internal/cooldown/cooldown.go
+  2112945b1d5b767c 10-11,117
+internal/handler/conda.go
+  2112945b1d5b767c 10,101,124
+internal/server/api_test.go
+  2112945b1d5b767c 19-20,183,204,315,392,438
+internal/handler/hex.go
+  2112945b1d5b767c 90
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.12",
+  "base_commit_sha": "1d894ceefa5141e214892ac86c211016510dc57a",
+  "prompts": {
+    "2112945b1d5b767c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6944a40-2dd1-480a-a0f2-87e5cf9bcbea",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 922,
+      "total_deletions": 1100,
+      "accepted_lines": 806,
+      "overriden_lines": 1
+    }
+  }
+}
