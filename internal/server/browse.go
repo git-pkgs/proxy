@@ -15,6 +15,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const contentTypePlainText = "text/plain; charset=utf-8"
+
 // getStripPrefix returns the path prefix to strip for a given ecosystem.
 // npm packages wrap content in a "package/" directory.
 func getStripPrefix(ecosystem string) string {
@@ -240,7 +242,7 @@ func detectContentType(filename string) string {
 	switch ext {
 	// Text formats
 	case ".txt", ".md", ".markdown":
-		return "text/plain; charset=utf-8"
+		return contentTypePlainText
 	case ".html", ".htm":
 		return "text/html; charset=utf-8"
 	case ".css":
@@ -282,7 +284,7 @@ func detectContentType(filename string) string {
 
 	// Config files
 	case ".conf", ".config", ".ini":
-		return "text/plain; charset=utf-8"
+		return contentTypePlainText
 	case ".sh", ".bash":
 		return "text/x-shellscript; charset=utf-8"
 	case ".dockerfile":
@@ -307,7 +309,7 @@ func detectContentType(filename string) string {
 	default:
 		// Try to detect if it looks like text
 		if isLikelyText(filename) {
-			return "text/plain; charset=utf-8"
+			return contentTypePlainText
 		}
 		return "application/octet-stream"
 	}
@@ -482,8 +484,9 @@ func (s *Server) handleComparePage(w http.ResponseWriter, r *http.Request) {
 	versions := chi.URLParam(r, "versions")
 
 	// Parse versions (format: "1.0.0...2.0.0")
+	const compareVersionParts = 2
 	parts := strings.Split(versions, "...")
-	if len(parts) != 2 {
+	if len(parts) != compareVersionParts {
 		http.Error(w, "invalid version format, use: version1...version2", http.StatusBadRequest)
 		return
 	}

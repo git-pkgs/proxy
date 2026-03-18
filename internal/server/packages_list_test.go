@@ -28,7 +28,7 @@ func TestHandlePackagesList(t *testing.T) {
 	// Create test data
 	pkg1 := &database.Package{
 		PURL:          "pkg:npm/lodash",
-		Ecosystem:     "npm",
+		Ecosystem:     testEcosystemNPM,
 		Name:          "lodash",
 		LatestVersion: sql.NullString{String: "4.17.21", Valid: true},
 		License:       sql.NullString{String: "MIT", Valid: true},
@@ -103,7 +103,7 @@ func TestHandlePackagesList(t *testing.T) {
 		if len(resp.Results) != 2 {
 			t.Errorf("expected 2 results, got %d", len(resp.Results))
 		}
-		if resp.SortBy != "hits" {
+		if resp.SortBy != defaultSortBy {
 			t.Errorf("expected default sort to be hits, got %s", resp.SortBy)
 		}
 	})
@@ -123,7 +123,7 @@ func TestHandlePackagesList(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		if resp.Ecosystem != "npm" {
+		if resp.Ecosystem != testEcosystemNPM {
 			t.Errorf("expected ecosystem npm, got %s", resp.Ecosystem)
 		}
 		if resp.Count != 1 {

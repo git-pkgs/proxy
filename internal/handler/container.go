@@ -10,8 +10,11 @@ import (
 )
 
 const (
-	dockerHubRegistry = "https://registry-1.docker.io"
-	dockerHubAuth     = "https://auth.docker.io"
+	dockerHubRegistry  = "https://registry-1.docker.io"
+	dockerHubAuth      = "https://auth.docker.io"
+	blobMatchCount     = 3 // full match + name + digest
+	manifestMatchCount = 3 // full match + name + reference
+	tagsListMatchCount = 2 // full match + name
 )
 
 // ContainerHandler handles OCI/Docker container registry protocol requests.
@@ -347,7 +350,7 @@ var blobPathPattern = regexp.MustCompile(`^(.+)/blobs/(sha256:[a-f0-9]+)$`)
 // parseBlobPath extracts repository name and digest from a blob path.
 func (h *ContainerHandler) parseBlobPath(path string) (name, digest string) {
 	matches := blobPathPattern.FindStringSubmatch(path)
-	if len(matches) != 3 {
+	if len(matches) != blobMatchCount {
 		return "", ""
 	}
 	return matches[1], matches[2]
@@ -359,7 +362,7 @@ var manifestPathPattern = regexp.MustCompile(`^(.+)/manifests/(.+)$`)
 // parseManifestPath extracts repository name and reference from a manifest path.
 func (h *ContainerHandler) parseManifestPath(path string) (name, reference string) {
 	matches := manifestPathPattern.FindStringSubmatch(path)
-	if len(matches) != 3 {
+	if len(matches) != manifestMatchCount {
 		return "", ""
 	}
 	return matches[1], matches[2]
@@ -371,7 +374,7 @@ var tagsListPathPattern = regexp.MustCompile(`^(.+)/tags/list$`)
 // parseTagsListPath extracts repository name from a tags list path.
 func (h *ContainerHandler) parseTagsListPath(path string) string {
 	matches := tagsListPathPattern.FindStringSubmatch(path)
-	if len(matches) != 2 {
+	if len(matches) != tagsListMatchCount {
 		return ""
 	}
 	return matches[1]

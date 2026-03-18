@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"fmt"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -89,40 +87,5 @@ func (h *HexHandler) parseTarballFilename(filename string) (name, version string
 
 // proxyUpstream forwards a request to hex.pm without caching.
 func (h *HexHandler) proxyUpstream(w http.ResponseWriter, r *http.Request) {
-	upstreamURL := h.upstreamURL + r.URL.Path
-
-	h.proxy.Logger.Debug("proxying to upstream", "url", upstreamURL)
-
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
-	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-
-	// Copy accept header for content negotiation
-	if accept := r.Header.Get("Accept"); accept != "" {
-		req.Header.Set("Accept", accept)
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		h.proxy.Logger.Error("upstream request failed", "error", err)
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Copy response headers
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
-}
-
-func init() {
-	_ = fmt.Sprintf // silence import if unused
+	h.proxy.ProxyUpstream(w, r, h.upstreamURL+r.URL.Path, []string{"Accept"})
 }

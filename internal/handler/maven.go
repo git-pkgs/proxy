@@ -2,7 +2,6 @@ package handler
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"path"
 	"strings"
@@ -10,6 +9,7 @@ import (
 
 const (
 	mavenUpstream = "https://repo1.maven.org/maven2"
+	minMavenParts = 4 // group path segments + artifact + version + filename
 )
 
 // MavenHandler handles Maven repository protocol requests.
@@ -99,7 +99,7 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, ur
 // -> ("com.google.guava", "guava", "32.1.3-jre", "guava-32.1.3-jre.jar")
 func (h *MavenHandler) parsePath(urlPath string) (group, artifact, version, filename string) {
 	parts := strings.Split(urlPath, "/")
-	if len(parts) < 4 {
+	if len(parts) < minMavenParts {
 		return "", "", "", ""
 	}
 
@@ -136,30 +136,5 @@ func (h *MavenHandler) isMetadataFile(filename string) bool {
 
 // proxyUpstream forwards a request to Maven Central without caching.
 func (h *MavenHandler) proxyUpstream(w http.ResponseWriter, r *http.Request) {
-	upstreamURL := h.upstreamURL + r.URL.Path
-
-	h.proxy.Logger.Debug("proxying to upstream", "url", upstreamURL)
-
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
-	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		h.proxy.Logger.Error("upstream request failed", "error", err)
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	h.proxy.ProxyUpstream(w, r, h.upstreamURL+r.URL.Path, nil)
 }

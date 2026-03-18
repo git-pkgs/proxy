@@ -60,6 +60,14 @@ import (
 	"github.com/go-chi/chi/v5/middleware"
 )
 
+const (
+	serverReadTimeout  = 30 * time.Second
+	serverWriteTimeout = 5 * time.Minute
+	serverIdleTimeout  = 60 * time.Second
+	dashboardTopN      = 10
+	hoursPerDay        = 24
+)
+
 // Server is the main proxy server.
 type Server struct {
 	cfg       *config.Config
@@ -96,7 +104,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	storageURL := cfg.Storage.URL
 	if storageURL == "" {
 		// Fall back to file:// with Path
-		storageURL = "file://" + cfg.Storage.Path
+		storageURL = "file://" + cfg.Storage.Path //nolint:staticcheck // backwards compat
 	}
 	store, err := storage.OpenBucket(context.Background(), storageURL)
 	if err != nil {
@@ -228,15 +236,15 @@ func (s *Server) Start() error {
 	s.http = &http.Server{
 		Addr:         s.cfg.Listen,
 		Handler:      r,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 5 * time.Minute, // Large artifacts need time
-		IdleTimeout:  60 * time.Second,
+		ReadTimeout:  serverReadTimeout,
+		WriteTimeout: serverWriteTimeout, // Large artifacts need time
+		IdleTimeout:  serverIdleTimeout,
 	}
 
 	s.logger.Info("starting server",
 		"listen", s.cfg.Listen,
 		"base_url", s.cfg.BaseURL,
-		"storage", s.cfg.Storage.Path,
+		"storage", s.cfg.Storage.Path, //nolint:staticcheck // backwards compat
 		"database", s.cfg.Database.Path)
 
 	// Start background goroutine to update cache stats metrics
@@ -316,13 +324,13 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Get popular packages
-	popular, err := s.db.GetMostPopularPackages(10)
+	popular, err := s.db.GetMostPopularPackages(dashboardTopN)
 	if err != nil {
 		s.logger.Error("failed to get popular packages", "error", err)
 	}
 
 	// Get recent packages
-	recent, err := s.db.GetRecentlyCachedPackages(10)
+	recent, err := s.db.GetRecentlyCachedPackages(dashboardTopN)
 	if err != nil {
 		s.logger.Error("failed to get recent packages", "error", err)
 	}
@@ -497,7 +505,7 @@ func (s *Server) handlePackagesList(w http.ResponseWriter, r *http.Request) {
 	ecosystem := r.URL.Query().Get("ecosystem")
 	sortBy := r.URL.Query().Get("sort")
 	if sortBy == "" {
-		sortBy = "hits"
+		sortBy = defaultSortBy
 	}
 
 	page := 1
@@ -731,7 +739,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		CachedArtifacts: count,
 		TotalSize:       size,
 		TotalSizeHuman:  formatSize(size),
-		StoragePath:     s.cfg.Storage.Path,
+		StoragePath:     s.cfg.Storage.Path, //nolint:staticcheck // backwards compat
 		DatabasePath:    s.cfg.Database.Path,
 	}
 
@@ -766,14 +774,14 @@ func formatTimeAgo(t time.Time) string {
 			return "1 min ago"
 		}
 		return fmt.Sprintf("%d mins ago", m)
-	case d < 24*time.Hour:
+	case d < hoursPerDay*time.Hour:
 		h := int(d.Hours())
 		if h == 1 {
 			return "1 hour ago"
 		}
 		return fmt.Sprintf("%d hours ago", h)
-	case d < 7*24*time.Hour:
-		days := int(d.Hours() / 24)
+	case d < 7*hoursPerDay*time.Hour:
+		days := int(d.Hours() / hoursPerDay)
 		if days == 1 {
 			return "1 day ago"
 		}
@@ -786,7 +794,7 @@ func formatTimeAgo(t time.Time) string {
 // categorizeLicenseCSS returns the CSS class suffix for a license category using the spdx module.
 func categorizeLicenseCSS(license string) string {
 	if license == "" {
-		return "unknown"
+		return licenseCategoryUnknown
 	}
 
 	if spdx.HasCopyleft(license) {
@@ -797,13 +805,13 @@ func categorizeLicenseCSS(license string) string {
 		return "permissive"
 	}
 
-	return "unknown"
+	return licenseCategoryUnknown
 }
 
 // categorizeLicense is a helper that handles sql.NullString.
 func categorizeLicense(license sql.NullString) string {
 	if !license.Valid {
-		return "unknown"
+		return licenseCategoryUnknown
 	}
 	return categorizeLicenseCSS(license.String)
 }

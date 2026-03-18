@@ -1,6 +1,8 @@
 package storage
 
 import (
+	"bytes"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
@@ -54,5 +56,35 @@ func TestHashingReader(t *testing.T) {
 	wantHash := hex.EncodeToString(h[:])
 	if r.Sum() != wantHash {
 		t.Errorf("got hash %s, want %s", r.Sum(), wantHash)
+	}
+}
+
+// assertLargeFileRoundTrip stores a 1MB file in the given storage, verifies size and
+// hash, then reads it back and confirms the content matches.
+func assertLargeFileRoundTrip(t *testing.T, s Storage) {
+	t.Helper()
+	ctx := context.Background()
+
+	data := bytes.Repeat([]byte("x"), 1024*1024)
+
+	size, hash, err := s.Store(ctx, "large/file.bin", bytes.NewReader(data))
+	if err != nil {
+		t.Fatalf("Store large file failed: %v", err)
+	}
+	if size != int64(len(data)) {
+		t.Errorf("size = %d, want %d", size, len(data))
+	}
+
+	h := sha256.Sum256(data)
+	wantHash := hex.EncodeToString(h[:])
+	if hash != wantHash {
+		t.Errorf("hash mismatch for large file")
+	}
+
+	r, _ := s.Open(ctx, "large/file.bin")
+	defer func() { _ = r.Close() }()
+	readBack, _ := io.ReadAll(r)
+	if !bytes.Equal(readBack, data) {
+		t.Error("large file content mismatch")
 	}
 }

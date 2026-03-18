@@ -11,6 +11,8 @@ import (
 	"github.com/git-pkgs/proxy/internal/cooldown"
 )
 
+const testVersion100 = "1.0.0"
+
 func testProxy() *Proxy {
 	return &Proxy{
 		Logger:     slog.Default(),
@@ -172,7 +174,7 @@ func TestNPMHandlerMetadataProxy(t *testing.T) {
 
 	// Check that tarball URL was rewritten
 	versions := result["versions"].(map[string]any)
-	v := versions["1.0.0"].(map[string]any)
+	v := versions[testVersion100].(map[string]any)
 	dist := v["dist"].(map[string]any)
 	tarball := dist["tarball"].(string)
 
@@ -232,7 +234,7 @@ func TestNPMRewriteMetadataCooldown(t *testing.T) {
 	versions := result["versions"].(map[string]any)
 
 	// Old version should remain
-	if _, ok := versions["1.0.0"]; !ok {
+	if _, ok := versions[testVersion100]; !ok {
 		t.Error("version 1.0.0 should not be filtered")
 	}
 
@@ -243,8 +245,8 @@ func TestNPMRewriteMetadataCooldown(t *testing.T) {
 
 	// dist-tags.latest should be updated to 1.0.0
 	distTags := result["dist-tags"].(map[string]any)
-	if distTags["latest"] != "1.0.0" {
-		t.Errorf("dist-tags.latest = %q, want %q", distTags["latest"], "1.0.0")
+	if distTags["latest"] != testVersion100 {
+		t.Errorf("dist-tags.latest = %q, want %q", distTags["latest"], testVersion100)
 	}
 }
 
@@ -286,7 +288,7 @@ func TestNPMRewriteMetadataCooldownExemptPackage(t *testing.T) {
 	}
 
 	versions := result["versions"].(map[string]any)
-	if _, ok := versions["1.0.0"]; !ok {
+	if _, ok := versions[testVersion100]; !ok {
 		t.Error("exempt package version should not be filtered")
 	}
 }

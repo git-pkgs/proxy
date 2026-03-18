@@ -14,6 +14,7 @@ import (
 
 const (
 	npmUpstream = "https://registry.npmjs.org"
+	scopedParts = 2 // scope + name in scoped packages
 )
 
 // NPMHandler handles npm registry protocol requests.
@@ -127,46 +128,71 @@ func (h *NPMHandler) rewriteMetadata(packageName string, body []byte) ([]byte, e
 		return body, nil // No versions to rewrite
 	}
 
-	// Apply cooldown filtering
-	if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
-		timeMap, _ := metadata["time"].(map[string]any)
-		packagePURL := purl.MakePURLString("npm", packageName, "")
+	h.applyCooldownFiltering(metadata, versions, packageName)
+	h.rewriteTarballURLs(versions, packageName)
 
-		for version := range versions {
-			if timeMap == nil {
-				continue
-			}
-			publishedStr, ok := timeMap[version].(string)
-			if !ok {
-				continue
-			}
-			publishedAt, err := time.Parse(time.RFC3339, publishedStr)
-			if err != nil {
-				continue
-			}
-			if !h.proxy.Cooldown.IsAllowed("npm", packagePURL, publishedAt) {
-				h.proxy.Logger.Info("cooldown: filtering npm version",
-					"package", packageName, "version", version,
-					"published", publishedStr)
-				delete(versions, version)
-				delete(timeMap, version)
-			}
+	return json.Marshal(metadata)
+}
+
+// applyCooldownFiltering removes versions that are too recently published,
+// and updates dist-tags.latest if the current latest was filtered out.
+func (h *NPMHandler) applyCooldownFiltering(metadata map[string]any, versions map[string]any, packageName string) {
+	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
+		return
+	}
+
+	timeMap, _ := metadata["time"].(map[string]any)
+	if timeMap == nil {
+		return
+	}
+
+	packagePURL := purl.MakePURLString("npm", packageName, "")
+
+	for version := range versions {
+		publishedStr, ok := timeMap[version].(string)
+		if !ok {
+			continue
 		}
-
-		// Update dist-tags.latest if it was filtered
-		if distTags, ok := metadata["dist-tags"].(map[string]any); ok {
-			if latest, ok := distTags["latest"].(string); ok {
-				if _, exists := versions[latest]; !exists {
-					// Find newest remaining version from the time map
-					newLatest := h.findNewestVersion(versions, timeMap)
-					if newLatest != "" {
-						distTags["latest"] = newLatest
-					}
-				}
-			}
+		publishedAt, err := time.Parse(time.RFC3339, publishedStr)
+		if err != nil {
+			continue
+		}
+		if !h.proxy.Cooldown.IsAllowed("npm", packagePURL, publishedAt) {
+			h.proxy.Logger.Info("cooldown: filtering npm version",
+				"package", packageName, "version", version,
+				"published", publishedStr)
+			delete(versions, version)
+			delete(timeMap, version)
 		}
 	}
 
+	h.updateDistTagsLatest(metadata, versions, timeMap)
+}
+
+// updateDistTagsLatest updates the dist-tags.latest field if the current latest
+// version was removed by cooldown filtering.
+func (h *NPMHandler) updateDistTagsLatest(metadata, versions, timeMap map[string]any) {
+	distTags, ok := metadata["dist-tags"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	latest, ok := distTags["latest"].(string)
+	if !ok {
+		return
+	}
+
+	if _, exists := versions[latest]; exists {
+		return
+	}
+
+	if newLatest := h.findNewestVersion(versions, timeMap); newLatest != "" {
+		distTags["latest"] = newLatest
+	}
+}
+
+// rewriteTarballURLs rewrites all tarball URLs in version entries to point at this proxy.
+func (h *NPMHandler) rewriteTarballURLs(versions map[string]any, packageName string) {
 	for version, vdata := range versions {
 		vmap, ok := vdata.(map[string]any)
 		if !ok {
@@ -178,25 +204,24 @@ func (h *NPMHandler) rewriteMetadata(packageName string, body []byte) ([]byte, e
 			continue
 		}
 
-		if tarball, ok := dist["tarball"].(string); ok {
-			// Extract filename from tarball URL
-			filename := tarball
-			if idx := strings.LastIndex(tarball, "/"); idx >= 0 {
-				filename = tarball[idx+1:]
-			}
-
-			// Rewrite to our proxy URL
-			escapedName := url.PathEscape(packageName)
-			newTarball := fmt.Sprintf("%s/npm/%s/-/%s", h.proxyURL, escapedName, filename)
-			dist["tarball"] = newTarball
-
-			h.proxy.Logger.Debug("rewrote tarball URL",
-				"package", packageName, "version", version,
-				"old", tarball, "new", newTarball)
+		tarball, ok := dist["tarball"].(string)
+		if !ok {
+			continue
 		}
-	}
 
-	return json.Marshal(metadata)
+		filename := tarball
+		if idx := strings.LastIndex(tarball, "/"); idx >= 0 {
+			filename = tarball[idx+1:]
+		}
+
+		escapedName := url.PathEscape(packageName)
+		newTarball := fmt.Sprintf("%s/npm/%s/-/%s", h.proxyURL, escapedName, filename)
+		dist["tarball"] = newTarball
+
+		h.proxy.Logger.Debug("rewrote tarball URL",
+			"package", packageName, "version", version,
+			"old", tarball, "new", newTarball)
+	}
 }
 
 // findNewestVersion returns the version string with the most recent timestamp
@@ -313,7 +338,7 @@ func (h *NPMHandler) extractVersionFromFilename(packageName, filename string) st
 	// For scoped packages, the filename uses the short name
 	shortName := packageName
 	if strings.Contains(packageName, "/") {
-		parts := strings.SplitN(packageName, "/", 2)
+		parts := strings.SplitN(packageName, "/", scopedParts)
 		shortName = parts[1]
 	}
 

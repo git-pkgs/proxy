@@ -16,6 +16,8 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const testEcosystemNPM = "npm"
+
 func TestNewAPIHandler(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	svc := enrichment.New(logger)
@@ -178,7 +180,7 @@ func TestWriteJSON(t *testing.T) {
 
 func TestPackageResponseJSON(t *testing.T) {
 	resp := &PackageResponse{
-		Ecosystem:       "npm",
+		Ecosystem:       testEcosystemNPM,
 		Name:            "lodash",
 		LatestVersion:   "4.17.21",
 		License:         "MIT",
@@ -199,7 +201,7 @@ func TestPackageResponseJSON(t *testing.T) {
 		t.Fatalf("failed to unmarshal: %v", err)
 	}
 
-	if decoded.Ecosystem != "npm" {
+	if decoded.Ecosystem != testEcosystemNPM {
 		t.Errorf("expected ecosystem npm, got %s", decoded.Ecosystem)
 	}
 	if decoded.Name != "lodash" {
@@ -310,7 +312,7 @@ func TestHandleSearch_WithNullValues(t *testing.T) {
 
 	pkg := &database.Package{
 		PURL:      "pkg:npm/api-test",
-		Ecosystem: "npm",
+		Ecosystem: testEcosystemNPM,
 		Name:      "api-test",
 	}
 	if err := db.UpsertPackage(pkg); err != nil {
@@ -387,7 +389,7 @@ func TestHandlePackagesListAPI(t *testing.T) {
 	for _, name := range []string{"api-list-one", "api-list-two"} {
 		pkg := &database.Package{
 			PURL:      "pkg:npm/" + name,
-			Ecosystem: "npm",
+			Ecosystem: testEcosystemNPM,
 			Name:      name,
 		}
 		if err := db.UpsertPackage(pkg); err != nil {
@@ -433,7 +435,7 @@ func TestHandlePackagesListAPI(t *testing.T) {
 		t.Fatalf("expected at least 2 results, got %d", len(resp.Results))
 	}
 
-	if resp.SortBy != "hits" {
+	if resp.SortBy != defaultSortBy {
 		t.Errorf("expected default sort by hits, got %q", resp.SortBy)
 	}
 

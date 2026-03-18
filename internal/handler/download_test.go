@@ -59,6 +59,38 @@ func seedPackageWithPURL(t *testing.T, db *database.DB, store *mockStorage, ecos
 	}
 }
 
+// assertUpstreamProxied verifies that a handler proxies a request to the upstream
+// server and returns the expected response body. The makeHandler function receives
+// a configured Proxy and the upstream URL, and returns the handler to test.
+func assertUpstreamProxied(t *testing.T, wantBody, path string, makeHandler func(*Proxy, string) http.Handler) {
+	t.Helper()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = fmt.Fprint(w, wantBody)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+
+	srv := httptest.NewServer(makeHandler(proxy, upstream.URL))
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + path)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != wantBody {
+		t.Errorf("body = %q, want %q", body, wantBody)
+	}
+}
+
 func TestGemHandler_DownloadCacheHit(t *testing.T) {
 	proxy, db, store, _ := setupTestProxy(t)
 	seedPackage(t, db, store, "gem", "rails", "7.1.0", "rails-7.1.0.gem", "gem binary data")
@@ -71,7 +103,7 @@ func TestGemHandler_DownloadCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -94,7 +126,7 @@ func TestGemHandler_DownloadCacheHitMultiHyphen(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -125,7 +157,7 @@ func TestGemHandler_InvalidFilename(t *testing.T) {
 		if err != nil {
 			t.Fatalf("request to %s failed: %v", tt.path, err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode != tt.code {
 			t.Errorf("GET %s: status = %d, want %d", tt.path, resp.StatusCode, tt.code)
@@ -137,7 +169,7 @@ func TestGemHandler_UpstreamProxy(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("X-Test", "upstream")
 		w.WriteHeader(http.StatusOK)
-		fmt.Fprint(w, "upstream specs data")
+		_, _ = fmt.Fprint(w, "upstream specs data")
 	}))
 	defer upstream.Close()
 
@@ -156,7 +188,7 @@ func TestGemHandler_UpstreamProxy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -185,7 +217,7 @@ func TestGemHandler_CacheMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if !fetcher.fetchCalled {
 		t.Error("expected fetcher to be called on cache miss")
@@ -204,7 +236,7 @@ func TestGoHandler_DownloadCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -225,7 +257,7 @@ func TestGoHandler_MethodNotAllowed(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusMethodNotAllowed {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
@@ -242,7 +274,7 @@ func TestGoHandler_NotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNotFound)
@@ -259,7 +291,7 @@ func TestGoHandler_UnknownAtVSuffix(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNotFound)
@@ -268,7 +300,7 @@ func TestGoHandler_UnknownAtVSuffix(t *testing.T) {
 
 func TestGoHandler_UpstreamProxy(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "v0.14.0\nv0.13.0\n")
+		_, _ = fmt.Fprint(w, "v0.14.0\nv0.13.0\n")
 	}))
 	defer upstream.Close()
 
@@ -296,7 +328,7 @@ func TestGoHandler_UpstreamProxy(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET %s failed: %v", path, err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("GET %s: status = %d, want %d", path, resp.StatusCode, http.StatusOK)
@@ -319,7 +351,7 @@ func TestGoHandler_CacheMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if !fetcher.fetchCalled {
 		t.Error("expected fetcher to be called on cache miss")
@@ -338,7 +370,7 @@ func TestHexHandler_DownloadCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -368,7 +400,7 @@ func TestHexHandler_InvalidFilename(t *testing.T) {
 		if err != nil {
 			t.Fatalf("request to %s failed: %v", tt.path, err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode != tt.code {
 			t.Errorf("GET %s: status = %d, want %d", tt.path, resp.StatusCode, tt.code)
@@ -377,35 +409,12 @@ func TestHexHandler_InvalidFilename(t *testing.T) {
 }
 
 func TestHexHandler_UpstreamProxy(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "hex registry data")
-	}))
-	defer upstream.Close()
-
-	proxy, _, _, _ := setupTestProxy(t)
-	h := &HexHandler{
-		proxy:       proxy,
-		upstreamURL: upstream.URL,
-		proxyURL:    "http://localhost",
-	}
-	proxy.HTTPClient = upstream.Client()
-
-	srv := httptest.NewServer(h.Routes())
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/packages/phoenix")
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	if string(body) != "hex registry data" {
-		t.Errorf("body = %q, want %q", body, "hex registry data")
-	}
+	assertUpstreamProxied(t, "hex registry data", "/packages/phoenix",
+		func(proxy *Proxy, upstreamURL string) http.Handler {
+			h := &HexHandler{proxy: proxy, upstreamURL: upstreamURL, proxyURL: "http://localhost"}
+			return h.Routes()
+		},
+	)
 }
 
 func TestHexHandler_CacheMiss(t *testing.T) {
@@ -423,7 +432,7 @@ func TestHexHandler_CacheMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if !fetcher.fetchCalled {
 		t.Error("expected fetcher to be called on cache miss")
@@ -442,7 +451,7 @@ func TestCondaHandler_DownloadCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -465,7 +474,7 @@ func TestCondaHandler_DownloadTarBz2CacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -477,35 +486,12 @@ func TestCondaHandler_DownloadTarBz2CacheHit(t *testing.T) {
 }
 
 func TestCondaHandler_NonPackageFileProxied(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "repodata json")
-	}))
-	defer upstream.Close()
-
-	proxy, _, _, _ := setupTestProxy(t)
-	h := &CondaHandler{
-		proxy:       proxy,
-		upstreamURL: upstream.URL,
-		proxyURL:    "http://localhost",
-	}
-	proxy.HTTPClient = upstream.Client()
-
-	srv := httptest.NewServer(h.Routes())
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/main/linux-64/repodata.json")
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	if string(body) != "repodata json" {
-		t.Errorf("body = %q, want %q", body, "repodata json")
-	}
+	assertUpstreamProxied(t, "repodata json", "/main/linux-64/repodata.json",
+		func(proxy *Proxy, upstreamURL string) http.Handler {
+			h := &CondaHandler{proxy: proxy, upstreamURL: upstreamURL, proxyURL: "http://localhost"}
+			return h.Routes()
+		},
+	)
 }
 
 func TestCondaHandler_CacheMiss(t *testing.T) {
@@ -531,7 +517,7 @@ func TestCondaHandler_CacheMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if !fetcher.fetchCalled {
 		t.Error("expected fetcher to be called on cache miss")
@@ -550,7 +536,7 @@ func TestCRANHandler_SourceDownloadCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -573,7 +559,7 @@ func TestCRANHandler_BinaryDownloadCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -585,40 +571,17 @@ func TestCRANHandler_BinaryDownloadCacheHit(t *testing.T) {
 }
 
 func TestCRANHandler_NonPackageFileProxied(t *testing.T) {
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "PACKAGES index")
-	}))
-	defer upstream.Close()
-
-	proxy, _, _, _ := setupTestProxy(t)
-	h := &CRANHandler{
-		proxy:       proxy,
-		upstreamURL: upstream.URL,
-		proxyURL:    "http://localhost",
-	}
-	proxy.HTTPClient = upstream.Client()
-
-	srv := httptest.NewServer(h.Routes())
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/src/contrib/PACKAGES")
-	if err != nil {
-		t.Fatalf("request failed: %v", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
-	}
-	body, _ := io.ReadAll(resp.Body)
-	if string(body) != "PACKAGES index" {
-		t.Errorf("body = %q, want %q", body, "PACKAGES index")
-	}
+	assertUpstreamProxied(t, "PACKAGES index", "/src/contrib/PACKAGES",
+		func(proxy *Proxy, upstreamURL string) http.Handler {
+			h := &CRANHandler{proxy: proxy, upstreamURL: upstreamURL, proxyURL: "http://localhost"}
+			return h.Routes()
+		},
+	)
 }
 
 func TestCRANHandler_SourceNonTarGzProxied(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "some other file")
+		_, _ = fmt.Fprint(w, "some other file")
 	}))
 	defer upstream.Close()
 
@@ -637,7 +600,7 @@ func TestCRANHandler_SourceNonTarGzProxied(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -661,7 +624,7 @@ func TestCRANHandler_CacheMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if !fetcher.fetchCalled {
 		t.Error("expected fetcher to be called on cache miss")
@@ -680,7 +643,7 @@ func TestMavenHandler_DownloadCacheHit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
@@ -693,7 +656,7 @@ func TestMavenHandler_DownloadCacheHit(t *testing.T) {
 
 func TestMavenHandler_MetadataProxied(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		fmt.Fprint(w, "<metadata/>")
+		_, _ = fmt.Fprint(w, "<metadata/>")
 	}))
 	defer upstream.Close()
 
@@ -719,7 +682,7 @@ func TestMavenHandler_MetadataProxied(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET %s failed: %v", path, err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if resp.StatusCode != http.StatusOK {
 			t.Errorf("GET %s: status = %d, want %d", path, resp.StatusCode, http.StatusOK)
@@ -737,7 +700,7 @@ func TestMavenHandler_EmptyPathNotFound(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	resp.Body.Close()
+	_ = resp.Body.Close()
 
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusNotFound)
@@ -770,7 +733,7 @@ func TestMavenHandler_ArtifactExtensions(t *testing.T) {
 		if err != nil {
 			t.Fatalf("GET %s failed: %v", path, err)
 		}
-		resp.Body.Close()
+		_ = resp.Body.Close()
 
 		if !fetcher.fetchCalled {
 			t.Errorf("fetcher not called for %s", ext)
@@ -796,7 +759,7 @@ func TestMavenHandler_CacheMiss(t *testing.T) {
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() { _ = resp.Body.Close() }()
 
 	if !fetcher.fetchCalled {
 		t.Error("expected fetcher to be called on cache miss")

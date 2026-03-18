@@ -12,6 +12,12 @@ import (
 	"github.com/go-chi/chi/v5"
 )
 
+const (
+	maxBodySize            = 1 << 20 // 1 MB
+	licenseCategoryUnknown = "unknown"
+	defaultSortBy          = "hits"
+)
+
 // APIHandler provides REST endpoints for package enrichment data.
 type APIHandler struct {
 	enrichment *enrichment.Service
@@ -327,7 +333,7 @@ func (h *APIHandler) HandleGetVulns(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string
 // @Router /api/outdated [post]
 func (h *APIHandler) HandleOutdated(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req OutdatedRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -373,7 +379,7 @@ func (h *APIHandler) HandleOutdated(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {string} string
 // @Router /api/bulk [post]
 func (h *APIHandler) HandleBulkLookup(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, 1<<20) // 1 MB
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req BulkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		http.Error(w, "invalid request body", http.StatusBadRequest)
@@ -573,11 +579,11 @@ func (h *APIHandler) HandlePackagesList(w http.ResponseWriter, r *http.Request) 
 	ecosystem := r.URL.Query().Get("ecosystem")
 	sortBy := r.URL.Query().Get("sort")
 	if sortBy == "" {
-		sortBy = "hits"
+		sortBy = defaultSortBy
 	}
 
 	validSorts := map[string]bool{
-		"hits":      true,
+		defaultSortBy: true,
 		"name":      true,
 		"size":      true,
 		"cached_at": true,
@@ -619,7 +625,7 @@ func (h *APIHandler) HandlePackagesList(w http.ResponseWriter, r *http.Request) 
 			latestVersion = pkg.LatestVersion.String
 		}
 		license := ""
-		licenseCategory := "unknown"
+		licenseCategory := licenseCategoryUnknown
 		if pkg.License.Valid {
 			license = pkg.License.String
 			if h.enrichment != nil {

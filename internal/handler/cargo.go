@@ -11,6 +11,10 @@ import (
 const (
 	cargoUpstream     = "https://index.crates.io"
 	cargoDownloadBase = "https://static.crates.io/crates"
+
+	cargoIndexLen1 = 1
+	cargoIndexLen2 = 2
+	cargoIndexLen3 = 3
 )
 
 // CargoHandler handles cargo registry protocol requests.
@@ -125,11 +129,11 @@ func (h *CargoHandler) buildIndexPath(name string) string {
 	name = strings.ToLower(name)
 
 	switch len(name) {
-	case 1:
+	case cargoIndexLen1:
 		return fmt.Sprintf("1/%s", name)
-	case 2:
+	case cargoIndexLen2:
 		return fmt.Sprintf("2/%s", name)
-	case 3:
+	case cargoIndexLen3:
 		return fmt.Sprintf("3/%c/%s", name[0], name)
 	default:
 		return fmt.Sprintf("%s/%s/%s", name[0:2], name[2:4], name)

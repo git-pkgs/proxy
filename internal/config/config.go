@@ -109,8 +109,9 @@ type StorageConfig struct {
 	URL string `json:"url" yaml:"url"`
 
 	// Path is the directory where cached artifacts are stored.
-	// Deprecated: Use URL with file:// scheme instead.
 	// If URL is empty, this is used as file://{Path}.
+	//
+	// Deprecated: Use URL with file:// scheme instead.
 	Path string `json:"path" yaml:"path"`
 
 	// MaxSize is the maximum cache size (e.g., "10GB", "500MB").

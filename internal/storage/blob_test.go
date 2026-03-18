@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -186,33 +185,7 @@ func TestBlobUsedSpace(t *testing.T) {
 }
 
 func TestBlobLargeFile(t *testing.T) {
-	b := createTestBlob(t)
-	ctx := context.Background()
-
-	// 1MB of data
-	data := bytes.Repeat([]byte("x"), 1024*1024)
-
-	size, hash, err := b.Store(ctx, "large/file.bin", bytes.NewReader(data))
-	if err != nil {
-		t.Fatalf("Store large file failed: %v", err)
-	}
-	if size != int64(len(data)) {
-		t.Errorf("size = %d, want %d", size, len(data))
-	}
-
-	h := sha256.Sum256(data)
-	wantHash := hex.EncodeToString(h[:])
-	if hash != wantHash {
-		t.Errorf("hash mismatch for large file")
-	}
-
-	// Read it back
-	r, _ := b.Open(ctx, "large/file.bin")
-	defer func() { _ = r.Close() }()
-	readBack, _ := io.ReadAll(r)
-	if !bytes.Equal(readBack, data) {
-		t.Error("large file content mismatch")
-	}
+	assertLargeFileRoundTrip(t, createTestBlob(t))
 }
 
 func TestBlobOverwrite(t *testing.T) {
@@ -258,7 +231,7 @@ func createTestBlob(t *testing.T) *Blob {
 }
 
 func fileURLFromPath(path string) string {
-	if runtime.GOOS == "windows" {
+	if runtime.GOOS == osWindows {
 		// Windows paths need file:///C:/path format
 		path = filepath.ToSlash(path)
 		return "file:///" + path

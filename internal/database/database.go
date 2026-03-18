@@ -12,6 +12,8 @@ import (
 
 const SchemaVersion = 1
 
+const dirPermissions = 0755
+
 type Dialect string
 
 const (
@@ -56,7 +58,7 @@ func Create(path string) (*DB, error) {
 
 func Open(path string) (*DB, error) {
 	if dir := filepath.Dir(path); dir != "." && dir != "/" {
-		if err := os.MkdirAll(dir, 0755); err != nil {
+		if err := os.MkdirAll(dir, dirPermissions); err != nil {
 			return nil, fmt.Errorf("creating database directory: %w", err)
 		}
 	}
