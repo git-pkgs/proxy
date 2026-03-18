@@ -62,7 +62,7 @@ func TestTemplatesRenderAllPages(t *testing.T) {
 		}},
 		{"packages_list", PackagesListPageData{
 			Ecosystem:  "",
-			SortBy:     "hits",
+			SortBy:     defaultSortBy,
 			Results:    []SearchResultItem{{Ecosystem: "npm", Name: "express", Hits: 200, SizeFormatted: "2 MB"}},
 			Count:      1,
 			Page:       1,

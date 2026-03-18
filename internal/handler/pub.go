@@ -12,7 +12,8 @@ import (
 )
 
 const (
-	pubUpstream = "https://pub.dev"
+	pubUpstream  = "https://pub.dev"
+	pubPathParts = 2 // name + version in path split by /versions/
 )
 
 // PubHandler handles pub.dev registry protocol requests.
@@ -49,7 +50,7 @@ func (h *PubHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	// Parse path: /packages/{name}/versions/{version}.tar.gz
 	path := strings.TrimPrefix(r.URL.Path, "/packages/")
 	parts := strings.Split(path, "/versions/")
-	if len(parts) != 2 {
+	if len(parts) != pubPathParts {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
@@ -137,15 +138,23 @@ func (h *PubHandler) rewriteMetadata(name string, body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// Rewrite archive URLs in versions
 	versions, ok := metadata["versions"].([]any)
 	if !ok {
 		return body, nil
 	}
 
 	packagePURL := purl.MakePURLString("pub", name, "")
+	filtered := h.filterAndRewriteVersions(name, packagePURL, versions)
+	metadata["versions"] = filtered
 
-	// Filter and rewrite versions
+	h.updateLatestVersion(metadata, filtered)
+
+	return json.Marshal(metadata)
+}
+
+// filterAndRewriteVersions applies cooldown filtering and rewrites archive URLs
+// for a package's version list.
+func (h *PubHandler) filterAndRewriteVersions(name, packagePURL string, versions []any) []any {
 	filtered := versions[:0]
 	for _, vdata := range versions {
 		vmap, ok := vdata.(map[string]any)
@@ -158,20 +167,10 @@ func (h *PubHandler) rewriteMetadata(name string, body []byte) ([]byte, error) {
 			continue
 		}
 
-		// Apply cooldown filtering
-		if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
-			if publishedStr, ok := vmap["published"].(string); ok {
-				if publishedAt, err := time.Parse(time.RFC3339, publishedStr); err == nil {
-					if !h.proxy.Cooldown.IsAllowed("pub", packagePURL, publishedAt) {
-						h.proxy.Logger.Info("cooldown: filtering pub version",
-							"package", name, "version", version)
-						continue
-					}
-				}
-			}
+		if h.shouldFilterVersion(packagePURL, name, version, vmap) {
+			continue
 		}
 
-		// Rewrite archive_url
 		newURL := fmt.Sprintf("%s/pub/packages/%s/versions/%s.tar.gz", h.proxyURL, name, version)
 		vmap["archive_url"] = newURL
 		filtered = append(filtered, vdata)
@@ -180,28 +179,60 @@ func (h *PubHandler) rewriteMetadata(name string, body []byte) ([]byte, error) {
 			"package", name, "version", version, "new", newURL)
 	}
 
-	metadata["versions"] = filtered
+	return filtered
+}
 
-	// Update latest if it points to a filtered version
-	if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
-		if latest, ok := metadata["latest"].(map[string]any); ok {
-			if latestVer, ok := latest["version"].(string); ok {
-				found := false
-				for _, vdata := range filtered {
-					if vmap, ok := vdata.(map[string]any); ok {
-						if vmap["version"] == latestVer {
-							found = true
-							break
-						}
-					}
-				}
-				if !found && len(filtered) > 0 {
-					// Use the last entry (most recent remaining)
-					metadata["latest"] = filtered[len(filtered)-1]
-				}
+// shouldFilterVersion returns true if the version should be excluded due to cooldown.
+func (h *PubHandler) shouldFilterVersion(packagePURL, name, version string, vmap map[string]any) bool {
+	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
+		return false
+	}
+
+	publishedStr, ok := vmap["published"].(string)
+	if !ok {
+		return false
+	}
+
+	publishedAt, err := time.Parse(time.RFC3339, publishedStr)
+	if err != nil {
+		return false
+	}
+
+	if !h.proxy.Cooldown.IsAllowed("pub", packagePURL, publishedAt) {
+		h.proxy.Logger.Info("cooldown: filtering pub version",
+			"package", name, "version", version)
+		return true
+	}
+
+	return false
+}
+
+// updateLatestVersion updates the latest field if the current latest version
+// was removed by cooldown filtering.
+func (h *PubHandler) updateLatestVersion(metadata map[string]any, filtered []any) {
+	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
+		return
+	}
+
+	latest, ok := metadata["latest"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	latestVer, ok := latest["version"].(string)
+	if !ok {
+		return
+	}
+
+	for _, vdata := range filtered {
+		if vmap, ok := vdata.(map[string]any); ok {
+			if vmap["version"] == latestVer {
+				return
 			}
 		}
 	}
 
-	return json.Marshal(metadata)
+	if len(filtered) > 0 {
+		metadata["latest"] = filtered[len(filtered)-1]
+	}
 }

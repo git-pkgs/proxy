@@ -125,6 +125,39 @@ func (ts *testServer) close() {
 	_ = os.RemoveAll(ts.tempDir)
 }
 
+// seedTestPackage creates a package, version, and artifact in the database for testing
+// page rendering. The package is created under the npm ecosystem with version 1.0.0.
+func seedTestPackage(t *testing.T, db *database.DB, name string) {
+	t.Helper()
+
+	pkg := &database.Package{
+		PURL:      "pkg:npm/" + name,
+		Ecosystem: "npm",
+		Name:      name,
+	}
+	if err := db.UpsertPackage(pkg); err != nil {
+		t.Fatalf("failed to upsert package: %v", err)
+	}
+
+	ver := &database.Version{
+		PURL:        "pkg:npm/" + name + "@1.0.0",
+		PackagePURL: pkg.PURL,
+	}
+	if err := db.UpsertVersion(ver); err != nil {
+		t.Fatalf("failed to upsert version: %v", err)
+	}
+
+	artifact := &database.Artifact{
+		VersionPURL: ver.PURL,
+		Filename:    name + "-1.0.0.tgz",
+		UpstreamURL: "https://registry.npmjs.org/" + name + "/-/" + name + "-1.0.0.tgz",
+		StoragePath: sql.NullString{String: "/tmp/test.tgz", Valid: true},
+	}
+	if err := db.UpsertArtifact(artifact); err != nil {
+		t.Fatalf("failed to upsert artifact: %v", err)
+	}
+}
+
 func TestHandleOpenAPIJSON(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
@@ -668,32 +701,7 @@ func TestSearchPage_WithSeededResults(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
-	pkg := &database.Package{
-		PURL:      "pkg:npm/searchable-pkg",
-		Ecosystem: "npm",
-		Name:      "searchable-pkg",
-	}
-	if err := ts.db.UpsertPackage(pkg); err != nil {
-		t.Fatalf("failed to upsert package: %v", err)
-	}
-
-	ver := &database.Version{
-		PURL:        "pkg:npm/searchable-pkg@1.0.0",
-		PackagePURL: pkg.PURL,
-	}
-	if err := ts.db.UpsertVersion(ver); err != nil {
-		t.Fatalf("failed to upsert version: %v", err)
-	}
-
-	artifact := &database.Artifact{
-		VersionPURL: ver.PURL,
-		Filename:    "searchable-pkg-1.0.0.tgz",
-		UpstreamURL: "https://registry.npmjs.org/searchable-pkg/-/searchable-pkg-1.0.0.tgz",
-		StoragePath: sql.NullString{String: "/tmp/test.tgz", Valid: true},
-	}
-	if err := ts.db.UpsertArtifact(artifact); err != nil {
-		t.Fatalf("failed to upsert artifact: %v", err)
-	}
+	seedTestPackage(t, ts.db, "searchable-pkg")
 
 	req := httptest.NewRequest("GET", "/search?q=searchable", nil)
 	w := httptest.NewRecorder()
@@ -844,32 +852,7 @@ func TestHandlePackagesListPage(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
-	pkg := &database.Package{
-		PURL:      "pkg:npm/list-test",
-		Ecosystem: "npm",
-		Name:      "list-test",
-	}
-	if err := ts.db.UpsertPackage(pkg); err != nil {
-		t.Fatalf("failed to upsert package: %v", err)
-	}
-
-	ver := &database.Version{
-		PURL:        "pkg:npm/list-test@1.0.0",
-		PackagePURL: pkg.PURL,
-	}
-	if err := ts.db.UpsertVersion(ver); err != nil {
-		t.Fatalf("failed to upsert version: %v", err)
-	}
-
-	artifact := &database.Artifact{
-		VersionPURL: ver.PURL,
-		Filename:    "list-test-1.0.0.tgz",
-		UpstreamURL: "https://registry.npmjs.org/list-test/-/list-test-1.0.0.tgz",
-		StoragePath: sql.NullString{String: "/tmp/test.tgz", Valid: true},
-	}
-	if err := ts.db.UpsertArtifact(artifact); err != nil {
-		t.Fatalf("failed to upsert artifact: %v", err)
-	}
+	seedTestPackage(t, ts.db, "list-test")
 
 	req := httptest.NewRequest("GET", "/packages", nil)
 	w := httptest.NewRecorder()

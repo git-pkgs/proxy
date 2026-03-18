@@ -2,7 +2,6 @@ package handler
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -10,6 +9,7 @@ import (
 
 const (
 	debianUpstream = "http://deb.debian.org/debian"
+	debMatchCount  = 4 // full match + name + version + arch
 )
 
 // DebianHandler handles APT/Debian repository protocol requests.
@@ -93,67 +93,12 @@ func (h *DebianHandler) handlePackageDownload(w http.ResponseWriter, r *http.Req
 // handleMetadata proxies repository metadata files.
 // These change frequently so we don't cache them.
 func (h *DebianHandler) handleMetadata(w http.ResponseWriter, r *http.Request, path string) {
-	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, path)
-
-	h.proxy.Logger.Debug("debian metadata request", "path", path)
-
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
-	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-
-	// Forward relevant headers
-	for _, header := range []string{"Accept", "Accept-Encoding", "If-Modified-Since", "If-None-Match"} {
-		if v := r.Header.Get(header); v != "" {
-			req.Header.Set(header, v)
-		}
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		h.proxy.Logger.Error("failed to fetch upstream metadata", "error", err)
-		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Copy response headers
-	for _, header := range []string{"Content-Type", "Content-Length", "Last-Modified", "ETag"} {
-		if v := resp.Header.Get(header); v != "" {
-			w.Header().Set(header, v)
-		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	h.proxy.ProxyMetadata(w, r, fmt.Sprintf("%s/%s", h.upstreamURL, path), "debian")
 }
 
 // proxyFile proxies any file directly without caching.
 func (h *DebianHandler) proxyFile(w http.ResponseWriter, r *http.Request, path string) {
-	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, path)
-
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
-	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	for key, values := range resp.Header {
-		for _, v := range values {
-			w.Header().Add(key, v)
-		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	h.proxy.ProxyFile(w, r, fmt.Sprintf("%s/%s", h.upstreamURL, path))
 }
 
 // debPackagePattern matches .deb filenames to extract name, version, and arch.
@@ -172,7 +117,7 @@ func (h *DebianHandler) parsePoolPath(path string) (name, version, arch string) 
 
 	// Parse the filename
 	matches := debPackagePattern.FindStringSubmatch(filename)
-	if len(matches) != 4 {
+	if len(matches) != debMatchCount {
 		return "", "", ""
 	}
 

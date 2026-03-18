@@ -160,6 +160,61 @@ func seedPackage(t *testing.T, db *database.DB, store *mockStorage, ecosystem, n
 	}
 }
 
+// pathParseCase holds a single test case for path parsing functions that return
+// (name, version, arch).
+type pathParseCase struct {
+	path        string
+	wantName    string
+	wantVersion string
+	wantArch    string
+}
+
+// assertPathParser runs table-driven tests for a path parser function that returns
+// three strings (name, version, arch).
+func assertPathParser(t *testing.T, funcName string, parse func(string) (string, string, string), cases []pathParseCase) {
+	t.Helper()
+	for _, tt := range cases {
+		t.Run(tt.path, func(t *testing.T) {
+			name, version, arch := parse(tt.path)
+			if name != tt.wantName {
+				t.Errorf("%s() name = %q, want %q", funcName, name, tt.wantName)
+			}
+			if version != tt.wantVersion {
+				t.Errorf("%s() version = %q, want %q", funcName, version, tt.wantVersion)
+			}
+			if arch != tt.wantArch {
+				t.Errorf("%s() arch = %q, want %q", funcName, arch, tt.wantArch)
+			}
+		})
+	}
+}
+
+// assertRoutesBasics checks that a handler's Routes() returns a non-nil handler,
+// rejects POST requests with 405, and rejects path traversal with 400.
+func assertRoutesBasics(t *testing.T, handler http.Handler, postPath, traversalPath string) {
+	t.Helper()
+
+	if handler == nil {
+		t.Fatal("Routes() returned nil")
+	}
+
+	req := httptest.NewRequest(http.MethodPost, postPath, nil)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Errorf("POST request: got status %d, want %d", w.Code, http.StatusMethodNotAllowed)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, traversalPath, nil)
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("path traversal: got status %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
 func TestGetOrFetchArtifact_CacheHit(t *testing.T) {
 	proxy, db, store, fetcher := setupTestProxy(t)
 	seedPackage(t, db, store, "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz", "cached content")

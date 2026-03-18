@@ -2,13 +2,13 @@ package handler
 
 import (
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 )
 
 const (
-	goUpstream = "https://proxy.golang.org"
+	goUpstream      = "https://proxy.golang.org"
+	asciiCaseOffset = 32 // difference between lowercase and uppercase ASCII letters
 )
 
 // GoHandler handles Go module proxy protocol requests.
@@ -108,33 +108,7 @@ func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, modul
 
 // proxyUpstream forwards a request to proxy.golang.org without caching.
 func (h *GoHandler) proxyUpstream(w http.ResponseWriter, r *http.Request) {
-	upstreamURL := h.upstreamURL + r.URL.Path
-
-	h.proxy.Logger.Debug("proxying to upstream", "url", upstreamURL)
-
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
-	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		h.proxy.Logger.Error("upstream request failed", "error", err)
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Copy response headers
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	h.proxy.ProxyUpstream(w, r, h.upstreamURL+r.URL.Path, nil)
 }
 
 // decodeGoModule decodes an encoded module path.
@@ -143,7 +117,7 @@ func decodeGoModule(encoded string) string {
 	var b strings.Builder
 	for i := 0; i < len(encoded); i++ {
 		if encoded[i] == '!' && i+1 < len(encoded) {
-			b.WriteByte(encoded[i+1] - 32) // lowercase to uppercase
+			b.WriteByte(encoded[i+1] - asciiCaseOffset) // lowercase to uppercase
 			i++
 		} else {
 			b.WriteByte(encoded[i])

@@ -12,8 +12,9 @@ import (
 )
 
 const (
-	composerUpstream = "https://packagist.org"
-	composerRepo     = "https://repo.packagist.org"
+	composerUpstream   = "https://packagist.org"
+	composerRepo       = "https://repo.packagist.org"
+	vendorPackageParts = 2
 )
 
 // ComposerHandler handles Composer/Packagist registry protocol requests.
@@ -74,8 +75,8 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 	// Parse path: /p2/{vendor}/{package}.json
 	path := strings.TrimPrefix(r.URL.Path, "/p2/")
 	path = strings.TrimSuffix(path, ".json")
-	parts := strings.SplitN(path, "/", 2)
-	if len(parts) != 2 || parts[0] == "" || parts[1] == "" {
+	parts := strings.SplitN(path, "/", vendorPackageParts)
+	if len(parts) != vendorPackageParts || parts[0] == "" || parts[1] == "" {
 		http.Error(w, "invalid package path", http.StatusBadRequest)
 		return
 	}
@@ -145,58 +146,85 @@ func (h *ComposerHandler) rewriteMetadata(body []byte) ([]byte, error) {
 			continue
 		}
 
-		packagePURL := purl.MakePURLString("composer", packageName, "")
-
-		filtered := versionList[:0]
-		for _, v := range versionList {
-			vmap, ok := v.(map[string]any)
-			if !ok {
-				continue
-			}
-
-			version, _ := vmap["version"].(string)
-
-			// Apply cooldown filtering
-			if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
-				if timeStr, ok := vmap["time"].(string); ok {
-					if publishedAt, err := time.Parse(time.RFC3339, timeStr); err == nil {
-						if !h.proxy.Cooldown.IsAllowed("composer", packagePURL, publishedAt) {
-							h.proxy.Logger.Info("cooldown: filtering composer version",
-								"package", packageName, "version", version)
-							continue
-						}
-					}
-				}
-			}
-
-			dist, ok := vmap["dist"].(map[string]any)
-			if !ok {
-				filtered = append(filtered, v)
-				continue
-			}
-
-			// Rewrite the dist URL
-			if url, ok := dist["url"].(string); ok && url != "" {
-				filename := "package.zip"
-				if idx := strings.LastIndex(url, "/"); idx >= 0 {
-					filename = url[idx+1:]
-				}
-
-				parts := strings.SplitN(packageName, "/", 2)
-				if len(parts) == 2 {
-					newURL := fmt.Sprintf("%s/composer/files/%s/%s/%s/%s",
-						h.proxyURL, parts[0], parts[1], version, filename)
-					dist["url"] = newURL
-				}
-			}
-
-			filtered = append(filtered, v)
-		}
-
-		packages[packageName] = filtered
+		packages[packageName] = h.filterAndRewriteVersions(packageName, versionList)
 	}
 
 	return json.Marshal(metadata)
+}
+
+// filterAndRewriteVersions applies cooldown filtering and rewrites dist URLs
+// for a single package's version list.
+func (h *ComposerHandler) filterAndRewriteVersions(packageName string, versionList []any) []any {
+	packagePURL := purl.MakePURLString("composer", packageName, "")
+
+	filtered := versionList[:0]
+	for _, v := range versionList {
+		vmap, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		version, _ := vmap["version"].(string)
+
+		if h.shouldFilterVersion(packagePURL, packageName, version, vmap) {
+			continue
+		}
+
+		h.rewriteDistURL(vmap, packageName, version)
+		filtered = append(filtered, v)
+	}
+
+	return filtered
+}
+
+// shouldFilterVersion returns true if the version should be excluded due to cooldown.
+func (h *ComposerHandler) shouldFilterVersion(packagePURL, packageName, version string, vmap map[string]any) bool {
+	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
+		return false
+	}
+
+	timeStr, ok := vmap["time"].(string)
+	if !ok {
+		return false
+	}
+
+	publishedAt, err := time.Parse(time.RFC3339, timeStr)
+	if err != nil {
+		return false
+	}
+
+	if !h.proxy.Cooldown.IsAllowed("composer", packagePURL, publishedAt) {
+		h.proxy.Logger.Info("cooldown: filtering composer version",
+			"package", packageName, "version", version)
+		return true
+	}
+
+	return false
+}
+
+// rewriteDistURL rewrites the dist URL in a version entry to point at this proxy.
+func (h *ComposerHandler) rewriteDistURL(vmap map[string]any, packageName, version string) {
+	dist, ok := vmap["dist"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	url, ok := dist["url"].(string)
+	if !ok || url == "" {
+		return
+	}
+
+	filename := "package.zip"
+	if idx := strings.LastIndex(url, "/"); idx >= 0 {
+		filename = url[idx+1:]
+	}
+
+	parts := strings.SplitN(packageName, "/", vendorPackageParts)
+	if len(parts) == vendorPackageParts {
+		newURL := fmt.Sprintf("%s/composer/files/%s/%s/%s/%s",
+			h.proxyURL, parts[0], parts[1], version, filename)
+		dist["url"] = newURL
+	}
 }
 
 // handleDownload serves a package file, fetching and caching from upstream if needed.

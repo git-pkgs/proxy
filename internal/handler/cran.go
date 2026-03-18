@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"io"
 	"net/http"
 	"strings"
 )
@@ -153,34 +152,5 @@ func (h *CRANHandler) isBinaryPackage(filename string) bool {
 
 // proxyUpstream forwards a request to CRAN without caching.
 func (h *CRANHandler) proxyUpstream(w http.ResponseWriter, r *http.Request) {
-	upstreamURL := h.upstreamURL + r.URL.Path
-
-	h.proxy.Logger.Debug("proxying to upstream", "url", upstreamURL)
-
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
-	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-
-	if ae := r.Header.Get("Accept-Encoding"); ae != "" {
-		req.Header.Set("Accept-Encoding", ae)
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		h.proxy.Logger.Error("upstream request failed", "error", err)
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	h.proxy.ProxyUpstream(w, r, h.upstreamURL+r.URL.Path, []string{"Accept-Encoding"})
 }

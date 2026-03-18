@@ -103,6 +103,8 @@ import (
 	"github.com/git-pkgs/proxy/internal/server"
 )
 
+const defaultTopN = 10
+
 var (
 	// Version is set at build time.
 	Version = "dev"
@@ -247,7 +249,6 @@ func runServe() {
 
 	// Handle shutdown signals
 	ctx, cancel := context.WithCancel(context.Background())
-	defer cancel()
 
 	go func() {
 		sigCh := make(chan os.Signal, 1)
@@ -266,10 +267,12 @@ func runServe() {
 	// Wait for shutdown or error
 	select {
 	case <-ctx.Done():
+		cancel()
 		if err := srv.Shutdown(context.Background()); err != nil {
 			logger.Error("shutdown error", "error", err)
 		}
 	case err := <-errCh:
+		cancel()
 		if err != nil {
 			logger.Error("server error", "error", err)
 			os.Exit(1)
@@ -283,8 +286,8 @@ func runStats() {
 	databasePath := fs.String("database-path", "./cache/proxy.db", "Path to SQLite database file")
 	databaseURL := fs.String("database-url", "", "PostgreSQL connection URL")
 	asJSON := fs.Bool("json", false, "Output as JSON")
-	popular := fs.Int("popular", 10, "Show top N most popular packages")
-	recent := fs.Int("recent", 10, "Show N recently cached packages")
+	popular := fs.Int("popular", defaultTopN, "Show top N most popular packages")
+	recent := fs.Int("recent", defaultTopN, "Show N recently cached packages")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "git-pkgs proxy - Show cache statistics\n\n")
@@ -330,32 +333,37 @@ func runStats() {
 		fmt.Fprintf(os.Stderr, "error opening database: %v\n", err)
 		os.Exit(1)
 	}
+
+	if err := printStats(db, *popular, *recent, *asJSON); err != nil {
+		fmt.Fprintf(os.Stderr, "%v\n", err)
+		os.Exit(1)
+	}
+}
+
+func printStats(db *database.DB, popular, recent int, asJSON bool) error {
 	defer func() { _ = db.Close() }()
 
-	// Get stats
 	stats, err := db.GetCacheStats()
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error getting stats: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error getting stats: %w", err)
 	}
 
-	popularPkgs, err := db.GetMostPopularPackages(*popular)
+	popularPkgs, err := db.GetMostPopularPackages(popular)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error getting popular packages: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error getting popular packages: %w", err)
 	}
 
-	recentPkgs, err := db.GetRecentlyCachedPackages(*recent)
+	recentPkgs, err := db.GetRecentlyCachedPackages(recent)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "error getting recent packages: %v\n", err)
-		os.Exit(1)
+		return fmt.Errorf("error getting recent packages: %w", err)
 	}
 
-	if *asJSON {
+	if asJSON {
 		outputJSON(stats, popularPkgs, recentPkgs)
 	} else {
 		outputText(stats, popularPkgs, recentPkgs)
 	}
+	return nil
 }
 
 type jsonOutput struct {

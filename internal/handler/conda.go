@@ -1,13 +1,13 @@
 package handler
 
 import (
-	"io"
 	"net/http"
 	"strings"
 )
 
 const (
 	condaUpstream = "https://conda.anaconda.org"
+	minCondaParts = 3 // name-version-build requires at least 3 hyphen-separated parts
 )
 
 // CondaHandler handles Conda/Anaconda registry protocol requests.
@@ -98,7 +98,7 @@ func (h *CondaHandler) parseFilename(filename string) (name, version string) {
 	// Split by hyphens, the format is name-version-build
 	// The name can contain hyphens, so we need to find version-build at the end
 	parts := strings.Split(base, "-")
-	if len(parts) < 3 {
+	if len(parts) < minCondaParts {
 		return "", ""
 	}
 
@@ -121,35 +121,5 @@ func (h *CondaHandler) parseFilename(filename string) (name, version string) {
 
 // proxyUpstream forwards a request to Anaconda without caching.
 func (h *CondaHandler) proxyUpstream(w http.ResponseWriter, r *http.Request) {
-	upstreamURL := h.upstreamURL + r.URL.Path
-
-	h.proxy.Logger.Debug("proxying to upstream", "url", upstreamURL)
-
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
-	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-
-	// Copy accept-encoding for compression
-	if ae := r.Header.Get("Accept-Encoding"); ae != "" {
-		req.Header.Set("Accept-Encoding", ae)
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		h.proxy.Logger.Error("upstream request failed", "error", err)
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	h.proxy.ProxyUpstream(w, r, h.upstreamURL+r.URL.Path, []string{"Accept-Encoding"})
 }

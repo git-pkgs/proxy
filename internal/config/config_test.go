@@ -6,6 +6,12 @@ import (
 	"testing"
 )
 
+const (
+	testDriverPostgres = "postgres"
+	testInvalid        = "invalid"
+	testLevelDebug     = "debug"
+)
+
 func TestDefault(t *testing.T) {
 	cfg := Default()
 
@@ -63,27 +69,27 @@ func TestValidate(t *testing.T) {
 		},
 		{
 			name:    "postgres without url",
-			modify:  func(c *Config) { c.Database.Driver = "postgres"; c.Database.URL = "" },
+			modify:  func(c *Config) { c.Database.Driver = testDriverPostgres; c.Database.URL = "" },
 			wantErr: true,
 		},
 		{
 			name:    "postgres with url",
-			modify:  func(c *Config) { c.Database.Driver = "postgres"; c.Database.URL = "postgres://localhost/test" },
+			modify:  func(c *Config) { c.Database.Driver = testDriverPostgres; c.Database.URL = "postgres://localhost/test" },
 			wantErr: false,
 		},
 		{
 			name:    "invalid log level",
-			modify:  func(c *Config) { c.Log.Level = "invalid" },
+			modify:  func(c *Config) { c.Log.Level = testInvalid },
 			wantErr: true,
 		},
 		{
 			name:    "invalid log format",
-			modify:  func(c *Config) { c.Log.Format = "invalid" },
+			modify:  func(c *Config) { c.Log.Format = testInvalid },
 			wantErr: true,
 		},
 		{
 			name:    "invalid max size",
-			modify:  func(c *Config) { c.Storage.MaxSize = "invalid" },
+			modify:  func(c *Config) { c.Storage.MaxSize = testInvalid },
 			wantErr: true,
 		},
 		{
@@ -176,8 +182,8 @@ log:
 	if cfg.Storage.MaxSize != "5GB" {
 		t.Errorf("Storage.MaxSize = %q, want %q", cfg.Storage.MaxSize, "5GB")
 	}
-	if cfg.Log.Level != "debug" {
-		t.Errorf("Log.Level = %q, want %q", cfg.Log.Level, "debug")
+	if cfg.Log.Level != testLevelDebug {
+		t.Errorf("Log.Level = %q, want %q", cfg.Log.Level, testLevelDebug)
 	}
 	if cfg.Log.Format != "json" {
 		t.Errorf("Log.Format = %q, want %q", cfg.Log.Format, "json")
@@ -215,7 +221,7 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("PROXY_LISTEN", ":9000")
 	t.Setenv("PROXY_BASE_URL", "https://env.example.com")
 	t.Setenv("PROXY_STORAGE_PATH", "/env/cache")
-	t.Setenv("PROXY_LOG_LEVEL", "debug")
+	t.Setenv("PROXY_LOG_LEVEL", testLevelDebug)
 
 	cfg.LoadFromEnv()
 
@@ -228,8 +234,8 @@ func TestLoadFromEnv(t *testing.T) {
 	if cfg.Storage.Path != "/env/cache" {
 		t.Errorf("Storage.Path = %q, want %q", cfg.Storage.Path, "/env/cache")
 	}
-	if cfg.Log.Level != "debug" {
-		t.Errorf("Log.Level = %q, want %q", cfg.Log.Level, "debug")
+	if cfg.Log.Level != testLevelDebug {
+		t.Errorf("Log.Level = %q, want %q", cfg.Log.Level, testLevelDebug)
 	}
 }
 

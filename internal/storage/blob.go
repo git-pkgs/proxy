@@ -17,6 +17,8 @@ import (
 	"gocloud.dev/gcerrors"
 )
 
+const osWindows = "windows"
+
 // Blob implements Storage using gocloud.dev/blob.
 // Supports local filesystem (file://) and S3 (s3://) URLs.
 type Blob struct {
@@ -38,10 +40,10 @@ func OpenBucket(ctx context.Context, urlStr string) (*Blob, error) {
 		path := strings.TrimPrefix(urlStr, "file://")
 
 		// Handle file:/// (three slashes) for absolute paths
-		if strings.HasPrefix(path, "/") && runtime.GOOS != "windows" {
+		if strings.HasPrefix(path, "/") && runtime.GOOS != osWindows {
 			// Unix: file:///path -> /path
 			// path is already correct
-		} else if strings.HasPrefix(path, "/") && runtime.GOOS == "windows" {
+		} else if strings.HasPrefix(path, "/") && runtime.GOOS == osWindows {
 			// Windows: file:///C:/path -> C:/path
 			path = strings.TrimPrefix(path, "/")
 		}
@@ -50,7 +52,7 @@ func OpenBucket(ctx context.Context, urlStr string) (*Blob, error) {
 		nativePath := filepath.FromSlash(path)
 
 		// Ensure directory exists
-		if err := os.MkdirAll(nativePath, 0755); err != nil {
+		if err := os.MkdirAll(nativePath, dirPermissions); err != nil {
 			return nil, fmt.Errorf("creating directory: %w", err)
 		}
 
@@ -62,7 +64,7 @@ func OpenBucket(ctx context.Context, urlStr string) (*Blob, error) {
 
 		// Convert back to URL format with forward slashes
 		urlPath := filepath.ToSlash(absPath)
-		if runtime.GOOS == "windows" {
+		if runtime.GOOS == osWindows {
 			// Windows needs file:///C:/path format
 			urlStr = "file:///" + urlPath
 		} else {

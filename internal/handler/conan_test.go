@@ -9,6 +9,8 @@ import (
 	"testing"
 )
 
+const testProxyURL = "http://localhost:8080"
+
 func conanTestProxy() *Proxy {
 	return &Proxy{
 		Logger:     slog.Default(),
@@ -44,7 +46,7 @@ func TestConanShouldCacheFile(t *testing.T) {
 func TestConanPingV1(t *testing.T) {
 	h := &ConanHandler{
 		proxy:    conanTestProxy(),
-		proxyURL: "http://localhost:8080",
+		proxyURL: testProxyURL,
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v1/ping", nil)
@@ -65,7 +67,7 @@ func TestConanPingV1(t *testing.T) {
 func TestConanPingV2(t *testing.T) {
 	h := &ConanHandler{
 		proxy:    conanTestProxy(),
-		proxyURL: "http://localhost:8080",
+		proxyURL: testProxyURL,
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/ping", nil)
@@ -372,17 +374,17 @@ func TestNewConanHandler(t *testing.T) {
 	if h.upstreamURL != conanUpstream {
 		t.Errorf("upstreamURL = %q, want %q", h.upstreamURL, conanUpstream)
 	}
-	if h.proxyURL != "http://localhost:8080" {
-		t.Errorf("proxyURL = %q, want %q (trailing slash should be trimmed)", h.proxyURL, "http://localhost:8080")
+	if h.proxyURL != testProxyURL {
+		t.Errorf("proxyURL = %q, want %q (trailing slash should be trimmed)", h.proxyURL, testProxyURL)
 	}
 }
 
 func TestNewConanHandlerNoTrailingSlash(t *testing.T) {
 	proxy := conanTestProxy()
-	h := NewConanHandler(proxy, "http://localhost:8080")
+	h := NewConanHandler(proxy, testProxyURL)
 
-	if h.proxyURL != "http://localhost:8080" {
-		t.Errorf("proxyURL = %q, want %q", h.proxyURL, "http://localhost:8080")
+	if h.proxyURL != testProxyURL {
+		t.Errorf("proxyURL = %q, want %q", h.proxyURL, testProxyURL)
 	}
 }
 

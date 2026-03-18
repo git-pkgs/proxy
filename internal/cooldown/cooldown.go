@@ -7,6 +7,8 @@ import (
 	"time"
 )
 
+const hoursPerDay = 24
+
 // Config holds cooldown settings for version filtering.
 // Cooldown hides package versions published too recently, giving the community
 // time to spot malicious releases before they're pulled into projects.
@@ -112,7 +114,7 @@ func ParseDuration(s string) (time.Duration, error) {
 		if err != nil {
 			return 0, fmt.Errorf("invalid duration %q: %w", s, err)
 		}
-		return time.Duration(days * float64(24*time.Hour)), nil
+		return time.Duration(days * float64(hoursPerDay*time.Hour)), nil
 	}
 
 	d, err := time.ParseDuration(s)

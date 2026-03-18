@@ -1,7 +1,6 @@
 package storage
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -234,33 +233,7 @@ func TestFilesystemUsedSpace(t *testing.T) {
 }
 
 func TestFilesystemLargeFile(t *testing.T) {
-	fs := createTestFilesystem(t)
-	ctx := context.Background()
-
-	// 1MB of data
-	data := bytes.Repeat([]byte("x"), 1024*1024)
-
-	size, hash, err := fs.Store(ctx, "large/file.bin", bytes.NewReader(data))
-	if err != nil {
-		t.Fatalf("Store large file failed: %v", err)
-	}
-	if size != int64(len(data)) {
-		t.Errorf("size = %d, want %d", size, len(data))
-	}
-
-	h := sha256.Sum256(data)
-	wantHash := hex.EncodeToString(h[:])
-	if hash != wantHash {
-		t.Errorf("hash mismatch for large file")
-	}
-
-	// Read it back
-	r, _ := fs.Open(ctx, "large/file.bin")
-	defer func() { _ = r.Close() }()
-	readBack, _ := io.ReadAll(r)
-	if !bytes.Equal(readBack, data) {
-		t.Error("large file content mismatch")
-	}
+	assertLargeFileRoundTrip(t, createTestFilesystem(t))
 }
 
 func createTestFilesystem(t *testing.T) *Filesystem {

@@ -16,7 +16,11 @@ import (
 )
 
 const (
-	pypiUpstream = "https://pypi.org"
+	pypiUpstream      = "https://pypi.org"
+	minWheelParts     = 5 // name + version + python + abi + platform
+	minSubmatchParts  = 2 // full match + first capture group
+	minPyPIPathParts  = 3 // hash_prefix + hash + filename
+	minPythonTagLen   = 2 // minimum length for a python tag (e.g., "py")
 )
 
 // PyPIHandler handles PyPI registry protocol requests.
@@ -172,7 +176,7 @@ func (h *PyPIHandler) rewriteSimpleHTML(body []byte, filteredVersions map[string
 			// Extract filename from between tags
 			innerRe := regexp.MustCompile(`>([^<]+)</a>`)
 			innerMatch := innerRe.FindSubmatch(match)
-			if len(innerMatch) < 2 {
+			if len(innerMatch) < minSubmatchParts {
 				return match
 			}
 			filename := string(innerMatch[1])
@@ -190,7 +194,7 @@ func (h *PyPIHandler) rewriteSimpleHTML(body []byte, filteredVersions map[string
 
 	return re.ReplaceAllFunc(body, func(match []byte) []byte {
 		submatch := re.FindSubmatch(match)
-		if len(submatch) < 2 {
+		if len(submatch) < minSubmatchParts {
 			return match
 		}
 
@@ -285,59 +289,86 @@ func (h *PyPIHandler) rewriteJSONMetadata(body []byte) ([]byte, error) {
 		return nil, err
 	}
 
-	// Determine package name for cooldown lookup
 	packageName, _ := extractPyPIName(metadata)
 	packagePURL := ""
 	if packageName != "" {
 		packagePURL = purl.MakePURLString("pypi", packageName, "")
 	}
 
-	// Filter and rewrite URLs in releases map
-	if releases, ok := metadata["releases"].(map[string]any); ok {
-		for version, files := range releases {
-			if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() && packagePURL != "" {
-				if filesArr, ok := files.([]any); ok {
-					if publishedAt := h.newestUploadTime(filesArr); !publishedAt.IsZero() {
-						if !h.proxy.Cooldown.IsAllowed("pypi", packagePURL, publishedAt) {
-							h.proxy.Logger.Info("cooldown: filtering pypi version",
-								"package", packageName, "version", version)
-							delete(releases, version)
-							continue
-						}
-					}
-				}
-			}
-
-			if filesArr, ok := files.([]any); ok {
-				for _, f := range filesArr {
-					if fmap, ok := f.(map[string]any); ok {
-						h.rewriteURLEntry(fmap)
-					}
-				}
-			}
-		}
-	}
-
-	// Filter and rewrite URLs in urls array (current version files)
-	if urls, ok := metadata["urls"].([]any); ok {
-		if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() && packagePURL != "" {
-			if publishedAt := h.newestUploadTime(urls); !publishedAt.IsZero() {
-				if !h.proxy.Cooldown.IsAllowed("pypi", packagePURL, publishedAt) {
-					metadata["urls"] = []any{}
-				}
-			}
-		}
-
-		if urls, ok := metadata["urls"].([]any); ok {
-			for _, u := range urls {
-				if umap, ok := u.(map[string]any); ok {
-					h.rewriteURLEntry(umap)
-				}
-			}
-		}
-	}
+	h.filterAndRewriteReleases(metadata, packageName, packagePURL)
+	h.filterAndRewriteURLs(metadata, packagePURL)
 
 	return json.Marshal(metadata)
+}
+
+// filterAndRewriteReleases applies cooldown filtering and URL rewriting to the
+// releases map in PyPI metadata.
+func (h *PyPIHandler) filterAndRewriteReleases(metadata map[string]any, packageName, packagePURL string) {
+	releases, ok := metadata["releases"].(map[string]any)
+	if !ok {
+		return
+	}
+
+	for version, files := range releases {
+		if h.shouldFilterRelease(packagePURL, files) {
+			h.proxy.Logger.Info("cooldown: filtering pypi version",
+				"package", packageName, "version", version)
+			delete(releases, version)
+			continue
+		}
+
+		h.rewriteFileEntries(files)
+	}
+}
+
+// shouldFilterRelease returns true if a release should be excluded due to cooldown.
+func (h *PyPIHandler) shouldFilterRelease(packagePURL string, files any) bool {
+	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() || packagePURL == "" {
+		return false
+	}
+
+	filesArr, ok := files.([]any)
+	if !ok {
+		return false
+	}
+
+	publishedAt := h.newestUploadTime(filesArr)
+	return !publishedAt.IsZero() && !h.proxy.Cooldown.IsAllowed("pypi", packagePURL, publishedAt)
+}
+
+// rewriteFileEntries rewrites URLs in a list of file entries.
+func (h *PyPIHandler) rewriteFileEntries(files any) {
+	filesArr, ok := files.([]any)
+	if !ok {
+		return
+	}
+
+	for _, f := range filesArr {
+		if fmap, ok := f.(map[string]any); ok {
+			h.rewriteURLEntry(fmap)
+		}
+	}
+}
+
+// filterAndRewriteURLs applies cooldown filtering and URL rewriting to the
+// urls array (current version files) in PyPI metadata.
+func (h *PyPIHandler) filterAndRewriteURLs(metadata map[string]any, packagePURL string) {
+	urls, ok := metadata["urls"].([]any)
+	if !ok {
+		return
+	}
+
+	if h.shouldFilterRelease(packagePURL, urls) {
+		metadata["urls"] = []any{}
+	}
+
+	if urls, ok := metadata["urls"].([]any); ok {
+		for _, u := range urls {
+			if umap, ok := u.(map[string]any); ok {
+				h.rewriteURLEntry(umap)
+			}
+		}
+	}
 }
 
 // extractPyPIName extracts the package name from PyPI JSON metadata.
@@ -403,7 +434,7 @@ func (h *PyPIHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	// Path format: /packages/{hash_prefix}/{hash}/{filename}
 	// e.g., /packages/ab/cd/abc123.../requests-2.31.0.tar.gz
 	parts := strings.Split(path, "/")
-	if len(parts) < 3 {
+	if len(parts) < minPyPIPathParts {
 		http.Error(w, "invalid path", http.StatusBadRequest)
 		return
 	}
@@ -442,7 +473,7 @@ func (h *PyPIHandler) parseFilename(filename string) (name, version string) {
 	if strings.HasSuffix(filename, ".whl") {
 		base := strings.TrimSuffix(filename, ".whl")
 		parts := strings.Split(base, "-")
-		if len(parts) >= 5 {
+		if len(parts) >= minWheelParts {
 			// Find where version ends (version followed by python tag)
 			for i := 1; i < len(parts)-2; i++ {
 				// Check if this looks like a python tag (py2, py3, cp39, etc)
@@ -472,7 +503,7 @@ func (h *PyPIHandler) parseFilename(filename string) (name, version string) {
 }
 
 func isPythonTag(s string) bool {
-	if len(s) < 2 {
+	if len(s) < minPythonTagLen {
 		return false
 	}
 	// Python tags start with py, cp, pp, ip, jy

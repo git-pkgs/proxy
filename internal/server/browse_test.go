@@ -16,6 +16,8 @@ import (
 	"github.com/git-pkgs/proxy/internal/database"
 )
 
+const testArchiveName = "test.tar.gz"
+
 func TestHandleBrowseList(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
@@ -26,12 +28,12 @@ func TestHandleBrowseList(t *testing.T) {
 	if err := os.MkdirAll(artifactsDir, 0755); err != nil {
 		t.Fatalf("failed to create artifacts dir: %v", err)
 	}
-	storagePath := filepath.Join(artifactsDir, "test.tar.gz")
+	storagePath := filepath.Join(artifactsDir, testArchiveName)
 	if err := os.WriteFile(storagePath, archiveData, 0644); err != nil {
 		t.Fatalf("failed to write test archive: %v", err)
 	}
 	// Storage path relative to artifacts directory
-	relPath := "test.tar.gz"
+	relPath := testArchiveName
 
 	// Setup test package and artifact
 	pkg := &database.Package{
@@ -99,12 +101,12 @@ func TestHandleBrowseFile(t *testing.T) {
 	if err := os.MkdirAll(artifactsDir, 0755); err != nil {
 		t.Fatalf("failed to create artifacts dir: %v", err)
 	}
-	storagePath := filepath.Join(artifactsDir, "test.tar.gz")
+	storagePath := filepath.Join(artifactsDir, testArchiveName)
 	if err := os.WriteFile(storagePath, archiveData, 0644); err != nil {
 		t.Fatalf("failed to write test archive: %v", err)
 	}
 	// Storage path relative to artifacts directory
-	relPath := "test.tar.gz"
+	relPath := testArchiveName
 
 	// Setup test package and artifact
 	pkg := &database.Package{
@@ -150,7 +152,7 @@ func TestHandleBrowseFile(t *testing.T) {
 
 	// Check content type
 	contentType := w.Header().Get("Content-Type")
-	if contentType != "text/plain; charset=utf-8" {
+	if contentType != contentTypePlainText {
 		t.Errorf("expected text/plain content type, got %q", contentType)
 	}
 
@@ -169,8 +171,8 @@ func TestDetectContentType(t *testing.T) {
 		filename    string
 		expectedCT  string
 	}{
-		{"file.txt", "text/plain; charset=utf-8"},
-		{"file.md", "text/plain; charset=utf-8"},
+		{"file.txt", contentTypePlainText},
+		{"file.md", contentTypePlainText},
 		{"file.json", "application/json; charset=utf-8"},
 		{"file.js", "application/javascript; charset=utf-8"},
 		{"file.go", "text/x-go; charset=utf-8"},
@@ -178,10 +180,10 @@ func TestDetectContentType(t *testing.T) {
 		{"file.rs", "text/x-rust; charset=utf-8"},
 		{"file.png", "image/png"},
 		{"file.jpg", "image/jpeg"},
-		{"README", "text/plain; charset=utf-8"},
-		{"LICENSE", "text/plain; charset=utf-8"},
-		{"Makefile", "text/plain; charset=utf-8"},
-		{".gitignore", "text/plain; charset=utf-8"},
+		{"README", contentTypePlainText},
+		{"LICENSE", contentTypePlainText},
+		{"Makefile", contentTypePlainText},
+		{".gitignore", contentTypePlainText},
 		{"file.bin", "application/octet-stream"},
 	}
 
@@ -313,11 +315,11 @@ func TestHandleBrowseSourcePage(t *testing.T) {
 	if err := os.MkdirAll(artifactsDir, 0755); err != nil {
 		t.Fatalf("failed to create artifacts dir: %v", err)
 	}
-	storagePath := filepath.Join(artifactsDir, "test.tar.gz")
+	storagePath := filepath.Join(artifactsDir, testArchiveName)
 	if err := os.WriteFile(storagePath, archiveData, 0644); err != nil {
 		t.Fatalf("failed to write test archive: %v", err)
 	}
-	relPath := "test.tar.gz"
+	relPath := testArchiveName
 
 	// Setup test package and artifact
 	pkg := &database.Package{

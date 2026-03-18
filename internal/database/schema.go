@@ -2,6 +2,8 @@ package database
 
 import "fmt"
 
+const postgresTimestamp = "TIMESTAMP"
+
 // Schema for proxy-specific tables. The packages and versions tables
 // are compatible with git-pkgs, allowing the proxy to use an existing
 // git-pkgs database as a starting point.
@@ -303,8 +305,8 @@ func (db *DB) MigrateSchema() error {
 	}
 
 	if db.dialect == DialectPostgres {
-		packagesColumns["enriched_at"] = "TIMESTAMP"
-		packagesColumns["vulns_synced_at"] = "TIMESTAMP"
+		packagesColumns["enriched_at"] = postgresTimestamp
+		packagesColumns["vulns_synced_at"] = postgresTimestamp
 	}
 
 	for column, colType := range packagesColumns {
@@ -313,12 +315,7 @@ func (db *DB) MigrateSchema() error {
 			return fmt.Errorf("checking column %s: %w", column, err)
 		}
 		if !hasCol {
-			var alterQuery string
-			if db.dialect == DialectPostgres {
-				alterQuery = fmt.Sprintf("ALTER TABLE packages ADD COLUMN %s %s", column, colType)
-			} else {
-				alterQuery = fmt.Sprintf("ALTER TABLE packages ADD COLUMN %s %s", column, colType)
-			}
+			alterQuery := fmt.Sprintf("ALTER TABLE packages ADD COLUMN %s %s", column, colType)
 			if _, err := db.Exec(alterQuery); err != nil {
 				return fmt.Errorf("adding column %s to packages: %w", column, err)
 			}
@@ -335,7 +332,7 @@ func (db *DB) MigrateSchema() error {
 
 	if db.dialect == DialectPostgres {
 		versionsColumns["yanked"] = "BOOLEAN DEFAULT FALSE"
-		versionsColumns["enriched_at"] = "TIMESTAMP"
+		versionsColumns["enriched_at"] = postgresTimestamp
 	}
 
 	for column, colType := range versionsColumns {
@@ -344,12 +341,7 @@ func (db *DB) MigrateSchema() error {
 			return fmt.Errorf("checking column %s: %w", column, err)
 		}
 		if !hasCol {
-			var alterQuery string
-			if db.dialect == DialectPostgres {
-				alterQuery = fmt.Sprintf("ALTER TABLE versions ADD COLUMN %s %s", column, colType)
-			} else {
-				alterQuery = fmt.Sprintf("ALTER TABLE versions ADD COLUMN %s %s", column, colType)
-			}
+			alterQuery := fmt.Sprintf("ALTER TABLE versions ADD COLUMN %s %s", column, colType)
 			if _, err := db.Exec(alterQuery); err != nil {
 				return fmt.Errorf("adding column %s to versions: %w", column, err)
 			}

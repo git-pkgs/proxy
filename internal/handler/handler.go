@@ -30,6 +30,8 @@ func containsPathTraversal(path string) bool {
 	return false
 }
 
+const defaultHTTPTimeout = 30 * time.Second
+
 // maxMetadataSize is the maximum size of upstream metadata responses (50 MB).
 // Package metadata (e.g. npm with many versions) can be large, but unbounded
 // reads risk OOM if an upstream misbehaves.
@@ -64,7 +66,7 @@ func NewProxy(db *database.DB, store storage.Storage, fetcher fetch.FetcherInter
 		Resolver: resolver,
 		Logger:   logger,
 		HTTPClient: &http.Client{
-			Timeout: 30 * time.Second,
+			Timeout: defaultHTTPTimeout,
 		},
 	}
 }
@@ -187,7 +189,7 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 	}
 
 	// Update database
-	if err := p.updateCacheDB(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, info.URL, storagePath, hash, size, artifact.ContentType); err != nil {
+	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, info.URL, storagePath, hash, size, artifact.ContentType); err != nil {
 		p.Logger.Warn("failed to update cache database", "error", err)
 		// Continue anyway - we have the file
 	}
@@ -211,7 +213,7 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 	}, nil
 }
 
-func (p *Proxy) updateCacheDB(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, upstreamURL, storagePath, hash string, size int64, contentType string) error {
+func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, upstreamURL, storagePath, hash string, size int64, contentType string) error {
 	now := time.Now()
 
 	// Upsert package
@@ -272,6 +274,102 @@ func ServeArtifact(w http.ResponseWriter, result *CacheResult) {
 	_, _ = io.Copy(w, result.Reader)
 }
 
+// ProxyUpstream forwards a request to an upstream URL without caching.
+// It copies the request, forwards specified headers, and streams the response back.
+// If forwardHeaders is nil, all response headers are copied.
+func (p *Proxy) ProxyUpstream(w http.ResponseWriter, r *http.Request, upstreamURL string, forwardHeaders []string) {
+	p.Logger.Debug("proxying to upstream", "url", upstreamURL)
+
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
+	if err != nil {
+		http.Error(w, "failed to create request", http.StatusInternalServerError)
+		return
+	}
+
+	// Copy request headers that affect content negotiation / caching
+	for _, header := range forwardHeaders {
+		if v := r.Header.Get(header); v != "" {
+			req.Header.Set(header, v)
+		}
+	}
+
+	resp, err := p.HTTPClient.Do(req)
+	if err != nil {
+		p.Logger.Error("upstream request failed", "error", err)
+		http.Error(w, "upstream request failed", http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	for k, vv := range resp.Header {
+		for _, v := range vv {
+			w.Header().Add(k, v)
+		}
+	}
+
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// ProxyMetadata forwards a metadata request to upstream, copying only specific response headers.
+func (p *Proxy) ProxyMetadata(w http.ResponseWriter, r *http.Request, upstreamURL string, logLabel string) {
+	p.Logger.Debug(logLabel+" metadata request", "url", upstreamURL)
+
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
+	if err != nil {
+		http.Error(w, "failed to create request", http.StatusInternalServerError)
+		return
+	}
+
+	for _, header := range []string{"Accept", "Accept-Encoding", "If-Modified-Since", "If-None-Match"} {
+		if v := r.Header.Get(header); v != "" {
+			req.Header.Set(header, v)
+		}
+	}
+
+	resp, err := p.HTTPClient.Do(req)
+	if err != nil {
+		p.Logger.Error("failed to fetch upstream metadata", "error", err)
+		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	for _, header := range []string{"Content-Type", "Content-Length", "Last-Modified", "ETag"} {
+		if v := resp.Header.Get(header); v != "" {
+			w.Header().Set(header, v)
+		}
+	}
+
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
+// ProxyFile forwards a file request to upstream, copying all response headers.
+func (p *Proxy) ProxyFile(w http.ResponseWriter, r *http.Request, upstreamURL string) {
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
+	if err != nil {
+		http.Error(w, "failed to create request", http.StatusInternalServerError)
+		return
+	}
+
+	resp, err := p.HTTPClient.Do(req)
+	if err != nil {
+		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	for key, values := range resp.Header {
+		for _, v := range values {
+			w.Header().Add(key, v)
+		}
+	}
+
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
+}
+
 // JSONError writes a JSON error response.
 func JSONError(w http.ResponseWriter, status int, message string) {
 	w.Header().Set("Content-Type", "application/json")
@@ -310,7 +408,7 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 		return nil, fmt.Errorf("storing artifact: %w", err)
 	}
 
-	if err := p.updateCacheDB(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, storagePath, hash, size, artifact.ContentType); err != nil {
+	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, downloadURL, storagePath, hash, size, artifact.ContentType); err != nil {
 		p.Logger.Warn("failed to update cache database", "error", err)
 	}
 

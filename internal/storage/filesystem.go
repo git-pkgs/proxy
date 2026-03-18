@@ -23,7 +23,7 @@ func NewFilesystem(root string) (*Filesystem, error) {
 		return nil, fmt.Errorf("resolving root path: %w", err)
 	}
 
-	if err := os.MkdirAll(absRoot, 0755); err != nil {
+	if err := os.MkdirAll(absRoot, dirPermissions); err != nil {
 		return nil, fmt.Errorf("creating root directory: %w", err)
 	}
 
@@ -38,7 +38,7 @@ func (fs *Filesystem) Store(ctx context.Context, path string, r io.Reader) (int6
 	fullPath := fs.fullPath(path)
 
 	dir := filepath.Dir(fullPath)
-	if err := os.MkdirAll(dir, 0755); err != nil {
+	if err := os.MkdirAll(dir, dirPermissions); err != nil {
 		return 0, "", fmt.Errorf("creating directory: %w", err)
 	}
 

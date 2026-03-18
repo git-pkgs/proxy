@@ -17,6 +17,8 @@ import (
 	"io"
 )
 
+const dirPermissions = 0755
+
 var (
 	ErrNotFound = errors.New("artifact not found")
 )
