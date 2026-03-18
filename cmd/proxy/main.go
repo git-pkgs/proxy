@@ -213,7 +213,7 @@ func runServe() {
 		cfg.Storage.URL = *storageURL
 	}
 	if *storagePath != "" {
-		cfg.Storage.Path = *storagePath
+		cfg.Storage.Path = *storagePath //nolint:staticcheck // backwards compat
 	}
 	if *databaseDriver != "" {
 		cfg.Database.Driver = *databaseDriver

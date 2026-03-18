@@ -104,7 +104,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 	storageURL := cfg.Storage.URL
 	if storageURL == "" {
 		// Fall back to file:// with Path
-		storageURL = "file://" + cfg.Storage.Path
+		storageURL = "file://" + cfg.Storage.Path //nolint:staticcheck // backwards compat
 	}
 	store, err := storage.OpenBucket(context.Background(), storageURL)
 	if err != nil {
@@ -244,7 +244,7 @@ func (s *Server) Start() error {
 	s.logger.Info("starting server",
 		"listen", s.cfg.Listen,
 		"base_url", s.cfg.BaseURL,
-		"storage", s.cfg.Storage.Path,
+		"storage", s.cfg.Storage.Path, //nolint:staticcheck // backwards compat
 		"database", s.cfg.Database.Path)
 
 	// Start background goroutine to update cache stats metrics
@@ -739,7 +739,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		CachedArtifacts: count,
 		TotalSize:       size,
 		TotalSizeHuman:  formatSize(size),
-		StoragePath:     s.cfg.Storage.Path,
+		StoragePath:     s.cfg.Storage.Path, //nolint:staticcheck // backwards compat
 		DatabasePath:    s.cfg.Database.Path,
 	}
 
