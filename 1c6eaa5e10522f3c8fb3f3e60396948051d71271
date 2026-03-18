@@ -1,0 +1,25 @@
+internal/server/server.go
+  2112945b1d5b767c 107,247,742
+cmd/proxy/main.go
+  2112945b1d5b767c 216
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.12",
+  "base_commit_sha": "1c6eaa5e10522f3c8fb3f3e60396948051d71271",
+  "prompts": {
+    "2112945b1d5b767c": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d6944a40-2dd1-480a-a0f2-87e5cf9bcbea",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 4,
+      "total_deletions": 4,
+      "accepted_lines": 4,
+      "overriden_lines": 0
+    }
+  }
+}
