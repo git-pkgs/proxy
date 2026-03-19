@@ -54,18 +54,19 @@ func (h *GoHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 		module := path[:idx]
 		rest := path[idx+4:] // after "/@v/"
 
+		decodedMod := decodeGoModule(module)
 		switch {
 		case rest == "list":
 			// GET /{module}/@v/list - list versions
-			h.proxyUpstream(w, r)
+			h.proxyCached(w, r, decodedMod+"/@v/list")
 
 		case strings.HasSuffix(rest, ".info"):
 			// GET /{module}/@v/{version}.info - version metadata
-			h.proxyUpstream(w, r)
+			h.proxyCached(w, r, decodedMod+"/@v/"+rest)
 
 		case strings.HasSuffix(rest, ".mod"):
 			// GET /{module}/@v/{version}.mod - go.mod file
-			h.proxyUpstream(w, r)
+			h.proxyCached(w, r, decodedMod+"/@v/"+rest)
 
 		case strings.HasSuffix(rest, ".zip"):
 			// GET /{module}/@v/{version}.zip - source archive (cache this)
@@ -80,7 +81,8 @@ func (h *GoHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Check for @latest
 	if strings.HasSuffix(path, "/@latest") {
-		h.proxyUpstream(w, r)
+		module := strings.TrimSuffix(path, "/@latest")
+		h.proxyCached(w, r, decodeGoModule(module)+"/@latest")
 		return
 	}
 
@@ -109,6 +111,11 @@ func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, modul
 // proxyUpstream forwards a request to proxy.golang.org without caching.
 func (h *GoHandler) proxyUpstream(w http.ResponseWriter, r *http.Request) {
 	h.proxy.ProxyUpstream(w, r, h.upstreamURL+r.URL.Path, nil)
+}
+
+// proxyCached forwards a request with metadata caching.
+func (h *GoHandler) proxyCached(w http.ResponseWriter, r *http.Request, cacheKey string) {
+	h.proxy.ProxyCached(w, r, h.upstreamURL+r.URL.Path, "golang", cacheKey, "*/*")
 }
 
 // decodeGoModule decodes an encoded module path.
