@@ -213,6 +213,40 @@ Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyG
 
 Note: Hex cooldown requires disabling registry signature verification since the proxy re-encodes the protobuf payload without the original signature. Set `HEX_NO_VERIFY_REPO_ORIGIN=1` or configure your repo with `no_verify: true`.
 
+## Metadata Caching
+
+By default the proxy fetches metadata fresh from upstream on every request. Enable `cache_metadata` to store metadata responses in the database and storage backend for offline fallback. When upstream is unreachable, the proxy serves the last cached copy. ETag-based revalidation avoids re-downloading unchanged metadata.
+
+```yaml
+cache_metadata: true
+```
+
+Or via environment variable: `PROXY_CACHE_METADATA=true`.
+
+The `proxy mirror` command always enables metadata caching regardless of this setting.
+
+## Mirror Command
+
+The `proxy mirror` command pre-populates the cache from various sources. It accepts the same storage and database flags as `serve`.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--sbom` | | Path to CycloneDX or SPDX SBOM file |
+| `--registry` | | Ecosystem name for full registry mirror |
+| `--concurrency` | `4` | Number of parallel downloads |
+| `--dry-run` | `false` | Show what would be mirrored without downloading |
+| `--config` | | Path to configuration file |
+| `--storage-url` | | Storage URL |
+| `--database-driver` | | Database driver |
+| `--database-path` | | SQLite database file |
+| `--database-url` | | PostgreSQL connection URL |
+
+Positional arguments are treated as PURLs:
+
+```bash
+proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
+```
+
 ## Docker
 
 ### SQLite with Local Storage

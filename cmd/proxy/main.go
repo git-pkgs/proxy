@@ -16,6 +16,7 @@
 //
 //	serve    Start the proxy server (default if no command given)
 //	stats    Show cache statistics
+//	mirror   Pre-populate cache from PURLs, SBOMs, or registries
 //
 // Serve Flags:
 //
@@ -100,7 +101,11 @@ import (
 
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/handler"
+	"github.com/git-pkgs/proxy/internal/mirror"
 	"github.com/git-pkgs/proxy/internal/server"
+	"github.com/git-pkgs/proxy/internal/storage"
+	"github.com/git-pkgs/registries/fetch"
 )
 
 const defaultTopN = 10
@@ -124,6 +129,10 @@ func main() {
 			os.Args = append(os.Args[:1], os.Args[2:]...)
 			runStats()
 			return
+		case "mirror":
+			os.Args = append(os.Args[:1], os.Args[2:]...)
+			runMirror()
+			return
 		case "-version", "--version":
 			fmt.Printf("proxy %s (%s)\n", Version, Commit)
 			os.Exit(0)
@@ -145,6 +154,7 @@ Usage: proxy [command] [flags]
 Commands:
   serve    Start the proxy server (default)
   stats    Show cache statistics
+  mirror   Pre-populate cache from PURLs, SBOMs, or registries
 
 Run 'proxy <command> -help' for more information on a command.
 
@@ -337,6 +347,158 @@ func runStats() {
 	if err := printStats(db, *popular, *recent, *asJSON); err != nil {
 		fmt.Fprintf(os.Stderr, "%v\n", err)
 		os.Exit(1)
+	}
+}
+
+func runMirror() {
+	fs := flag.NewFlagSet("mirror", flag.ExitOnError)
+	configPath := fs.String("config", "", "Path to configuration file")
+	storageURL := fs.String("storage-url", "", "Storage URL (file:// or s3://)")
+	databaseDriver := fs.String("database-driver", "", "Database driver: sqlite or postgres")
+	databasePath := fs.String("database-path", "", "Path to SQLite database file")
+	databaseURL := fs.String("database-url", "", "PostgreSQL connection URL")
+	sbomPath := fs.String("sbom", "", "Path to CycloneDX or SPDX SBOM file")
+	registry := fs.String("registry", "", "Ecosystem name for full registry mirror")
+	concurrency := fs.Int("concurrency", 4, "Number of parallel downloads") //nolint:mnd // default concurrency
+	dryRun := fs.Bool("dry-run", false, "Show what would be mirrored without downloading")
+
+	fs.Usage = func() {
+		fmt.Fprintf(os.Stderr, "git-pkgs proxy - Pre-populate cache\n\n")
+		fmt.Fprintf(os.Stderr, "Usage: proxy mirror [flags] [purl...]\n\n")
+		fmt.Fprintf(os.Stderr, "Examples:\n")
+		fmt.Fprintf(os.Stderr, "  proxy mirror pkg:npm/lodash@4.17.21\n")
+		fmt.Fprintf(os.Stderr, "  proxy mirror --sbom sbom.cdx.json\n")
+		fmt.Fprintf(os.Stderr, "  proxy mirror pkg:npm/lodash  # all versions\n")
+		fmt.Fprintf(os.Stderr, "  proxy mirror --registry npm\n\n")
+		fmt.Fprintf(os.Stderr, "Flags:\n")
+		fs.PrintDefaults()
+	}
+
+	_ = fs.Parse(os.Args[1:])
+	purls := fs.Args()
+
+	// Determine source
+	var source mirror.Source
+	switch {
+	case *sbomPath != "":
+		source = &mirror.SBOMSource{Path: *sbomPath}
+	case *registry != "":
+		source = &mirror.RegistrySource{Ecosystem: *registry}
+	case len(purls) > 0:
+		source = &mirror.PURLSource{PURLs: purls}
+	default:
+		fmt.Fprintf(os.Stderr, "error: provide PURLs, --sbom, or --registry\n")
+		fs.Usage()
+		os.Exit(1)
+	}
+
+	// Load config
+	cfg, err := loadConfig(*configPath)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error loading config: %v\n", err)
+		os.Exit(1)
+	}
+	cfg.LoadFromEnv()
+
+	if *storageURL != "" {
+		cfg.Storage.URL = *storageURL
+	}
+	if *databaseDriver != "" {
+		cfg.Database.Driver = *databaseDriver
+	}
+	if *databasePath != "" {
+		cfg.Database.Path = *databasePath
+	}
+	if *databaseURL != "" {
+		cfg.Database.URL = *databaseURL
+	}
+
+	if err := cfg.Validate(); err != nil {
+		fmt.Fprintf(os.Stderr, "invalid configuration: %v\n", err)
+		os.Exit(1)
+	}
+
+	logger := setupLogger("info", "text")
+
+	// Open database
+	var db *database.DB
+	switch cfg.Database.Driver {
+	case "postgres":
+		db, err = database.OpenPostgresOrCreate(cfg.Database.URL)
+	default:
+		db, err = database.OpenOrCreate(cfg.Database.Path)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "error opening database: %v\n", err)
+		os.Exit(1)
+	}
+
+	if err := db.MigrateSchema(); err != nil {
+		_ = db.Close()
+		fmt.Fprintf(os.Stderr, "error migrating schema: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Open storage
+	sURL := cfg.Storage.URL
+	if sURL == "" {
+		sURL = "file://" + cfg.Storage.Path //nolint:staticcheck // backwards compat
+	}
+	store, err := storage.OpenBucket(context.Background(), sURL)
+	if err != nil {
+		_ = db.Close()
+		fmt.Fprintf(os.Stderr, "error opening storage: %v\n", err)
+		os.Exit(1)
+	}
+
+	// Build proxy (reuses same pipeline as serve)
+	fetcher := fetch.NewFetcher()
+	resolver := fetch.NewResolver()
+	proxy := handler.NewProxy(db, store, fetcher, resolver, logger)
+	proxy.CacheMetadata = true // mirror always caches metadata
+
+	m := mirror.New(proxy, db, store, logger, *concurrency)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	go func() {
+		sigCh := make(chan os.Signal, 1)
+		signal.Notify(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		<-sigCh
+		cancel()
+	}()
+
+	if *dryRun {
+		items, err := m.RunDryRun(ctx, source)
+		if err != nil {
+			_ = db.Close()
+			fmt.Fprintf(os.Stderr, "error: %v\n", err)
+			os.Exit(1)
+		}
+		fmt.Printf("Would mirror %d package versions:\n", len(items))
+		for _, item := range items {
+			fmt.Printf("  %s\n", item)
+		}
+		_ = db.Close()
+		return
+	}
+
+	progress, err := m.Run(ctx, source)
+	if err != nil {
+		_ = db.Close()
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1)
+	}
+
+	_ = db.Close()
+
+	fmt.Printf("Mirror complete: %d downloaded, %d skipped (cached), %d failed, %s total\n",
+		progress.Completed, progress.Skipped, progress.Failed, formatSize(progress.Bytes))
+
+	if len(progress.Errors) > 0 {
+		fmt.Fprintf(os.Stderr, "\nErrors:\n")
+		for _, e := range progress.Errors {
+			fmt.Fprintf(os.Stderr, "  %s/%s@%s: %s\n", e.Ecosystem, e.Name, e.Version, e.Error)
+		}
 	}
 }
 

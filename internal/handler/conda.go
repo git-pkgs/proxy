@@ -37,7 +37,7 @@ func (h *CondaHandler) Routes() http.Handler {
 
 	// Channel index (repodata)
 	mux.HandleFunc("GET /{channel}/{arch}/repodata.json", h.handleRepodata)
-	mux.HandleFunc("GET /{channel}/{arch}/repodata.json.bz2", h.proxyUpstream)
+	mux.HandleFunc("GET /{channel}/{arch}/repodata.json.bz2", h.proxyCached)
 	mux.HandleFunc("GET /{channel}/{arch}/current_repodata.json", h.handleRepodata)
 
 	// Package downloads (cache these)
@@ -127,7 +127,7 @@ func (h *CondaHandler) parseFilename(filename string) (name, version string) {
 // handleRepodata proxies repodata.json, applying cooldown filtering when enabled.
 func (h *CondaHandler) handleRepodata(w http.ResponseWriter, r *http.Request) {
 	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		h.proxyUpstream(w, r)
+		h.proxyCached(w, r)
 		return
 	}
 
@@ -230,6 +230,13 @@ func (h *CondaHandler) applyCooldownFiltering(body []byte) ([]byte, error) {
 	}
 
 	return json.Marshal(repodata)
+}
+
+// proxyCached forwards a metadata request with caching.
+func (h *CondaHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
+	cacheKey := strings.TrimPrefix(r.URL.Path, "/")
+	cacheKey = strings.ReplaceAll(cacheKey, "/", "_")
+	h.proxy.ProxyCached(w, r, h.upstreamURL+r.URL.Path, "conda", cacheKey, "*/*")
 }
 
 // proxyUpstream forwards a request to Anaconda without caching.

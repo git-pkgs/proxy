@@ -83,6 +83,11 @@ type Config struct {
 
 	// Cooldown configures version age filtering to mitigate supply chain attacks.
 	Cooldown CooldownConfig `json:"cooldown" yaml:"cooldown"`
+
+	// CacheMetadata enables caching of upstream metadata responses for offline fallback.
+	// When enabled, metadata is stored in the database and storage backend.
+	// The mirror command always enables this regardless of this setting.
+	CacheMetadata bool `json:"cache_metadata" yaml:"cache_metadata"`
 }
 
 // CooldownConfig configures version cooldown periods.
@@ -305,6 +310,9 @@ func (c *Config) LoadFromEnv() {
 	}
 	if v := os.Getenv("PROXY_COOLDOWN_DEFAULT"); v != "" {
 		c.Cooldown.Default = v
+	}
+	if v := os.Getenv("PROXY_CACHE_METADATA"); v != "" {
+		c.CacheMetadata = v == "true" || v == "1"
 	}
 }
 

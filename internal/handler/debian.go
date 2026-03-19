@@ -93,7 +93,8 @@ func (h *DebianHandler) handlePackageDownload(w http.ResponseWriter, r *http.Req
 // handleMetadata proxies repository metadata files.
 // These change frequently so we don't cache them.
 func (h *DebianHandler) handleMetadata(w http.ResponseWriter, r *http.Request, path string) {
-	h.proxy.ProxyMetadata(w, r, fmt.Sprintf("%s/%s", h.upstreamURL, path), "debian")
+	cacheKey := strings.ReplaceAll(path, "/", "_")
+	h.proxy.ProxyCached(w, r, fmt.Sprintf("%s/%s", h.upstreamURL, path), "deb", cacheKey, "*/*")
 }
 
 // proxyFile proxies any file directly without caching.

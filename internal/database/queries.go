@@ -887,3 +887,64 @@ func (db *DB) CountCachedPackages(ecosystem string) (int64, error) {
 	err = db.Get(&count, query, args...)
 	return count, err
 }
+
+// Metadata cache queries
+
+func (db *DB) GetMetadataCache(ecosystem, name string) (*MetadataCacheEntry, error) {
+	var entry MetadataCacheEntry
+	query := db.Rebind(`
+		SELECT id, ecosystem, name, storage_path, etag, content_type,
+		       size, fetched_at, created_at, updated_at
+		FROM metadata_cache WHERE ecosystem = ? AND name = ?
+	`)
+	err := db.Get(&entry, query, ecosystem, name)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &entry, nil
+}
+
+func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
+	now := time.Now()
+	var query string
+
+	if db.dialect == DialectPostgres {
+		query = `
+			INSERT INTO metadata_cache (ecosystem, name, storage_path, etag, content_type,
+			                            size, fetched_at, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			ON CONFLICT(ecosystem, name) DO UPDATE SET
+				storage_path = EXCLUDED.storage_path,
+				etag = EXCLUDED.etag,
+				content_type = EXCLUDED.content_type,
+				size = EXCLUDED.size,
+				fetched_at = EXCLUDED.fetched_at,
+				updated_at = EXCLUDED.updated_at
+		`
+	} else {
+		query = `
+			INSERT INTO metadata_cache (ecosystem, name, storage_path, etag, content_type,
+			                            size, fetched_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(ecosystem, name) DO UPDATE SET
+				storage_path = excluded.storage_path,
+				etag = excluded.etag,
+				content_type = excluded.content_type,
+				size = excluded.size,
+				fetched_at = excluded.fetched_at,
+				updated_at = excluded.updated_at
+		`
+	}
+
+	_, err := db.Exec(query,
+		entry.Ecosystem, entry.Name, entry.StoragePath, entry.ETag,
+		entry.ContentType, entry.Size, entry.FetchedAt, now, now,
+	)
+	if err != nil {
+		return fmt.Errorf("upserting metadata cache: %w", err)
+	}
+	return nil
+}
