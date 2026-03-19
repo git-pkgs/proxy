@@ -1,0 +1,23 @@
+.github/workflows/publish.yml
+  f3b3b661c03e3c5e 1-44
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "f713d326d685a1ac4c5521714aedafa664e762e8",
+  "prompts": {
+    "f3b3b661c03e3c5e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "e5247f2f-bd6e-4f2d-ba30-288065a5e3f8",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 44,
+      "total_deletions": 0,
+      "accepted_lines": 44,
+      "overriden_lines": 0
+    }
+  }
+}
