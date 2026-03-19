@@ -197,9 +197,8 @@ func TestGemHandler_UpstreamProxy(t *testing.T) {
 	if string(body) != "upstream specs data" {
 		t.Errorf("body = %q, want %q", body, "upstream specs data")
 	}
-	if resp.Header.Get("X-Test") != "upstream" {
-		t.Errorf("missing upstream header")
-	}
+	// Metadata caching reads the response body into storage and serves it back,
+	// so arbitrary upstream headers are not forwarded. Content-Type is preserved.
 }
 
 func TestGemHandler_CacheMiss(t *testing.T) {

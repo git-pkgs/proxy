@@ -95,7 +95,8 @@ func (h *RPMHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 // handleMetadata proxies repository metadata files (repomd.xml, primary.xml.gz, etc.).
 // These change frequently so we don't cache them.
 func (h *RPMHandler) handleMetadata(w http.ResponseWriter, r *http.Request, path string) {
-	h.proxy.ProxyMetadata(w, r, fmt.Sprintf("%s/%s", h.upstreamURL, path), "rpm")
+	cacheKey := strings.ReplaceAll(path, "/", "_")
+	h.proxy.ProxyCached(w, r, fmt.Sprintf("%s/%s", h.upstreamURL, path), "rpm", cacheKey, "*/*")
 }
 
 // proxyFile proxies any file directly without caching.

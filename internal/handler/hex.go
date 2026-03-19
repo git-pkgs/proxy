@@ -32,10 +32,10 @@ func (h *HexHandler) Routes() http.Handler {
 	// Package tarballs (cache these)
 	mux.HandleFunc("GET /tarballs/{filename}", h.handleDownload)
 
-	// Registry resources (proxy without caching)
-	mux.HandleFunc("GET /names", h.proxyUpstream)
-	mux.HandleFunc("GET /versions", h.proxyUpstream)
-	mux.HandleFunc("GET /packages/{name}", h.proxyUpstream)
+	// Registry resources (cached for offline)
+	mux.HandleFunc("GET /names", h.proxyCached)
+	mux.HandleFunc("GET /versions", h.proxyCached)
+	mux.HandleFunc("GET /packages/{name}", h.proxyCached)
 
 	// Public keys
 	mux.HandleFunc("GET /public_key", h.proxyUpstream)
@@ -83,6 +83,12 @@ func (h *HexHandler) parseTarballFilename(filename string) (name, version string
 		}
 	}
 	return "", ""
+}
+
+// proxyCached forwards a request with metadata caching.
+func (h *HexHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
+	cacheKey := strings.TrimPrefix(r.URL.Path, "/")
+	h.proxy.ProxyCached(w, r, h.upstreamURL+r.URL.Path, "hex", cacheKey, "*/*")
 }
 
 // proxyUpstream forwards a request to hex.pm without caching.

@@ -86,6 +86,7 @@ CREATE TABLE IF NOT EXISTS vulnerabilities (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
 CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
+
 `
 
 var schemaPostgres = `
@@ -166,6 +167,7 @@ CREATE TABLE IF NOT EXISTS vulnerabilities (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
 CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
+
 `
 
 // schemaArtifactsOnly contains just the artifacts table for adding to existing git-pkgs databases.
@@ -404,5 +406,60 @@ func (db *DB) MigrateSchema() error {
 		}
 	}
 
+	// Ensure metadata_cache table exists
+	if err := db.EnsureMetadataCacheTable(); err != nil {
+		return fmt.Errorf("ensuring metadata_cache table: %w", err)
+	}
+
+	return nil
+}
+
+// EnsureMetadataCacheTable creates the metadata_cache table if it doesn't exist.
+func (db *DB) EnsureMetadataCacheTable() error {
+	has, err := db.HasTable("metadata_cache")
+	if err != nil {
+		return fmt.Errorf("checking metadata_cache table: %w", err)
+	}
+	if has {
+		return nil
+	}
+
+	var schema string
+	if db.dialect == DialectPostgres {
+		schema = `
+			CREATE TABLE metadata_cache (
+				id SERIAL PRIMARY KEY,
+				ecosystem TEXT NOT NULL,
+				name TEXT NOT NULL,
+				storage_path TEXT NOT NULL,
+				etag TEXT,
+				content_type TEXT,
+				size BIGINT,
+				fetched_at TIMESTAMP,
+				created_at TIMESTAMP,
+				updated_at TIMESTAMP
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_metadata_eco_name ON metadata_cache(ecosystem, name);
+		`
+	} else {
+		schema = `
+			CREATE TABLE metadata_cache (
+				id INTEGER PRIMARY KEY,
+				ecosystem TEXT NOT NULL,
+				name TEXT NOT NULL,
+				storage_path TEXT NOT NULL,
+				etag TEXT,
+				content_type TEXT,
+				size INTEGER,
+				fetched_at DATETIME,
+				created_at DATETIME,
+				updated_at DATETIME
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_metadata_eco_name ON metadata_cache(ecosystem, name);
+		`
+	}
+	if _, err := db.Exec(schema); err != nil {
+		return fmt.Errorf("creating metadata_cache table: %w", err)
+	}
 	return nil
 }
