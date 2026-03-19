@@ -1,0 +1,59 @@
+internal/handler/nuget.go
+  9b0a6a5a91c17904 60
+internal/handler/pypi.go
+  9b0a6a5a91c17904 77,79,205,221,225-226
+internal/handler/go.go
+  9b0a6a5a91c17904 57,61,65,69,84-85,116-120
+internal/handler/conda.go
+  9b0a6a5a91c17904 34-36,122-128
+internal/server/server_test.go
+  9b0a6a5a91c17904 331-334,336,338
+internal/handler/maven.go
+  9b0a6a5a91c17904 54-55
+internal/handler/nuget_test.go
+  9b0a6a5a91c17904 230-232
+internal/handler/hex.go
+  9b0a6a5a91c17904 35-38,88-93
+internal/handler/handler.go
+  9b0a6a5a91c17904 7,36-37,378,383-563
+internal/handler/rpm.go
+  9b0a6a5a91c17904 98-99
+internal/handler/gem.go
+  9b0a6a5a91c17904 38-40,43-44,101-107
+internal/handler/npm.go
+  9b0a6a5a91c17904 5,71,73-77
+internal/handler/cargo.go
+  9b0a6a5a91c17904 5,90,92-95,101-102,104,106
+internal/handler/debian.go
+  9b0a6a5a91c17904 96-97
+internal/handler/composer.go
+  9b0a6a5a91c17904 91
+internal/handler/download_test.go
+  9b0a6a5a91c17904 200-201
+internal/handler/conan.go
+  9b0a6a5a91c17904 46-47,150-163
+internal/handler/pub.go
+  9b0a6a5a91c17904 91
+internal/handler/cran.go
+  9b0a6a5a91c17904 33-35,38-40,153-159
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "e61e9ea7bf2f9854e72a0d49fdc7e224d51ced6d",
+  "prompts": {
+    "9b0a6a5a91c17904": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "13b5383e-ba14-4b5d-a4e9-15d240770351",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 309,
+      "total_deletions": 208,
+      "accepted_lines": 300,
+      "overriden_lines": 0
+    }
+  }
+}
