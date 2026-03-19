@@ -1,0 +1,63 @@
+internal/mirror/metadata.go
+  9b0a6a5a91c17904 1-98
+cmd/proxy/main.go
+  9b0a6a5a91c17904 19,104-105,107-108,132-135,157,353-503
+internal/database/queries.go
+  9b0a6a5a91c17904 890-950
+internal/server/server.go
+  9b0a6a5a91c17904 55,237-244
+internal/database/types.go
+  9b0a6a5a91c17904 79-92
+docs/configuration.md
+  9b0a6a5a91c17904 214-235
+internal/mirror/job.go
+  9b0a6a5a91c17904 1-141
+docs/architecture.md
+  9b0a6a5a91c17904 164-177,294-299,349,353
+internal/mirror/source.go
+  9b0a6a5a91c17904 1-190
+internal/mirror/registry.go
+  9b0a6a5a91c17904 1-47
+internal/mirror/registry_test.go
+  9b0a6a5a91c17904 1-46
+internal/database/metadata_cache_test.go
+  9b0a6a5a91c17904 1-180
+internal/mirror/mirror_test.go
+  9b0a6a5a91c17904 1-195
+internal/server/mirror_api_test.go
+  9b0a6a5a91c17904 1-163
+internal/database/schema.go
+  9b0a6a5a91c17904 89-102,183-196,435-489
+internal/mirror/source_test.go
+  9b0a6a5a91c17904 1-243
+internal/mirror/job_test.go
+  9b0a6a5a91c17904 1-126
+internal/mirror/metadata_test.go
+  9b0a6a5a91c17904 1-163
+internal/mirror/mirror.go
+  9b0a6a5a91c17904 1-181
+README.md
+  9b0a6a5a91c17904 463-503,578-585
+internal/server/mirror_api.go
+  9b0a6a5a91c17904 1-70
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "bcd6c3fa87166f080e6e365e5b914a1648dbdf01",
+  "prompts": {
+    "9b0a6a5a91c17904": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "13b5383e-ba14-4b5d-a4e9-15d240770351",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 2332,
+      "total_deletions": 69,
+      "accepted_lines": 2264,
+      "overriden_lines": 0
+    }
+  }
+}
