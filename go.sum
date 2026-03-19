@@ -225,6 +225,8 @@ github.com/git-pkgs/archives v0.2.0 h1:8OuuGwAB+Eww8/1ayyYpZzP0wVEH0/VWBG3mQrfi9
 github.com/git-pkgs/archives v0.2.0/go.mod h1:LTJ1iQVFA7otizWMOyiI82NYVmyBWAPRzwu/e30rcXU=
 github.com/git-pkgs/enrichment v0.1.5 h1:xhZkQMciofrPPrDtVRQqz+suRmKTtk53ibSUYCYviCI=
 github.com/git-pkgs/enrichment v0.1.5/go.mod h1:5LB52Ei3cUI4LqLkshpMfxcSguwWT5L3exv+erfIcNI=
+github.com/git-pkgs/git-pkgs v0.15.1-0.20260304191500-e296d0146017 h1:jZ/2h7dmOIFX7KC7nF7FF/ZGjWdqanzE7LUMwJ7OePE=
+github.com/git-pkgs/git-pkgs v0.15.1-0.20260304191500-e296d0146017/go.mod h1:YP6B+ij6pmaLMYWcoKyvCtCJvPeVPJbYcDmQEBTuZZc=
 github.com/git-pkgs/packageurl-go v0.3.1 h1:WM3RBABQZLaRBxgKyYughc3cVBE8KyQxbSC6Jt5ak7M=
 github.com/git-pkgs/packageurl-go v0.3.1/go.mod h1:rcIxiG37BlQLB6FZfgdj9Fm7yjhRQd3l+5o7J0QPAk4=
 github.com/git-pkgs/purl v0.1.9 h1:zSHKBVwRTJiMGwiYIiHgoIUfJTdtC7kVQ0+0RHckwxc=
@@ -550,8 +552,8 @@ github.com/sashamelentyev/usestdlibvars v1.29.0 h1:8J0MoRrw4/NAXtjQqTHrbW9NN+3iM
 github.com/sashamelentyev/usestdlibvars v1.29.0/go.mod h1:8PpnjHMk5VdeWlVb4wCdrB8PNbLqZ3wBZTZWkrpZZL8=
 github.com/securego/gosec/v2 v2.23.0 h1:h4TtF64qFzvnkqvsHC/knT7YC5fqyOCItlVR8+ptEBo=
 github.com/securego/gosec/v2 v2.23.0/go.mod h1:qRHEgXLFuYUDkI2T7W7NJAmOkxVhkR0x9xyHOIcMNZ0=
-github.com/sergi/go-diff v1.2.0 h1:XU+rvMAioB0UC3q1MFrIQy4Vo5/4VsRDQQXHsEya6xQ=
-github.com/sergi/go-diff v1.2.0/go.mod h1:STckp+ISIX8hZLjrqAeVduY0gWCT9IjLuqbuNXdaHfM=
+github.com/sergi/go-diff v1.4.0 h1:n/SP9D5ad1fORl+llWyN+D6qoUETXNZARKjyY2/KVCw=
+github.com/sergi/go-diff v1.4.0/go.mod h1:A0bzQcvG0E7Rwjx0REVgAGH58e96+X0MeOfepqsbeW4=
 github.com/shurcooL/go v0.0.0-20180423040247-9e1955d9fb6e/go.mod h1:TDJrrUr11Vxrven61rcy3hJMUqaf/CLWYhHNPmT14Lk=
 github.com/shurcooL/go-goon v0.0.0-20170922171312-37c2f522c041/go.mod h1:N5mDOmsrJOB+vfqUK+7DmDyjhSLIIBnXo9lvZJj3MWQ=
 github.com/sirupsen/logrus v1.9.4 h1:TsZE7l11zFCLZnZ+teH4Umoq5BhEIfIzfRDZ1Uzql2w=

@@ -1,10 +1,11 @@
 module github.com/git-pkgs/proxy
 
-go 1.25.6
+go 1.25.7
 
 require (
 	github.com/git-pkgs/archives v0.2.0
 	github.com/git-pkgs/enrichment v0.1.5
+	github.com/git-pkgs/git-pkgs v0.15.1-0.20260304191500-e296d0146017
 	github.com/git-pkgs/purl v0.1.9
 	github.com/git-pkgs/registries v0.3.0
 	github.com/git-pkgs/spdx v0.1.1
