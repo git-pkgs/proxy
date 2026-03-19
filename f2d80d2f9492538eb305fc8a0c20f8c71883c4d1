@@ -1,0 +1,100 @@
+internal/handler/hex.go
+  c3e8bbc47bf36089 91
+  9b0a6a5a91c17904 35-38,88-90,92-93
+internal/handler/npm.go
+  9b0a6a5a91c17904 5,71,73-77
+internal/server/mirror_api.go
+  9b0a6a5a91c17904 1-70
+internal/server/server_test.go
+  9b0a6a5a91c17904 331-334,336,338
+internal/handler/cargo.go
+  9b0a6a5a91c17904 5,90,92-95,101-102,104,106
+internal/mirror/job.go
+  c3e8bbc47bf36089 5,22-24,36,45,64,105-131,165,167-173
+  9b0a6a5a91c17904 1-4,6-21,25-35,37-44,46-63,65-104,132-164,166,174
+internal/database/metadata_cache_test.go
+  9b0a6a5a91c17904 1-180
+internal/handler/debian.go
+  c3e8bbc47bf36089 97
+  9b0a6a5a91c17904 96
+internal/mirror/source.go
+  9b0a6a5a91c17904 1-190
+docs/architecture.md
+  9b0a6a5a91c17904 164-177,294-299,349
+  c3e8bbc47bf36089 353
+docs/configuration.md
+  9b0a6a5a91c17904 226-247
+  c3e8bbc47bf36089 214-225
+internal/handler/download_test.go
+  9b0a6a5a91c17904 200-201
+internal/database/types.go
+  9b0a6a5a91c17904 79-92
+internal/handler/gem.go
+  c3e8bbc47bf36089 105
+  9b0a6a5a91c17904 38-40,43-44,101-104,106-107
+internal/server/mirror_api_test.go
+  9b0a6a5a91c17904 1-163
+internal/database/schema.go
+  9b0a6a5a91c17904 89-102,183-196,435-489
+README.md
+  c3e8bbc47bf36089 582
+  9b0a6a5a91c17904 463-503,578-581,583-585
+cmd/proxy/main.go
+  9b0a6a5a91c17904 19,104-105,107-108,132-135,157,353-457,459-504
+  c3e8bbc47bf36089 458
+internal/handler/conda.go
+  9b0a6a5a91c17904 34-36,122-125,127-128
+  c3e8bbc47bf36089 126
+internal/handler/cran.go
+  9b0a6a5a91c17904 33-35,38-40,153-156,158-159
+  c3e8bbc47bf36089 157
+internal/mirror/mirror.go
+  9b0a6a5a91c17904 1-181
+internal/handler/composer.go
+  9b0a6a5a91c17904 91
+internal/handler/maven.go
+  c3e8bbc47bf36089 55
+  9b0a6a5a91c17904 54
+internal/handler/go.go
+  9b0a6a5a91c17904 57,61,65,69,84-85,116-117,119-120
+  c3e8bbc47bf36089 118
+internal/mirror/mirror_test.go
+  9b0a6a5a91c17904 1-195
+internal/mirror/registry_test.go
+  9b0a6a5a91c17904 1-46
+internal/server/server.go
+  c3e8bbc47bf36089 145,260,262
+  9b0a6a5a91c17904 55,238-245
+internal/handler/conan.go
+  9b0a6a5a91c17904 46-47,150-160,162-163
+  c3e8bbc47bf36089 161
+internal/database/queries.go
+  9b0a6a5a91c17904 890-950
+internal/handler/nuget_test.go
+  9b0a6a5a91c17904 230-232
+internal/handler/pypi.go
+  9b0a6a5a91c17904 77,79,205,221,225-226
+internal/mirror/registry.go
+  9b0a6a5a91c17904 1-47
+internal/handler/nuget.go
+  9b0a6a5a91c17904 60
+internal/handler/handler.go
+  9b0a6a5a91c17904 8,37-38,380,385-387,391-400,405-408,410-413,419,423-425,428-429,433-454,457-458,460-468,470-475,478,484-487,489-491,493-494,496-499,501-508,510-512,514-517,519-527,529-534,538-553
+  c3e8bbc47bf36089 5,58,388-390,401-404,409,414-418,420-422,426-427,430-432,455-456,459,469,476-477,479-483,488,492,495,500,509,513,518,528,535-537
+internal/handler/rpm.go
+  9b0a6a5a91c17904 98
+  c3e8bbc47bf36089 99
+internal/mirror/source_test.go
+  9b0a6a5a91c17904 1-243
+internal/handler/pub.go
+  9b0a6a5a91c17904 91
+internal/mirror/job_test.go
+  9b0a6a5a91c17904 1-101,103-105,107-109,112-114,116-118,125,159-160
+  c3e8bbc47bf36089 102,106,110-111,115,119-124,126-158
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "f2d80d2f9492538eb305fc8a0c20f8c71883c4d1",
+  "prompts": {}
+}
