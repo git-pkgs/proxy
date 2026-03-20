@@ -35,13 +35,13 @@ func (h *GemHandler) Routes() http.Handler {
 	mux.HandleFunc("GET /gems/{filename}", h.handleDownload)
 
 	// Specs indexes (compressed Ruby Marshal format)
-	mux.HandleFunc("GET /specs.4.8.gz", h.proxyUpstream)
-	mux.HandleFunc("GET /latest_specs.4.8.gz", h.proxyUpstream)
-	mux.HandleFunc("GET /prerelease_specs.4.8.gz", h.proxyUpstream)
+	mux.HandleFunc("GET /specs.4.8.gz", h.proxyCached)
+	mux.HandleFunc("GET /latest_specs.4.8.gz", h.proxyCached)
+	mux.HandleFunc("GET /prerelease_specs.4.8.gz", h.proxyCached)
 
 	// Compact index (bundler 2.x+)
-	mux.HandleFunc("GET /versions", h.proxyUpstream)
-	mux.HandleFunc("GET /info/{name}", h.proxyUpstream)
+	mux.HandleFunc("GET /versions", h.proxyCached)
+	mux.HandleFunc("GET /info/{name}", h.proxyCached)
 
 	// Quick index
 	mux.HandleFunc("GET /quick/Marshal.4.8/{filename}", h.proxyUpstream)
@@ -96,6 +96,13 @@ func (h *GemHandler) parseGemFilename(filename string) (name, version string) {
 		}
 	}
 	return "", ""
+}
+
+// proxyCached forwards a metadata request with caching.
+func (h *GemHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
+	upstreamURL := h.upstreamURL + r.URL.Path
+	cacheKey := strings.TrimPrefix(r.URL.Path, "/")
+	h.proxy.ProxyCached(w, r, upstreamURL, "gem", cacheKey, "*/*")
 }
 
 // proxyUpstream forwards a request to rubygems.org without caching.

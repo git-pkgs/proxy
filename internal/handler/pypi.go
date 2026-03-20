@@ -74,31 +74,12 @@ func (h *PyPIHandler) handleSimplePackage(w http.ResponseWriter, r *http.Request
 	h.proxy.Logger.Info("pypi simple request", "package", name)
 
 	upstreamURL := fmt.Sprintf("%s/simple/%s/", h.upstreamURL, name)
+	cacheKey := name + "/simple"
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
-	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-	req.Header.Set("Accept", "text/html")
-
-	resp, err := h.proxy.HTTPClient.Do(req)
+	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "pypi", cacheKey, upstreamURL, "text/html")
 	if err != nil {
 		h.proxy.Logger.Error("upstream request failed", "error", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
-		return
-	}
-
-	body, err := ReadMetadata(resp.Body)
-	if err != nil {
-		http.Error(w, "failed to read response", http.StatusInternalServerError)
 		return
 	}
 
@@ -221,7 +202,7 @@ func (h *PyPIHandler) handleJSON(w http.ResponseWriter, r *http.Request) {
 	h.proxy.Logger.Info("pypi json request", "package", name)
 
 	upstreamURL := fmt.Sprintf("%s/pypi/%s/json", h.upstreamURL, name)
-	h.proxyAndRewriteJSON(w, r, upstreamURL)
+	h.proxyAndRewriteJSON(w, r, upstreamURL, name+"/json")
 }
 
 // handleVersionJSON serves the JSON API version metadata.
@@ -237,35 +218,15 @@ func (h *PyPIHandler) handleVersionJSON(w http.ResponseWriter, r *http.Request) 
 	h.proxy.Logger.Info("pypi version json request", "package", name, "version", version)
 
 	upstreamURL := fmt.Sprintf("%s/pypi/%s/%s/json", h.upstreamURL, name, version)
-	h.proxyAndRewriteJSON(w, r, upstreamURL)
+	h.proxyAndRewriteJSON(w, r, upstreamURL, name+"/"+version)
 }
 
 // proxyAndRewriteJSON fetches JSON metadata and rewrites download URLs.
-func (h *PyPIHandler) proxyAndRewriteJSON(w http.ResponseWriter, r *http.Request, upstreamURL string) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
-	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := h.proxy.HTTPClient.Do(req)
+func (h *PyPIHandler) proxyAndRewriteJSON(w http.ResponseWriter, r *http.Request, upstreamURL, cacheKey string) {
+	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "pypi", cacheKey, upstreamURL)
 	if err != nil {
 		h.proxy.Logger.Error("upstream request failed", "error", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
-		return
-	}
-
-	body, err := ReadMetadata(resp.Body)
-	if err != nil {
-		http.Error(w, "failed to read response", http.StatusInternalServerError)
 		return
 	}
 

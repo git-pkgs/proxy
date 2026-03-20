@@ -460,6 +460,47 @@ proxy serve [flags]
 proxy [flags]  # same as 'proxy serve'
 ```
 
+### mirror
+
+Pre-populate the cache from PURLs, SBOM files, or entire registries. Useful for ensuring offline availability or warming the cache before deployments.
+
+```bash
+# Mirror specific package versions
+proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
+
+# Mirror all versions of a package
+proxy mirror pkg:npm/lodash
+
+# Mirror from a CycloneDX or SPDX SBOM
+proxy mirror --sbom sbom.cdx.json
+
+# Full registry mirror (npm, pypi, cargo supported)
+proxy mirror --registry npm
+
+# Preview what would be mirrored
+proxy mirror --dry-run pkg:npm/lodash
+
+# Control parallelism
+proxy mirror --concurrency 8 pkg:npm/lodash@4.17.21
+```
+
+The mirror command accepts the same storage and database flags as `serve`. Already-cached artifacts are skipped.
+
+A mirror API is also available when the server is running:
+
+```bash
+# Start a mirror job
+curl -X POST http://localhost:8080/api/mirror \
+  -H "Content-Type: application/json" \
+  -d '{"purls": ["pkg:npm/lodash@4.17.21"]}'
+
+# Check job status
+curl http://localhost:8080/api/mirror/mirror-1
+
+# Cancel a running job
+curl -X DELETE http://localhost:8080/api/mirror/mirror-1
+```
+
 ### stats
 
 Show cache statistics without running the server.
@@ -533,6 +574,14 @@ Recently cached:
 | `GET /v2/*` | OCI/Docker registry protocol |
 | `GET /debian/*` | Debian/APT repository protocol |
 | `GET /rpm/*` | RPM/Yum repository protocol |
+
+### Mirror API
+
+| Endpoint | Description |
+|----------|-------------|
+| `POST /api/mirror` | Start a mirror job (JSON body with `purls` or `registry`) |
+| `GET /api/mirror/{id}` | Get job status and progress |
+| `DELETE /api/mirror/{id}` | Cancel a running job |
 
 ### Enrichment API
 
