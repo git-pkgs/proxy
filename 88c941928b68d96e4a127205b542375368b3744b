@@ -1,0 +1,192 @@
+docs/configuration.md
+  9b0a6a5a91c17904 226-247
+internal/handler/cargo.go
+  9b0a6a5a91c17904 5,90,92-95,101-102,104,106
+internal/server/mirror_api_test.go
+  9b0a6a5a91c17904 1-163
+internal/handler/nuget.go
+  9b0a6a5a91c17904 60
+internal/mirror/mirror.go
+  9b0a6a5a91c17904 1-181
+internal/mirror/registry.go
+  9b0a6a5a91c17904 1-47
+internal/handler/hex.go
+  9b0a6a5a91c17904 35-38,88-90,92-93
+internal/mirror/job.go
+  9b0a6a5a91c17904 1-4,6-21,25-35,37-44,46-63,65-104,132-164,166,174
+internal/handler/npm.go
+  9b0a6a5a91c17904 5,71,73-77
+internal/handler/debian.go
+  9b0a6a5a91c17904 96
+internal/mirror/registry_test.go
+  9b0a6a5a91c17904 1-46
+internal/handler/conan.go
+  9b0a6a5a91c17904 46-47,150-160,162-163
+internal/handler/nuget_test.go
+  9b0a6a5a91c17904 230-232
+cmd/proxy/main.go
+  9b0a6a5a91c17904 19,104-105,107-108,132-135,157,353-457,459-504
+internal/database/metadata_cache_test.go
+  9b0a6a5a91c17904 1-180
+internal/server/server.go
+  9b0a6a5a91c17904 55,238-245
+internal/handler/cran.go
+  9b0a6a5a91c17904 33-35,38-40,153-156,158-159
+internal/mirror/mirror_test.go
+  9b0a6a5a91c17904 1-195
+internal/handler/composer.go
+  9b0a6a5a91c17904 91
+README.md
+  9b0a6a5a91c17904 463-503,578-581,583-585
+internal/handler/download_test.go
+  9b0a6a5a91c17904 200-201
+internal/handler/rpm.go
+  9b0a6a5a91c17904 98
+internal/server/mirror_api.go
+  9b0a6a5a91c17904 1-70
+internal/handler/pub.go
+  9b0a6a5a91c17904 91
+internal/mirror/source.go
+  9b0a6a5a91c17904 1-190
+docs/swagger/swagger.json
+  c3e8bbc47bf36089 248-355,763-878
+internal/handler/conda.go
+  9b0a6a5a91c17904 34-36,122-125,127-128
+internal/database/schema.go
+  9b0a6a5a91c17904 89-102,183-196,435-489
+internal/database/queries.go
+  9b0a6a5a91c17904 890-950
+internal/database/types.go
+  9b0a6a5a91c17904 79-92
+docs/swagger/docs.go
+  c3e8bbc47bf36089 255-362,770-885
+internal/handler/maven.go
+  9b0a6a5a91c17904 54
+internal/server/server_test.go
+  9b0a6a5a91c17904 331-334,336,338
+internal/handler/pypi.go
+  9b0a6a5a91c17904 77,79,205,221,225-226
+internal/mirror/source_test.go
+  9b0a6a5a91c17904 1-243
+internal/handler/gem.go
+  9b0a6a5a91c17904 38-40,43-44,101-104,106-107
+internal/handler/go.go
+  9b0a6a5a91c17904 57,61,65,69,84-85,116-117,119-120
+internal/handler/handler.go
+  9b0a6a5a91c17904 8,37-38,380,385-387,391-400,405-408,410-413,419,423-425,428-429,433-454,457-458,460-468,470-475,478,484-487,489-491,493-494,496-499,501-508,510-512,514-517,519-527,529-534,538-553
+internal/mirror/job_test.go
+  9b0a6a5a91c17904 1-101,103-105,107-109,112-114,116-118,125,159-160
+docs/architecture.md
+  9b0a6a5a91c17904 164-177,294-299,349
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.15",
+  "base_commit_sha": "88c941928b68d96e4a127205b542375368b3744b",
+  "prompts": {
+    "6702463e5e3429f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "94c22121-0e88-4727-a3c1-6ae2ad5f0462",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 777,
+      "overriden_lines": 0
+    },
+    "8b7384548763a737": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019cdddc-cee5-7f81-be63-e6550dfbd243",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 46,
+      "total_deletions": 32,
+      "accepted_lines": 25,
+      "overriden_lines": 0
+    },
+    "98f5e9f5ce41173b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019cddcb-ffe1-7373-bea2-f44ea0e2cf10",
+        "model": "gpt-5.2-codex"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 843,
+      "total_deletions": 1,
+      "accepted_lines": 32,
+      "overriden_lines": 0
+    },
+    "9b0a6a5a91c17904": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "13b5383e-ba14-4b5d-a4e9-15d240770351",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 309,
+      "total_deletions": 208,
+      "accepted_lines": 2218,
+      "overriden_lines": 0
+    },
+    "b98de1153b11134e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d063a445-d283-4db3-a728-573ea639306c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 1,
+      "overriden_lines": 0
+    },
+    "c3e8bbc47bf36089": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "438b7ec3-499c-44af-a0c1-ed8a86088183",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 448,
+      "total_deletions": 0,
+      "accepted_lines": 448,
+      "overriden_lines": 0
+    },
+    "d604d3e652fd4151": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9550a2b8-329a-4acf-8276-ce3364de850a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 172,
+      "total_deletions": 60,
+      "accepted_lines": 176,
+      "overriden_lines": 0
+    },
+    "da15eed9d48e8570": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ccda35cc-0641-4388-a7cf-d5ad2f635141",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 1366,
+      "total_deletions": 24,
+      "accepted_lines": 1008,
+      "overriden_lines": 0
+    }
+  }
+}
