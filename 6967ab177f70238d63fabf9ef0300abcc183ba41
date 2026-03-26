@@ -1,0 +1,55 @@
+internal/handler/handler.go
+  23a7f31ec4bd9249 383-389,399,402,406
+internal/handler/container_test.go
+  23a7f31ec4bd9249 4-8,12-14,138-223
+internal/handler/handler_test.go
+  23a7f31ec4bd9249 90-94
+internal/handler/container.go
+  23a7f31ec4bd9249 106,108-109,116,120-121
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.19",
+  "base_commit_sha": "6967ab177f70238d63fabf9ef0300abcc183ba41",
+  "prompts": {
+    "23a7f31ec4bd9249": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0408e2b2-5c9d-4193-a925-b445ac90c9ec",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 159,
+      "total_deletions": 80,
+      "accepted_lines": 119,
+      "overriden_lines": 0
+    },
+    "6702463e5e3429f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "94c22121-0e88-4727-a3c1-6ae2ad5f0462",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 777,
+      "overriden_lines": 0
+    },
+    "d604d3e652fd4151": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9550a2b8-329a-4acf-8276-ce3364de850a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 172,
+      "total_deletions": 60,
+      "accepted_lines": 176,
+      "overriden_lines": 0
+    }
+  }
+}
