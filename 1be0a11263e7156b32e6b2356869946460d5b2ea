@@ -1,0 +1,29 @@
+internal/handler/container.go
+  23a7f31ec4bd9249 106,108-109,116,120-121
+internal/handler/handler_test.go
+  23a7f31ec4bd9249 90-94
+internal/handler/container_test.go
+  23a7f31ec4bd9249 4-8,12-14,138-223
+internal/handler/handler.go
+  23a7f31ec4bd9249 383-389,399,402,406
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.1.19",
+  "base_commit_sha": "1be0a11263e7156b32e6b2356869946460d5b2ea",
+  "prompts": {
+    "23a7f31ec4bd9249": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0408e2b2-5c9d-4193-a925-b445ac90c9ec",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 159,
+      "total_deletions": 80,
+      "accepted_lines": 119,
+      "overriden_lines": 0
+    }
+  }
+}
