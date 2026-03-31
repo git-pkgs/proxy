@@ -1,11 +1,15 @@
 package handler
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -60,7 +64,7 @@ func (h *CargoHandler) Routes() http.Handler {
 
 // CargoConfig is the registry configuration returned by config.json.
 type CargoConfig struct {
-	DL string `json:"dl"`
+	DL  string `json:"dl"`
 	API string `json:"api,omitempty"`
 }
 
@@ -120,8 +124,67 @@ func (h *CargoHandler) handleIndex(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Last-Modified", lastMod)
 	}
 
-	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, resp.Body)
+	h.applyCooldownFiltering(w, resp.Body)
+
+}
+
+type crateIndexEntry struct {
+	Name        string `json:"name"`
+	Version     string `json:"vers"`
+	PublishTime string `json:"pubtime,omitempty"`
+}
+
+func (h *CargoHandler) applyCooldownFiltering(downstreamResponse io.Writer, upstreamBody io.Reader) {
+	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
+		// not using cooldowns, just copy the upstream to the downstream
+		_, _ = io.Copy(downstreamResponse, upstreamBody)
+	}
+
+	// create a scanner on the body of the http response
+	requestScanner := bufio.NewScanner(upstreamBody)
+
+	// the response is newline-delimited JSON, loop through each line
+	for requestScanner.Scan() {
+		line := requestScanner.Text()
+
+		// decode the line
+		var crate crateIndexEntry
+		err := json.Unmarshal([]byte(line), &crate)
+
+		if err != nil {
+			// if there is an error parsing this line then exclude it and move to the next entry
+			h.proxy.Logger.Error("failed to parse json entry in index", "error", err)
+			continue
+		}
+
+		// parse publish time
+		publishedAt, err := time.Parse(time.RFC3339, crate.PublishTime)
+
+		if crate.PublishTime == "" || err != nil {
+			// publish time is empty/missing/invalid, presumably was published before pubtime was added as a field
+			// write line to response
+			_, _ = downstreamResponse.Write([]byte(line + "\n"))
+			continue
+		}
+
+		// make PURL
+		cratePURL := purl.MakePURLString("cargo", crate.Name, "")
+
+		if !h.proxy.Cooldown.IsAllowed("cargo", cratePURL, publishedAt) {
+			// crate is not allowed, move to next crate
+			h.proxy.Logger.Info("cooldown: filtering cargo version",
+				"crate", crate.Name, "version", crate.Version,
+				"published", crate.PublishTime)
+			continue
+		}
+
+		// crate passes, write to response
+		_, _ = downstreamResponse.Write([]byte(line + "\n"))
+	}
+
+	if err := requestScanner.Err(); err != nil {
+		h.proxy.Logger.Error("error reading index response", "error", err)
+	}
 }
 
 // buildIndexPath builds the sparse index path for a crate name.

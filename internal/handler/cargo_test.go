@@ -1,11 +1,16 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
+	"time"
+
+	"github.com/git-pkgs/proxy/internal/cooldown"
 )
 
 func cargoTestProxy() *Proxy {
@@ -28,8 +33,8 @@ func TestCargoBuildIndexPath(t *testing.T) {
 		{"abcd", "ab/cd/abcd"},
 		{"serde", "se/rd/serde"},
 		{"tokio", "to/ki/tokio"},
-		{"A", "1/a"},                      // lowercase
-		{"SERDE", "se/rd/serde"},          // lowercase
+		{"A", "1/a"},             // lowercase
+		{"SERDE", "se/rd/serde"}, // lowercase
 		{"rand_core", "ra/nd/rand_core"},
 	}
 
@@ -145,4 +150,58 @@ func TestCargoRoutes(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Errorf("config.json status = %d, want %d", w.Code, http.StatusOK)
 	}
+}
+
+type filterTestCase struct {
+	line     string
+	expected bool
+}
+
+func TestCargoCooldown(t *testing.T) {
+	now := time.Now()
+
+	createCase := func(name string, version string, age time.Duration, expected bool) filterTestCase {
+		return filterTestCase{line: `{"name":"` + name + `","vers":"` + version + `","cksum":"abcd","features":{},"yanked":false,"pubtime":"` + now.Add(-1*age).Format(time.RFC3339) + `"}`, expected: expected}
+	}
+
+	testCases := []filterTestCase{
+		// one week ago
+		createCase("serde", "1.0.0", 168*time.Hour, true),
+		// one hour ago
+		createCase("serde", "1.0.1", 1*time.Hour, false),
+		// two hours ago with custom filter (1h)
+		createCase("tokio", "1.0.0", 2*time.Hour, true),
+		// one hour ago with custom filter (1h)
+		createCase("tokio", "1.0.0", 1*time.Minute, false),
+	}
+
+	var testInput strings.Builder
+	var expectedOutput strings.Builder
+
+	for _, testCase := range testCases {
+		testInput.WriteString(testCase.line + "\n")
+		if testCase.expected {
+			expectedOutput.WriteString(testCase.line + "\n")
+		}
+	}
+
+	proxy := testProxy()
+	proxy.Cooldown = &cooldown.Config{
+		Default:  "3d",
+		Packages: map[string]string{"pkg:cargo/tokio": "1h"},
+	}
+
+	h := &CargoHandler{
+		proxy:    proxy,
+		proxyURL: "http://localhost:8080",
+	}
+
+	var outputBuffer bytes.Buffer
+	h.applyCooldownFiltering(&outputBuffer, strings.NewReader(testInput.String()))
+	output := outputBuffer.String()
+
+	if output != expectedOutput.String() {
+		t.Errorf("output = %q, want %q", output, expectedOutput.String())
+	}
+
 }
