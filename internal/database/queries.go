@@ -894,7 +894,7 @@ func (db *DB) GetMetadataCache(ecosystem, name string) (*MetadataCacheEntry, err
 	var entry MetadataCacheEntry
 	query := db.Rebind(`
 		SELECT id, ecosystem, name, storage_path, etag, content_type,
-		       size, fetched_at, created_at, updated_at
+		       size, last_modified, fetched_at, created_at, updated_at
 		FROM metadata_cache WHERE ecosystem = ? AND name = ?
 	`)
 	err := db.Get(&entry, query, ecosystem, name)
@@ -914,26 +914,28 @@ func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 	if db.dialect == DialectPostgres {
 		query = `
 			INSERT INTO metadata_cache (ecosystem, name, storage_path, etag, content_type,
-			                            size, fetched_at, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+			                            size, last_modified, fetched_at, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)
 			ON CONFLICT(ecosystem, name) DO UPDATE SET
 				storage_path = EXCLUDED.storage_path,
 				etag = EXCLUDED.etag,
 				content_type = EXCLUDED.content_type,
 				size = EXCLUDED.size,
+				last_modified = EXCLUDED.last_modified,
 				fetched_at = EXCLUDED.fetched_at,
 				updated_at = EXCLUDED.updated_at
 		`
 	} else {
 		query = `
 			INSERT INTO metadata_cache (ecosystem, name, storage_path, etag, content_type,
-			                            size, fetched_at, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+			                            size, last_modified, fetched_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(ecosystem, name) DO UPDATE SET
 				storage_path = excluded.storage_path,
 				etag = excluded.etag,
 				content_type = excluded.content_type,
 				size = excluded.size,
+				last_modified = excluded.last_modified,
 				fetched_at = excluded.fetched_at,
 				updated_at = excluded.updated_at
 		`
@@ -941,7 +943,7 @@ func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 
 	_, err := db.Exec(query,
 		entry.Ecosystem, entry.Name, entry.StoragePath, entry.ETag,
-		entry.ContentType, entry.Size, entry.FetchedAt, now, now,
+		entry.ContentType, entry.Size, entry.LastModified, entry.FetchedAt, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("upserting metadata cache: %w", err)

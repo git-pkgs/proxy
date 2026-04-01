@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
@@ -90,6 +91,10 @@ func (h *PubHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 
 	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "pub", name, upstreamURL)
 	if err != nil {
+		if errors.Is(err, ErrUpstreamNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 		h.proxy.Logger.Error("upstream request failed", "error", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return

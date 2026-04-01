@@ -78,16 +78,17 @@ func (a *Artifact) IsCached() bool {
 
 // MetadataCacheEntry represents a cached metadata blob for offline serving.
 type MetadataCacheEntry struct {
-	ID          int64          `db:"id" json:"id"`
-	Ecosystem   string         `db:"ecosystem" json:"ecosystem"`
-	Name        string         `db:"name" json:"name"`
-	StoragePath string         `db:"storage_path" json:"storage_path"`
-	ETag        sql.NullString `db:"etag" json:"etag,omitempty"`
-	ContentType sql.NullString `db:"content_type" json:"content_type,omitempty"`
-	Size        sql.NullInt64  `db:"size" json:"size,omitempty"`
-	FetchedAt   sql.NullTime   `db:"fetched_at" json:"fetched_at,omitempty"`
-	CreatedAt   time.Time      `db:"created_at" json:"created_at"`
-	UpdatedAt   time.Time      `db:"updated_at" json:"updated_at"`
+	ID           int64          `db:"id" json:"id"`
+	Ecosystem    string         `db:"ecosystem" json:"ecosystem"`
+	Name         string         `db:"name" json:"name"`
+	StoragePath  string         `db:"storage_path" json:"storage_path"`
+	ETag         sql.NullString `db:"etag" json:"etag,omitempty"`
+	ContentType  sql.NullString `db:"content_type" json:"content_type,omitempty"`
+	Size         sql.NullInt64  `db:"size" json:"size,omitempty"`
+	LastModified sql.NullTime   `db:"last_modified" json:"last_modified,omitempty"`
+	FetchedAt    sql.NullTime   `db:"fetched_at" json:"fetched_at,omitempty"`
+	CreatedAt    time.Time      `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time      `db:"updated_at" json:"updated_at"`
 }
 
 // Vulnerability represents a cached vulnerability record.

@@ -158,7 +158,13 @@ func (js *JobStore) runJob(ctx context.Context, cancel context.CancelFunc, job *
 	job.State = JobStateRunning
 	js.mu.Unlock()
 
-	progress, err := js.mirror.Run(ctx, source)
+	progress, err := js.mirror.Run(ctx, source, func(p Progress) {
+		js.mu.Lock()
+		defer js.mu.Unlock()
+		if job.State == JobStateRunning {
+			job.Progress = p
+		}
+	})
 
 	js.mu.Lock()
 	defer js.mu.Unlock()
@@ -187,9 +193,9 @@ func (js *JobStore) sourceFromRequest(req JobRequest) (Source, error) { //nolint
 	case len(req.PURLs) > 0:
 		return &PURLSource{PURLs: req.PURLs}, nil
 	case req.Registry != "":
-		return &RegistrySource{Ecosystem: req.Registry}, nil
+		return nil, fmt.Errorf("registry mirroring is not yet implemented; use purls instead")
 	default:
-		return nil, fmt.Errorf("request must include purls or registry")
+		return nil, fmt.Errorf("request must include purls")
 	}
 }
 
