@@ -43,7 +43,7 @@ func setupMirrorAPI(t *testing.T) *MirrorAPIHandler {
 	proxy := handler.NewProxy(db, store, fetcher, resolver, logger)
 
 	m := mirror.New(proxy, db, store, logger, 1)
-	js := mirror.NewJobStore(m)
+	js := mirror.NewJobStore(context.Background(), m)
 	return NewMirrorAPIHandler(js)
 }
 

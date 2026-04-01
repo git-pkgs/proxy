@@ -78,14 +78,18 @@ func newProgressTracker() *progressTracker {
 	return pt
 }
 
+const maxTrackedErrors = 1000
+
 func (pt *progressTracker) addError(eco, name, version, err string) {
 	pt.mu.Lock()
-	pt.errors = append(pt.errors, MirrorError{
-		Ecosystem: eco,
-		Name:      name,
-		Version:   version,
-		Error:     err,
-	})
+	if len(pt.errors) < maxTrackedErrors {
+		pt.errors = append(pt.errors, MirrorError{
+			Ecosystem: eco,
+			Name:      name,
+			Version:   version,
+			Error:     err,
+		})
+	}
 	pt.mu.Unlock()
 }
 
@@ -132,7 +136,15 @@ func (m *Mirror) Run(ctx context.Context, source Source) (*Progress, error) {
 	g.SetLimit(m.workers)
 
 	for _, item := range items {
-		g.Go(func() error {
+		g.Go(func() (err error) {
+			defer func() {
+				if r := recover(); r != nil {
+					m.logger.Error("panic in mirror worker", "recover", r,
+						"ecosystem", item.Ecosystem, "name", item.Name, "version", item.Version)
+					tracker.failed.Add(1)
+					tracker.addError(item.Ecosystem, item.Name, item.Version, fmt.Sprintf("panic: %v", r))
+				}
+			}()
 			m.mirrorOne(gctx, item, tracker)
 			return nil // never fail the group; errors are tracked
 		})

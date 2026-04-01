@@ -41,16 +41,19 @@ type JobRequest struct {
 
 // JobStore manages in-memory mirror jobs.
 type JobStore struct {
-	mu     sync.RWMutex
-	jobs   map[string]*Job
-	mirror *Mirror
+	mu      sync.RWMutex
+	jobs    map[string]*Job
+	mirror  *Mirror
+	parentCtx context.Context
 }
 
-// NewJobStore creates a new job store.
-func NewJobStore(m *Mirror) *JobStore {
+// NewJobStore creates a new job store. The parent context is used as the base
+// for all job contexts so that jobs are canceled when the server shuts down.
+func NewJobStore(ctx context.Context, m *Mirror) *JobStore {
 	return &JobStore{
-		jobs:   make(map[string]*Job),
-		mirror: m,
+		jobs:      make(map[string]*Job),
+		mirror:    m,
+		parentCtx: ctx,
 	}
 }
 
@@ -62,7 +65,7 @@ func (js *JobStore) Create(req JobRequest) (string, error) {
 	}
 
 	id := newJobID()
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(js.parentCtx)
 
 	job := &Job{
 		ID:        id,
@@ -75,7 +78,7 @@ func (js *JobStore) Create(req JobRequest) (string, error) {
 	js.jobs[id] = job
 	js.mu.Unlock()
 
-	go js.runJob(ctx, job, source)
+	go js.runJob(ctx, cancel, job, source)
 
 	return id, nil
 }
@@ -144,7 +147,9 @@ func (js *JobStore) StartCleanup(ctx context.Context) {
 	}
 }
 
-func (js *JobStore) runJob(ctx context.Context, job *Job, source Source) {
+func (js *JobStore) runJob(ctx context.Context, cancel context.CancelFunc, job *Job, source Source) {
+	defer cancel()
+
 	js.mu.Lock()
 	job.State = JobStateRunning
 	js.mu.Unlock()
