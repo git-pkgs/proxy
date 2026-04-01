@@ -138,6 +138,7 @@ func (h *CargoHandler) applyCooldownFiltering(downstreamResponse io.Writer, upst
 	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
 		// not using cooldowns, just copy the upstream to the downstream
 		_, _ = io.Copy(downstreamResponse, upstreamBody)
+		return
 	}
 
 	// create a scanner on the body of the http response
