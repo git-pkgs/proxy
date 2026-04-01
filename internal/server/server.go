@@ -236,9 +236,13 @@ func (s *Server) Start() error {
 	r.Get("/api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion}", s.handleCompareDiff)
 	r.Get("/package/{ecosystem}/{name}/compare/{versions}", s.handleComparePage)
 
+	// Start background context (used by mirror jobs and cleanup)
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	s.cancel = bgCancel
+
 	// Mirror API endpoints
 	mirrorSvc := mirror.New(proxy, s.db, s.storage, s.logger, 4) //nolint:mnd // default concurrency
-	jobStore := mirror.NewJobStore(mirrorSvc)
+	jobStore := mirror.NewJobStore(bgCtx, mirrorSvc)
 	mirrorAPI := NewMirrorAPIHandler(jobStore)
 	r.Post("/api/mirror", mirrorAPI.HandleCreate)
 	r.Get("/api/mirror/{id}", mirrorAPI.HandleGet)
@@ -257,10 +261,6 @@ func (s *Server) Start() error {
 		"base_url", s.cfg.BaseURL,
 		"storage", s.cfg.Storage.Path, //nolint:staticcheck // backwards compat
 		"database", s.cfg.Database.Path)
-
-	// Start background goroutines
-	bgCtx, bgCancel := context.WithCancel(context.Background())
-	s.cancel = bgCancel
 	go s.updateCacheStatsMetrics()
 	go jobStore.StartCleanup(bgCtx)
 
