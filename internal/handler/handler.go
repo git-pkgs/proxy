@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"strings"
 	"time"
 
@@ -383,14 +384,14 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 	}
 
 	// Try upstream
-	body, contentType, etag, err := p.fetchUpstreamMetadata(ctx, upstreamURL, entry, accept)
+	body, contentType, etag, lastModified, err := p.fetchUpstreamMetadata(ctx, upstreamURL, entry, accept)
 	if errors.Is(err, errStale304) {
 		// 304 but cached file is gone; retry without ETag
-		body, contentType, etag, err = p.fetchUpstreamMetadata(ctx, upstreamURL, nil, accept)
+		body, contentType, etag, lastModified, err = p.fetchUpstreamMetadata(ctx, upstreamURL, nil, accept)
 	}
 	if err == nil {
 		if p.CacheMetadata {
-			p.cacheMetadataBlob(ctx, ecosystem, cacheKey, storagePath, body, contentType, etag)
+			p.cacheMetadataBlob(ctx, ecosystem, cacheKey, storagePath, body, contentType, etag, lastModified)
 		}
 		return body, contentType, nil
 	}
@@ -424,11 +425,13 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 }
 
 // fetchUpstreamMetadata fetches metadata from upstream, using ETag for conditional revalidation.
-// Returns the body, content type, ETag, and any error.
-func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept string) ([]byte, string, string, error) {
+// Returns the body, content type, ETag, upstream Last-Modified time, and any error.
+func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept string) ([]byte, string, string, time.Time, error) {
+	var zeroTime time.Time
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL, nil)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("creating request: %w", err)
+		return nil, "", "", zeroTime, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Accept", accept)
 
@@ -438,7 +441,7 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 
 	resp, err := p.HTTPClient.Do(req)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("fetching metadata: %w", err)
+		return nil, "", "", zeroTime, fmt.Errorf("fetching metadata: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -446,30 +449,34 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 	if resp.StatusCode == http.StatusNotModified && entry != nil {
 		cached, readErr := p.Storage.Open(ctx, entry.StoragePath)
 		if readErr != nil {
-			return nil, "", "", errStale304
+			return nil, "", "", zeroTime, errStale304
 		}
 		defer func() { _ = cached.Close() }()
 		data, readErr := ReadMetadata(cached)
 		if readErr != nil {
-			return nil, "", "", errStale304
+			return nil, "", "", zeroTime, errStale304
 		}
 		ct := contentTypeJSON
 		if entry.ContentType.Valid {
 			ct = entry.ContentType.String
 		}
-		return data, ct, entry.ETag.String, nil
+		lm := zeroTime
+		if entry.LastModified.Valid {
+			lm = entry.LastModified.Time
+		}
+		return data, ct, entry.ETag.String, lm, nil
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, "", "", ErrUpstreamNotFound
+		return nil, "", "", zeroTime, ErrUpstreamNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", "", fmt.Errorf("upstream returned %d", resp.StatusCode)
+		return nil, "", "", zeroTime, fmt.Errorf("upstream returned %d", resp.StatusCode)
 	}
 
 	body, err := ReadMetadata(resp.Body)
 	if err != nil {
-		return nil, "", "", fmt.Errorf("reading response: %w", err)
+		return nil, "", "", zeroTime, fmt.Errorf("reading response: %w", err)
 	}
 
 	contentType := resp.Header.Get("Content-Type")
@@ -478,11 +485,17 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 	}
 
 	etag := resp.Header.Get("ETag")
-	return body, contentType, etag, nil
+
+	var lastModified time.Time
+	if lm := resp.Header.Get("Last-Modified"); lm != "" {
+		lastModified, _ = http.ParseTime(lm)
+	}
+
+	return body, contentType, etag, lastModified, nil
 }
 
 // cacheMetadataBlob stores metadata bytes in storage and updates the database.
-func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, storagePath string, data []byte, contentType, etag string) {
+func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, storagePath string, data []byte, contentType, etag string, lastModified time.Time) {
 	if p.DB == nil || p.Storage == nil {
 		return
 	}
@@ -494,13 +507,14 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 	}
 
 	_ = p.DB.UpsertMetadataCache(&database.MetadataCacheEntry{
-		Ecosystem:   ecosystem,
-		Name:        cacheKey,
-		StoragePath: storagePath,
-		ETag:        sql.NullString{String: etag, Valid: etag != ""},
-		ContentType: sql.NullString{String: contentType, Valid: contentType != ""},
-		Size:        sql.NullInt64{Int64: size, Valid: true},
-		FetchedAt:   sql.NullTime{Time: time.Now(), Valid: true},
+		Ecosystem:    ecosystem,
+		Name:         cacheKey,
+		StoragePath:  storagePath,
+		ETag:         sql.NullString{String: etag, Valid: etag != ""},
+		ContentType:  sql.NullString{String: contentType, Valid: contentType != ""},
+		Size:         sql.NullInt64{Int64: size, Valid: true},
+		LastModified: sql.NullTime{Time: lastModified, Valid: !lastModified.IsZero()},
+		FetchedAt:    sql.NullTime{Time: time.Now(), Valid: true},
 	})
 }
 
@@ -526,7 +540,44 @@ func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL,
 		return
 	}
 
+	// Look up cache entry to get ETag and upstream Last-Modified for conditional response headers
+	var etag string
+	var lastModified time.Time
+	if p.DB != nil {
+		if entry, err := p.DB.GetMetadataCache(ecosystem, cacheKey); err == nil && entry != nil {
+			if entry.ETag.Valid {
+				etag = entry.ETag.String
+			}
+			if entry.LastModified.Valid {
+				lastModified = entry.LastModified.Time
+			}
+		}
+	}
+
+	// Honor client conditional request headers
+	if etag != "" {
+		if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+	if !lastModified.IsZero() {
+		if ims := r.Header.Get("If-Modified-Since"); ims != "" {
+			if t, err := http.ParseTime(ims); err == nil && !lastModified.After(t) {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+		}
+	}
+
 	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	if etag != "" {
+		w.Header().Set("ETag", etag)
+	}
+	if !lastModified.IsZero() {
+		w.Header().Set("Last-Modified", lastModified.UTC().Format(http.TimeFormat))
+	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
 }

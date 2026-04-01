@@ -100,16 +100,13 @@ func TestSourceFromRequestPURLs(t *testing.T) {
 	}
 }
 
-func TestSourceFromRequestRegistry(t *testing.T) {
+func TestSourceFromRequestRegistryRejected(t *testing.T) {
 	m := setupTestMirror(t, 1)
 	js := NewJobStore(context.Background(), m)
 
-	source, err := js.sourceFromRequest(JobRequest{Registry: "npm"})
-	if err != nil {
-		t.Fatalf("sourceFromRequest() error = %v", err)
-	}
-	if _, ok := source.(*RegistrySource); !ok {
-		t.Errorf("expected *RegistrySource, got %T", source)
+	_, err := js.sourceFromRequest(JobRequest{Registry: "npm"})
+	if err == nil {
+		t.Fatal("expected error for registry request")
 	}
 }
 
@@ -153,8 +150,8 @@ func TestJobStoreCancelPreservesStateAfterRunJob(t *testing.T) {
 	m := setupTestMirror(t, 1)
 	js := NewJobStore(context.Background(), m)
 
-	// Create a job that will fail (registry enumeration is not implemented)
-	id, err := js.Create(JobRequest{Registry: "npm"})
+	// Create a job with a PURL that will fail (no real upstream in test)
+	id, err := js.Create(JobRequest{PURLs: []string{"pkg:npm/nonexistent-pkg@0.0.0"}})
 	if err != nil {
 		t.Fatalf("Create() error = %v", err)
 	}

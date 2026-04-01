@@ -474,9 +474,6 @@ proxy mirror pkg:npm/lodash
 # Mirror from a CycloneDX or SPDX SBOM
 proxy mirror --sbom sbom.cdx.json
 
-# Full registry mirror (npm, pypi, cargo supported)
-proxy mirror --registry npm
-
 # Preview what would be mirrored
 proxy mirror --dry-run pkg:npm/lodash
 
@@ -579,7 +576,7 @@ Recently cached:
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /api/mirror` | Start a mirror job (JSON body with `purls` or `registry`) |
+| `POST /api/mirror` | Start a mirror job (JSON body with `purls`) |
 | `GET /api/mirror/{id}` | Get job status and progress |
 | `DELETE /api/mirror/{id}` | Cancel a running job |
 

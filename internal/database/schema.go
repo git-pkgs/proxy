@@ -99,6 +99,7 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 	etag TEXT,
 	content_type TEXT,
 	size INTEGER,
+	last_modified DATETIME,
 	fetched_at DATETIME,
 	created_at DATETIME,
 	updated_at DATETIME
@@ -198,6 +199,7 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 	etag TEXT,
 	content_type TEXT,
 	size BIGINT,
+	last_modified TIMESTAMP,
 	fetched_at TIMESTAMP,
 	created_at TIMESTAMP,
 	updated_at TIMESTAMP
@@ -596,6 +598,7 @@ func (db *DB) EnsureMetadataCacheTable() error {
 				etag TEXT,
 				content_type TEXT,
 				size BIGINT,
+				last_modified TIMESTAMP,
 				fetched_at TIMESTAMP,
 				created_at TIMESTAMP,
 				updated_at TIMESTAMP
@@ -612,6 +615,7 @@ func (db *DB) EnsureMetadataCacheTable() error {
 				etag TEXT,
 				content_type TEXT,
 				size INTEGER,
+				last_modified DATETIME,
 				fetched_at DATETIME,
 				created_at DATETIME,
 				updated_at DATETIME

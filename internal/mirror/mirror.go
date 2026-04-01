@@ -79,6 +79,7 @@ func newProgressTracker() *progressTracker {
 }
 
 const maxTrackedErrors = 1000
+const progressReportInterval = 500 * time.Millisecond //nolint:mnd // progress update frequency
 
 func (pt *progressTracker) addError(eco, name, version, err string) {
 	pt.mu.Lock()
@@ -112,9 +113,13 @@ func (pt *progressTracker) snapshot() Progress {
 	}
 }
 
+// ProgressFunc is called periodically with a snapshot of the current progress.
+type ProgressFunc func(Progress)
+
 // Run mirrors all packages from the source using a bounded worker pool.
-// It returns the final progress when complete.
-func (m *Mirror) Run(ctx context.Context, source Source) (*Progress, error) {
+// It returns the final progress when complete. If onProgress is non-nil,
+// it is called with progress snapshots as work proceeds.
+func (m *Mirror) Run(ctx context.Context, source Source, onProgress ...ProgressFunc) (*Progress, error) {
 	tracker := newProgressTracker()
 
 	// Collect items from source
@@ -130,6 +135,28 @@ func (m *Mirror) Run(ctx context.Context, source Source) (*Progress, error) {
 
 	tracker.total.Store(int64(len(items)))
 	tracker.phase.Store("downloading")
+
+	// Start periodic progress reporting if a callback was provided
+	var progressFn ProgressFunc
+	if len(onProgress) > 0 && onProgress[0] != nil {
+		progressFn = onProgress[0]
+	}
+	progressDone := make(chan struct{})
+	if progressFn != nil {
+		progressFn(tracker.snapshot()) // initial snapshot with total set
+		go func() {
+			ticker := time.NewTicker(progressReportInterval)
+			defer ticker.Stop()
+			for {
+				select {
+				case <-progressDone:
+					return
+				case <-ticker.C:
+					progressFn(tracker.snapshot())
+				}
+			}
+		}()
+	}
 
 	// Process items with bounded concurrency
 	g, gctx := errgroup.WithContext(ctx)
@@ -152,8 +179,16 @@ func (m *Mirror) Run(ctx context.Context, source Source) (*Progress, error) {
 
 	_ = g.Wait()
 
+	close(progressDone) // stop the progress reporter goroutine
+
 	tracker.phase.Store("complete")
 	p := tracker.snapshot()
+
+	// Send final snapshot
+	if progressFn != nil {
+		progressFn(p)
+	}
+
 	return &p, nil
 }
 

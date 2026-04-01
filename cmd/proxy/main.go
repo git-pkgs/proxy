@@ -358,7 +358,6 @@ func runMirror() {
 	databasePath := fs.String("database-path", "", "Path to SQLite database file")
 	databaseURL := fs.String("database-url", "", "PostgreSQL connection URL")
 	sbomPath := fs.String("sbom", "", "Path to CycloneDX or SPDX SBOM file")
-	registry := fs.String("registry", "", "Ecosystem name for full registry mirror")
 	concurrency := fs.Int("concurrency", 4, "Number of parallel downloads") //nolint:mnd // default concurrency
 	dryRun := fs.Bool("dry-run", false, "Show what would be mirrored without downloading")
 
@@ -368,8 +367,7 @@ func runMirror() {
 		fmt.Fprintf(os.Stderr, "Examples:\n")
 		fmt.Fprintf(os.Stderr, "  proxy mirror pkg:npm/lodash@4.17.21\n")
 		fmt.Fprintf(os.Stderr, "  proxy mirror --sbom sbom.cdx.json\n")
-		fmt.Fprintf(os.Stderr, "  proxy mirror pkg:npm/lodash  # all versions\n")
-		fmt.Fprintf(os.Stderr, "  proxy mirror --registry npm\n\n")
+		fmt.Fprintf(os.Stderr, "  proxy mirror pkg:npm/lodash  # all versions\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		fs.PrintDefaults()
 	}
@@ -382,12 +380,10 @@ func runMirror() {
 	switch {
 	case *sbomPath != "":
 		source = &mirror.SBOMSource{Path: *sbomPath}
-	case *registry != "":
-		source = &mirror.RegistrySource{Ecosystem: *registry}
 	case len(purls) > 0:
 		source = &mirror.PURLSource{PURLs: purls}
 	default:
-		fmt.Fprintf(os.Stderr, "error: provide PURLs, --sbom, or --registry\n")
+		fmt.Fprintf(os.Stderr, "error: provide PURLs or --sbom\n")
 		fs.Usage()
 		os.Exit(1)
 	}

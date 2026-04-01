@@ -244,7 +244,6 @@ The `proxy mirror` command pre-populates the cache from various sources. It acce
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--sbom` | | Path to CycloneDX or SPDX SBOM file |
-| `--registry` | | Ecosystem name for full registry mirror |
 | `--concurrency` | `4` | Number of parallel downloads |
 | `--dry-run` | `false` | Show what would be mirrored without downloading |
 | `--config` | | Path to configuration file |
