@@ -506,7 +506,15 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 
 // ProxyCached fetches metadata from upstream (with optional caching for offline fallback)
 // and writes it to the response. Optional acceptHeaders specify the Accept header to send.
+// When metadata caching is disabled, the response is streamed directly to avoid buffering
+// large metadata responses (e.g. npm packages with many versions) in memory.
 func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL, ecosystem, cacheKey string, acceptHeaders ...string) {
+	if !p.CacheMetadata {
+		// Stream directly without buffering when caching is off.
+		p.proxyMetadataStream(w, r, upstreamURL, acceptHeaders...)
+		return
+	}
+
 	body, contentType, err := p.FetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, acceptHeaders...)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
@@ -521,6 +529,44 @@ func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL,
 	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)
+}
+
+// proxyMetadataStream forwards an upstream metadata response by streaming it to the client
+// without buffering the full body in memory.
+func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upstreamURL string, acceptHeaders ...string) {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+	if err != nil {
+		http.Error(w, "failed to create request", http.StatusInternalServerError)
+		return
+	}
+
+	accept := contentTypeJSON
+	if len(acceptHeaders) > 0 && acceptHeaders[0] != "" {
+		accept = acceptHeaders[0]
+	}
+	req.Header.Set("Accept", accept)
+
+	for _, header := range []string{"Accept-Encoding", "If-Modified-Since", "If-None-Match"} {
+		if v := r.Header.Get(header); v != "" {
+			req.Header.Set(header, v)
+		}
+	}
+
+	resp, err := p.HTTPClient.Do(req)
+	if err != nil {
+		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	for _, header := range []string{"Content-Type", "Content-Length", "Last-Modified", "ETag"} {
+		if v := resp.Header.Get(header); v != "" {
+			w.Header().Set(header, v)
+		}
+	}
+
+	w.WriteHeader(resp.StatusCode)
+	_, _ = io.Copy(w, resp.Body)
 }
 
 // GetOrFetchArtifactFromURL retrieves an artifact from cache or fetches from a specific URL.

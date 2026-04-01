@@ -235,13 +235,16 @@ func (s *Server) Start() error {
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	s.cancel = bgCancel
 
-	// Mirror API endpoints
-	mirrorSvc := mirror.New(proxy, s.db, s.storage, s.logger, 4) //nolint:mnd // default concurrency
-	jobStore := mirror.NewJobStore(bgCtx, mirrorSvc)
-	mirrorAPI := NewMirrorAPIHandler(jobStore)
-	r.Post("/api/mirror", mirrorAPI.HandleCreate)
-	r.Get("/api/mirror/{id}", mirrorAPI.HandleGet)
-	r.Delete("/api/mirror/{id}", mirrorAPI.HandleCancel)
+	// Mirror API endpoints (opt-in via mirror_api config or PROXY_MIRROR_API env)
+	if s.cfg.MirrorAPI {
+		mirrorSvc := mirror.New(proxy, s.db, s.storage, s.logger, 4) //nolint:mnd // default concurrency
+		jobStore := mirror.NewJobStore(bgCtx, mirrorSvc)
+		mirrorAPI := NewMirrorAPIHandler(jobStore)
+		r.Post("/api/mirror", mirrorAPI.HandleCreate)
+		r.Get("/api/mirror/{id}", mirrorAPI.HandleGet)
+		r.Delete("/api/mirror/{id}", mirrorAPI.HandleCancel)
+		go jobStore.StartCleanup(bgCtx)
+	}
 
 	s.http = &http.Server{
 		Addr:         s.cfg.Listen,
@@ -257,7 +260,6 @@ func (s *Server) Start() error {
 		"storage", s.storage.URL(),
 		"database", s.cfg.Database.Path)
 	go s.updateCacheStatsMetrics()
-	go jobStore.StartCleanup(bgCtx)
 
 	return s.http.ListenAndServe()
 }
