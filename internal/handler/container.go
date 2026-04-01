@@ -103,20 +103,22 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	// Try to get from cache first
+	// Try to get from cache, or fetch from upstream with auth
 	filename := digest
-	result, err := h.proxy.GetOrFetchArtifactFromURL(
+	headers := http.Header{"Authorization": {"Bearer " + token}}
+	result, err := h.proxy.GetOrFetchArtifactFromURLWithHeaders(
 		r.Context(),
 		"oci",
 		name,
 		digest, // use digest as version
 		filename,
 		fmt.Sprintf("%s/v2/%s/blobs/%s", h.registryURL, name, digest),
+		headers,
 	)
 
 	if err != nil {
-		// Fetch directly with auth
-		h.proxyBlobWithAuth(w, r, name, digest, token)
+		h.proxy.Logger.Error("failed to fetch blob", "error", err)
+		h.containerError(w, http.StatusBadGateway, "BLOB_UNKNOWN", "failed to fetch blob")
 		return
 	}
 
@@ -304,34 +306,6 @@ func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request,
 	w.WriteHeader(resp.StatusCode)
 }
 
-// proxyBlobWithAuth proxies a blob download with authentication.
-func (h *ContainerHandler) proxyBlobWithAuth(w http.ResponseWriter, r *http.Request, name, digest, token string) {
-	upstreamURL := fmt.Sprintf("%s/v2/%s/blobs/%s", h.registryURL, name, digest)
-
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
-	if err != nil {
-		h.containerError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create request")
-		return
-	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		h.containerError(w, http.StatusBadGateway, "INTERNAL_ERROR", "failed to fetch from upstream")
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	for _, header := range []string{"Content-Type", "Content-Length", "Docker-Content-Digest"} {
-		if v := resp.Header.Get(header); v != "" {
-			w.Header().Set(header, v)
-		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
-}
 
 // containerError writes an OCI-compliant error response.
 func (h *ContainerHandler) containerError(w http.ResponseWriter, status int, code, message string) {

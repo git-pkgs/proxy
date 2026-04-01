@@ -380,6 +380,13 @@ func JSONError(w http.ResponseWriter, status int, message string) {
 // GetOrFetchArtifactFromURL retrieves an artifact from cache or fetches from a specific URL.
 // This is useful for registries where download URLs are determined from metadata.
 func (p *Proxy) GetOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, version, filename, downloadURL string) (*CacheResult, error) {
+	return p.GetOrFetchArtifactFromURLWithHeaders(ctx, ecosystem, name, version, filename, downloadURL, nil)
+}
+
+// GetOrFetchArtifactFromURLWithHeaders retrieves an artifact from cache or fetches from a URL
+// with additional HTTP headers. This is needed for registries that require authentication
+// (e.g. Docker Hub requires a Bearer token even for public images).
+func (p *Proxy) GetOrFetchArtifactFromURLWithHeaders(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header) (*CacheResult, error) {
 	pkgPURL := purl.MakePURLString(ecosystem, name, "")
 	versionPURL := purl.MakePURLString(ecosystem, name, version)
 
@@ -389,14 +396,14 @@ func (p *Proxy) GetOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, 
 		return cached, nil
 	}
 
-	return p.fetchAndCacheFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL)
+	return p.fetchAndCacheFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers)
 }
 
-func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string) (*CacheResult, error) {
+func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header) (*CacheResult, error) {
 	p.Logger.Info("fetching from upstream",
 		"ecosystem", ecosystem, "name", name, "version", version, "url", downloadURL)
 
-	artifact, err := p.Fetcher.Fetch(ctx, downloadURL)
+	artifact, err := p.Fetcher.FetchWithHeaders(ctx, downloadURL, headers)
 	if err != nil {
 		return nil, fmt.Errorf("fetching from upstream: %w", err)
 	}
