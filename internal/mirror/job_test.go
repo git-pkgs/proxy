@@ -1,13 +1,14 @@
 package mirror
 
 import (
+	"context"
 	"testing"
 	"time"
 )
 
 func TestJobStoreCreateAndGet(t *testing.T) {
 	m := setupTestMirror(t, 1)
-	js := NewJobStore(m)
+	js := NewJobStore(context.Background(), m)
 
 	id, err := js.Create(JobRequest{
 		PURLs: []string{"pkg:npm/lodash@4.17.21"},
@@ -34,7 +35,7 @@ func TestJobStoreCreateAndGet(t *testing.T) {
 
 func TestJobStoreGetNotFound(t *testing.T) {
 	m := setupTestMirror(t, 1)
-	js := NewJobStore(m)
+	js := NewJobStore(context.Background(), m)
 
 	job := js.Get("nonexistent")
 	if job != nil {
@@ -44,7 +45,7 @@ func TestJobStoreGetNotFound(t *testing.T) {
 
 func TestJobStoreCancelNotFound(t *testing.T) {
 	m := setupTestMirror(t, 1)
-	js := NewJobStore(m)
+	js := NewJobStore(context.Background(), m)
 
 	if js.Cancel("nonexistent") {
 		t.Error("expected Cancel to return false for nonexistent job")
@@ -53,7 +54,7 @@ func TestJobStoreCancelNotFound(t *testing.T) {
 
 func TestJobStoreCreateInvalidRequest(t *testing.T) {
 	m := setupTestMirror(t, 1)
-	js := NewJobStore(m)
+	js := NewJobStore(context.Background(), m)
 
 	_, err := js.Create(JobRequest{})
 	if err == nil {
@@ -63,7 +64,7 @@ func TestJobStoreCreateInvalidRequest(t *testing.T) {
 
 func TestJobStoreMultipleJobs(t *testing.T) {
 	m := setupTestMirror(t, 1)
-	js := NewJobStore(m)
+	js := NewJobStore(context.Background(), m)
 
 	id1, err := js.Create(JobRequest{PURLs: []string{"pkg:npm/lodash@4.17.21"}})
 	if err != nil {
@@ -88,7 +89,7 @@ func TestJobStoreMultipleJobs(t *testing.T) {
 
 func TestSourceFromRequestPURLs(t *testing.T) {
 	m := setupTestMirror(t, 1)
-	js := NewJobStore(m)
+	js := NewJobStore(context.Background(), m)
 
 	source, err := js.sourceFromRequest(JobRequest{PURLs: []string{"pkg:npm/lodash@1.0.0"}})
 	if err != nil {
@@ -101,7 +102,7 @@ func TestSourceFromRequestPURLs(t *testing.T) {
 
 func TestSourceFromRequestRegistry(t *testing.T) {
 	m := setupTestMirror(t, 1)
-	js := NewJobStore(m)
+	js := NewJobStore(context.Background(), m)
 
 	source, err := js.sourceFromRequest(JobRequest{Registry: "npm"})
 	if err != nil {
@@ -114,7 +115,7 @@ func TestSourceFromRequestRegistry(t *testing.T) {
 
 func TestJobStoreCleanup(t *testing.T) {
 	m := setupTestMirror(t, 1)
-	js := NewJobStore(m)
+	js := NewJobStore(context.Background(), m)
 
 	// Add a completed job with old CreatedAt
 	js.mu.Lock()

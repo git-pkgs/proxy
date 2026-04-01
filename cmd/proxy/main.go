@@ -432,11 +432,12 @@ func runMirror() {
 		fmt.Fprintf(os.Stderr, "error opening database: %v\n", err)
 		os.Exit(1)
 	}
+	defer func() { _ = db.Close() }()
 
 	if err := db.MigrateSchema(); err != nil {
 		_ = db.Close()
 		fmt.Fprintf(os.Stderr, "error migrating schema: %v\n", err)
-		os.Exit(1)
+		os.Exit(1) //nolint:gocritic // db closed above
 	}
 
 	// Open storage
@@ -448,7 +449,7 @@ func runMirror() {
 	if err != nil {
 		_ = db.Close()
 		fmt.Fprintf(os.Stderr, "error opening storage: %v\n", err)
-		os.Exit(1)
+		os.Exit(1) //nolint:gocritic // db closed above
 	}
 
 	// Build proxy (reuses same pipeline as serve)
@@ -470,7 +471,6 @@ func runMirror() {
 	if *dryRun {
 		items, err := m.RunDryRun(ctx, source)
 		if err != nil {
-			_ = db.Close()
 			fmt.Fprintf(os.Stderr, "error: %v\n", err)
 			os.Exit(1)
 		}
@@ -478,18 +478,14 @@ func runMirror() {
 		for _, item := range items {
 			fmt.Printf("  %s\n", item)
 		}
-		_ = db.Close()
 		return
 	}
 
 	progress, err := m.Run(ctx, source)
 	if err != nil {
-		_ = db.Close()
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
 	}
-
-	_ = db.Close()
 
 	fmt.Printf("Mirror complete: %d downloaded, %d skipped (cached), %d failed, %s total\n",
 		progress.Completed, progress.Skipped, progress.Failed, formatSize(progress.Bytes))
