@@ -20,14 +20,14 @@ A 3-day cooldown means that when `lodash` publishes version `4.18.0`, your build
 
 Resolution order: package override, then ecosystem override, then global default. This lets you set a conservative default and carve out exceptions for packages where you need faster updates.
 
-Currently works with npm, PyPI, pub.dev, and Composer, which all include publish timestamps in their metadata. See [docs/configuration.md](docs/configuration.md) for the full config reference.
+Currently works with npm, PyPI, pub.dev, Composer, and Cargo, which all include publish timestamps in their metadata. See [docs/configuration.md](docs/configuration.md) for the full config reference.
 
 ## Supported Registries
 
 | Registry | Language/Platform | Cooldown | Completed |
 |----------|-------------------|:--------:|:---------:|
 | npm | JavaScript | Yes | ✓ |
-| Cargo | Rust | | ✓ |
+| Cargo | Rust | Yes | ✓ |
 | RubyGems | Ruby | | ✓ |
 | Go proxy | Go | | ✓ |
 | Hex | Elixir | | ✓ |
