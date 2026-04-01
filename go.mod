@@ -5,10 +5,10 @@ go 1.25.6
 require (
 	github.com/git-pkgs/archives v0.2.0
 	github.com/git-pkgs/enrichment v0.2.1
-	github.com/git-pkgs/purl v0.1.9
-	github.com/git-pkgs/registries v0.3.1-0.20260326092736-068ed59177cb
-	github.com/git-pkgs/spdx v0.1.1
-	github.com/git-pkgs/vers v0.2.3
+	github.com/git-pkgs/purl v0.1.10
+	github.com/git-pkgs/registries v0.4.0
+	github.com/git-pkgs/spdx v0.1.2
+	github.com/git-pkgs/vers v0.2.4
 	github.com/git-pkgs/vulns v0.1.3
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/jmoiron/sqlx v1.4.0
@@ -276,7 +276,7 @@ require (
 	golang.org/x/exp/typeparams v0.0.0-20260209203927-2842357ff358 // indirect
 	golang.org/x/mod v0.33.0 // indirect
 	golang.org/x/net v0.51.0 // indirect
-	golang.org/x/sync v0.19.0 // indirect
+	golang.org/x/sync v0.20.0 // indirect
 	golang.org/x/sys v0.42.0 // indirect
 	golang.org/x/text v0.34.0 // indirect
 	golang.org/x/tools v0.42.0 // indirect
