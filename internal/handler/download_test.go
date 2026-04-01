@@ -522,6 +522,11 @@ func TestCondaHandler_CacheMiss(t *testing.T) {
 	if !fetcher.fetchCalled {
 		t.Error("expected fetcher to be called on cache miss")
 	}
+
+	want := upstream.URL + "/conda-forge/linux-64/pandas-2.0.0-py311h320fe9a_0.conda"
+	if fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
+	}
 }
 
 func TestCRANHandler_SourceDownloadCacheHit(t *testing.T) {
@@ -615,7 +620,7 @@ func TestCRANHandler_CacheMiss(t *testing.T) {
 	}
 
 	h := NewCRANHandler(proxy, "http://localhost")
-	h.upstreamURL = "http://should-not-be-reached"
+	h.upstreamURL = "https://cran.r-project.org"
 
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
@@ -628,6 +633,40 @@ func TestCRANHandler_CacheMiss(t *testing.T) {
 
 	if !fetcher.fetchCalled {
 		t.Error("expected fetcher to be called on cache miss")
+	}
+
+	want := "https://cran.r-project.org/src/contrib/tidyr_1.3.0.tar.gz"
+	if fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
+	}
+}
+
+func TestCRANHandler_BinaryDownloadCacheMiss(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("fetched binary")),
+		ContentType: "application/zip",
+	}
+
+	h := NewCRANHandler(proxy, "http://localhost")
+	h.upstreamURL = "https://cran.r-project.org"
+
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/bin/windows/contrib/4.3/dplyr_1.1.0.zip")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if !fetcher.fetchCalled {
+		t.Error("expected fetcher to be called on cache miss")
+	}
+
+	want := "https://cran.r-project.org/bin/windows/contrib/4.3/dplyr_1.1.0.zip"
+	if fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
 	}
 }
 
@@ -763,5 +802,145 @@ func TestMavenHandler_CacheMiss(t *testing.T) {
 
 	if !fetcher.fetchCalled {
 		t.Error("expected fetcher to be called on cache miss")
+	}
+
+	want := "https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar"
+	if fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
+	}
+}
+
+func TestNuGetHandler_DownloadCacheMiss(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("fetched nupkg")),
+		ContentType: "application/octet-stream",
+	}
+
+	h := NewNuGetHandler(proxy, "http://localhost")
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v3-flatcontainer/newtonsoft.json/13.0.3/newtonsoft.json.13.0.3.nupkg")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if !fetcher.fetchCalled {
+		t.Error("expected fetcher to be called on cache miss")
+	}
+
+	want := "https://api.nuget.org/v3-flatcontainer/newtonsoft.json/13.0.3/newtonsoft.json.13.0.3.nupkg"
+	if fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
+	}
+}
+
+func TestConanHandler_RecipeFileCacheMiss(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("conan export")),
+		ContentType: "application/octet-stream",
+	}
+
+	h := NewConanHandler(proxy, "http://localhost")
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v2/files/zlib/1.3/_/_/abc123/recipe/conan_export.tgz")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if !fetcher.fetchCalled {
+		t.Error("expected fetcher to be called on cache miss")
+	}
+
+	want := "https://center.conan.io/v2/files/zlib/1.3/_/_/abc123/recipe/conan_export.tgz"
+	if fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
+	}
+}
+
+func TestConanHandler_PackageFileCacheMiss(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("conan package")),
+		ContentType: "application/octet-stream",
+	}
+
+	h := NewConanHandler(proxy, "http://localhost")
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/v2/files/zlib/1.3/_/_/abc123/package/def456/ghi789/conan_package.tgz")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if !fetcher.fetchCalled {
+		t.Error("expected fetcher to be called on cache miss")
+	}
+
+	want := "https://center.conan.io/v2/files/zlib/1.3/_/_/abc123/package/def456/ghi789/conan_package.tgz"
+	if fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
+	}
+}
+
+func TestDebianHandler_DownloadCacheMiss(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("fetched deb")),
+		ContentType: "application/vnd.debian.binary-package",
+	}
+
+	h := NewDebianHandler(proxy, "http://localhost")
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if !fetcher.fetchCalled {
+		t.Error("expected fetcher to be called on cache miss")
+	}
+
+	want := "http://deb.debian.org/debian/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb"
+	if fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
+	}
+}
+
+func TestRPMHandler_DownloadCacheMiss(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("fetched rpm")),
+		ContentType: "application/x-rpm",
+	}
+
+	h := NewRPMHandler(proxy, "http://localhost")
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/releases/39/Everything/x86_64/os/Packages/n/nginx-1.24.0-1.fc39.x86_64.rpm")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if !fetcher.fetchCalled {
+		t.Error("expected fetcher to be called on cache miss")
+	}
+
+	want := "https://dl.fedoraproject.org/pub/fedora/linux/releases/39/Everything/x86_64/os/Packages/n/nginx-1.24.0-1.fc39.x86_64.rpm"
+	if fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
 	}
 }

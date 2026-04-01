@@ -2,11 +2,16 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/cooldown"
+	"github.com/git-pkgs/registries/fetch"
 )
 
 func TestPyPIParseFilename(t *testing.T) {
@@ -109,5 +114,81 @@ func TestIsPythonTag(t *testing.T) {
 		if got != tt.want {
 			t.Errorf("isPythonTag(%q) = %v, want %v", tt.tag, got, tt.want)
 		}
+	}
+}
+
+func TestPyPIHandler_DownloadUpstreamURL(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("wheel data")),
+		ContentType: "application/octet-stream",
+	}
+
+	h := NewPyPIHandler(proxy, "http://localhost")
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	// The path wildcard {path...} captures everything after /packages/,
+	// which includes "packages/" from the rewritten URL. The upstream URL
+	// must not double the "packages" segment.
+	resp, err := http.Get(srv.URL + "/packages/packages/ab/cd/ef0123456789/requests-2.31.0-py3-none-any.whl")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if !fetcher.fetchCalled {
+		t.Fatal("expected fetcher to be called on cache miss")
+	}
+
+	want := "https://files.pythonhosted.org/packages/ab/cd/ef0123456789/requests-2.31.0-py3-none-any.whl"
+	if fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
+	}
+}
+
+func TestPyPIHandler_DownloadCacheHit(t *testing.T) {
+	proxy, db, store, _ := setupTestProxy(t)
+	seedPackage(t, db, store, "pypi", "requests", "2.31.0",
+		"requests-2.31.0-py3-none-any.whl", "wheel binary data")
+
+	h := NewPyPIHandler(proxy, "http://localhost")
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/packages/ab/cd/ef0123456789/requests-2.31.0-py3-none-any.whl")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	if string(body) != "wheel binary data" {
+		t.Errorf("body = %q, want %q", body, "wheel binary data")
+	}
+}
+
+func TestPyPIHandler_DownloadCacheMiss(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("fetched wheel")),
+		ContentType: "application/octet-stream",
+	}
+
+	h := NewPyPIHandler(proxy, "http://localhost")
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + "/packages/packages/ab/cd/ef0123456789/newpkg-1.0.0.tar.gz")
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if !fetcher.fetchCalled {
+		t.Error("expected fetcher to be called on cache miss")
 	}
 }
