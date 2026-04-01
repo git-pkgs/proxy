@@ -211,6 +211,52 @@ Resolution order: package override, then ecosystem override, then global default
 
 Currently supported for npm, PyPI, pub.dev, and Composer. These ecosystems include publish timestamps in their metadata. Other ecosystems (Go, Cargo, RubyGems) would require extra API calls and are not yet supported.
 
+## Metadata Caching
+
+By default the proxy fetches metadata fresh from upstream on every request. Enable `cache_metadata` to store metadata responses in the database and storage backend for offline fallback. When upstream is unreachable, the proxy serves the last cached copy. ETag-based revalidation avoids re-downloading unchanged metadata.
+
+```yaml
+cache_metadata: true
+```
+
+Or via environment variable: `PROXY_CACHE_METADATA=true`.
+
+The `proxy mirror` command always enables metadata caching regardless of this setting.
+
+## Mirror API
+
+The `/api/mirror` endpoints are disabled by default. Enable them to allow starting mirror jobs via HTTP:
+
+```yaml
+mirror_api: true
+```
+
+Or via environment variable: `PROXY_MIRROR_API=true`.
+
+When disabled, the endpoints are not registered and return 404.
+
+## Mirror Command
+
+The `proxy mirror` command pre-populates the cache from various sources. It accepts the same storage and database flags as `serve`.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--sbom` | | Path to CycloneDX or SPDX SBOM file |
+| `--registry` | | Ecosystem name for full registry mirror |
+| `--concurrency` | `4` | Number of parallel downloads |
+| `--dry-run` | `false` | Show what would be mirrored without downloading |
+| `--config` | | Path to configuration file |
+| `--storage-url` | | Storage URL |
+| `--database-driver` | | Database driver |
+| `--database-path` | | SQLite database file |
+| `--database-url` | | PostgreSQL connection URL |
+
+Positional arguments are treated as PURLs:
+
+```bash
+proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
+```
+
 ## Docker
 
 ### SQLite with Local Storage

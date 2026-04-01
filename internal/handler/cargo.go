@@ -2,8 +2,8 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 )
@@ -84,44 +84,26 @@ func (h *CargoHandler) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	h.proxy.Logger.Info("cargo index request", "crate", name)
 
-	// Build the index path
 	indexPath := h.buildIndexPath(name)
 	upstreamURL := fmt.Sprintf("%s/%s", h.indexURL, indexPath)
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+	body, contentType, err := h.proxy.FetchOrCacheMetadata(r.Context(), "cargo", name, upstreamURL, "text/plain")
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
+		if errors.Is(err, ErrUpstreamNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 		h.proxy.Logger.Error("failed to fetch upstream index", "error", err)
 		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode == http.StatusNotFound {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+	if contentType == "" {
+		contentType = "text/plain; charset=utf-8"
 	}
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, fmt.Sprintf("upstream returned %d", resp.StatusCode), http.StatusBadGateway)
-		return
-	}
-
-	// Copy headers and body
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if etag := resp.Header.Get("ETag"); etag != "" {
-		w.Header().Set("ETag", etag)
-	}
-	if lastMod := resp.Header.Get("Last-Modified"); lastMod != "" {
-		w.Header().Set("Last-Modified", lastMod)
-	}
-
+	w.Header().Set("Content-Type", contentType)
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, resp.Body)
+	_, _ = w.Write(body)
 }
 
 // buildIndexPath builds the sparse index path for a crate name.

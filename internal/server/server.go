@@ -52,6 +52,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/enrichment"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/metrics"
+	"github.com/git-pkgs/proxy/internal/mirror"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
@@ -76,6 +77,7 @@ type Server struct {
 	logger    *slog.Logger
 	http      *http.Server
 	templates *Templates
+	cancel    context.CancelFunc
 }
 
 // New creates a new Server with the given configuration.
@@ -141,6 +143,7 @@ func (s *Server) Start() error {
 	}
 	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
 	proxy.Cooldown = cd
+	proxy.CacheMetadata = s.cfg.CacheMetadata
 
 	// Create router with Chi
 	r := chi.NewRouter()
@@ -233,6 +236,21 @@ func (s *Server) Start() error {
 	r.Get("/api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion}", s.handleCompareDiff)
 	r.Get("/package/{ecosystem}/{name}/compare/{versions}", s.handleComparePage)
 
+	// Start background context (used by mirror jobs and cleanup)
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	s.cancel = bgCancel
+
+	// Mirror API endpoints (opt-in via mirror_api config or PROXY_MIRROR_API env)
+	if s.cfg.MirrorAPI {
+		mirrorSvc := mirror.New(proxy, s.db, s.storage, s.logger, 4) //nolint:mnd // default concurrency
+		jobStore := mirror.NewJobStore(bgCtx, mirrorSvc)
+		mirrorAPI := NewMirrorAPIHandler(jobStore)
+		r.Post("/api/mirror", mirrorAPI.HandleCreate)
+		r.Get("/api/mirror/{id}", mirrorAPI.HandleGet)
+		r.Delete("/api/mirror/{id}", mirrorAPI.HandleCancel)
+		go jobStore.StartCleanup(bgCtx)
+	}
+
 	s.http = &http.Server{
 		Addr:         s.cfg.Listen,
 		Handler:      r,
@@ -246,8 +264,6 @@ func (s *Server) Start() error {
 		"base_url", s.cfg.BaseURL,
 		"storage", s.cfg.Storage.Path, //nolint:staticcheck // backwards compat
 		"database", s.cfg.Database.Path)
-
-	// Start background goroutine to update cache stats metrics
 	go s.updateCacheStatsMetrics()
 
 	return s.http.ListenAndServe()
@@ -278,6 +294,10 @@ func (s *Server) updateCacheStats() {
 // Shutdown gracefully shuts down the server.
 func (s *Server) Shutdown(ctx context.Context) error {
 	s.logger.Info("shutting down server")
+
+	if s.cancel != nil {
+		s.cancel()
+	}
 
 	var errs []error
 

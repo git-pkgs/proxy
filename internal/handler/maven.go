@@ -51,8 +51,8 @@ func (h *MavenHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	filename := path.Base(urlPath)
 
 	if h.isMetadataFile(filename) {
-		// Proxy metadata without caching
-		h.proxyUpstream(w, r)
+		cacheKey := strings.ReplaceAll(urlPath, "/", "_")
+		h.proxy.ProxyCached(w, r, h.upstreamURL+r.URL.Path, "maven", cacheKey, "*/*")
 		return
 	}
 
