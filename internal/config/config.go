@@ -88,6 +88,10 @@ type Config struct {
 	// When enabled, metadata is stored in the database and storage backend.
 	// The mirror command always enables this regardless of this setting.
 	CacheMetadata bool `json:"cache_metadata" yaml:"cache_metadata"`
+
+	// MirrorAPI enables the /api/mirror endpoints for starting mirror jobs via HTTP.
+	// Disabled by default to prevent unauthenticated users from triggering downloads.
+	MirrorAPI bool `json:"mirror_api" yaml:"mirror_api"`
 }
 
 // CooldownConfig configures version cooldown periods.
@@ -313,6 +317,9 @@ func (c *Config) LoadFromEnv() {
 	}
 	if v := os.Getenv("PROXY_CACHE_METADATA"); v != "" {
 		c.CacheMetadata = v == "true" || v == "1"
+	}
+	if v := os.Getenv("PROXY_MIRROR_API"); v != "" {
+		c.MirrorAPI = v == "true" || v == "1"
 	}
 }
 

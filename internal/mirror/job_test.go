@@ -149,6 +149,31 @@ func TestJobStoreCleanup(t *testing.T) {
 	}
 }
 
+func TestJobStoreCancelPreservesStateAfterRunJob(t *testing.T) {
+	m := setupTestMirror(t, 1)
+	js := NewJobStore(context.Background(), m)
+
+	// Create a job that will fail (registry enumeration is not implemented)
+	id, err := js.Create(JobRequest{Registry: "npm"})
+	if err != nil {
+		t.Fatalf("Create() error = %v", err)
+	}
+
+	// Cancel immediately -- the job may already be running
+	js.Cancel(id)
+
+	// Wait for runJob goroutine to finish
+	time.Sleep(200 * time.Millisecond)
+
+	job := js.Get(id)
+	if job == nil {
+		t.Fatal("Get() returned nil")
+	}
+	if job.State != JobStateCanceled {
+		t.Errorf("state = %q, want %q (cancel should not be overwritten by runJob)", job.State, JobStateCanceled)
+	}
+}
+
 func TestNewJobIDUnique(t *testing.T) {
 	ids := make(map[string]bool)
 	for range 100 {

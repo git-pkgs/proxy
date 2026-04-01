@@ -25,7 +25,7 @@ func TestUpsertAndGetMetadataCache(t *testing.T) {
 	db := setupMetadataCacheDB(t)
 
 	entry := &MetadataCacheEntry{
-		Ecosystem:   "npm",
+		Ecosystem:   testEcosystemNPM,
 		Name:        "lodash",
 		StoragePath: "_metadata/npm/lodash/metadata",
 		ETag:        sql.NullString{String: `"abc123"`, Valid: true},
@@ -39,7 +39,7 @@ func TestUpsertAndGetMetadataCache(t *testing.T) {
 		t.Fatalf("UpsertMetadataCache() error = %v", err)
 	}
 
-	got, err := db.GetMetadataCache("npm", "lodash")
+	got, err := db.GetMetadataCache(testEcosystemNPM, "lodash")
 	if err != nil {
 		t.Fatalf("GetMetadataCache() error = %v", err)
 	}
@@ -47,8 +47,8 @@ func TestUpsertAndGetMetadataCache(t *testing.T) {
 		t.Fatal("GetMetadataCache() returned nil")
 	}
 
-	if got.Ecosystem != "npm" {
-		t.Errorf("ecosystem = %q, want %q", got.Ecosystem, "npm")
+	if got.Ecosystem != testEcosystemNPM {
+		t.Errorf("ecosystem = %q, want %q", got.Ecosystem, testEcosystemNPM)
 	}
 	if got.Name != "lodash" {
 		t.Errorf("name = %q, want %q", got.Name, "lodash")
@@ -70,7 +70,7 @@ func TestUpsertAndGetMetadataCache(t *testing.T) {
 func TestGetMetadataCacheMiss(t *testing.T) {
 	db := setupMetadataCacheDB(t)
 
-	got, err := db.GetMetadataCache("npm", "nonexistent")
+	got, err := db.GetMetadataCache(testEcosystemNPM, "nonexistent")
 	if err != nil {
 		t.Fatalf("GetMetadataCache() error = %v", err)
 	}
@@ -84,7 +84,7 @@ func TestUpsertMetadataCacheOverwrite(t *testing.T) {
 
 	// First insert
 	entry1 := &MetadataCacheEntry{
-		Ecosystem:   "npm",
+		Ecosystem:   testEcosystemNPM,
 		Name:        "lodash",
 		StoragePath: "_metadata/npm/lodash/metadata",
 		ETag:        sql.NullString{String: `"v1"`, Valid: true},
@@ -98,7 +98,7 @@ func TestUpsertMetadataCacheOverwrite(t *testing.T) {
 
 	// Second insert (same ecosystem+name, different etag and size)
 	entry2 := &MetadataCacheEntry{
-		Ecosystem:   "npm",
+		Ecosystem:   testEcosystemNPM,
 		Name:        "lodash",
 		StoragePath: "_metadata/npm/lodash/metadata",
 		ETag:        sql.NullString{String: `"v2"`, Valid: true},
@@ -110,7 +110,7 @@ func TestUpsertMetadataCacheOverwrite(t *testing.T) {
 		t.Fatalf("second UpsertMetadataCache() error = %v", err)
 	}
 
-	got, err := db.GetMetadataCache("npm", "lodash")
+	got, err := db.GetMetadataCache(testEcosystemNPM, "lodash")
 	if err != nil {
 		t.Fatalf("GetMetadataCache() error = %v", err)
 	}

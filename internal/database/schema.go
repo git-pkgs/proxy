@@ -87,6 +87,20 @@ CREATE TABLE IF NOT EXISTS vulnerabilities (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
 CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
 
+CREATE TABLE IF NOT EXISTS metadata_cache (
+	id INTEGER PRIMARY KEY,
+	ecosystem TEXT NOT NULL,
+	name TEXT NOT NULL,
+	storage_path TEXT NOT NULL,
+	etag TEXT,
+	content_type TEXT,
+	size INTEGER,
+	fetched_at DATETIME,
+	created_at DATETIME,
+	updated_at DATETIME
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_metadata_eco_name ON metadata_cache(ecosystem, name);
+
 `
 
 var schemaPostgres = `
@@ -167,6 +181,20 @@ CREATE TABLE IF NOT EXISTS vulnerabilities (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
 CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
+
+CREATE TABLE IF NOT EXISTS metadata_cache (
+	id SERIAL PRIMARY KEY,
+	ecosystem TEXT NOT NULL,
+	name TEXT NOT NULL,
+	storage_path TEXT NOT NULL,
+	etag TEXT,
+	content_type TEXT,
+	size BIGINT,
+	fetched_at TIMESTAMP,
+	created_at TIMESTAMP,
+	updated_at TIMESTAMP
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_metadata_eco_name ON metadata_cache(ecosystem, name);
 
 `
 

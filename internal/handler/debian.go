@@ -94,7 +94,7 @@ func (h *DebianHandler) handlePackageDownload(w http.ResponseWriter, r *http.Req
 // These change frequently so we don't cache them.
 func (h *DebianHandler) handleMetadata(w http.ResponseWriter, r *http.Request, path string) {
 	cacheKey := strings.ReplaceAll(path, "/", "_")
-	h.proxy.ProxyCached(w, r, fmt.Sprintf("%s/%s", h.upstreamURL, path), "deb", cacheKey, "*/*")
+	h.proxy.ProxyCached(w, r, fmt.Sprintf("%s/%s", h.upstreamURL, path), "debian", cacheKey, "*/*")
 }
 
 // proxyFile proxies any file directly without caching.

@@ -151,6 +151,10 @@ func (js *JobStore) runJob(ctx context.Context, cancel context.CancelFunc, job *
 	defer cancel()
 
 	js.mu.Lock()
+	if job.State == JobStateCanceled {
+		js.mu.Unlock()
+		return
+	}
 	job.State = JobStateRunning
 	js.mu.Unlock()
 
@@ -158,6 +162,11 @@ func (js *JobStore) runJob(ctx context.Context, cancel context.CancelFunc, job *
 
 	js.mu.Lock()
 	defer js.mu.Unlock()
+
+	// Cancel() may have already set the state; don't overwrite it.
+	if job.State == JobStateCanceled {
+		return
+	}
 
 	if err != nil {
 		job.State = JobStateFailed
