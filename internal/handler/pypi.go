@@ -451,8 +451,10 @@ func (h *PyPIHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	h.proxy.Logger.Info("pypi download request",
 		"name", name, "version", version, "filename", filename)
 
-	// Construct upstream URL
-	upstreamURL := fmt.Sprintf("https://files.pythonhosted.org/packages/%s", path)
+	// Construct upstream URL; the incoming path starts with
+	// '/packages' so there is no need to include it in the format
+	// string
+	upstreamURL := fmt.Sprintf("https://files.pythonhosted.org/%s", path)
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "pypi", name, version, filename, upstreamURL)
 	if err != nil {
