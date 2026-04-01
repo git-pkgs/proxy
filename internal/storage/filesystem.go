@@ -172,3 +172,11 @@ func (fs *Filesystem) Root() string {
 func (fs *Filesystem) FullPath(path string) string {
 	return fs.fullPath(path)
 }
+
+func (fs *Filesystem) URL() string {
+	return "file://" + filepath.ToSlash(fs.root)
+}
+
+func (fs *Filesystem) Close() error {
+	return nil
+}

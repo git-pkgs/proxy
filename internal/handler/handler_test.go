@@ -79,6 +79,10 @@ func (s *mockStorage) UsedSpace(_ context.Context) (int64, error) {
 	return total, nil
 }
 
+func (s *mockStorage) URL() string { return "mem://" }
+
+func (s *mockStorage) Close() error { return nil }
+
 // mockFetcher implements fetch.FetcherInterface for testing.
 type mockFetcher struct {
 	artifact    *fetch.Artifact

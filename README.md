@@ -688,7 +688,7 @@ Response:
   "cached_artifacts": 142,
   "total_size_bytes": 523456789,
   "total_size": "499.2 MB",
-  "storage_path": "./cache/artifacts",
+  "storage_url": "file:///path/to/cache/artifacts",
   "database_path": "./cache/proxy.db"
 }
 ```

@@ -47,6 +47,12 @@ type Storage interface {
 
 	// UsedSpace returns the total bytes used by all stored content.
 	UsedSpace(ctx context.Context) (int64, error)
+
+	// URL returns the storage backend URL (e.g. "file:///path" or "s3://bucket").
+	URL() string
+
+	// Close releases any resources held by the storage backend.
+	Close() error
 }
 
 // ArtifactPath builds a storage path for an artifact.

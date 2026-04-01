@@ -939,7 +939,7 @@ const docTemplate = `{
                 "database_path": {
                     "type": "string"
                 },
-                "storage_path": {
+                "storage_url": {
                     "type": "string"
                 },
                 "total_size": {

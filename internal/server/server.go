@@ -112,9 +112,19 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("initializing storage: %w", err)
 	}
 
+	// Verify storage is accessible (catches bad S3 credentials/endpoints early).
+	// Exists returns (false, nil) for a missing key, so only real connectivity
+	// or permission errors surface here.
+	if _, err := store.Exists(context.Background(), ".health-check"); err != nil {
+		_ = store.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("verifying storage connectivity: %w", err)
+	}
+
 	// Load templates
 	templates, err := NewTemplates()
 	if err != nil {
+		_ = store.Close()
 		_ = db.Close()
 		return nil, fmt.Errorf("loading templates: %w", err)
 	}
@@ -244,7 +254,7 @@ func (s *Server) Start() error {
 	s.logger.Info("starting server",
 		"listen", s.cfg.Listen,
 		"base_url", s.cfg.BaseURL,
-		"storage", s.cfg.Storage.Path, //nolint:staticcheck // backwards compat
+		"storage", s.storage.URL(),
 		"database", s.cfg.Database.Path)
 
 	// Start background goroutine to update cache stats metrics
@@ -284,6 +294,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.http != nil {
 		if err := s.http.Shutdown(ctx); err != nil {
 			errs = append(errs, fmt.Errorf("http shutdown: %w", err))
+		}
+	}
+
+	if s.storage != nil {
+		if err := s.storage.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("storage close: %w", err))
 		}
 	}
 
@@ -707,7 +723,7 @@ type StatsResponse struct {
 	CachedArtifacts int64  `json:"cached_artifacts"`
 	TotalSize       int64  `json:"total_size_bytes"`
 	TotalSizeHuman  string `json:"total_size"`
-	StoragePath     string `json:"storage_path"`
+	StorageURL      string `json:"storage_url"`
 	DatabasePath    string `json:"database_path"`
 }
 
@@ -739,7 +755,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		CachedArtifacts: count,
 		TotalSize:       size,
 		TotalSizeHuman:  formatSize(size),
-		StoragePath:     s.cfg.Storage.Path, //nolint:staticcheck // backwards compat
+		StorageURL:      s.storage.URL(),
 		DatabasePath:    s.cfg.Database.Path,
 	}
 
