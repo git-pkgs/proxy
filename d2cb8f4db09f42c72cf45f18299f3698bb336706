@@ -1,0 +1,23 @@
+internal/database/database_test.go
+  651c01763382be60 756-808
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "d2cb8f4db09f42c72cf45f18299f3698bb336706",
+  "prompts": {
+    "651c01763382be60": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b80f4c0-dc64-4fed-b4dc-7526518994c5",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 53,
+      "total_deletions": 0,
+      "accepted_lines": 53,
+      "overriden_lines": 0
+    }
+  }
+}
