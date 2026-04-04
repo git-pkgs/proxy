@@ -1,0 +1,27 @@
+internal/server/server_test.go
+  651c01763382be60 88
+internal/server/templates.go
+  651c01763382be60 8,14,16,18,21-24,26-31,34,36-37,40-43,45-59,61-63,68-71
+internal/server/server.go
+  651c01763382be60 129
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "93e848f5cd1fccc5f99e09070556b867f2161b3f",
+  "prompts": {
+    "651c01763382be60": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b80f4c0-dc64-4fed-b4dc-7526518994c5",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 47,
+      "total_deletions": 54,
+      "accepted_lines": 47,
+      "overriden_lines": 0
+    }
+  }
+}
