@@ -317,8 +317,8 @@ type migration struct {
 	fn   func(db *DB) error
 }
 
-// migrations is the ordered list of all schema migrations. New migrations
-// should be appended to the end with a sequential prefix.
+// migrations is the ordered list of all schema migrations. See
+// docs/migrations.md for how to add new ones.
 var migrations = []migration{
 	{"001_add_packages_enrichment_columns", migrateAddPackagesEnrichmentColumns},
 	{"002_add_versions_enrichment_columns", migrateAddVersionsEnrichmentColumns},
