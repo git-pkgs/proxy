@@ -79,21 +79,13 @@ func newTestServer(t *testing.T) *testServer {
 	r.Mount("/go", http.StripPrefix("/go", goHandler.Routes()))
 	r.Mount("/pypi", http.StripPrefix("/pypi", pypiHandler.Routes()))
 
-	// Load templates
-	templates, err := NewTemplates()
-	if err != nil {
-		_ = db.Close()
-		_ = os.RemoveAll(tempDir)
-		t.Fatalf("failed to load templates: %v", err)
-	}
-
 	// Create a minimal server struct for the handlers
 	s := &Server{
 		cfg:       cfg,
 		db:        db,
 		storage:   store,
 		logger:    logger,
-		templates: templates,
+		templates: &Templates{},
 	}
 
 	r.Get("/health", s.handleHealth)
