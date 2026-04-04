@@ -1,0 +1,27 @@
+docs/migrations.md
+  651c01763382be60 1-51
+docs/architecture.md
+  651c01763382be60 168
+internal/database/schema.go
+  651c01763382be60 320-321
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "744e74693a48fb614b93cfc554ab21627cf72695",
+  "prompts": {
+    "651c01763382be60": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b80f4c0-dc64-4fed-b4dc-7526518994c5",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 65,
+      "total_deletions": 14,
+      "accepted_lines": 54,
+      "overriden_lines": 0
+    }
+  }
+}
