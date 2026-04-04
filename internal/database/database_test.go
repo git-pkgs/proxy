@@ -651,58 +651,159 @@ func TestMigrationFromOldSchema(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	// Try to run queries that require new columns - these should fail without migration
-	t.Run("queries should fail without migration", func(t *testing.T) {
-		_, err := db.GetEnrichmentStats()
-		if err == nil {
-			t.Error("GetEnrichmentStats: expected error querying enriched_at column, got nil")
-		}
-
-		_, err = db.GetPackageByEcosystemName("npm", "test-package")
-		if err == nil {
-			t.Error("GetPackageByEcosystemName: expected error querying registry_url column, got nil")
-		}
-
-		// SearchPackages should work even with old schema because it uses sql.NullString
-		// for nullable columns, which can handle NULL values properly
-		_, err = db.SearchPackages("test", "", 10, 0)
-		if err != nil {
-			t.Errorf("SearchPackages: unexpected error with old schema: %v", err)
-		}
-	})
+	// Queries that require new columns should fail without migration
+	if _, err := db.GetEnrichmentStats(); err == nil {
+		t.Error("GetEnrichmentStats: expected error querying enriched_at column, got nil")
+	}
+	if _, err := db.GetPackageByEcosystemName("npm", "test-package"); err == nil {
+		t.Error("GetPackageByEcosystemName: expected error querying registry_url column, got nil")
+	}
+	// SearchPackages should work even with old schema because it uses sql.NullString
+	if _, err := db.SearchPackages("test", "", 10, 0); err != nil {
+		t.Errorf("SearchPackages: unexpected error with old schema: %v", err)
+	}
 
 	// Run migration
-	t.Run("migrate schema", func(t *testing.T) {
-		if err := db.MigrateSchema(); err != nil {
-			t.Fatalf("MigrateSchema failed: %v", err)
-		}
-	})
+	if err := db.MigrateSchema(); err != nil {
+		t.Fatalf("MigrateSchema failed: %v", err)
+	}
 
 	// Verify queries work after migration
-	t.Run("queries should work after migration", func(t *testing.T) {
-		stats, err := db.GetEnrichmentStats()
-		if err != nil {
-			t.Errorf("GetEnrichmentStats failed after migration: %v", err)
-		}
-		if stats == nil {
-			t.Error("GetEnrichmentStats returned nil after migration")
-		}
+	stats, err := db.GetEnrichmentStats()
+	if err != nil {
+		t.Errorf("GetEnrichmentStats failed after migration: %v", err)
+	}
+	if stats == nil {
+		t.Error("GetEnrichmentStats returned nil after migration")
+	}
 
-		pkg, err := db.GetPackageByEcosystemName("npm", "test-package")
-		if err != nil {
-			t.Errorf("GetPackageByEcosystemName failed after migration: %v", err)
-		}
-		if pkg == nil {
-			t.Fatal("GetPackageByEcosystemName returned nil after migration")
-		}
-		if pkg.Name != "test-package" {
-			t.Errorf("expected package name test-package, got %s", pkg.Name)
-		}
+	pkg, err := db.GetPackageByEcosystemName("npm", "test-package")
+	if err != nil {
+		t.Errorf("GetPackageByEcosystemName failed after migration: %v", err)
+	}
+	if pkg == nil {
+		t.Fatal("GetPackageByEcosystemName returned nil after migration")
+	}
+	if pkg.Name != "test-package" {
+		t.Errorf("expected package name test-package, got %s", pkg.Name)
+	}
 
-		// Note: SearchPackages not tested here because old timestamp data
-		// stored as strings can't be scanned into time.Time. This is a data
-		// migration issue, not a schema migration issue.
-	})
+	// Verify migrations were recorded
+	applied, err := db.appliedMigrations()
+	if err != nil {
+		t.Fatalf("appliedMigrations failed: %v", err)
+	}
+	for _, m := range migrations {
+		if !applied[m.name] {
+			t.Errorf("migration %s not recorded as applied", m.name)
+		}
+	}
+
+	// Running again should be a no-op
+	if err := db.MigrateSchema(); err != nil {
+		t.Fatalf("second MigrateSchema failed: %v", err)
+	}
+}
+
+func TestFreshDatabaseRecordsMigrations(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "fresh.db")
+
+	db, err := Create(dbPath)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	applied, err := db.appliedMigrations()
+	if err != nil {
+		t.Fatalf("appliedMigrations failed: %v", err)
+	}
+
+	for _, m := range migrations {
+		if !applied[m.name] {
+			t.Errorf("migration %s not recorded in fresh database", m.name)
+		}
+	}
+}
+
+func TestMigrateSchemaSkipsApplied(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "test.db")
+
+	db, err := Create(dbPath)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// All migrations are already recorded from Create. Running MigrateSchema
+	// should return without running any migration functions.
+	if err := db.MigrateSchema(); err != nil {
+		t.Fatalf("MigrateSchema failed: %v", err)
+	}
+
+	// Verify count hasn't changed (no duplicate inserts)
+	var count int
+	if err := db.Get(&count, "SELECT COUNT(*) FROM migrations"); err != nil {
+		t.Fatalf("counting migrations failed: %v", err)
+	}
+	if count != len(migrations) {
+		t.Errorf("expected %d migrations, got %d", len(migrations), count)
+	}
+}
+
+func TestMigrateSchemaUpgradeFromFullyMigrated(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "existing.db")
+
+	// Simulate an existing proxy database that has the full current schema
+	// but no migrations table (i.e. it was running the previous version).
+	sqlDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+
+	if _, err := sqlDB.Exec(schemaSQLite); err != nil {
+		t.Fatalf("failed to create schema: %v", err)
+	}
+	// Drop the migrations table that schemaSQLite now includes
+	if _, err := sqlDB.Exec("DROP TABLE migrations"); err != nil {
+		t.Fatalf("failed to drop migrations table: %v", err)
+	}
+	if _, err := sqlDB.Exec("INSERT INTO schema_info (version) VALUES (1)"); err != nil {
+		t.Fatalf("failed to set schema version: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("failed to close database: %v", err)
+	}
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// This should create the migrations table and record all migrations
+	// without altering any tables (everything already exists).
+	if err := db.MigrateSchema(); err != nil {
+		t.Fatalf("MigrateSchema failed: %v", err)
+	}
+
+	applied, err := db.appliedMigrations()
+	if err != nil {
+		t.Fatalf("appliedMigrations failed: %v", err)
+	}
+	for _, m := range migrations {
+		if !applied[m.name] {
+			t.Errorf("migration %s not recorded after upgrade", m.name)
+		}
+	}
+
+	// Second run should be the fast path (single SELECT)
+	if err := db.MigrateSchema(); err != nil {
+		t.Fatalf("second MigrateSchema failed: %v", err)
+	}
 }
 
 func TestConcurrentWrites(t *testing.T) {
@@ -888,5 +989,28 @@ func TestSearchPackagesWithValues(t *testing.T) {
 	}
 	if result.Hits != 10 {
 		t.Errorf("expected 10 hits, got %d", result.Hits)
+	}
+}
+
+func BenchmarkMigrateSchemaFullyMigrated(b *testing.B) {
+	dir := b.TempDir()
+	dbPath := filepath.Join(dir, "bench.db")
+
+	db, err := Create(dbPath)
+	if err != nil {
+		b.Fatalf("Create failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// First call to ensure everything is migrated
+	if err := db.MigrateSchema(); err != nil {
+		b.Fatalf("initial MigrateSchema failed: %v", err)
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		if err := db.MigrateSchema(); err != nil {
+			b.Fatalf("MigrateSchema failed: %v", err)
+		}
 	}
 }

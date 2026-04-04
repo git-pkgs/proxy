@@ -1,6 +1,10 @@
 package database
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+	"time"
+)
 
 const postgresTimestamp = "TIMESTAMP"
 
@@ -86,6 +90,11 @@ CREATE TABLE IF NOT EXISTS vulnerabilities (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
 CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
+
+CREATE TABLE IF NOT EXISTS migrations (
+	name TEXT NOT NULL PRIMARY KEY,
+	applied_at DATETIME NOT NULL
+);
 `
 
 var schemaPostgres = `
@@ -166,6 +175,11 @@ CREATE TABLE IF NOT EXISTS vulnerabilities (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
 CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
+
+CREATE TABLE IF NOT EXISTS migrations (
+	name TEXT NOT NULL PRIMARY KEY,
+	applied_at TIMESTAMP NOT NULL
+);
 `
 
 // schemaArtifactsOnly contains just the artifacts table for adding to existing git-pkgs databases.
@@ -232,6 +246,11 @@ func (db *DB) CreateSchema() error {
 		return fmt.Errorf("setting schema version: %w", err)
 	}
 
+	// Record all migrations as applied since the full schema is already current.
+	if err := db.recordAllMigrations(); err != nil {
+		return fmt.Errorf("recording migrations: %w", err)
+	}
+
 	return db.OptimizeForReads()
 }
 
@@ -292,24 +311,135 @@ func (db *DB) HasColumn(table, column string) (bool, error) {
 	return exists, err
 }
 
-// MigrateSchema adds missing columns to existing tables for backward compatibility.
+// migration represents a named schema migration.
+type migration struct {
+	name string
+	fn   func(db *DB) error
+}
+
+// migrations is the ordered list of all schema migrations. See
+// docs/migrations.md for how to add new ones.
+var migrations = []migration{
+	{"001_add_packages_enrichment_columns", migrateAddPackagesEnrichmentColumns},
+	{"002_add_versions_enrichment_columns", migrateAddVersionsEnrichmentColumns},
+	{"003_ensure_artifacts_table", migrateEnsureArtifactsTable},
+	{"004_ensure_vulnerabilities_table", migrateEnsureVulnerabilitiesTable},
+}
+
+// isTableNotFound returns true if the error indicates a missing table.
+// SQLite returns "no such table: X", Postgres returns "relation \"X\" does not exist".
+func isTableNotFound(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "no such table") ||
+		strings.Contains(msg, "does not exist")
+}
+
+// createMigrationsTable creates the migrations table.
+func (db *DB) createMigrationsTable() error {
+	var ts string
+	if db.dialect == DialectPostgres {
+		ts = "TIMESTAMP"
+	} else {
+		ts = "DATETIME"
+	}
+
+	query := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS migrations (
+		name TEXT NOT NULL PRIMARY KEY,
+		applied_at %s NOT NULL
+	)`, ts)
+
+	if _, err := db.Exec(query); err != nil {
+		return fmt.Errorf("creating migrations table: %w", err)
+	}
+	return nil
+}
+
+// appliedMigrations returns the set of migration names that have been recorded.
+// Returns nil if the migrations table does not exist yet.
+func (db *DB) appliedMigrations() (map[string]bool, error) {
+	var names []string
+	err := db.Select(&names, "SELECT name FROM migrations")
+	if err != nil {
+		// Table doesn't exist yet — this is a pre-migration database.
+		if isTableNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("loading applied migrations: %w", err)
+	}
+
+	applied := make(map[string]bool, len(names))
+	for _, name := range names {
+		applied[name] = true
+	}
+	return applied, nil
+}
+
+// recordMigration inserts a migration name into the migrations table.
+func (db *DB) recordMigration(name string) error {
+	query := db.Rebind("INSERT INTO migrations (name, applied_at) VALUES (?, ?)")
+	if _, err := db.Exec(query, name, time.Now().UTC()); err != nil {
+		return fmt.Errorf("recording migration %s: %w", name, err)
+	}
+	return nil
+}
+
+// recordAllMigrations marks every known migration as applied.
+func (db *DB) recordAllMigrations() error {
+	for _, m := range migrations {
+		if err := db.recordMigration(m.name); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+// MigrateSchema applies any unapplied migrations in order.
+// For a fully migrated database this executes a single SELECT query.
 func (db *DB) MigrateSchema() error {
-	// Check and add missing columns to packages table
-	packagesColumns := map[string]string{
-		"registry_url":     "TEXT",
-		"supplier_name":    "TEXT",
-		"supplier_type":    "TEXT",
-		"source":           "TEXT",
-		"enriched_at":      "DATETIME",
-		"vulns_synced_at":  "DATETIME",
+	applied, err := db.appliedMigrations()
+	if err != nil {
+		return err
+	}
+
+	// If the migrations table didn't exist, create it now.
+	if applied == nil {
+		if err := db.createMigrationsTable(); err != nil {
+			return err
+		}
+		applied = make(map[string]bool)
+	}
+
+	for _, m := range migrations {
+		if applied[m.name] {
+			continue
+		}
+		if err := m.fn(db); err != nil {
+			return fmt.Errorf("migration %s: %w", m.name, err)
+		}
+		if err := db.recordMigration(m.name); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func migrateAddPackagesEnrichmentColumns(db *DB) error {
+	columns := map[string]string{
+		"registry_url":    "TEXT",
+		"supplier_name":   "TEXT",
+		"supplier_type":   "TEXT",
+		"source":          "TEXT",
+		"enriched_at":     "DATETIME",
+		"vulns_synced_at": "DATETIME",
 	}
 
 	if db.dialect == DialectPostgres {
-		packagesColumns["enriched_at"] = postgresTimestamp
-		packagesColumns["vulns_synced_at"] = postgresTimestamp
+		columns["enriched_at"] = postgresTimestamp
+		columns["vulns_synced_at"] = postgresTimestamp
 	}
 
-	for column, colType := range packagesColumns {
+	for column, colType := range columns {
 		hasCol, err := db.HasColumn("packages", column)
 		if err != nil {
 			return fmt.Errorf("checking column %s: %w", column, err)
@@ -321,9 +451,11 @@ func (db *DB) MigrateSchema() error {
 			}
 		}
 	}
+	return nil
+}
 
-	// Check and add missing columns to versions table
-	versionsColumns := map[string]string{
+func migrateAddVersionsEnrichmentColumns(db *DB) error {
+	columns := map[string]string{
 		"integrity":   "TEXT",
 		"yanked":      "INTEGER DEFAULT 0",
 		"source":      "TEXT",
@@ -331,11 +463,11 @@ func (db *DB) MigrateSchema() error {
 	}
 
 	if db.dialect == DialectPostgres {
-		versionsColumns["yanked"] = "BOOLEAN DEFAULT FALSE"
-		versionsColumns["enriched_at"] = postgresTimestamp
+		columns["yanked"] = "BOOLEAN DEFAULT FALSE"
+		columns["enriched_at"] = postgresTimestamp
 	}
 
-	for column, colType := range versionsColumns {
+	for column, colType := range columns {
 		hasCol, err := db.HasColumn("versions", column)
 		if err != nil {
 			return fmt.Errorf("checking column %s: %w", column, err)
@@ -347,62 +479,64 @@ func (db *DB) MigrateSchema() error {
 			}
 		}
 	}
+	return nil
+}
 
-	// Ensure artifacts table exists
-	if err := db.EnsureArtifactsTable(); err != nil {
-		return fmt.Errorf("ensuring artifacts table: %w", err)
-	}
+func migrateEnsureArtifactsTable(db *DB) error {
+	return db.EnsureArtifactsTable()
+}
 
-	// Ensure vulnerabilities table exists
+func migrateEnsureVulnerabilitiesTable(db *DB) error {
 	hasVulns, err := db.HasTable("vulnerabilities")
 	if err != nil {
 		return fmt.Errorf("checking vulnerabilities table: %w", err)
 	}
-	if !hasVulns {
-		var vulnSchema string
-		if db.dialect == DialectPostgres {
-			vulnSchema = `
-				CREATE TABLE vulnerabilities (
-					id SERIAL PRIMARY KEY,
-					vuln_id TEXT NOT NULL,
-					ecosystem TEXT NOT NULL,
-					package_name TEXT NOT NULL,
-					severity TEXT,
-					summary TEXT,
-					fixed_version TEXT,
-					cvss_score REAL,
-					"references" TEXT,
-					fetched_at TIMESTAMP,
-					created_at TIMESTAMP,
-					updated_at TIMESTAMP
-				);
-				CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
-				CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
-			`
-		} else {
-			vulnSchema = `
-				CREATE TABLE vulnerabilities (
-					id INTEGER PRIMARY KEY,
-					vuln_id TEXT NOT NULL,
-					ecosystem TEXT NOT NULL,
-					package_name TEXT NOT NULL,
-					severity TEXT,
-					summary TEXT,
-					fixed_version TEXT,
-					cvss_score REAL,
-					"references" TEXT,
-					fetched_at DATETIME,
-					created_at DATETIME,
-					updated_at DATETIME
-				);
-				CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
-				CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
-			`
-		}
-		if _, err := db.Exec(vulnSchema); err != nil {
-			return fmt.Errorf("creating vulnerabilities table: %w", err)
-		}
+	if hasVulns {
+		return nil
 	}
 
+	var vulnSchema string
+	if db.dialect == DialectPostgres {
+		vulnSchema = `
+			CREATE TABLE vulnerabilities (
+				id SERIAL PRIMARY KEY,
+				vuln_id TEXT NOT NULL,
+				ecosystem TEXT NOT NULL,
+				package_name TEXT NOT NULL,
+				severity TEXT,
+				summary TEXT,
+				fixed_version TEXT,
+				cvss_score REAL,
+				"references" TEXT,
+				fetched_at TIMESTAMP,
+				created_at TIMESTAMP,
+				updated_at TIMESTAMP
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
+			CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
+		`
+	} else {
+		vulnSchema = `
+			CREATE TABLE vulnerabilities (
+				id INTEGER PRIMARY KEY,
+				vuln_id TEXT NOT NULL,
+				ecosystem TEXT NOT NULL,
+				package_name TEXT NOT NULL,
+				severity TEXT,
+				summary TEXT,
+				fixed_version TEXT,
+				cvss_score REAL,
+				"references" TEXT,
+				fetched_at DATETIME,
+				created_at DATETIME,
+				updated_at DATETIME
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_vulns_id_pkg ON vulnerabilities(vuln_id, ecosystem, package_name);
+			CREATE INDEX IF NOT EXISTS idx_vulns_ecosystem_pkg ON vulnerabilities(ecosystem, package_name);
+		`
+	}
+	if _, err := db.Exec(vulnSchema); err != nil {
+		return fmt.Errorf("creating vulnerabilities table: %w", err)
+	}
 	return nil
 }

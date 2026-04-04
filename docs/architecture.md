@@ -165,7 +165,7 @@ vulnerabilities (
 
 On PostgreSQL, `INTEGER PRIMARY KEY` becomes `SERIAL`, `DATETIME` becomes `TIMESTAMP`, `INTEGER DEFAULT 0` booleans become `BOOLEAN DEFAULT FALSE`, and size/count columns use `BIGINT`.
 
-The `MigrateSchema()` function handles backward compatibility with older git-pkgs databases by adding missing columns via `ALTER TABLE` as needed.
+The `MigrateSchema()` function handles backward compatibility with older git-pkgs databases by running named migrations that add missing columns and tables. See [migrations.md](migrations.md) for how to add new schema changes.
 
 **Key operations:**
 - `GetPackageByPURL()` - Look up package by PURL
