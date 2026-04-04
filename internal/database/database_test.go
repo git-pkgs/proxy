@@ -938,3 +938,26 @@ func TestSearchPackagesWithValues(t *testing.T) {
 		t.Errorf("expected 10 hits, got %d", result.Hits)
 	}
 }
+
+func BenchmarkMigrateSchemaFullyMigrated(b *testing.B) {
+	dir := b.TempDir()
+	dbPath := filepath.Join(dir, "bench.db")
+
+	db, err := Create(dbPath)
+	if err != nil {
+		b.Fatalf("Create failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// First call to ensure everything is migrated
+	if err := db.MigrateSchema(); err != nil {
+		b.Fatalf("initial MigrateSchema failed: %v", err)
+	}
+
+	b.ResetTimer()
+	for b.Loop() {
+		if err := db.MigrateSchema(); err != nil {
+			b.Fatalf("MigrateSchema failed: %v", err)
+		}
+	}
+}
