@@ -1,0 +1,23 @@
+internal/database/schema.go
+  651c01763382be60 5,329-334,337-338,357-374,397,404-409
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "e540dc3e928b3a537463773958f57fd607729963",
+  "prompts": {
+    "651c01763382be60": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "0b80f4c0-dc64-4fed-b4dc-7526518994c5",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 45,
+      "total_deletions": 34,
+      "accepted_lines": 42,
+      "overriden_lines": 0
+    }
+  }
+}
