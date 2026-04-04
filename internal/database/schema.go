@@ -2,6 +2,7 @@ package database
 
 import (
 	"fmt"
+	"strings"
 	"time"
 )
 
@@ -325,31 +326,16 @@ var migrations = []migration{
 	{"004_ensure_vulnerabilities_table", migrateEnsureVulnerabilitiesTable},
 }
 
-// appliedMigrations returns the set of migration names that have been recorded.
-func (db *DB) appliedMigrations() (map[string]bool, error) {
-	// The migrations table might not exist yet (pre-migration databases).
-	hasMigrations, err := db.HasTable("migrations")
-	if err != nil {
-		return nil, fmt.Errorf("checking migrations table: %w", err)
-	}
-	if !hasMigrations {
-		return nil, nil
-	}
-
-	var names []string
-	if err := db.Select(&names, "SELECT name FROM migrations"); err != nil {
-		return nil, fmt.Errorf("loading applied migrations: %w", err)
-	}
-
-	applied := make(map[string]bool, len(names))
-	for _, name := range names {
-		applied[name] = true
-	}
-	return applied, nil
+// isTableNotFound returns true if the error indicates a missing table.
+// SQLite returns "no such table: X", Postgres returns "relation \"X\" does not exist".
+func isTableNotFound(err error) bool {
+	msg := err.Error()
+	return strings.Contains(msg, "no such table") ||
+		strings.Contains(msg, "does not exist")
 }
 
-// ensureMigrationsTable creates the migrations table if it doesn't exist.
-func (db *DB) ensureMigrationsTable() error {
+// createMigrationsTable creates the migrations table.
+func (db *DB) createMigrationsTable() error {
 	var ts string
 	if db.dialect == DialectPostgres {
 		ts = "TIMESTAMP"
@@ -366,6 +352,26 @@ func (db *DB) ensureMigrationsTable() error {
 		return fmt.Errorf("creating migrations table: %w", err)
 	}
 	return nil
+}
+
+// appliedMigrations returns the set of migration names that have been recorded.
+// Returns nil if the migrations table does not exist yet.
+func (db *DB) appliedMigrations() (map[string]bool, error) {
+	var names []string
+	err := db.Select(&names, "SELECT name FROM migrations")
+	if err != nil {
+		// Table doesn't exist yet — this is a pre-migration database.
+		if isTableNotFound(err) {
+			return nil, nil
+		}
+		return nil, fmt.Errorf("loading applied migrations: %w", err)
+	}
+
+	applied := make(map[string]bool, len(names))
+	for _, name := range names {
+		applied[name] = true
+	}
+	return applied, nil
 }
 
 // recordMigration inserts a migration name into the migrations table.
@@ -388,14 +394,19 @@ func (db *DB) recordAllMigrations() error {
 }
 
 // MigrateSchema applies any unapplied migrations in order.
+// For a fully migrated database this executes a single SELECT query.
 func (db *DB) MigrateSchema() error {
 	applied, err := db.appliedMigrations()
 	if err != nil {
 		return err
 	}
 
-	if err := db.ensureMigrationsTable(); err != nil {
-		return err
+	// If the migrations table didn't exist, create it now.
+	if applied == nil {
+		if err := db.createMigrationsTable(); err != nil {
+			return err
+		}
+		applied = make(map[string]bool)
 	}
 
 	for _, m := range migrations {
