@@ -121,20 +121,12 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("verifying storage connectivity: %w", err)
 	}
 
-	// Load templates
-	templates, err := NewTemplates()
-	if err != nil {
-		_ = store.Close()
-		_ = db.Close()
-		return nil, fmt.Errorf("loading templates: %w", err)
-	}
-
 	return &Server{
 		cfg:       cfg,
 		db:        db,
 		storage:   store,
 		logger:    logger,
-		templates: templates,
+		templates: &Templates{},
 	}, nil
 }
 

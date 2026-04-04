@@ -11,10 +11,7 @@ import (
 )
 
 func TestTemplatesRenderAllPages(t *testing.T) {
-	templates, err := NewTemplates()
-	if err != nil {
-		t.Fatalf("failed to load templates: %v", err)
-	}
+	templates := &Templates{}
 
 	tests := []struct {
 		page string
@@ -156,14 +153,26 @@ func TestTemplatesRenderAllPages(t *testing.T) {
 	}
 }
 
-func TestTemplatesRenderUnknownPage(t *testing.T) {
-	templates, err := NewTemplates()
-	if err != nil {
-		t.Fatalf("failed to load templates: %v", err)
+func TestTemplatesLazyLoading(t *testing.T) {
+	templates := &Templates{}
+
+	if templates.pages != nil {
+		t.Fatal("expected pages to be nil before first Render call")
 	}
 
 	w := httptest.NewRecorder()
-	err = templates.Render(w, "nonexistent_page", nil)
+	_ = templates.Render(w, "dashboard", DashboardData{})
+
+	if templates.pages == nil {
+		t.Fatal("expected pages to be populated after first Render call")
+	}
+}
+
+func TestTemplatesRenderUnknownPage(t *testing.T) {
+	templates := &Templates{}
+
+	w := httptest.NewRecorder()
+	err := templates.Render(w, "nonexistent_page", nil)
 	if err == nil {
 		t.Error("expected error for unknown page")
 	}
@@ -421,6 +430,33 @@ func TestCategorizeLicense(t *testing.T) {
 		got := categorizeLicense(tt.license)
 		if got != tt.want {
 			t.Errorf("categorizeLicense(%v) = %q, want %q", tt.license, got, tt.want)
+		}
+	}
+}
+
+func BenchmarkTemplatesParse(b *testing.B) {
+	for b.Loop() {
+		t := &Templates{}
+		if err := t.load(); err != nil {
+			b.Fatal(err)
+		}
+	}
+}
+
+func BenchmarkServerCreate(b *testing.B) {
+	for b.Loop() {
+		_ = &Server{
+			templates: &Templates{},
+		}
+	}
+}
+
+func BenchmarkFirstRender(b *testing.B) {
+	for b.Loop() {
+		t := &Templates{}
+		w := httptest.NewRecorder()
+		if err := t.Render(w, "dashboard", DashboardData{}); err != nil {
+			b.Fatal(err)
 		}
 	}
 }
