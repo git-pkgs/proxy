@@ -753,6 +753,59 @@ func TestMigrateSchemaSkipsApplied(t *testing.T) {
 	}
 }
 
+func TestMigrateSchemaUpgradeFromFullyMigrated(t *testing.T) {
+	dir := t.TempDir()
+	dbPath := filepath.Join(dir, "existing.db")
+
+	// Simulate an existing proxy database that has the full current schema
+	// but no migrations table (i.e. it was running the previous version).
+	sqlDB, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatalf("failed to open database: %v", err)
+	}
+
+	if _, err := sqlDB.Exec(schemaSQLite); err != nil {
+		t.Fatalf("failed to create schema: %v", err)
+	}
+	// Drop the migrations table that schemaSQLite now includes
+	if _, err := sqlDB.Exec("DROP TABLE migrations"); err != nil {
+		t.Fatalf("failed to drop migrations table: %v", err)
+	}
+	if _, err := sqlDB.Exec("INSERT INTO schema_info (version) VALUES (1)"); err != nil {
+		t.Fatalf("failed to set schema version: %v", err)
+	}
+	if err := sqlDB.Close(); err != nil {
+		t.Fatalf("failed to close database: %v", err)
+	}
+
+	db, err := Open(dbPath)
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	// This should create the migrations table and record all migrations
+	// without altering any tables (everything already exists).
+	if err := db.MigrateSchema(); err != nil {
+		t.Fatalf("MigrateSchema failed: %v", err)
+	}
+
+	applied, err := db.appliedMigrations()
+	if err != nil {
+		t.Fatalf("appliedMigrations failed: %v", err)
+	}
+	for _, m := range migrations {
+		if !applied[m.name] {
+			t.Errorf("migration %s not recorded after upgrade", m.name)
+		}
+	}
+
+	// Second run should be the fast path (single SELECT)
+	if err := db.MigrateSchema(); err != nil {
+		t.Fatalf("second MigrateSchema failed: %v", err)
+	}
+}
+
 func TestConcurrentWrites(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
