@@ -1,0 +1,23 @@
+internal/server/server_test.go
+  5ed289a63151d8b8 748-806
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "48006ff408aae20b0e069e1505c4d198972ef82a",
+  "prompts": {
+    "5ed289a63151d8b8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4f831605-c5ae-4c65-8b84-5f1b5ed9a73e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 59,
+      "total_deletions": 0,
+      "accepted_lines": 59,
+      "overriden_lines": 0
+    }
+  }
+}
