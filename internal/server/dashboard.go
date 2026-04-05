@@ -118,7 +118,7 @@ func supportedEcosystems() []string {
 		"npm",
 		"cargo",
 		"gem",
-		"go",
+		"golang",
 		"hex",
 		"pub",
 		"pypi",
