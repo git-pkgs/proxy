@@ -745,6 +745,65 @@ func TestComposerNamespacedPackageRoutes(t *testing.T) {
 	}
 }
 
+func TestNamespacedPackageRoutes(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	// Seed packages from ecosystems that use slashes in package names.
+	pkgs := []struct {
+		purl, ecosystem, name, versionPURL string
+	}{
+		// npm scoped packages
+		{"pkg:npm/%40babel/core", "npm", "@babel/core", "pkg:npm/%40babel/core@7.24.0"},
+		// Go modules (multi-segment paths)
+		{"pkg:golang/github.com/stretchr/testify", "golang", "github.com/stretchr/testify", "pkg:golang/github.com/stretchr/testify@1.9.0"},
+		// OCI/container images
+		{"pkg:oci/library/nginx", "oci", "library/nginx", "pkg:oci/library/nginx@sha256:abc123"},
+		// Conda (channel/name)
+		{"pkg:conda/conda-forge/numpy", "conda", "conda-forge/numpy", "pkg:conda/conda-forge/numpy@1.26.4"},
+		// Conan (name/version@user/channel)
+		{"pkg:conan/zlib/1.2.13@demo/stable", "conan", "zlib/1.2.13@demo/stable", "pkg:conan/zlib/1.2.13@demo/stable@rev1"},
+	}
+
+	for _, p := range pkgs {
+		if err := ts.db.UpsertPackage(&database.Package{
+			PURL: p.purl, Ecosystem: p.ecosystem, Name: p.name,
+		}); err != nil {
+			t.Fatalf("failed to upsert package %s: %v", p.name, err)
+		}
+		if err := ts.db.UpsertVersion(&database.Version{
+			PURL: p.versionPURL, PackagePURL: p.purl,
+		}); err != nil {
+			t.Fatalf("failed to upsert version for %s: %v", p.name, err)
+		}
+	}
+
+	tests := []struct {
+		name string
+		url  string
+		want int
+	}{
+		{"npm scoped package show", "/package/npm/@babel/core", http.StatusOK},
+		{"golang module show", "/package/golang/github.com/stretchr/testify", http.StatusOK},
+		{"oci image show", "/package/oci/library/nginx", http.StatusOK},
+		{"conda package show", "/package/conda/conda-forge/numpy", http.StatusOK},
+		{"conan package show", "/package/conan/zlib/1.2.13@demo/stable", http.StatusOK},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tt.url, nil)
+			w := httptest.NewRecorder()
+			ts.handler.ServeHTTP(w, req)
+
+			if w.Code != tt.want {
+				t.Errorf("GET %s: expected status %d, got %d (body: %s)",
+					tt.url, tt.want, w.Code, w.Body.String())
+			}
+		})
+	}
+}
+
 func TestSearchPage_WithSeededResults(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
