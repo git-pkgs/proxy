@@ -31,55 +31,37 @@ func TestNewAPIHandler(t *testing.T) {
 	}
 }
 
-func TestHandleGetPackage_MissingParams(t *testing.T) {
+func TestHandlePackagePath_MissingParams(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	svc := enrichment.New(logger)
 	h := NewAPIHandler(svc, nil)
+
+	r := chi.NewRouter()
+	r.Get("/api/package/{ecosystem}/*", h.HandlePackagePath)
 
 	req := httptest.NewRequest("GET", "/api/package//", nil)
-	req.SetPathValue("ecosystem", "")
-	req.SetPathValue("name", "")
-
 	w := httptest.NewRecorder()
-	h.HandleGetPackage(w, req)
+	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected status %d, got %d", http.StatusBadRequest, w.Code)
+	if w.Code != http.StatusBadRequest && w.Code != http.StatusNotFound {
+		t.Errorf("expected status 400 or 404, got %d", w.Code)
 	}
 }
 
-func TestHandleGetVersion_MissingParams(t *testing.T) {
+func TestHandleVulnsPath_MissingParams(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
 	svc := enrichment.New(logger)
 	h := NewAPIHandler(svc, nil)
 
-	req := httptest.NewRequest("GET", "/api/package///", nil)
-	req.SetPathValue("ecosystem", "")
-	req.SetPathValue("name", "")
-	req.SetPathValue("version", "")
-
-	w := httptest.NewRecorder()
-	h.HandleGetVersion(w, req)
-
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected status %d, got %d", http.StatusBadRequest, w.Code)
-	}
-}
-
-func TestHandleGetVulns_MissingParams(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	svc := enrichment.New(logger)
-	h := NewAPIHandler(svc, nil)
+	r := chi.NewRouter()
+	r.Get("/api/vulns/{ecosystem}/*", h.HandleVulnsPath)
 
 	req := httptest.NewRequest("GET", "/api/vulns//", nil)
-	req.SetPathValue("ecosystem", "")
-	req.SetPathValue("name", "")
-
 	w := httptest.NewRecorder()
-	h.HandleGetVulns(w, req)
+	r.ServeHTTP(w, req)
 
-	if w.Code != http.StatusBadRequest {
-		t.Errorf("expected status %d, got %d", http.StatusBadRequest, w.Code)
+	if w.Code != http.StatusBadRequest && w.Code != http.StatusNotFound {
+		t.Errorf("expected status 400 or 404, got %d", w.Code)
 	}
 }
 

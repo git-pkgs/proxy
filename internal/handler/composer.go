@@ -128,7 +128,9 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 }
 
 // rewriteMetadata rewrites dist URLs in Composer metadata to point at this proxy.
-// If cooldown is enabled, versions published too recently are filtered out.
+// If the metadata uses the minified Composer v2 format, it is expanded first so
+// that every version entry contains all fields. If cooldown is enabled, versions
+// published too recently are filtered out.
 func (h *ComposerHandler) rewriteMetadata(body []byte) ([]byte, error) {
 	var metadata map[string]any
 	if err := json.Unmarshal(body, &metadata); err != nil {
@@ -140,16 +142,61 @@ func (h *ComposerHandler) rewriteMetadata(body []byte) ([]byte, error) {
 		return body, nil
 	}
 
+	minified := metadata["minified"] == "composer/2.0"
+
 	for packageName, versions := range packages {
 		versionList, ok := versions.([]any)
 		if !ok {
 			continue
 		}
 
+		if minified {
+			versionList = expandMinifiedVersions(versionList)
+		}
+
 		packages[packageName] = h.filterAndRewriteVersions(packageName, versionList)
 	}
 
+	delete(metadata, "minified")
+
 	return json.Marshal(metadata)
+}
+
+// expandMinifiedVersions expands the Composer v2 minified format where each
+// version entry only contains fields that differ from the previous entry.
+// The "~dev" sentinel string resets the inheritance chain.
+func expandMinifiedVersions(versionList []any) []any {
+	expanded := make([]any, 0, len(versionList))
+	inherited := map[string]any{}
+
+	for _, v := range versionList {
+		// The "~dev" sentinel resets the inheritance chain for dev versions.
+		if s, ok := v.(string); ok && s == "~dev" {
+			inherited = map[string]any{}
+			continue
+		}
+
+		vmap, ok := v.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		// Merge inherited fields into a new map, then overlay current fields.
+		merged := make(map[string]any, len(inherited)+len(vmap))
+		for k, val := range inherited {
+			merged[k] = val
+		}
+		for k, val := range vmap {
+			merged[k] = val
+		}
+
+		// Update inherited state for next iteration.
+		inherited = merged
+
+		expanded = append(expanded, merged)
+	}
+
+	return expanded
 }
 
 // filterAndRewriteVersions applies cooldown filtering and rewrites dist URLs

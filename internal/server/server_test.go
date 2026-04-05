@@ -101,13 +101,9 @@ func newTestServer(t *testing.T) *testServer {
 	r.Get("/openapi.json", s.handleOpenAPIJSON)
 	r.Mount("/static", http.StripPrefix("/static/", staticHandler()))
 	r.Get("/search", s.handleSearch)
-	r.Get("/package/{ecosystem}/{name}", s.handlePackageShow)
-	r.Get("/package/{ecosystem}/{name}/{version}", s.handleVersionShow)
-	r.Get("/package/{ecosystem}/{name}/{version}/browse", s.handleBrowseSource)
-	r.Get("/api/browse/{ecosystem}/{name}/{version}", s.handleBrowseList)
-	r.Get("/api/browse/{ecosystem}/{name}/{version}/file/*", s.handleBrowseFile)
-	r.Get("/api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion}", s.handleCompareDiff)
-	r.Get("/package/{ecosystem}/{name}/compare/{versions}", s.handleComparePage)
+	r.Get("/package/{ecosystem}/*", s.handlePackagePath)
+	r.Get("/api/browse/{ecosystem}/*", s.handleBrowsePath)
+	r.Get("/api/compare/{ecosystem}/*", s.handleComparePath)
 	r.Get("/", s.handleRoot)
 	r.Get("/install", s.handleInstall)
 	r.Get("/packages", s.handlePackagesList)
@@ -698,6 +694,54 @@ func TestPackageShowPage_WithLicense(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "show-test-lic") {
 		t.Error("expected page to contain the package name")
+	}
+}
+
+func TestComposerNamespacedPackageRoutes(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	// Seed two Composer packages with vendor/name format.
+	for _, p := range []struct {
+		purl, name, versionPURL string
+	}{
+		{"pkg:composer/monolog/monolog", "monolog/monolog", "pkg:composer/monolog/monolog@3.0.0"},
+		{"pkg:composer/symfony/console", "symfony/console", "pkg:composer/symfony/console@6.0.0"},
+	} {
+		if err := ts.db.UpsertPackage(&database.Package{
+			PURL: p.purl, Ecosystem: "composer", Name: p.name,
+		}); err != nil {
+			t.Fatalf("failed to upsert package %s: %v", p.name, err)
+		}
+		if err := ts.db.UpsertVersion(&database.Version{
+			PURL: p.versionPURL, PackagePURL: p.purl,
+		}); err != nil {
+			t.Fatalf("failed to upsert version for %s: %v", p.name, err)
+		}
+	}
+
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"package show", "/package/composer/monolog/monolog", "monolog/monolog"},
+		{"version show", "/package/composer/symfony/console/6.0.0", "symfony/console"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tt.url, nil)
+			w := httptest.NewRecorder()
+			ts.handler.ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Errorf("GET %s: expected status 200, got %d", tt.url, w.Code)
+			}
+			if !strings.Contains(w.Body.String(), tt.want) {
+				t.Errorf("GET %s: expected body to contain %q", tt.url, tt.want)
+			}
+		})
 	}
 }
 

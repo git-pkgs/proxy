@@ -43,6 +43,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"strings"
 	"time"
 
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
@@ -218,30 +219,22 @@ func (s *Server) Start() error {
 	r.Get("/install", s.handleInstall)
 	r.Get("/search", s.handleSearch)
 	r.Get("/packages", s.handlePackagesList)
-	r.Get("/package/{ecosystem}/{name}", s.handlePackageShow)
-	r.Get("/package/{ecosystem}/{name}/{version}", s.handleVersionShow)
-	r.Get("/package/{ecosystem}/{name}/{version}/browse", s.handleBrowseSource)
+	r.Get("/package/{ecosystem}/*", s.handlePackagePath)
 
 	// API endpoints for enrichment data
 	enrichSvc := enrichment.New(s.logger)
 	apiHandler := NewAPIHandler(enrichSvc, s.db)
 
-	r.Get("/api/package/{ecosystem}/{name}", apiHandler.HandleGetPackage)
-	r.Get("/api/package/{ecosystem}/{name}/{version}", apiHandler.HandleGetVersion)
-	r.Get("/api/vulns/{ecosystem}/{name}", apiHandler.HandleGetVulns)
-	r.Get("/api/vulns/{ecosystem}/{name}/{version}", apiHandler.HandleGetVulns)
+	r.Get("/api/package/{ecosystem}/*", apiHandler.HandlePackagePath)
+	r.Get("/api/vulns/{ecosystem}/*", apiHandler.HandleVulnsPath)
 	r.Post("/api/outdated", apiHandler.HandleOutdated)
 	r.Post("/api/bulk", apiHandler.HandleBulkLookup)
 	r.Get("/api/search", apiHandler.HandleSearch)
 	r.Get("/api/packages", apiHandler.HandlePackagesList)
 
-	// Archive browsing endpoints
-	r.Get("/api/browse/{ecosystem}/{name}/{version}", s.handleBrowseList)
-	r.Get("/api/browse/{ecosystem}/{name}/{version}/file/*", s.handleBrowseFile)
-
-	// Version comparison endpoints
-	r.Get("/api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion}", s.handleCompareDiff)
-	r.Get("/package/{ecosystem}/{name}/compare/{versions}", s.handleComparePage)
+	// Archive browsing and comparison endpoints also use wildcard for namespaced packages
+	r.Get("/api/browse/{ecosystem}/*", s.handleBrowsePath)
+	r.Get("/api/compare/{ecosystem}/*", s.handleComparePath)
 
 	s.http = &http.Server{
 		Addr:         s.cfg.Listen,
@@ -592,15 +585,71 @@ func (s *Server) handlePackagesList(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handlePackageShow(w http.ResponseWriter, r *http.Request) {
+// handlePackagePath dispatches wildcard package routes to the appropriate handler.
+// It resolves namespaced package names (e.g., Composer vendor/name) by consulting
+// the database to determine which path segments are part of the package name.
+//
+// Supported paths:
+//
+//	{name}                       -> package show
+//	{name}/{version}             -> version show
+//	{name}/{version}/browse      -> browse source
+//	{name}/compare/{v1}...{v2}   -> compare versions
+func (s *Server) handlePackagePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
-	name := chi.URLParam(r, "name")
+	wildcard := chi.URLParam(r, "*")
+	segments := splitWildcardPath(wildcard)
 
-	if ecosystem == "" || name == "" {
-		http.Error(w, "ecosystem and name required", http.StatusBadRequest)
+	if ecosystem == "" || len(segments) == 0 {
+		http.Error(w, "ecosystem and package name required", http.StatusBadRequest)
 		return
 	}
 
+	// Check for compare route: {name}/compare/{versions}
+	for i, seg := range segments {
+		if seg == "compare" && i > 0 && i < len(segments)-1 {
+			name := strings.Join(segments[:i], "/")
+			versions := strings.Join(segments[i+1:], "/")
+			s.showComparePage(w, ecosystem, name, versions)
+			return
+		}
+	}
+
+	// Check for browse suffix
+	browse := false
+	if len(segments) > 1 && segments[len(segments)-1] == "browse" {
+		browse = true
+		segments = segments[:len(segments)-1]
+	}
+
+	// Resolve package name from the remaining segments using DB lookup.
+	name, rest := resolvePackageName(s.db, ecosystem, segments)
+
+	if name == "" {
+		// No package found in DB. Fall back to heuristic: assume the last
+		// segment is a version (if present) and everything else is the name.
+		if len(segments) == 1 {
+			// Single segment, no DB match: try package show (will 404).
+			s.showPackage(w, ecosystem, segments[0])
+			return
+		}
+		name = strings.Join(segments[:len(segments)-1], "/")
+		rest = segments[len(segments)-1:]
+	}
+
+	switch {
+	case len(rest) == 0 && !browse:
+		s.showPackage(w, ecosystem, name)
+	case len(rest) == 1 && browse:
+		s.showBrowseSource(w, ecosystem, name, rest[0])
+	case len(rest) == 1:
+		s.showVersion(w, ecosystem, name, rest[0])
+	default:
+		http.Error(w, "not found", http.StatusNotFound)
+	}
+}
+
+func (s *Server) showPackage(w http.ResponseWriter, ecosystem, name string) {
 	pkg, err := s.db.GetPackageByEcosystemName(ecosystem, name)
 	if err != nil {
 		s.logger.Error("failed to get package", "error", err, "ecosystem", ecosystem, "name", name)
@@ -636,16 +685,7 @@ func (s *Server) handlePackageShow(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-func (s *Server) handleVersionShow(w http.ResponseWriter, r *http.Request) {
-	ecosystem := chi.URLParam(r, "ecosystem")
-	name := chi.URLParam(r, "name")
-	version := chi.URLParam(r, "version")
-
-	if ecosystem == "" || name == "" || version == "" {
-		http.Error(w, "ecosystem, name, and version required", http.StatusBadRequest)
-		return
-	}
-
+func (s *Server) showVersion(w http.ResponseWriter, ecosystem, name, version string) {
 	pkg, err := s.db.GetPackageByEcosystemName(ecosystem, name)
 	if err != nil || pkg == nil {
 		s.logger.Error("failed to get package", "error", err)
@@ -675,7 +715,6 @@ func (s *Server) handleVersionShow(w http.ResponseWriter, r *http.Request) {
 
 	isOutdated := pkg.LatestVersion.Valid && pkg.LatestVersion.String != version
 
-	// Check if any artifact is cached
 	hasCached := false
 	for _, art := range artifacts {
 		if art.StoragePath.Valid {
@@ -696,6 +735,40 @@ func (s *Server) handleVersionShow(w http.ResponseWriter, r *http.Request) {
 
 	if err := s.templates.Render(w, "version_show", data); err != nil {
 		s.logger.Error("failed to render version show", "error", err)
+	}
+}
+
+func (s *Server) showBrowseSource(w http.ResponseWriter, ecosystem, name, version string) {
+	data := BrowseSourceData{
+		Ecosystem:   ecosystem,
+		PackageName: name,
+		Version:     version,
+	}
+
+	if err := s.templates.Render(w, "browse_source", data); err != nil {
+		s.logger.Error("failed to render browse source page", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
+	}
+}
+
+func (s *Server) showComparePage(w http.ResponseWriter, ecosystem, name, versions string) {
+	const compareVersionParts = 2
+	parts := strings.Split(versions, "...")
+	if len(parts) != compareVersionParts {
+		http.Error(w, "invalid version format, use: version1...version2", http.StatusBadRequest)
+		return
+	}
+
+	data := ComparePageData{
+		Ecosystem:   ecosystem,
+		PackageName: name,
+		FromVersion: parts[0],
+		ToVersion:   parts[1],
+	}
+
+	if err := s.templates.Render(w, "compare_versions", data); err != nil {
+		s.logger.Error("failed to render compare page", "error", err)
+		http.Error(w, "internal server error", http.StatusInternalServerError)
 	}
 }
 

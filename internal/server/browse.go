@@ -57,10 +57,85 @@ type BrowseFileInfo struct {
 // @Failure 404 {string} string
 // @Failure 500 {string} string
 // @Router /api/browse/{ecosystem}/{name}/{version} [get]
-func (s *Server) handleBrowseList(w http.ResponseWriter, r *http.Request) {
+// handleBrowsePath dispatches /api/browse/{ecosystem}/* to the appropriate browse handler.
+// It resolves namespaced package names by consulting the database.
+//
+// Supported paths:
+//
+//	{name}/{version}              -> browse list
+//	{name}/{version}/file/{path}  -> browse file
+func (s *Server) handleBrowsePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
-	name := chi.URLParam(r, "name")
-	version := chi.URLParam(r, "version")
+	wildcard := chi.URLParam(r, "*")
+	segments := splitWildcardPath(wildcard)
+
+	if ecosystem == "" || len(segments) < 2 {
+		http.Error(w, "ecosystem, name, and version required", http.StatusBadRequest)
+		return
+	}
+
+	// Check for /file/ in the path for browse file requests.
+	fileIdx := -1
+	for i, seg := range segments {
+		if seg == "file" && i > 0 {
+			fileIdx = i
+			break
+		}
+	}
+
+	if fileIdx >= 0 {
+		// Everything before "file" is name+version, everything after is the file path.
+		nameVersionSegments := segments[:fileIdx]
+		filePath := strings.Join(segments[fileIdx+1:], "/")
+
+		name, rest := resolvePackageName(s.db, ecosystem, nameVersionSegments)
+		if name == "" && len(nameVersionSegments) >= 2 {
+			name = strings.Join(nameVersionSegments[:len(nameVersionSegments)-1], "/")
+			rest = nameVersionSegments[len(nameVersionSegments)-1:]
+		}
+		if len(rest) != 1 {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		s.browseFile(w, r, ecosystem, name, rest[0], filePath)
+		return
+	}
+
+	// No /file/ segment: this is a browse list.
+	name, rest := resolvePackageName(s.db, ecosystem, segments)
+	if name == "" && len(segments) >= 2 {
+		name = strings.Join(segments[:len(segments)-1], "/")
+		rest = segments[len(segments)-1:]
+	}
+	if len(rest) != 1 {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	s.browseList(w, r, ecosystem, name, rest[0])
+}
+
+// handleComparePath dispatches /api/compare/{ecosystem}/* to the compare handler.
+// Supported paths: {name}/{fromVersion}/{toVersion}
+func (s *Server) handleComparePath(w http.ResponseWriter, r *http.Request) {
+	ecosystem := chi.URLParam(r, "ecosystem")
+	wildcard := chi.URLParam(r, "*")
+	segments := splitWildcardPath(wildcard)
+
+	if ecosystem == "" || len(segments) < 3 {
+		http.Error(w, "ecosystem, name, fromVersion, and toVersion required", http.StatusBadRequest)
+		return
+	}
+
+	// The last two segments are fromVersion and toVersion.
+	// Everything before that is the package name.
+	name := strings.Join(segments[:len(segments)-2], "/")
+	fromVersion := segments[len(segments)-2]
+	toVersion := segments[len(segments)-1]
+
+	s.compareDiff(w, r, ecosystem, name, fromVersion, toVersion)
+}
+
+func (s *Server) browseList(w http.ResponseWriter, r *http.Request, ecosystem, name, version string) {
 	dirPath := r.URL.Query().Get("path")
 
 	// Get the artifact for this version
@@ -152,13 +227,7 @@ func (s *Server) handleBrowseList(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {string} string
 // @Failure 500 {string} string
 // @Router /api/browse/{ecosystem}/{name}/{version}/file/{filepath} [get]
-func (s *Server) handleBrowseFile(w http.ResponseWriter, r *http.Request) {
-	ecosystem := chi.URLParam(r, "ecosystem")
-	name := chi.URLParam(r, "name")
-	version := chi.URLParam(r, "version")
-
-	// Get the wildcard path
-	filePath := chi.URLParam(r, "*")
+func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, name, version, filePath string) {
 	if filePath == "" {
 		http.Error(w, "file path required", http.StatusBadRequest)
 		return
@@ -345,24 +414,7 @@ type BrowseSourceData struct {
 	Version     string
 }
 
-// handleBrowseSource renders the source code browser UI.
-// GET /package/{ecosystem}/{name}/{version}/browse
-func (s *Server) handleBrowseSource(w http.ResponseWriter, r *http.Request) {
-	ecosystem := chi.URLParam(r, "ecosystem")
-	name := chi.URLParam(r, "name")
-	version := chi.URLParam(r, "version")
-
-	data := BrowseSourceData{
-		Ecosystem:   ecosystem,
-		PackageName: name,
-		Version:     version,
-	}
-
-	if err := s.templates.Render(w, "browse_source", data); err != nil {
-		s.logger.Error("failed to render browse source page", "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-	}
-}
+// handleBrowseSource is now showBrowseSource in server.go, dispatched via handlePackagePath.
 
 // handleCompareDiff compares two versions and returns a diff.
 // GET /api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion}
@@ -378,12 +430,7 @@ func (s *Server) handleBrowseSource(w http.ResponseWriter, r *http.Request) {
 // @Failure 404 {string} string
 // @Failure 500 {string} string
 // @Router /api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion} [get]
-func (s *Server) handleCompareDiff(w http.ResponseWriter, r *http.Request) {
-	ecosystem := chi.URLParam(r, "ecosystem")
-	name := chi.URLParam(r, "name")
-	fromVersion := chi.URLParam(r, "fromVersion")
-	toVersion := chi.URLParam(r, "toVersion")
-
+func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, name, fromVersion, toVersion string) {
 	// Get artifacts for both versions
 	fromPURL := purl.MakePURLString(ecosystem, name, fromVersion)
 	toPURL := purl.MakePURLString(ecosystem, name, toVersion)
@@ -475,34 +522,4 @@ type ComparePageData struct {
 	ToVersion   string
 }
 
-// handleComparePage renders the version comparison UI.
-// GET /package/{ecosystem}/{name}/compare/{versions}
-// where {versions} is in format "fromVersion...toVersion"
-func (s *Server) handleComparePage(w http.ResponseWriter, r *http.Request) {
-	ecosystem := chi.URLParam(r, "ecosystem")
-	name := chi.URLParam(r, "name")
-	versions := chi.URLParam(r, "versions")
-
-	// Parse versions (format: "1.0.0...2.0.0")
-	const compareVersionParts = 2
-	parts := strings.Split(versions, "...")
-	if len(parts) != compareVersionParts {
-		http.Error(w, "invalid version format, use: version1...version2", http.StatusBadRequest)
-		return
-	}
-
-	fromVersion := parts[0]
-	toVersion := parts[1]
-
-	data := ComparePageData{
-		Ecosystem:   ecosystem,
-		PackageName: name,
-		FromVersion: fromVersion,
-		ToVersion:   toVersion,
-	}
-
-	if err := s.templates.Render(w, "compare_versions", data); err != nil {
-		s.logger.Error("failed to render compare page", "error", err)
-		http.Error(w, "internal server error", http.StatusInternalServerError)
-	}
-}
+// handleComparePage is now showComparePage in server.go, dispatched via handlePackagePath.

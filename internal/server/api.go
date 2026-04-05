@@ -135,36 +135,59 @@ type BulkResponse struct {
 	Packages map[string]*PackageResponse `json:"packages"`
 }
 
-// HandleGetPackage handles GET /api/package/{ecosystem}/{name}
-// @Summary Get package metadata
-// @Description Returns enriched package metadata. URL-encode scoped names (e.g. @scope/name -> %40scope%2Fname).
-// @Tags api
-// @Produce json
-// @Param ecosystem path string true "Ecosystem"
-// @Param name path string true "Package name"
-// @Success 200 {object} PackageResponse
-// @Failure 400 {string} string
-// @Failure 404 {string} string
-// @Failure 500 {string} string
-// @Router /api/package/{ecosystem}/{name} [get]
-func (h *APIHandler) HandleGetPackage(w http.ResponseWriter, r *http.Request) {
+// HandlePackagePath dispatches /api/package/{ecosystem}/* to the appropriate handler.
+// Resolves namespaced package names (Composer vendor/name, npm @scope/name) from the path.
+func (h *APIHandler) HandlePackagePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
-	name := chi.URLParam(r, "name")
+	wildcard := chi.URLParam(r, "*")
+	segments := splitWildcardPath(wildcard)
 
-	if ecosystem == "" || name == "" {
+	if ecosystem == "" || len(segments) == 0 {
 		http.Error(w, "ecosystem and name are required", http.StatusBadRequest)
 		return
 	}
 
-	// Handle scoped npm packages (e.g., @scope/name)
-	if strings.HasPrefix(name, "@") {
-		// The path is split, so we need to get the rest
-		rest := chi.URLParam(r, "rest")
-		if rest != "" {
-			name = name + "/" + rest
-		}
+	// For the API, we don't have a DB to resolve names, so we use a heuristic:
+	// the last segment that looks like a version (contains a digit) is the version,
+	// everything before it is the name. If no version-like segment, it's all name.
+	//
+	// With 1 segment: package lookup (name only)
+	// With 2+ segments: last segment is version, rest is name
+	//   Exception: if this is a namespaced ecosystem and we have exactly 2 segments,
+	//   it could be vendor/name with no version. The enrichment service handles
+	//   both cases (it will try to look up the package either way).
+	if len(segments) == 1 {
+		h.getPackage(w, r, ecosystem, segments[0])
+		return
 	}
 
+	// Try the full path as a package name first via enrichment.
+	// If it resolves, this is a package-only lookup.
+	fullName := strings.Join(segments, "/")
+	info, err := h.enrichment.EnrichPackage(r.Context(), ecosystem, fullName)
+	if err == nil && info != nil {
+		resp := &PackageResponse{
+			Ecosystem:       info.Ecosystem,
+			Name:            info.Name,
+			LatestVersion:   info.LatestVersion,
+			License:         info.License,
+			LicenseCategory: string(h.enrichment.CategorizeLicense(info.License)),
+			Description:     info.Description,
+			Homepage:        info.Homepage,
+			Repository:      info.Repository,
+			RegistryURL:     info.RegistryURL,
+		}
+		writeJSON(w, resp)
+		return
+	}
+
+	// Otherwise, last segment is the version.
+	name := strings.Join(segments[:len(segments)-1], "/")
+	version := segments[len(segments)-1]
+	h.getVersion(w, r, ecosystem, name, version)
+}
+
+func (h *APIHandler) getPackage(w http.ResponseWriter, r *http.Request, ecosystem, name string) {
 	info, err := h.enrichment.EnrichPackage(r.Context(), ecosystem, name)
 	if err != nil {
 		http.Error(w, "failed to enrich package", http.StatusInternalServerError)
@@ -191,28 +214,7 @@ func (h *APIHandler) HandleGetPackage(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// HandleGetVersion handles GET /api/package/{ecosystem}/{name}/{version}
-// @Summary Get version metadata and vulnerabilities
-// @Description Returns enriched package+version metadata and vulnerability data.
-// @Tags api
-// @Produce json
-// @Param ecosystem path string true "Ecosystem"
-// @Param name path string true "Package name"
-// @Param version path string true "Version"
-// @Success 200 {object} EnrichmentResponse
-// @Failure 400 {string} string
-// @Failure 500 {string} string
-// @Router /api/package/{ecosystem}/{name}/{version} [get]
-func (h *APIHandler) HandleGetVersion(w http.ResponseWriter, r *http.Request) {
-	ecosystem := chi.URLParam(r, "ecosystem")
-	name := chi.URLParam(r, "name")
-	version := chi.URLParam(r, "version")
-
-	if ecosystem == "" || name == "" || version == "" {
-		http.Error(w, "ecosystem, name, and version are required", http.StatusBadRequest)
-		return
-	}
-
+func (h *APIHandler) getVersion(w http.ResponseWriter, r *http.Request, ecosystem, name, version string) {
 	result, err := h.enrichment.EnrichFull(r.Context(), ecosystem, name, version)
 	if err != nil {
 		http.Error(w, "failed to enrich version", http.StatusInternalServerError)
@@ -267,32 +269,31 @@ func (h *APIHandler) HandleGetVersion(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
-// HandleGetVulns handles GET /api/vulns/{ecosystem}/{name}
-// @Summary Get vulnerabilities for a package or version
-// @Description Returns vulnerabilities for a package across versions, or for a specific version if provided.
-// @Tags api
-// @Produce json
-// @Param ecosystem path string true "Ecosystem"
-// @Param name path string true "Package name"
-// @Param version path string false "Version"
-// @Success 200 {object} VulnsResponse
-// @Failure 400 {string} string
-// @Failure 500 {string} string
-// @Router /api/vulns/{ecosystem}/{name} [get]
-// @Router /api/vulns/{ecosystem}/{name}/{version} [get]
-func (h *APIHandler) HandleGetVulns(w http.ResponseWriter, r *http.Request) {
+// HandleVulnsPath dispatches /api/vulns/{ecosystem}/* to the vulns handler.
+// Supports both {name} and {name}/{version} paths with namespaced package names.
+func (h *APIHandler) HandleVulnsPath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
-	name := chi.URLParam(r, "name")
-	version := chi.URLParam(r, "version")
+	wildcard := chi.URLParam(r, "*")
+	segments := splitWildcardPath(wildcard)
 
-	if ecosystem == "" || name == "" {
+	if ecosystem == "" || len(segments) == 0 {
 		http.Error(w, "ecosystem and name are required", http.StatusBadRequest)
 		return
 	}
 
-	// If no version specified, use "0" to get all vulnerabilities
-	if version == "" {
-		version = "0"
+	// Last segment could be a version. Try full path as name first,
+	// then split off the last segment as version.
+	name := strings.Join(segments, "/")
+	version := "0"
+
+	if len(segments) > 1 {
+		// Try enrichment with the full path as name.
+		// If it doesn't resolve, assume last segment is version.
+		info, err := h.enrichment.EnrichPackage(r.Context(), ecosystem, name)
+		if err != nil || info == nil {
+			name = strings.Join(segments[:len(segments)-1], "/")
+			version = segments[len(segments)-1]
+		}
 	}
 
 	vulns, err := h.enrichment.CheckVulnerabilities(r.Context(), ecosystem, name, version)
