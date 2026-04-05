@@ -1,0 +1,39 @@
+internal/server/server_test.go
+  5ed289a63151d8b8 104-106,700-747
+internal/handler/composer_test.go
+  5ed289a63151d8b8 53-247
+internal/server/resolve_test.go
+  5ed289a63151d8b8 1-120
+internal/server/server.go
+  5ed289a63151d8b8 46,222,228-229,235-237,588-598,600-601,603-604,608-648,650,652,688,741-771
+internal/server/browse.go
+  5ed289a63151d8b8 60-67,69-138,230,417,433,525
+internal/server/resolve.go
+  5ed289a63151d8b8 1-41
+internal/server/api.go
+  5ed289a63151d8b8 138-140,142-143,145,150-178,180-181,184-188,190,217,272-274,276-277,279,284-296
+internal/handler/composer.go
+  5ed289a63151d8b8 131-133,145-146,153-154,160,165-199
+internal/server/api_test.go
+  5ed289a63151d8b8 34,39-40,42,44,46-47,51,56-57,61,63-64
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "2c33fd13943df05a100a9a70a0cf0cbd19022af4",
+  "prompts": {
+    "5ed289a63151d8b8": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4f831605-c5ae-4c65-8b84-5f1b5ed9a73e",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 885,
+      "total_deletions": 365,
+      "accepted_lines": 717,
+      "overriden_lines": 0
+    }
+  }
+}
