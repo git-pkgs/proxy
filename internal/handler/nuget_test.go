@@ -8,6 +8,9 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/git-pkgs/proxy/internal/cooldown"
 )
 
 func nugetTestProxy() *Proxy {
@@ -766,5 +769,335 @@ func TestNuGetBuildUpstreamURLRegularPath(t *testing.T) {
 	want := "https://api.nuget.org/v3/registration5-gz-semver2/newtonsoft.json/index.json"
 	if got != want {
 		t.Errorf("buildUpstreamURL for registration = %q, want %q", got, want)
+	}
+}
+
+func TestNuGetCooldownFiltering(t *testing.T) {
+	now := time.Now()
+	oldTime := now.Add(-7 * 24 * time.Hour).Format(time.RFC3339)
+	recentTime := now.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	registration := map[string]any{
+		"items": []any{
+			map[string]any{
+				"count": 2,
+				"items": []any{
+					map[string]any{
+						"catalogEntry": map[string]any{
+							"id":        "TestPackage",
+							"version":   "1.0.0",
+							"published": oldTime,
+						},
+					},
+					map[string]any{
+						"catalogEntry": map[string]any{
+							"id":        "TestPackage",
+							"version":   "2.0.0",
+							"published": recentTime,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	body, err := json.Marshal(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxy := testProxy()
+	proxy.Cooldown = &cooldown.Config{
+		Default: "3d",
+	}
+
+	h := &NuGetHandler{
+		proxy:    proxy,
+		proxyURL: "http://localhost:8080",
+	}
+
+	filtered, err := h.applyCooldownFiltering(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(filtered, &result); err != nil {
+		t.Fatal(err)
+	}
+
+	pages := result["items"].([]any)
+	page := pages[0].(map[string]any)
+	items := page["items"].([]any)
+
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item after filtering, got %d", len(items))
+	}
+
+	entry := items[0].(map[string]any)["catalogEntry"].(map[string]any)
+	if entry["version"] != testVersion100 {
+		t.Errorf("expected version 1.0.0 to survive, got %s", entry["version"])
+	}
+
+	count := page["count"]
+	if count != float64(1) {
+		t.Errorf("expected page count to be 1, got %v", count)
+	}
+}
+
+func TestNuGetCooldownFilteringWithPackageOverride(t *testing.T) {
+	now := time.Now()
+	recentTime := now.Add(-2 * time.Hour).Format(time.RFC3339)
+
+	registration := map[string]any{
+		"items": []any{
+			map[string]any{
+				"count": 1,
+				"items": []any{
+					map[string]any{
+						"catalogEntry": map[string]any{
+							"id":        "SpecialPackage",
+							"version":   "1.0.0",
+							"published": recentTime,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	body, err := json.Marshal(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxy := testProxy()
+	proxy.Cooldown = &cooldown.Config{
+		Default:  "3d",
+		Packages: map[string]string{"pkg:nuget/specialpackage": "1h"},
+	}
+
+	h := &NuGetHandler{
+		proxy:    proxy,
+		proxyURL: "http://localhost:8080",
+	}
+
+	filtered, err := h.applyCooldownFiltering(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(filtered, &result); err != nil {
+		t.Fatal(err)
+	}
+
+	pages := result["items"].([]any)
+	page := pages[0].(map[string]any)
+	items := page["items"].([]any)
+
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item (package override allows it), got %d", len(items))
+	}
+}
+
+func TestNuGetCooldownNoCooldownConfig(t *testing.T) {
+	registration := map[string]any{
+		"items": []any{
+			map[string]any{
+				"count": 1,
+				"items": []any{
+					map[string]any{
+						"catalogEntry": map[string]any{
+							"id":        "Test",
+							"version":   "1.0.0",
+							"published": time.Now().Format(time.RFC3339),
+						},
+					},
+				},
+			},
+		},
+	}
+
+	body, err := json.Marshal(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// No cooldown - applyCooldownFiltering still works, just doesn't filter
+	h := &NuGetHandler{
+		proxy:    testProxy(),
+		proxyURL: "http://localhost:8080",
+	}
+
+	filtered, err := h.applyCooldownFiltering(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(filtered, &result); err != nil {
+		t.Fatal(err)
+	}
+
+	pages := result["items"].([]any)
+	page := pages[0].(map[string]any)
+	items := page["items"].([]any)
+
+	// Without cooldown config on the handler, applyCooldownFiltering
+	// is called but proxy.Cooldown is nil, so IsAllowed is never called
+	// Actually, applyCooldownFiltering always runs the filter logic -
+	// but the caller (handleRegistration) short-circuits when cooldown is disabled.
+	// The function itself should still work fine with a nil Cooldown.
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item, got %d", len(items))
+	}
+}
+
+func TestNuGetCooldownFilteringNuGetTimestamp(t *testing.T) {
+	// NuGet uses timestamps like "2024-09-07T01:37:52.233+00:00" which
+	// have fractional seconds - verify these parse correctly
+	now := time.Now()
+	oldTime := now.Add(-7 * 24 * time.Hour).Format("2006-01-02T15:04:05.000-07:00")
+
+	registration := map[string]any{
+		"items": []any{
+			map[string]any{
+				"count": 1,
+				"items": []any{
+					map[string]any{
+						"catalogEntry": map[string]any{
+							"id":        "Test",
+							"version":   "1.0.0",
+							"published": oldTime,
+						},
+					},
+				},
+			},
+		},
+	}
+
+	body, err := json.Marshal(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxy := testProxy()
+	proxy.Cooldown = &cooldown.Config{
+		Default: "3d",
+	}
+
+	h := &NuGetHandler{
+		proxy:    proxy,
+		proxyURL: "http://localhost:8080",
+	}
+
+	filtered, err := h.applyCooldownFiltering(body)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(filtered, &result); err != nil {
+		t.Fatal(err)
+	}
+
+	pages := result["items"].([]any)
+	page := pages[0].(map[string]any)
+	items := page["items"].([]any)
+
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item (old enough to pass cooldown), got %d", len(items))
+	}
+}
+
+func TestNuGetHandleRegistrationWithCooldown(t *testing.T) {
+	now := time.Now()
+	oldTime := now.Add(-7 * 24 * time.Hour).Format(time.RFC3339)
+	recentTime := now.Add(-1 * time.Hour).Format(time.RFC3339)
+
+	registrationJSON, _ := json.Marshal(map[string]any{
+		"items": []any{
+			map[string]any{
+				"count": 2,
+				"items": []any{
+					map[string]any{
+						"catalogEntry": map[string]any{
+							"id":        "TestPkg",
+							"version":   "1.0.0",
+							"published": oldTime,
+						},
+					},
+					map[string]any{
+						"catalogEntry": map[string]any{
+							"id":        "TestPkg",
+							"version":   "2.0.0",
+							"published": recentTime,
+						},
+					},
+				},
+			},
+		},
+	})
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(registrationJSON)
+	}))
+	defer upstream.Close()
+
+	proxy := testProxy()
+	proxy.Cooldown = &cooldown.Config{
+		Default: "3d",
+	}
+
+	h := &NuGetHandler{
+		proxy:       proxy,
+		upstreamURL: upstream.URL,
+		proxyURL:    "http://proxy.local",
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v3/registration5-gz-semver2/testpkg/index.json", nil)
+	w := httptest.NewRecorder()
+	h.handleRegistration(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatal(err)
+	}
+
+	pages := result["items"].([]any)
+	page := pages[0].(map[string]any)
+	items := page["items"].([]any)
+
+	if len(items) != 1 {
+		t.Fatalf("expected 1 item after cooldown filtering, got %d", len(items))
+	}
+}
+
+func TestNuGetHandleRegistrationWithoutCooldown(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"items":[]}`))
+	}))
+	defer upstream.Close()
+
+	h := &NuGetHandler{
+		proxy:       nugetTestProxy(), // no cooldown configured
+		upstreamURL: upstream.URL,
+		proxyURL:    "http://proxy.local",
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/v3/registration5-gz-semver2/testpkg/index.json", nil)
+	w := httptest.NewRecorder()
+	h.handleRegistration(w, req)
+
+	// Without cooldown, should proxy directly
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 }
