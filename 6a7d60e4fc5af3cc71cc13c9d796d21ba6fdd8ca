@@ -1,0 +1,27 @@
+internal/server/server_test.go
+  e1cea7726c20d013 897,899-900
+internal/storage/blob.go
+  e1cea7726c20d013 73-78
+internal/storage/blob_test.go
+  e1cea7726c20d013 220-257
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "6a7d60e4fc5af3cc71cc13c9d796d21ba6fdd8ca",
+  "prompts": {
+    "e1cea7726c20d013": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "6eb14482-19d8-4951-ab1a-3e20a05d5d79",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 48,
+      "total_deletions": 4,
+      "accepted_lines": 47,
+      "overriden_lines": 0
+    }
+  }
+}
