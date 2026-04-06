@@ -225,6 +225,20 @@ Or via environment variable: `PROXY_CACHE_METADATA=true`.
 
 The `proxy mirror` command always enables metadata caching regardless of this setting.
 
+### Metadata TTL
+
+When metadata caching is enabled, `metadata_ttl` controls how long a cached response is considered fresh before revalidating with upstream. During the TTL window, cached metadata is served directly without contacting upstream, reducing latency and upstream load.
+
+```yaml
+metadata_ttl: "5m"   # default
+```
+
+Or via environment variable: `PROXY_METADATA_TTL=10m`.
+
+Set to `"0"` to always revalidate with upstream (ETag-based conditional requests still avoid re-downloading unchanged content).
+
+When upstream is unreachable and the cached entry is past its TTL, the proxy serves the stale cached copy with a `Warning: 110 - "Response is Stale"` header so clients can tell the data may be outdated.
+
 ## Mirror API
 
 The `/api/mirror` endpoints are disabled by default. Enable them to allow starting mirror jobs via HTTP:

@@ -55,6 +55,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"time"
 
 	"gopkg.in/yaml.v3"
 )
@@ -88,6 +89,11 @@ type Config struct {
 	// When enabled, metadata is stored in the database and storage backend.
 	// The mirror command always enables this regardless of this setting.
 	CacheMetadata bool `json:"cache_metadata" yaml:"cache_metadata"`
+
+	// MetadataTTL is how long cached metadata is considered fresh before
+	// revalidating with upstream. Uses Go duration syntax (e.g. "5m", "1h").
+	// Default: "5m". Set to "0" to always revalidate.
+	MetadataTTL string `json:"metadata_ttl" yaml:"metadata_ttl"`
 
 	// MirrorAPI enables the /api/mirror endpoints for starting mirror jobs via HTTP.
 	// Disabled by default to prevent unauthenticated users from triggering downloads.
@@ -321,6 +327,9 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("PROXY_MIRROR_API"); v != "" {
 		c.MirrorAPI = v == "true" || v == "1"
 	}
+	if v := os.Getenv("PROXY_METADATA_TTL"); v != "" {
+		c.MetadataTTL = v
+	}
 }
 
 // Validate checks the configuration for errors.
@@ -370,7 +379,32 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate metadata TTL if specified
+	if c.MetadataTTL != "" && c.MetadataTTL != "0" {
+		if _, err := time.ParseDuration(c.MetadataTTL); err != nil {
+			return fmt.Errorf("invalid metadata_ttl %q: %w", c.MetadataTTL, err)
+		}
+	}
+
 	return nil
+}
+
+const defaultMetadataTTL = 5 * time.Minute //nolint:mnd // sensible default
+
+// ParseMetadataTTL returns the metadata TTL duration.
+// Returns 5 minutes if unset, 0 if explicitly disabled.
+func (c *Config) ParseMetadataTTL() time.Duration {
+	if c.MetadataTTL == "" {
+		return defaultMetadataTTL
+	}
+	if c.MetadataTTL == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(c.MetadataTTL)
+	if err != nil {
+		return defaultMetadataTTL
+	}
+	return d
 }
 
 // ParseSize parses a human-readable size string (e.g., "10GB", "500MB").

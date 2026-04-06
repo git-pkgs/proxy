@@ -4,6 +4,7 @@ import (
 	"os"
 	"path/filepath"
 	"testing"
+	"time"
 )
 
 const (
@@ -299,5 +300,58 @@ func TestLoadFileNotFound(t *testing.T) {
 	_, err := Load("/nonexistent/config.yaml")
 	if err == nil {
 		t.Error("expected error for nonexistent file")
+	}
+}
+
+func TestParseMetadataTTL(t *testing.T) {
+	tests := []struct {
+		name string
+		ttl  string
+		want time.Duration
+	}{
+		{"empty defaults to 5m", "", 5 * time.Minute},
+		{"explicit zero", "0", 0},
+		{"10 minutes", "10m", 10 * time.Minute},
+		{"1 hour", "1h", 1 * time.Hour},
+		{"invalid defaults to 5m", "not-a-duration", 5 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.MetadataTTL = tt.ttl
+			got := cfg.ParseMetadataTTL()
+			if got != tt.want {
+				t.Errorf("ParseMetadataTTL() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateMetadataTTL(t *testing.T) {
+	cfg := Default()
+	cfg.MetadataTTL = "invalid"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for invalid metadata_ttl")
+	}
+
+	cfg.MetadataTTL = "5m"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for valid metadata_ttl: %v", err)
+	}
+
+	cfg.MetadataTTL = "0"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for zero metadata_ttl: %v", err)
+	}
+}
+
+func TestLoadMetadataTTLFromEnv(t *testing.T) {
+	cfg := Default()
+	t.Setenv("PROXY_METADATA_TTL", "10m")
+	cfg.LoadFromEnv()
+
+	if cfg.MetadataTTL != "10m" {
+		t.Errorf("MetadataTTL = %q, want %q", cfg.MetadataTTL, "10m")
 	}
 }

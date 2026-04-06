@@ -57,6 +57,7 @@ type Proxy struct {
 	Logger        *slog.Logger
 	Cooldown      *cooldown.Config
 	CacheMetadata bool
+	MetadataTTL   time.Duration
 	HTTPClient    *http.Client
 }
 
@@ -372,10 +373,29 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 
 	storagePath := metadataStoragePath(ecosystem, cacheKey)
 
-	// Check for existing cache entry (for ETag revalidation)
+	// Check for existing cache entry (for ETag revalidation and TTL)
 	var entry *database.MetadataCacheEntry
 	if p.CacheMetadata && p.DB != nil {
 		entry, _ = p.DB.GetMetadataCache(ecosystem, cacheKey)
+	}
+
+	// Serve from cache if within TTL (skip upstream entirely)
+	if entry != nil && p.MetadataTTL > 0 && entry.FetchedAt.Valid {
+		if time.Since(entry.FetchedAt.Time) < p.MetadataTTL {
+			cached, readErr := p.Storage.Open(ctx, entry.StoragePath)
+			if readErr == nil {
+				defer func() { _ = cached.Close() }()
+				data, readErr := ReadMetadata(cached)
+				if readErr == nil {
+					ct := contentTypeJSON
+					if entry.ContentType.Valid {
+						ct = entry.ContentType.String
+					}
+					return data, ct, nil
+				}
+			}
+			// Cache file missing/unreadable, fall through to upstream
+		}
 	}
 
 	accept := contentTypeJSON
@@ -518,6 +538,37 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 	})
 }
 
+// cachedMeta holds cache validators and freshness state from a metadata cache entry.
+type cachedMeta struct {
+	etag         string
+	lastModified time.Time
+	stale        bool
+}
+
+// lookupCachedMeta retrieves cache validators for a metadata entry.
+func (p *Proxy) lookupCachedMeta(ecosystem, cacheKey string) cachedMeta {
+	if p.DB == nil {
+		return cachedMeta{}
+	}
+	entry, err := p.DB.GetMetadataCache(ecosystem, cacheKey)
+	if err != nil || entry == nil {
+		return cachedMeta{}
+	}
+	var cm cachedMeta
+	if entry.ETag.Valid {
+		cm.etag = entry.ETag.String
+	}
+	if entry.LastModified.Valid {
+		cm.lastModified = entry.LastModified.Time
+	}
+	// If FetchedAt is older than TTL, upstream must have failed and
+	// we served from stale cache (successful fetches update FetchedAt).
+	if p.MetadataTTL > 0 && entry.FetchedAt.Valid && time.Since(entry.FetchedAt.Time) > p.MetadataTTL {
+		cm.stale = true
+	}
+	return cm
+}
+
 // ProxyCached fetches metadata from upstream (with optional caching for offline fallback)
 // and writes it to the response. Optional acceptHeaders specify the Accept header to send.
 // When metadata caching is disabled, the response is streamed directly to avoid buffering
@@ -540,30 +591,18 @@ func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL,
 		return
 	}
 
-	// Look up cache entry to get ETag and upstream Last-Modified for conditional response headers
-	var etag string
-	var lastModified time.Time
-	if p.DB != nil {
-		if entry, err := p.DB.GetMetadataCache(ecosystem, cacheKey); err == nil && entry != nil {
-			if entry.ETag.Valid {
-				etag = entry.ETag.String
-			}
-			if entry.LastModified.Valid {
-				lastModified = entry.LastModified.Time
-			}
-		}
-	}
+	cm := p.lookupCachedMeta(ecosystem, cacheKey)
 
 	// Honor client conditional request headers
-	if etag != "" {
-		if match := r.Header.Get("If-None-Match"); match != "" && match == etag {
+	if cm.etag != "" {
+		if match := r.Header.Get("If-None-Match"); match != "" && match == cm.etag {
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
 	}
-	if !lastModified.IsZero() {
+	if !cm.lastModified.IsZero() {
 		if ims := r.Header.Get("If-Modified-Since"); ims != "" {
-			if t, err := http.ParseTime(ims); err == nil && !lastModified.After(t) {
+			if t, err := http.ParseTime(ims); err == nil && !cm.lastModified.After(t) {
 				w.WriteHeader(http.StatusNotModified)
 				return
 			}
@@ -572,11 +611,14 @@ func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL,
 
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-	if etag != "" {
-		w.Header().Set("ETag", etag)
+	if cm.etag != "" {
+		w.Header().Set("ETag", cm.etag)
 	}
-	if !lastModified.IsZero() {
-		w.Header().Set("Last-Modified", lastModified.UTC().Format(http.TimeFormat))
+	if !cm.lastModified.IsZero() {
+		w.Header().Set("Last-Modified", cm.lastModified.UTC().Format(http.TimeFormat))
+	}
+	if cm.stale {
+		w.Header().Set("Warning", `110 - "Response is Stale"`)
 	}
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(body)

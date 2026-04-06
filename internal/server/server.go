@@ -147,6 +147,7 @@ func (s *Server) Start() error {
 	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
 	proxy.Cooldown = cd
 	proxy.CacheMetadata = s.cfg.CacheMetadata
+	proxy.MetadataTTL = s.cfg.ParseMetadataTTL()
 
 	// Create router with Chi
 	r := chi.NewRouter()
