@@ -182,9 +182,10 @@ func expandMinifiedVersions(versionList []any) []any {
 		}
 
 		// Merge inherited fields into a new map, then overlay current fields.
+		// Deep copy values to avoid shared references between versions.
 		merged := make(map[string]any, len(inherited)+len(vmap))
 		for k, val := range inherited {
-			merged[k] = val
+			merged[k] = deepCopyValue(val)
 		}
 		for k, val := range vmap {
 			merged[k] = val
@@ -197,6 +198,26 @@ func expandMinifiedVersions(versionList []any) []any {
 	}
 
 	return expanded
+}
+
+// deepCopyValue returns a deep copy of JSON-like values (maps, slices, scalars).
+func deepCopyValue(v any) any {
+	switch val := v.(type) {
+	case map[string]any:
+		m := make(map[string]any, len(val))
+		for k, v := range val {
+			m[k] = deepCopyValue(v)
+		}
+		return m
+	case []any:
+		s := make([]any, len(val))
+		for i, v := range val {
+			s[i] = deepCopyValue(v)
+		}
+		return s
+	default:
+		return v
+	}
 }
 
 // filterAndRewriteVersions applies cooldown filtering and rewrites dist URLs
@@ -264,6 +285,14 @@ func (h *ComposerHandler) rewriteDistURL(vmap map[string]any, packageName, versi
 	filename := "package.zip"
 	if idx := strings.LastIndex(url, "/"); idx >= 0 {
 		filename = url[idx+1:]
+	}
+
+	// GitHub zipball URLs end with a bare commit hash (no extension).
+	// Append .zip so the archives library can detect the format.
+	if !strings.Contains(filename, ".") {
+		if distType, _ := dist["type"].(string); distType == "zip" {
+			filename += ".zip"
+		}
 	}
 
 	parts := strings.SplitN(packageName, "/", vendorPackageParts)

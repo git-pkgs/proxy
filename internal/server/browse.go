@@ -17,6 +17,17 @@ import (
 
 const contentTypePlainText = "text/plain; charset=utf-8"
 
+// archiveFilename returns a filename suitable for archive format detection.
+// Some ecosystems (e.g. composer) store artifacts with bare hash filenames
+// that have no extension. This adds .zip when the original has no extension
+// and the content is likely a zip archive.
+func archiveFilename(filename string) string {
+	if !strings.Contains(filename, ".") {
+		return filename + ".zip"
+	}
+	return filename
+}
+
 // getStripPrefix returns the path prefix to strip for a given ecosystem.
 // npm packages wrap content in a "package/" directory.
 func getStripPrefix(ecosystem string) string {
@@ -176,7 +187,7 @@ func (s *Server) browseList(w http.ResponseWriter, r *http.Request, ecosystem, n
 
 	// Open archive with appropriate prefix stripping
 	stripPrefix := getStripPrefix(ecosystem)
-	archiveReader, err := archives.OpenWithPrefix(cachedArtifact.Filename, artifactReader, stripPrefix)
+	archiveReader, err := archives.OpenWithPrefix(archiveFilename(cachedArtifact.Filename), artifactReader, stripPrefix)
 	if err != nil {
 		s.logger.Error("failed to open archive", "error", err, "filename", cachedArtifact.Filename)
 		http.Error(w, "failed to open archive", http.StatusInternalServerError)
@@ -271,7 +282,7 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 
 	// Open archive with appropriate prefix stripping
 	stripPrefix := getStripPrefix(ecosystem)
-	archiveReader, err := archives.OpenWithPrefix(cachedArtifact.Filename, artifactReader, stripPrefix)
+	archiveReader, err := archives.OpenWithPrefix(archiveFilename(cachedArtifact.Filename), artifactReader, stripPrefix)
 	if err != nil {
 		s.logger.Error("failed to open archive", "error", err, "filename", cachedArtifact.Filename)
 		http.Error(w, "failed to open archive", http.StatusInternalServerError)
@@ -486,7 +497,7 @@ func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, 
 
 	stripPrefix := getStripPrefix(ecosystem)
 
-	fromArchive, err := archives.OpenWithPrefix(fromArtifact.Filename, fromReader, stripPrefix)
+	fromArchive, err := archives.OpenWithPrefix(archiveFilename(fromArtifact.Filename), fromReader, stripPrefix)
 	if err != nil {
 		s.logger.Error("failed to open from archive", "error", err)
 		http.Error(w, "failed to open from archive", http.StatusInternalServerError)
@@ -494,7 +505,7 @@ func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, 
 	}
 	defer func() { _ = fromArchive.Close() }()
 
-	toArchive, err := archives.OpenWithPrefix(toArtifact.Filename, toReader, stripPrefix)
+	toArchive, err := archives.OpenWithPrefix(archiveFilename(toArtifact.Filename), toReader, stripPrefix)
 	if err != nil {
 		s.logger.Error("failed to open to archive", "error", err)
 		http.Error(w, "failed to open to archive", http.StatusInternalServerError)
