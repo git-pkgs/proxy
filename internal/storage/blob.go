@@ -70,6 +70,12 @@ func OpenBucket(ctx context.Context, urlStr string) (*Blob, error) {
 		} else {
 			urlStr = "file://" + urlPath
 		}
+
+		// Create temp files next to the final path instead of in os.TempDir.
+		// This avoids "invalid cross-device link" errors from os.Rename when
+		// the bucket directory and os.TempDir are on different filesystems
+		// (e.g. Docker volume mounts).
+		urlStr += "?no_tmp_dir=true"
 	}
 
 	bucket, err := blob.OpenBucket(ctx, urlStr)

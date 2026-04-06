@@ -217,6 +217,44 @@ func TestBlobOverwrite(t *testing.T) {
 	}
 }
 
+func TestOpenBucketSetsNoTmpDir(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	b, err := OpenBucket(ctx, fileURLFromPath(dir))
+	if err != nil {
+		t.Fatalf("OpenBucket failed: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	// fileblob uses os.TempDir() by default for temp files, then os.Rename to
+	// the final path. This fails with "invalid cross-device link" when the bucket
+	// dir and os.TempDir() are on different filesystems (e.g. Docker volumes).
+	// OpenBucket must set no_tmp_dir=true so temp files are created next to the
+	// final path instead.
+	if !strings.Contains(b.URL(), "no_tmp_dir=true") {
+		t.Errorf("URL should contain no_tmp_dir=true to avoid cross-device rename errors, got %q", b.URL())
+	}
+
+	// Verify Store still works with the parameter set
+	content := "cross-device test"
+	_, _, err = b.Store(ctx, "test/cross-device.txt", strings.NewReader(content))
+	if err != nil {
+		t.Fatalf("Store failed with no_tmp_dir=true: %v", err)
+	}
+
+	r, err := b.Open(ctx, "test/cross-device.txt")
+	if err != nil {
+		t.Fatalf("Open failed: %v", err)
+	}
+	defer func() { _ = r.Close() }()
+
+	data, _ := io.ReadAll(r)
+	if string(data) != content {
+		t.Errorf("content = %q, want %q", string(data), content)
+	}
+}
+
 func createTestBlob(t *testing.T) *Blob {
 	t.Helper()
 	dir := t.TempDir()
