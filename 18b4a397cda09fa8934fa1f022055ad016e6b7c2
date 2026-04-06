@@ -1,0 +1,48 @@
+internal/handler/handler.go
+  f9f1ed91ee4935dd 60,376,382-398,541-571,594,597-598,603,605,614-615,617-618,620-621
+docs/configuration.md
+  f9f1ed91ee4935dd 228-241
+internal/config/config_test.go
+  f9f1ed91ee4935dd 7,305-357
+internal/handler/handler_test.go
+  f9f1ed91ee4935dd 653-787
+internal/config/config.go
+  f9f1ed91ee4935dd 58,93-97,330-332,382-388,392-407
+cmd/proxy/main.go
+  f9f1ed91ee4935dd 456
+internal/server/server.go
+  f9f1ed91ee4935dd 150
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "18b4a397cda09fa8934fa1f022055ad016e6b7c2",
+  "prompts": {
+    "8c7ef527725f0770": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "43e6e8a2-3453-4d3e-9127-d98a7b6e54fa",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 146,
+      "total_deletions": 0,
+      "accepted_lines": 3,
+      "overriden_lines": 0
+    },
+    "f9f1ed91ee4935dd": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "3daf7b51-b0c3-4f1a-9714-d3595707a7bf",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 312,
+      "total_deletions": 31,
+      "accepted_lines": 303,
+      "overriden_lines": 0
+    }
+  }
+}
