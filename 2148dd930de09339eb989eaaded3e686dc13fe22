@@ -1,0 +1,27 @@
+docs/configuration.md
+  5a75f57267bf04a2 212
+internal/handler/nuget.go
+  5a75f57267bf04a2 9-11,46,173-306
+internal/handler/nuget_test.go
+  5a75f57267bf04a2 11-13,774-1103
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "2148dd930de09339eb989eaaded3e686dc13fe22",
+  "prompts": {
+    "5a75f57267bf04a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff9e52c6-c1cd-4114-8026-0f86f388ba96",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 473,
+      "total_deletions": 3,
+      "accepted_lines": 472,
+      "overriden_lines": 0
+    }
+  }
+}
