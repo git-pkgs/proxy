@@ -209,7 +209,7 @@ Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to
 
 Resolution order: package override, then ecosystem override, then global default. This lets you set a conservative default while exempting trusted packages.
 
-Currently supported for npm, PyPI, pub.dev, and Composer. These ecosystems include publish timestamps in their metadata. Other ecosystems (Go, Cargo, RubyGems) would require extra API calls and are not yet supported.
+Currently supported for npm, PyPI, pub.dev, Composer, Cargo, and NuGet. These ecosystems include publish timestamps in their metadata.
 
 ## Docker
 

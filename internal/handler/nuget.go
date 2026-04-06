@@ -6,6 +6,9 @@ import (
 	"io"
 	"net/http"
 	"strings"
+	"time"
+
+	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -40,7 +43,7 @@ func (h *NuGetHandler) Routes() http.Handler {
 	mux.HandleFunc("GET /v3-flatcontainer/{id}/index.json", h.proxyUpstream)
 
 	// Registration (package metadata) - use prefix matching since {version}.json isn't allowed
-	mux.HandleFunc("GET /v3/registration5-gz-semver2/", h.proxyUpstream)
+	mux.HandleFunc("GET /v3/registration5-gz-semver2/", h.handleRegistration)
 
 	// Search
 	mux.HandleFunc("GET /query", h.proxyUpstream)
@@ -165,6 +168,140 @@ func (h *NuGetHandler) rewriteNuGetURL(origURL string) string {
 	}
 
 	return origURL
+}
+
+// handleRegistration proxies NuGet registration pages, applying cooldown filtering.
+func (h *NuGetHandler) handleRegistration(w http.ResponseWriter, r *http.Request) {
+	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
+		h.proxyUpstream(w, r)
+		return
+	}
+
+	upstreamURL := h.buildUpstreamURL(r)
+
+	h.proxy.Logger.Debug("fetching registration for cooldown filtering", "url", upstreamURL)
+
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+	if err != nil {
+		http.Error(w, "failed to create request", http.StatusInternalServerError)
+		return
+	}
+	req.Header.Set("Accept-Encoding", "gzip")
+
+	resp, err := h.proxy.HTTPClient.Do(req)
+	if err != nil {
+		h.proxy.Logger.Error("upstream request failed", "error", err)
+		http.Error(w, "upstream request failed", http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		for k, vv := range resp.Header {
+			for _, v := range vv {
+				w.Header().Add(k, v)
+			}
+		}
+		w.WriteHeader(resp.StatusCode)
+		_, _ = io.Copy(w, resp.Body)
+		return
+	}
+
+	body, err := ReadMetadata(resp.Body)
+	if err != nil {
+		http.Error(w, "failed to read response", http.StatusInternalServerError)
+		return
+	}
+
+	filtered, err := h.applyCooldownFiltering(body)
+	if err != nil {
+		h.proxy.Logger.Warn("failed to filter registration, proxying original", "error", err)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write(body)
+		return
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write(filtered)
+}
+
+// applyCooldownFiltering filters versions from NuGet registration pages
+// that are too recently published.
+func (h *NuGetHandler) applyCooldownFiltering(body []byte) ([]byte, error) {
+	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
+		return body, nil
+	}
+
+	var registration map[string]any
+	if err := json.Unmarshal(body, &registration); err != nil {
+		return nil, err
+	}
+
+	pages, ok := registration["items"].([]any)
+	if !ok {
+		return body, nil
+	}
+
+	for _, page := range pages {
+		pageMap, ok := page.(map[string]any)
+		if !ok {
+			continue
+		}
+
+		items, ok := pageMap["items"].([]any)
+		if !ok {
+			continue
+		}
+
+		filtered := items[:0]
+		for _, item := range items {
+			itemMap, ok := item.(map[string]any)
+			if !ok {
+				continue
+			}
+
+			catalogEntry, ok := itemMap["catalogEntry"].(map[string]any)
+			if !ok {
+				filtered = append(filtered, item)
+				continue
+			}
+
+			version, _ := catalogEntry["version"].(string)
+			id, _ := catalogEntry["id"].(string)
+			publishedStr, _ := catalogEntry["published"].(string)
+
+			if publishedStr == "" {
+				filtered = append(filtered, item)
+				continue
+			}
+
+			publishedAt, err := time.Parse(time.RFC3339, publishedStr)
+			if err != nil {
+				// NuGet uses a slightly non-standard format, try parsing with fractional seconds
+				publishedAt, err = time.Parse("2006-01-02T15:04:05.999-07:00", publishedStr)
+				if err != nil {
+					filtered = append(filtered, item)
+					continue
+				}
+			}
+
+			packagePURL := purl.MakePURLString("nuget", strings.ToLower(id), "")
+
+			if !h.proxy.Cooldown.IsAllowed("nuget", packagePURL, publishedAt) {
+				h.proxy.Logger.Info("cooldown: filtering nuget version",
+					"package", id, "version", version,
+					"published", publishedStr)
+				continue
+			}
+
+			filtered = append(filtered, item)
+		}
+
+		pageMap["items"] = filtered
+		pageMap["count"] = len(filtered)
+	}
+
+	return json.Marshal(registration)
 }
 
 // handleDownload serves a package file, fetching and caching from upstream if needed.
