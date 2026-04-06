@@ -1,0 +1,203 @@
+internal/mirror/source_test.go
+  9b0a6a5a91c17904 1-243
+internal/database/types.go
+  9b0a6a5a91c17904 79-92
+internal/handler/conan.go
+  9b0a6a5a91c17904 46-47,150-160,162-163
+  eaae9387ab1859be 161
+internal/handler/pypi.go
+  9b0a6a5a91c17904 77,205,221,225-226
+  eaae9387ab1859be 79
+internal/server/mirror_api.go
+  9b0a6a5a91c17904 1-70
+internal/mirror/mirror.go
+  9b0a6a5a91c17904 1-80,83-84,93-138,148-193
+docs/configuration.md
+  9b0a6a5a91c17904 226-247
+README.md
+  9b0a6a5a91c17904 463-503,578-581,583-585
+internal/handler/conda.go
+  9b0a6a5a91c17904 34-36,122-125,127-128
+  eaae9387ab1859be 126
+internal/handler/rpm.go
+  9b0a6a5a91c17904 98
+  eaae9387ab1859be 99
+internal/handler/pub.go
+  9b0a6a5a91c17904 91
+docs/architecture.md
+  9b0a6a5a91c17904 164-177,294-299,349
+internal/server/server_test.go
+  9b0a6a5a91c17904 331-334,336,338
+cmd/proxy/main.go
+  9b0a6a5a91c17904 19,104-105,107-108,132-135,157,353-434,436-439,441-451,453-458,460-488,490-500
+internal/database/metadata_cache_test.go
+  9b0a6a5a91c17904 1-29,31-55,58-88,90-102,104-133,135-180
+  eaae9387ab1859be 30,56-57,89,103,134
+internal/handler/go.go
+  9b0a6a5a91c17904 57,61,65,69,84-85,116-117,119-120
+  eaae9387ab1859be 118
+internal/mirror/mirror_test.go
+  9b0a6a5a91c17904 1-195
+internal/mirror/registry.go
+  9b0a6a5a91c17904 1-47
+internal/handler/composer.go
+  9b0a6a5a91c17904 91
+internal/mirror/job_test.go
+  9b0a6a5a91c17904 1-3,5-10,12-37,39-47,49-56,58-66,68-91,93-102,104,106,108-110,113-115,117,119,126,160-161
+internal/handler/maven.go
+  9b0a6a5a91c17904 54
+  eaae9387ab1859be 55
+internal/database/queries.go
+  9b0a6a5a91c17904 890-950
+internal/handler/handler.go
+  9b0a6a5a91c17904 8,37-38,346,351-353,357-358,360-365,372-375,377,385,391,395-397,400-401,405-426,429,432,434-436,445-447,456-459,463,465-466,468-471,473-480,484,486-489,491-499,501-506,511-523
+  eaae9387ab1859be 359,366-367,380-384,386,389,428,433,508-510
+internal/handler/nuget.go
+  9b0a6a5a91c17904 60
+internal/handler/cargo.go
+  9b0a6a5a91c17904 5,92-95,101-102,104,106
+  eaae9387ab1859be 90
+internal/handler/download_test.go
+  9b0a6a5a91c17904 200-201
+internal/handler/cran.go
+  9b0a6a5a91c17904 33-35,38-40,153-156,158-159
+  eaae9387ab1859be 157
+internal/server/server.go
+  9b0a6a5a91c17904 55,243-244,246-250
+  eaae9387ab1859be 80,265,296-299
+internal/mirror/source.go
+  9b0a6a5a91c17904 1-190
+internal/database/schema.go
+  9b0a6a5a91c17904 89,170,409-463
+internal/mirror/job.go
+  9b0a6a5a91c17904 1-4,6-21,25-35,37-43,48-49,53,57-66,69-80,82-85,88-90,102-105,108,110-113,118-120,148-149,153-182,184,192
+  eaae9387ab1859be 86-87,91-101,106-107,109,114-117
+internal/handler/debian.go
+  9b0a6a5a91c17904 96
+  eaae9387ab1859be 97
+internal/handler/gem.go
+  9b0a6a5a91c17904 38-40,43-44,101-104,106-107
+  eaae9387ab1859be 105
+internal/handler/npm.go
+  9b0a6a5a91c17904 5,71,73-77
+internal/server/mirror_api_test.go
+  9b0a6a5a91c17904 1-45,47-163
+internal/mirror/registry_test.go
+  9b0a6a5a91c17904 1-46
+internal/handler/nuget_test.go
+  9b0a6a5a91c17904 230-232
+internal/handler/hex.go
+  9b0a6a5a91c17904 35-38,88-90,92-93
+  eaae9387ab1859be 91
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "9718962920ed0c02fab3318bdc0c2a1f4439d040",
+  "prompts": {
+    "6702463e5e3429f4": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "94c22121-0e88-4727-a3c1-6ae2ad5f0462",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "8b7384548763a737": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019cdddc-cee5-7f81-be63-e6550dfbd243",
+        "model": "gpt-5.4"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 46,
+      "total_deletions": 32,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "98f5e9f5ce41173b": {
+      "agent_id": {
+        "tool": "codex",
+        "id": "019cddcb-ffe1-7373-bea2-f44ea0e2cf10",
+        "model": "gpt-5.2-codex"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 843,
+      "total_deletions": 1,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "9b0a6a5a91c17904": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "13b5383e-ba14-4b5d-a4e9-15d240770351",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 309,
+      "total_deletions": 208,
+      "accepted_lines": 2122,
+      "overriden_lines": 0
+    },
+    "b98de1153b11134e": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "d063a445-d283-4db3-a728-573ea639306c",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 0,
+      "total_deletions": 0,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "d604d3e652fd4151": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "9550a2b8-329a-4acf-8276-ce3364de850a",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 172,
+      "total_deletions": 60,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "da15eed9d48e8570": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ccda35cc-0641-4388-a7cf-d5ad2f635141",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt <andrewnez@gmail.com>",
+      "messages": [],
+      "total_additions": 1366,
+      "total_deletions": 24,
+      "accepted_lines": 0,
+      "overriden_lines": 0
+    },
+    "eaae9387ab1859be": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4e577f93-4ad2-4e49-90f5-5eec9bf9a5d6",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": null,
+      "messages": [],
+      "total_additions": 60,
+      "total_deletions": 94,
+      "accepted_lines": 58,
+      "overriden_lines": 0
+    }
+  }
+}
