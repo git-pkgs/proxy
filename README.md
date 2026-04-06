@@ -37,7 +37,7 @@ Currently works with npm, PyPI, pub.dev, Composer, and Cargo, which all include 
 | NuGet | .NET | Yes | ✓ |
 | Composer | PHP | Yes | ✓ |
 | Conan | C/C++ | | ✓ |
-| Conda | Python/R | | ✓ |
+| Conda | Python/R | Yes | ✓ |
 | CRAN | R | | ✓ |
 | Container | Docker/OCI | | ✓ |
 | Debian | Debian/Ubuntu | | ✓ |
