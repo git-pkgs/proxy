@@ -34,7 +34,7 @@ Currently works with npm, PyPI, pub.dev, Composer, and Cargo, which all include 
 | pub.dev | Dart | Yes | ✓ |
 | PyPI | Python | Yes | ✓ |
 | Maven | Java | | ✓ |
-| NuGet | .NET | | ✓ |
+| NuGet | .NET | Yes | ✓ |
 | Composer | PHP | Yes | ✓ |
 | Conan | C/C++ | | ✓ |
 | Conda | Python/R | | ✓ |
