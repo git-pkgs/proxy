@@ -28,7 +28,7 @@ Currently works with npm, PyPI, pub.dev, Composer, and Cargo, which all include 
 |----------|-------------------|:--------:|:---------:|
 | npm | JavaScript | Yes | ✓ |
 | Cargo | Rust | Yes | ✓ |
-| RubyGems | Ruby | | ✓ |
+| RubyGems | Ruby | Yes | ✓ |
 | Go proxy | Go | | ✓ |
 | Hex | Elixir | | ✓ |
 | pub.dev | Dart | Yes | ✓ |
