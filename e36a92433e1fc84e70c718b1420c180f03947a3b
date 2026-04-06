@@ -1,0 +1,27 @@
+internal/server/browse_test.go
+  beb6cad472f1c4fe 5,594-785
+internal/server/browse.go
+  beb6cad472f1c4fe 26,43,64
+internal/handler/composer.go
+  beb6cad472f1c4fe 8,293
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "e36a92433e1fc84e70c718b1420c180f03947a3b",
+  "prompts": {
+    "beb6cad472f1c4fe": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "872123b2-ca90-4e13-8f6f-c2b084e4a11f",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 321,
+      "total_deletions": 156,
+      "accepted_lines": 198,
+      "overriden_lines": 0
+    }
+  }
+}
