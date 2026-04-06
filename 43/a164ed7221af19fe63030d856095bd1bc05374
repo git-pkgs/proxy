@@ -1,0 +1,29 @@
+internal/handler/hex.go
+  5a75f57267bf04a2 4-8,11-14,47,97-419
+README.md
+  5a75f57267bf04a2 33,55-56
+docs/configuration.md
+  5a75f57267bf04a2 213-214
+internal/handler/hex_test.go
+  5a75f57267bf04a2 4-7,9-10,12-15,40-326
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "43a164ed7221af19fe63030d856095bd1bc05374",
+  "prompts": {
+    "5a75f57267bf04a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff9e52c6-c1cd-4114-8026-0f86f388ba96",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 651,
+      "total_deletions": 18,
+      "accepted_lines": 635,
+      "overriden_lines": 0
+    }
+  }
+}
