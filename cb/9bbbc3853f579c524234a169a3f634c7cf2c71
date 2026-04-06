@@ -1,0 +1,27 @@
+README.md
+  5a75f57267bf04a2 31
+internal/handler/gem.go
+  5a75f57267bf04a2 4-5,10-12,49,106-290
+internal/handler/gem_test.go
+  5a75f57267bf04a2 4-5,7-9,11-13,39-252
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "cb9bbbc3853f579c524234a169a3f634c7cf2c71",
+  "prompts": {
+    "5a75f57267bf04a2": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "ff9e52c6-c1cd-4114-8026-0f86f388ba96",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 470,
+      "total_deletions": 58,
+      "accepted_lines": 414,
+      "overriden_lines": 0
+    }
+  }
+}
