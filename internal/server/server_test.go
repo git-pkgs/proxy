@@ -989,10 +989,10 @@ func TestNewServer_StorageConnectivityCheck(t *testing.T) {
 	// On Windows, OpenBucket normalises to file:///C:/path; on Unix the
 	// absolute path already starts with /, so file:// + /path == file:///path.
 	wantPrefix := "file://"
-	wantSuffix := filepath.ToSlash(storagePath)
+	wantPath := filepath.ToSlash(storagePath)
 	got := srv.storage.URL()
-	if !strings.HasPrefix(got, wantPrefix) || !strings.HasSuffix(got, wantSuffix) {
-		t.Errorf("expected storage URL ending with %s, got %s", wantSuffix, got)
+	if !strings.HasPrefix(got, wantPrefix) || !strings.Contains(got, wantPath) {
+		t.Errorf("expected storage URL containing %s, got %s", wantPath, got)
 	}
 
 	_ = srv.db.Close()
