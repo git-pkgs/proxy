@@ -209,7 +209,9 @@ Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to
 
 Resolution order: package override, then ecosystem override, then global default. This lets you set a conservative default while exempting trusted packages.
 
-Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, and RubyGems. These ecosystems include publish timestamps in their metadata.
+Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyGems, and Hex. These ecosystems include publish timestamps in their metadata.
+
+Note: Hex cooldown requires disabling registry signature verification since the proxy re-encodes the protobuf payload without the original signature. Set `HEX_NO_VERIFY_REPO_ORIGIN=1` or configure your repo with `no_verify: true`.
 
 ## Docker
 

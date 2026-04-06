@@ -30,7 +30,7 @@ Currently works with npm, PyPI, pub.dev, Composer, and Cargo, which all include 
 | Cargo | Rust | Yes | ✓ |
 | RubyGems | Ruby | Yes | ✓ |
 | Go proxy | Go | | ✓ |
-| Hex | Elixir | | ✓ |
+| Hex | Elixir | Yes* | ✓ |
 | pub.dev | Dart | Yes | ✓ |
 | PyPI | Python | Yes | ✓ |
 | Maven | Java | | ✓ |
@@ -51,6 +51,8 @@ Currently works with npm, PyPI, pub.dev, Composer, and Cargo, which all include 
 | Vagrant | Vagrant | | ✗ |
 
 Cooldown requires publish timestamps in metadata. Registries without a "Yes" in the cooldown column either don't expose timestamps or haven't been wired up yet.
+
+\* Hex cooldown requires disabling registry signature verification (`HEX_NO_VERIFY_REPO_ORIGIN=1`) since the proxy re-encodes the protobuf payload.
 
 ## Quick Start
 
