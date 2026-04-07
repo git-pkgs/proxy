@@ -3,8 +3,8 @@ package handler
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -88,44 +88,27 @@ func (h *CargoHandler) handleIndex(w http.ResponseWriter, r *http.Request) {
 
 	h.proxy.Logger.Info("cargo index request", "crate", name)
 
-	// Build the index path
 	indexPath := h.buildIndexPath(name)
 	upstreamURL := fmt.Sprintf("%s/%s", h.indexURL, indexPath)
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+	body, contentType, err := h.proxy.FetchOrCacheMetadata(r.Context(), "cargo", name, upstreamURL, "text/plain")
 	if err != nil {
-		http.Error(w, "internal error", http.StatusInternalServerError)
-		return
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
+		if errors.Is(err, ErrUpstreamNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 		h.proxy.Logger.Error("failed to fetch upstream index", "error", err)
 		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
 		return
 	}
-	defer func() { _ = resp.Body.Close() }()
 
-	if resp.StatusCode == http.StatusNotFound {
-		http.Error(w, "not found", http.StatusNotFound)
-		return
-	}
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, fmt.Sprintf("upstream returned %d", resp.StatusCode), http.StatusBadGateway)
-		return
+	if contentType == "" {
+		contentType = "text/plain; charset=utf-8"
 	}
 
-	// Copy headers and body
-	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
-	if etag := resp.Header.Get("ETag"); etag != "" {
-		w.Header().Set("ETag", etag)
-	}
-	if lastMod := resp.Header.Get("Last-Modified"); lastMod != "" {
-		w.Header().Set("Last-Modified", lastMod)
-	}
-
-	h.applyCooldownFiltering(w, resp.Body)
-
+	w.Header().Set("Content-Type", contentType)
+	w.WriteHeader(http.StatusOK)
+	h.applyCooldownFiltering(w, body)
 }
 
 type crateIndexEntry struct {
@@ -134,56 +117,45 @@ type crateIndexEntry struct {
 	PublishTime string `json:"pubtime,omitempty"`
 }
 
-func (h *CargoHandler) applyCooldownFiltering(downstreamResponse io.Writer, upstreamBody io.Reader) {
+func (h *CargoHandler) applyCooldownFiltering(downstreamResponse http.ResponseWriter, body []byte) {
 	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		// not using cooldowns, just copy the upstream to the downstream
-		_, _ = io.Copy(downstreamResponse, upstreamBody)
+		_, _ = downstreamResponse.Write(body)
 		return
 	}
 
-	// create a scanner on the body of the http response
-	requestScanner := bufio.NewScanner(upstreamBody)
+	scanner := bufio.NewScanner(strings.NewReader(string(body)))
 
-	// the response is newline-delimited JSON, loop through each line
-	for requestScanner.Scan() {
-		line := requestScanner.Text()
+	for scanner.Scan() {
+		line := scanner.Text()
 
-		// decode the line
 		var crate crateIndexEntry
 		err := json.Unmarshal([]byte(line), &crate)
 
 		if err != nil {
-			// if there is an error parsing this line then exclude it and move to the next entry
 			h.proxy.Logger.Error("failed to parse json entry in index", "error", err)
 			continue
 		}
 
-		// parse publish time
 		publishedAt, err := time.Parse(time.RFC3339, crate.PublishTime)
 
 		if crate.PublishTime == "" || err != nil {
-			// publish time is empty/missing/invalid, presumably was published before pubtime was added as a field
-			// write line to response
 			_, _ = downstreamResponse.Write([]byte(line + "\n"))
 			continue
 		}
 
-		// make PURL
 		cratePURL := purl.MakePURLString("cargo", crate.Name, "")
 
 		if !h.proxy.Cooldown.IsAllowed("cargo", cratePURL, publishedAt) {
-			// crate is not allowed, move to next crate
 			h.proxy.Logger.Info("cooldown: filtering cargo version",
 				"crate", crate.Name, "version", crate.Version,
 				"published", crate.PublishTime)
 			continue
 		}
 
-		// crate passes, write to response
 		_, _ = downstreamResponse.Write([]byte(line + "\n"))
 	}
 
-	if err := requestScanner.Err(); err != nil {
+	if err := scanner.Err(); err != nil {
 		h.proxy.Logger.Error("error reading index response", "error", err)
 	}
 }

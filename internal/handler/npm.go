@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -65,37 +66,16 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 
 	h.proxy.Logger.Info("npm metadata request", "package", packageName)
 
-	// Fetch metadata from upstream
 	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, url.PathEscape(packageName))
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "npm", packageName, upstreamURL)
 	if err != nil {
-		JSONError(w, http.StatusInternalServerError, "failed to create request")
-		return
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		h.proxy.Logger.Error("failed to fetch upstream metadata", "error", err)
+		if errors.Is(err, ErrUpstreamNotFound) {
+			JSONError(w, http.StatusNotFound, "package not found")
+			return
+		}
+		h.proxy.Logger.Error("failed to fetch npm metadata", "error", err)
 		JSONError(w, http.StatusBadGateway, "failed to fetch from upstream")
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusNotFound {
-		JSONError(w, http.StatusNotFound, "package not found")
-		return
-	}
-	if resp.StatusCode != http.StatusOK {
-		JSONError(w, http.StatusBadGateway, fmt.Sprintf("upstream returned %d", resp.StatusCode))
-		return
-	}
-
-	// Parse and rewrite tarball URLs
-	body, err := ReadMetadata(resp.Body)
-	if err != nil {
-		JSONError(w, http.StatusInternalServerError, "failed to read response")
 		return
 	}
 

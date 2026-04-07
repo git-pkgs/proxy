@@ -30,14 +30,14 @@ func (h *CRANHandler) Routes() http.Handler {
 	mux := http.NewServeMux()
 
 	// Package indexes
-	mux.HandleFunc("GET /src/contrib/PACKAGES", h.proxyUpstream)
-	mux.HandleFunc("GET /src/contrib/PACKAGES.gz", h.proxyUpstream)
-	mux.HandleFunc("GET /src/contrib/PACKAGES.rds", h.proxyUpstream)
+	mux.HandleFunc("GET /src/contrib/PACKAGES", h.proxyCached)
+	mux.HandleFunc("GET /src/contrib/PACKAGES.gz", h.proxyCached)
+	mux.HandleFunc("GET /src/contrib/PACKAGES.rds", h.proxyCached)
 
 	// Binary package indexes
-	mux.HandleFunc("GET /bin/{platform}/contrib/{rversion}/PACKAGES", h.proxyUpstream)
-	mux.HandleFunc("GET /bin/{platform}/contrib/{rversion}/PACKAGES.gz", h.proxyUpstream)
-	mux.HandleFunc("GET /bin/{platform}/contrib/{rversion}/PACKAGES.rds", h.proxyUpstream)
+	mux.HandleFunc("GET /bin/{platform}/contrib/{rversion}/PACKAGES", h.proxyCached)
+	mux.HandleFunc("GET /bin/{platform}/contrib/{rversion}/PACKAGES.gz", h.proxyCached)
+	mux.HandleFunc("GET /bin/{platform}/contrib/{rversion}/PACKAGES.rds", h.proxyCached)
 
 	// Source package downloads
 	mux.HandleFunc("GET /src/contrib/{filename}", h.handleSourceDownload)
@@ -148,6 +148,13 @@ func (h *CRANHandler) parseBinaryFilename(filename string) (name, version string
 // isBinaryPackage returns true if the filename is a CRAN binary package.
 func (h *CRANHandler) isBinaryPackage(filename string) bool {
 	return strings.HasSuffix(filename, ".zip") || strings.HasSuffix(filename, ".tgz")
+}
+
+// proxyCached forwards a metadata request with caching.
+func (h *CRANHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
+	cacheKey := strings.TrimPrefix(r.URL.Path, "/")
+	cacheKey = strings.ReplaceAll(cacheKey, "/", "_")
+	h.proxy.ProxyCached(w, r, h.upstreamURL+r.URL.Path, "cran", cacheKey, "*/*")
 }
 
 // proxyUpstream forwards a request to CRAN without caching.

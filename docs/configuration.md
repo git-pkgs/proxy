@@ -213,6 +213,65 @@ Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyG
 
 Note: Hex cooldown requires disabling registry signature verification since the proxy re-encodes the protobuf payload without the original signature. Set `HEX_NO_VERIFY_REPO_ORIGIN=1` or configure your repo with `no_verify: true`.
 
+## Metadata Caching
+
+By default the proxy fetches metadata fresh from upstream on every request. Enable `cache_metadata` to store metadata responses in the database and storage backend for offline fallback. When upstream is unreachable, the proxy serves the last cached copy. ETag-based revalidation avoids re-downloading unchanged metadata.
+
+```yaml
+cache_metadata: true
+```
+
+Or via environment variable: `PROXY_CACHE_METADATA=true`.
+
+The `proxy mirror` command always enables metadata caching regardless of this setting.
+
+### Metadata TTL
+
+When metadata caching is enabled, `metadata_ttl` controls how long a cached response is considered fresh before revalidating with upstream. During the TTL window, cached metadata is served directly without contacting upstream, reducing latency and upstream load.
+
+```yaml
+metadata_ttl: "5m"   # default
+```
+
+Or via environment variable: `PROXY_METADATA_TTL=10m`.
+
+Set to `"0"` to always revalidate with upstream (ETag-based conditional requests still avoid re-downloading unchanged content).
+
+When upstream is unreachable and the cached entry is past its TTL, the proxy serves the stale cached copy with a `Warning: 110 - "Response is Stale"` header so clients can tell the data may be outdated.
+
+## Mirror API
+
+The `/api/mirror` endpoints are disabled by default. Enable them to allow starting mirror jobs via HTTP:
+
+```yaml
+mirror_api: true
+```
+
+Or via environment variable: `PROXY_MIRROR_API=true`.
+
+When disabled, the endpoints are not registered and return 404.
+
+## Mirror Command
+
+The `proxy mirror` command pre-populates the cache from various sources. It accepts the same storage and database flags as `serve`.
+
+| Flag | Default | Description |
+|------|---------|-------------|
+| `--sbom` | | Path to CycloneDX or SPDX SBOM file |
+| `--concurrency` | `4` | Number of parallel downloads |
+| `--dry-run` | `false` | Show what would be mirrored without downloading |
+| `--config` | | Path to configuration file |
+| `--storage-url` | | Storage URL |
+| `--database-driver` | | Database driver |
+| `--database-path` | | SQLite database file |
+| `--database-url` | | PostgreSQL connection URL |
+
+Positional arguments are treated as PURLs:
+
+```bash
+proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
+```
+
 ## Docker
 
 ### SQLite with Local Storage

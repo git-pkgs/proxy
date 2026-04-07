@@ -161,6 +161,20 @@ vulnerabilities (
     updated_at    DATETIME
 )
 -- indexes: (vuln_id, ecosystem, package_name) unique, (ecosystem, package_name)
+
+metadata_cache (
+    id            INTEGER PRIMARY KEY,
+    ecosystem     TEXT NOT NULL,
+    name          TEXT NOT NULL,
+    storage_path  TEXT NOT NULL,
+    etag          TEXT,
+    content_type  TEXT,
+    size          INTEGER,           -- BIGINT on Postgres
+    fetched_at    DATETIME,
+    created_at    DATETIME,
+    updated_at    DATETIME
+)
+-- indexes: (ecosystem, name) unique
 ```
 
 On PostgreSQL, `INTEGER PRIMARY KEY` becomes `SERIAL`, `DATETIME` becomes `TIMESTAMP`, `INTEGER DEFAULT 0` booleans become `BOOLEAN DEFAULT FALSE`, and size/count columns use `BIGINT`.
@@ -277,6 +291,12 @@ Version age filtering for supply chain attack mitigation. Configurable at global
 
 Package metadata enrichment. Fetches license, description, homepage, repository URL, and vulnerability data from upstream registries. Powers the `/api/` endpoints and the web UI's package detail pages.
 
+### `internal/mirror`
+
+Selective package mirroring for pre-populating the proxy cache. Supports multiple input sources: individual PURLs (versioned or unversioned), CycloneDX/SPDX SBOM files, and full registry enumeration. Uses a bounded worker pool backed by `errgroup` to download artifacts in parallel, reusing `handler.Proxy.GetOrFetchArtifact()` for the actual fetch-and-cache work.
+
+The package also provides a `MetadataCache` for storing raw upstream metadata blobs so the proxy can serve metadata responses offline. The `JobStore` manages async mirror jobs exposed via the `/api/mirror` endpoints.
+
 ### `internal/config`
 
 Configuration loading.
@@ -326,10 +346,11 @@ Eviction can be implemented as:
 - Ensures clients fetch artifacts through proxy
 - Alternative: Let clients fetch directly, miss cache opportunity
 
-**Why not cache metadata?**
+**Why not cache metadata (by default)?**
 - Simplicity - no invalidation logic needed
 - Fresh data - new versions visible immediately
 - Metadata is small, upstream fetch is fast
+- Set `cache_metadata: true` or use the mirror command to enable metadata caching for offline use via the `metadata_cache` table
 
 **Why stream artifacts?**
 - Memory efficient - don't load large files into RAM
