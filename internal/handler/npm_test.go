@@ -293,6 +293,62 @@ func TestNPMRewriteMetadataCooldownExemptPackage(t *testing.T) {
 	}
 }
 
+func TestNPMHandlerUsesAbbreviatedMetadata(t *testing.T) {
+	var gotAccept string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		gotAccept = r.Header.Get("Accept")
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{
+			"name": "testpkg",
+			"versions": {
+				"1.0.0": {
+					"name": "testpkg",
+					"version": "1.0.0",
+					"dist": {
+						"tarball": "https://registry.npmjs.org/testpkg/-/testpkg-1.0.0.tgz"
+					}
+				}
+			}
+		}`))
+	}))
+	defer upstream.Close()
+
+	t.Run("no cooldown uses abbreviated metadata", func(t *testing.T) {
+		h := &NPMHandler{
+			proxy:       testProxy(),
+			upstreamURL: upstream.URL,
+			proxyURL:    "http://proxy.local",
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/testpkg", nil)
+		w := httptest.NewRecorder()
+		h.handlePackageMetadata(w, req)
+
+		if gotAccept != "application/vnd.npm.install-v1+json" {
+			t.Errorf("Accept = %q, want abbreviated metadata header", gotAccept)
+		}
+	})
+
+	t.Run("cooldown enabled uses full metadata", func(t *testing.T) {
+		proxy := testProxy()
+		proxy.Cooldown = &cooldown.Config{Default: "3d"}
+
+		h := &NPMHandler{
+			proxy:       proxy,
+			upstreamURL: upstream.URL,
+			proxyURL:    "http://proxy.local",
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/testpkg", nil)
+		w := httptest.NewRecorder()
+		h.handlePackageMetadata(w, req)
+
+		if gotAccept == "application/vnd.npm.install-v1+json" {
+			t.Error("cooldown enabled should use full metadata, not abbreviated")
+		}
+	})
+}
+
 func TestNPMHandlerMetadataNotFound(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)

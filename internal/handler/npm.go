@@ -73,7 +73,13 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		JSONError(w, http.StatusInternalServerError, "failed to create request")
 		return
 	}
-	req.Header.Set("Accept", "application/json")
+	// Use abbreviated metadata when cooldown is disabled — it's much smaller
+	// (e.g. drizzle-orm: 4MB vs 92MB) but lacks the time map needed for cooldown.
+	if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
+		req.Header.Set("Accept", "application/json")
+	} else {
+		req.Header.Set("Accept", "application/vnd.npm.install-v1+json")
+	}
 
 	resp, err := h.proxy.HTTPClient.Do(req)
 	if err != nil {
