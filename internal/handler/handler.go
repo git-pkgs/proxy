@@ -4,6 +4,7 @@ package handler
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -32,15 +33,26 @@ func containsPathTraversal(path string) bool {
 
 const defaultHTTPTimeout = 30 * time.Second
 
-// maxMetadataSize is the maximum size of upstream metadata responses (50 MB).
+// maxMetadataSize is the maximum size of upstream metadata responses (100 MB).
 // Package metadata (e.g. npm with many versions) can be large, but unbounded
 // reads risk OOM if an upstream misbehaves.
-const maxMetadataSize = 50 << 20
+const maxMetadataSize = 100 << 20
+
+// ErrMetadataTooLarge is returned when upstream metadata exceeds maxMetadataSize.
+var ErrMetadataTooLarge = errors.New("metadata response exceeds size limit")
 
 // ReadMetadata reads an upstream response body with a size limit to prevent OOM
-// from unexpectedly large responses.
+// from unexpectedly large responses. Returns ErrMetadataTooLarge if the response
+// is truncated by the limit.
 func ReadMetadata(r io.Reader) ([]byte, error) {
-	return io.ReadAll(io.LimitReader(r, maxMetadataSize))
+	data, err := io.ReadAll(io.LimitReader(r, maxMetadataSize+1))
+	if err != nil {
+		return nil, err
+	}
+	if int64(len(data)) > maxMetadataSize {
+		return nil, ErrMetadataTooLarge
+	}
+	return data, nil
 }
 
 // Proxy provides shared functionality for protocol handlers.
