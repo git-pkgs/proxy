@@ -1,0 +1,25 @@
+internal/handler/npm.go
+  a7b12ff75d3e4cf6 76-82
+internal/handler/npm_test.go
+  a7b12ff75d3e4cf6 296-351
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "01b4e7210dccd985c58fa02224023880d2aa282b",
+  "prompts": {
+    "a7b12ff75d3e4cf6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4b6072d3-56be-4514-be73-3cd291e6bd62",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 68,
+      "total_deletions": 6,
+      "accepted_lines": 63,
+      "overriden_lines": 0
+    }
+  }
+}
