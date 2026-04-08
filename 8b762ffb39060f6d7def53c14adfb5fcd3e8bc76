@@ -1,0 +1,25 @@
+internal/handler/read_metadata_test.go
+  a7b12ff75d3e4cf6 5,21-22,34-42
+internal/handler/handler.go
+  a7b12ff75d3e4cf6 7,36,39,41-42,45-46,48-55
+---
+{
+  "schema_version": "authorship/3.0.0",
+  "git_ai_version": "1.2.5",
+  "base_commit_sha": "8b762ffb39060f6d7def53c14adfb5fcd3e8bc76",
+  "prompts": {
+    "a7b12ff75d3e4cf6": {
+      "agent_id": {
+        "tool": "claude",
+        "id": "4b6072d3-56be-4514-be73-3cd291e6bd62",
+        "model": "claude-opus-4-6"
+      },
+      "human_author": "Andrew Nesbitt",
+      "messages": [],
+      "total_additions": 30,
+      "total_deletions": 7,
+      "accepted_lines": 30,
+      "overriden_lines": 0
+    }
+  }
+}
