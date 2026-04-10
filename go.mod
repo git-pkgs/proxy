@@ -9,7 +9,7 @@ require (
 	github.com/git-pkgs/registries v0.4.0
 	github.com/git-pkgs/spdx v0.1.2
 	github.com/git-pkgs/vers v0.2.4
-	github.com/git-pkgs/vulns v0.1.3
+	github.com/git-pkgs/vulns v0.1.4
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.2
