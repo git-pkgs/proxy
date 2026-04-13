@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -87,32 +88,16 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 
 	h.proxy.Logger.Info("composer metadata request", "package", packageName)
 
-	// Fetch from repo.packagist.org (Composer v2 metadata)
 	upstreamURL := fmt.Sprintf("%s/p2/%s/%s.json", h.repoURL, vendor, pkg)
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "composer", packageName, upstreamURL)
 	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
+		if errors.Is(err, ErrUpstreamNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 		h.proxy.Logger.Error("upstream request failed", "error", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
-		return
-	}
-
-	body, err := ReadMetadata(resp.Body)
-	if err != nil {
-		http.Error(w, "failed to read response", http.StatusInternalServerError)
 		return
 	}
 

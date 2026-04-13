@@ -2,8 +2,8 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -89,30 +89,14 @@ func (h *PubHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 
 	upstreamURL := fmt.Sprintf("%s/api/packages/%s", h.upstreamURL, name)
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "pub", name, upstreamURL)
 	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-	req.Header.Set("Accept", "application/json")
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
+		if errors.Is(err, ErrUpstreamNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 		h.proxy.Logger.Error("upstream request failed", "error", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
-		return
-	}
-
-	body, err := ReadMetadata(resp.Body)
-	if err != nil {
-		http.Error(w, "failed to read response", http.StatusInternalServerError)
 		return
 	}
 

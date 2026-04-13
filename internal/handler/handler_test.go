@@ -486,3 +486,302 @@ func TestNewProxy_NilLogger(t *testing.T) {
 		t.Error("Logger should be set to default when nil is passed")
 	}
 }
+
+const testLastModified = "Wed, 01 Jan 2025 12:00:00 GMT"
+
+// setupCachedProxy creates a Proxy with CacheMetadata enabled and an upstream
+// test server that returns JSON with ETag and Last-Modified headers.
+func setupCachedProxy(t *testing.T, upstreamETag, upstreamLastModified string) (*Proxy, *httptest.Server) {
+	t.Helper()
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if upstreamETag != "" {
+			w.Header().Set("ETag", upstreamETag)
+		}
+		if upstreamLastModified != "" {
+			w.Header().Set("Last-Modified", upstreamLastModified)
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.HTTPClient = upstream.Client()
+
+	return proxy, upstream
+}
+
+func TestProxyCached_SetsETagAndLastModified(t *testing.T) {
+	lm := testLastModified
+	proxy, upstream := setupCachedProxy(t, `"abc123"`, lm)
+
+	// First request populates the cache
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+	proxy.ProxyCached(w, req, upstream.URL+"/test", "test-eco", "test-key")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if got := w.Header().Get("ETag"); got != `"abc123"` {
+		t.Errorf("ETag = %q, want %q", got, `"abc123"`)
+	}
+	if got := w.Header().Get("Last-Modified"); got != lm {
+		t.Errorf("Last-Modified = %q, want %q", got, lm)
+	}
+	if got := w.Header().Get("Content-Length"); got != "11" {
+		t.Errorf("Content-Length = %q, want %q", got, "11")
+	}
+	if w.Body.String() != `{"ok":true}` {
+		t.Errorf("body = %q, want %q", w.Body.String(), `{"ok":true}`)
+	}
+}
+
+func TestProxyCached_IfNoneMatch_Returns304(t *testing.T) {
+	proxy, upstream := setupCachedProxy(t, `"abc123"`, "")
+
+	// Populate cache
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+	proxy.ProxyCached(w, req, upstream.URL+"/test", "test-eco", "etag-key")
+	if w.Code != http.StatusOK {
+		t.Fatalf("initial request: status = %d, want 200", w.Code)
+	}
+
+	// Conditional request with matching ETag
+	req = httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("If-None-Match", `"abc123"`)
+	w = httptest.NewRecorder()
+	proxy.ProxyCached(w, req, upstream.URL+"/test", "test-eco", "etag-key")
+
+	if w.Code != http.StatusNotModified {
+		t.Errorf("conditional request: status = %d, want 304", w.Code)
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("304 response should have empty body, got %d bytes", w.Body.Len())
+	}
+}
+
+func TestProxyCached_IfNoneMatch_NonMatching_Returns200(t *testing.T) {
+	proxy, upstream := setupCachedProxy(t, `"abc123"`, "")
+
+	// Populate cache
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+	proxy.ProxyCached(w, req, upstream.URL+"/test", "test-eco", "etag-nm-key")
+	if w.Code != http.StatusOK {
+		t.Fatalf("initial request: status = %d, want 200", w.Code)
+	}
+
+	// Conditional request with non-matching ETag
+	req = httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("If-None-Match", `"different"`)
+	w = httptest.NewRecorder()
+	proxy.ProxyCached(w, req, upstream.URL+"/test", "test-eco", "etag-nm-key")
+
+	if w.Code != http.StatusOK {
+		t.Errorf("non-matching ETag: status = %d, want 200", w.Code)
+	}
+}
+
+func TestProxyCached_IfModifiedSince_Returns304(t *testing.T) {
+	lm := testLastModified
+	proxy, upstream := setupCachedProxy(t, "", lm)
+
+	// Populate cache
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+	proxy.ProxyCached(w, req, upstream.URL+"/test", "test-eco", "lm-key")
+	if w.Code != http.StatusOK {
+		t.Fatalf("initial request: status = %d, want 200", w.Code)
+	}
+
+	// Conditional request with If-Modified-Since equal to Last-Modified
+	req = httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("If-Modified-Since", lm)
+	w = httptest.NewRecorder()
+	proxy.ProxyCached(w, req, upstream.URL+"/test", "test-eco", "lm-key")
+
+	if w.Code != http.StatusNotModified {
+		t.Errorf("conditional request: status = %d, want 304", w.Code)
+	}
+}
+
+func TestProxyCached_IfModifiedSince_OlderDate_Returns200(t *testing.T) {
+	lm := testLastModified
+	proxy, upstream := setupCachedProxy(t, "", lm)
+
+	// Populate cache
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+	proxy.ProxyCached(w, req, upstream.URL+"/test", "test-eco", "lm-old-key")
+	if w.Code != http.StatusOK {
+		t.Fatalf("initial request: status = %d, want 200", w.Code)
+	}
+
+	// Conditional request with If-Modified-Since older than Last-Modified
+	req = httptest.NewRequest(http.MethodGet, "/test", nil)
+	req.Header.Set("If-Modified-Since", "Mon, 01 Dec 2024 12:00:00 GMT")
+	w = httptest.NewRecorder()
+	proxy.ProxyCached(w, req, upstream.URL+"/test", "test-eco", "lm-old-key")
+
+	if w.Code != http.StatusOK {
+		t.Errorf("older If-Modified-Since: status = %d, want 200", w.Code)
+	}
+}
+
+func TestProxyCached_NoValidators_OmitsHeaders(t *testing.T) {
+	proxy, upstream := setupCachedProxy(t, "", "")
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+	proxy.ProxyCached(w, req, upstream.URL+"/test", "test-eco", "no-val-key")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if got := w.Header().Get("ETag"); got != "" {
+		t.Errorf("ETag should be empty when upstream has none, got %q", got)
+	}
+	if got := w.Header().Get("Last-Modified"); got != "" {
+		t.Errorf("Last-Modified should be empty when upstream has none, got %q", got)
+	}
+}
+
+func TestFetchOrCacheMetadata_TTL_ServesFreshFromCache(t *testing.T) {
+	upstreamHits := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"v":1}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = 1 * time.Hour
+	proxy.HTTPClient = upstream.Client()
+
+	ctx := context.Background()
+
+	// First request populates cache
+	body, _, err := proxy.FetchOrCacheMetadata(ctx, "test", "ttl-pkg", upstream.URL+"/pkg")
+	if err != nil {
+		t.Fatalf("first fetch: %v", err)
+	}
+	if string(body) != `{"v":1}` {
+		t.Errorf("body = %q, want %q", body, `{"v":1}`)
+	}
+	if upstreamHits != 1 {
+		t.Fatalf("expected 1 upstream hit, got %d", upstreamHits)
+	}
+
+	// Second request within TTL should serve from cache without hitting upstream
+	body, _, err = proxy.FetchOrCacheMetadata(ctx, "test", "ttl-pkg", upstream.URL+"/pkg")
+	if err != nil {
+		t.Fatalf("second fetch: %v", err)
+	}
+	if string(body) != `{"v":1}` {
+		t.Errorf("body = %q, want %q", body, `{"v":1}`)
+	}
+	if upstreamHits != 1 {
+		t.Errorf("expected upstream to still be hit only once, got %d", upstreamHits)
+	}
+}
+
+func TestFetchOrCacheMetadata_TTL_Zero_AlwaysRevalidates(t *testing.T) {
+	upstreamHits := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"v":1}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = 0 // always revalidate
+	proxy.HTTPClient = upstream.Client()
+
+	ctx := context.Background()
+
+	_, _, err := proxy.FetchOrCacheMetadata(ctx, "test", "ttl0-pkg", upstream.URL+"/pkg")
+	if err != nil {
+		t.Fatalf("first fetch: %v", err)
+	}
+
+	_, _, err = proxy.FetchOrCacheMetadata(ctx, "test", "ttl0-pkg", upstream.URL+"/pkg")
+	if err != nil {
+		t.Fatalf("second fetch: %v", err)
+	}
+
+	if upstreamHits != 2 {
+		t.Errorf("expected 2 upstream hits with TTL=0, got %d", upstreamHits)
+	}
+}
+
+func TestProxyCached_StaleWarningHeader(t *testing.T) {
+	requestCount := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestCount++
+		if requestCount == 1 {
+			// First request succeeds to populate cache
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = w.Write([]byte(`{"cached":true}`))
+			return
+		}
+		// Subsequent requests fail to simulate upstream outage
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(upstream.Close)
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = 1 * time.Millisecond // very short TTL so it expires immediately
+	proxy.HTTPClient = upstream.Client()
+
+	// First request populates cache
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+	proxy.ProxyCached(w, req, upstream.URL+"/test", "test-eco", "stale-key")
+	if w.Code != http.StatusOK {
+		t.Fatalf("initial request: status = %d, want 200", w.Code)
+	}
+
+	// Wait for TTL to expire
+	time.Sleep(5 * time.Millisecond)
+
+	// Second request: upstream fails, should serve stale cache with Warning header
+	req = httptest.NewRequest(http.MethodGet, "/test", nil)
+	w = httptest.NewRecorder()
+	proxy.ProxyCached(w, req, upstream.URL+"/test", "test-eco", "stale-key")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("stale request: status = %d, want 200", w.Code)
+	}
+	if w.Body.String() != `{"cached":true}` {
+		t.Errorf("body = %q, want %q", w.Body.String(), `{"cached":true}`)
+	}
+	if got := w.Header().Get("Warning"); got != `110 - "Response is Stale"` {
+		t.Errorf("Warning = %q, want %q", got, `110 - "Response is Stale"`)
+	}
+}
+
+func TestProxyCached_FreshResponse_NoWarningHeader(t *testing.T) {
+	proxy, upstream := setupCachedProxy(t, "", "")
+	proxy.MetadataTTL = 1 * time.Hour
+
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	w := httptest.NewRecorder()
+	proxy.ProxyCached(w, req, upstream.URL+"/test", "test-eco", "fresh-key")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if got := w.Header().Get("Warning"); got != "" {
+		t.Errorf("Warning should be empty for fresh response, got %q", got)
+	}
+}

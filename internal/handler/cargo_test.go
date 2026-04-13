@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"bytes"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -196,9 +195,9 @@ func TestCargoCooldown(t *testing.T) {
 		proxyURL: "http://localhost:8080",
 	}
 
-	var outputBuffer bytes.Buffer
-	h.applyCooldownFiltering(&outputBuffer, strings.NewReader(testInput.String()))
-	output := outputBuffer.String()
+	recorder := httptest.NewRecorder()
+	h.applyCooldownFiltering(recorder, []byte(testInput.String()))
+	output := recorder.Body.String()
 
 	if output != expectedOutput.String() {
 		t.Errorf("output = %q, want %q", output, expectedOutput.String())

@@ -41,9 +41,9 @@ func (h *HexHandler) Routes() http.Handler {
 	// Package tarballs (cache these)
 	mux.HandleFunc("GET /tarballs/{filename}", h.handleDownload)
 
-	// Registry resources (proxy without caching)
-	mux.HandleFunc("GET /names", h.proxyUpstream)
-	mux.HandleFunc("GET /versions", h.proxyUpstream)
+	// Registry resources (cached for offline)
+	mux.HandleFunc("GET /names", h.proxyCached)
+	mux.HandleFunc("GET /versions", h.proxyCached)
 	mux.HandleFunc("GET /packages/{name}", h.handlePackages)
 
 	// Public keys
@@ -102,13 +102,13 @@ const hexAPIURL = "https://hex.pm"
 // Hex HTTP API concurrently.
 func (h *HexHandler) handlePackages(w http.ResponseWriter, r *http.Request) {
 	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		h.proxyUpstream(w, r)
+		h.proxyCached(w, r)
 		return
 	}
 
 	name := r.PathValue("name")
 	if name == "" {
-		h.proxyUpstream(w, r)
+		h.proxyCached(w, r)
 		return
 	}
 
@@ -415,6 +415,12 @@ func extractProtobufBytes(data []byte, fieldNum protowire.Number) ([]byte, error
 		}
 	}
 	return nil, fmt.Errorf("field %d not found", fieldNum)
+}
+
+// proxyCached forwards a request with metadata caching.
+func (h *HexHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
+	cacheKey := strings.TrimPrefix(r.URL.Path, "/")
+	h.proxy.ProxyCached(w, r, h.upstreamURL+r.URL.Path, "hex", cacheKey, "*/*")
 }
 
 // proxyUpstream forwards a request to hex.pm without caching.

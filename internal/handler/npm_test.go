@@ -324,7 +324,7 @@ func TestNPMHandlerUsesAbbreviatedMetadata(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.handlePackageMetadata(w, req)
 
-		if gotAccept != "application/vnd.npm.install-v1+json" {
+		if gotAccept != npmAbbreviatedCT {
 			t.Errorf("Accept = %q, want abbreviated metadata header", gotAccept)
 		}
 	})
@@ -343,7 +343,7 @@ func TestNPMHandlerUsesAbbreviatedMetadata(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.handlePackageMetadata(w, req)
 
-		if gotAccept == "application/vnd.npm.install-v1+json" {
+		if gotAccept == npmAbbreviatedCT {
 			t.Error("cooldown enabled should use full metadata, not abbreviated")
 		}
 	})

@@ -230,8 +230,9 @@ func TestNuGetHandleServiceIndexUpstreamError(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.handleServiceIndex(w, req)
 
-	if w.Code != http.StatusInternalServerError {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusInternalServerError)
+	// With metadata caching, upstream 500 is reported as 502 (bad gateway)
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadGateway)
 	}
 }
 

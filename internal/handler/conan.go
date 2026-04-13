@@ -43,8 +43,8 @@ func (h *ConanHandler) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/files/{name}/{version}/{user}/{channel}/{revision}/package/{pkgref}/{pkgrev}/{filename}", h.handlePackageFile)
 	mux.HandleFunc("GET /v2/files/{name}/{version}/{user}/{channel}/{revision}/package/{pkgref}/{pkgrev}/{filename}", h.handlePackageFile)
 
-	// Proxy all other endpoints (metadata, search, etc.)
-	mux.HandleFunc("GET /", h.proxyUpstream)
+	// Proxy all other endpoints (metadata, search, etc.) with caching
+	mux.HandleFunc("GET /", h.proxyCached)
 
 	return mux
 }
@@ -145,6 +145,20 @@ func (h *ConanHandler) shouldCacheFile(filename string) bool {
 		}
 	}
 	return false
+}
+
+// proxyCached forwards a request with metadata caching.
+func (h *ConanHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
+	cacheKey := strings.TrimPrefix(r.URL.Path, "/")
+	cacheKey = strings.ReplaceAll(cacheKey, "/", "_")
+	if r.URL.RawQuery != "" {
+		cacheKey += "_" + r.URL.RawQuery
+	}
+	upstreamURL := h.upstreamURL + r.URL.Path
+	if r.URL.RawQuery != "" {
+		upstreamURL += "?" + r.URL.RawQuery
+	}
+	h.proxy.ProxyCached(w, r, upstreamURL, "conan", cacheKey, "*/*")
 }
 
 // proxyUpstream forwards a request to conan center without caching.

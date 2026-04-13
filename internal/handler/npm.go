@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
@@ -13,8 +14,9 @@ import (
 )
 
 const (
-	npmUpstream = "https://registry.npmjs.org"
-	scopedParts = 2 // scope + name in scoped packages
+	npmUpstream      = "https://registry.npmjs.org"
+	npmAbbreviatedCT = "application/vnd.npm.install-v1+json"
+	scopedParts      = 2 // scope + name in scoped packages
 )
 
 // NPMHandler handles npm registry protocol requests.
@@ -65,43 +67,23 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 
 	h.proxy.Logger.Info("npm metadata request", "package", packageName)
 
-	// Fetch metadata from upstream
 	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, url.PathEscape(packageName))
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
-	if err != nil {
-		JSONError(w, http.StatusInternalServerError, "failed to create request")
-		return
-	}
 	// Use abbreviated metadata when cooldown is disabled — it's much smaller
 	// (e.g. drizzle-orm: 4MB vs 92MB) but lacks the time map needed for cooldown.
+	accept := npmAbbreviatedCT
 	if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
-		req.Header.Set("Accept", "application/json")
-	} else {
-		req.Header.Set("Accept", "application/vnd.npm.install-v1+json")
+		accept = contentTypeJSON
 	}
 
-	resp, err := h.proxy.HTTPClient.Do(req)
+	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "npm", packageName, upstreamURL, accept)
 	if err != nil {
-		h.proxy.Logger.Error("failed to fetch upstream metadata", "error", err)
+		if errors.Is(err, ErrUpstreamNotFound) {
+			JSONError(w, http.StatusNotFound, "package not found")
+			return
+		}
+		h.proxy.Logger.Error("failed to fetch npm metadata", "error", err)
 		JSONError(w, http.StatusBadGateway, "failed to fetch from upstream")
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode == http.StatusNotFound {
-		JSONError(w, http.StatusNotFound, "package not found")
-		return
-	}
-	if resp.StatusCode != http.StatusOK {
-		JSONError(w, http.StatusBadGateway, fmt.Sprintf("upstream returned %d", resp.StatusCode))
-		return
-	}
-
-	// Parse and rewrite tarball URLs
-	body, err := ReadMetadata(resp.Body)
-	if err != nil {
-		JSONError(w, http.StatusInternalServerError, "failed to read response")
 		return
 	}
 
@@ -109,13 +91,13 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 	if err != nil {
 		// If rewriting fails, just proxy the original
 		h.proxy.Logger.Warn("failed to rewrite metadata, proxying original", "error", err)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Type", contentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set("Content-Type", contentTypeJSON)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(rewritten)
 }
