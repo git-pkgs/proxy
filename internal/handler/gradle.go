@@ -71,9 +71,7 @@ func (h *GradleBuildCacheHandler) parseCacheKey(urlPath string) (string, int) {
 		return "", http.StatusBadRequest
 	}
 
-	if strings.HasPrefix(keyPath, gradleBuildCachePathPrefix) {
-		keyPath = strings.TrimPrefix(keyPath, gradleBuildCachePathPrefix)
-	}
+	keyPath = strings.TrimPrefix(keyPath, gradleBuildCachePathPrefix)
 
 	if keyPath == "" || strings.Contains(keyPath, "/") {
 		return "", http.StatusNotFound
