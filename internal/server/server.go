@@ -9,6 +9,7 @@
 //   - /pub/*      - pub.dev registry protocol
 //   - /pypi/*     - PyPI registry protocol
 //   - /maven/*    - Maven repository protocol
+//   - /gradle/*   - Gradle HttpBuildCache protocol
 //   - /nuget/*    - NuGet V3 API protocol
 //   - /composer/* - Composer/Packagist protocol
 //   - /conan/*    - Conan C/C++ protocol
@@ -177,6 +178,7 @@ func (s *Server) Start() error {
 	pubHandler := handler.NewPubHandler(proxy, s.cfg.BaseURL)
 	pypiHandler := handler.NewPyPIHandler(proxy, s.cfg.BaseURL)
 	mavenHandler := handler.NewMavenHandler(proxy, s.cfg.BaseURL)
+	gradleHandler := handler.NewGradleBuildCacheHandler(proxy, s.cfg.BaseURL)
 	nugetHandler := handler.NewNuGetHandler(proxy, s.cfg.BaseURL)
 	composerHandler := handler.NewComposerHandler(proxy, s.cfg.BaseURL)
 	conanHandler := handler.NewConanHandler(proxy, s.cfg.BaseURL)
@@ -194,6 +196,7 @@ func (s *Server) Start() error {
 	r.Mount("/pub", http.StripPrefix("/pub", pubHandler.Routes()))
 	r.Mount("/pypi", http.StripPrefix("/pypi", pypiHandler.Routes()))
 	r.Mount("/maven", http.StripPrefix("/maven", mavenHandler.Routes()))
+	r.Mount("/gradle", http.StripPrefix("/gradle", gradleHandler.Routes()))
 	r.Mount("/nuget", http.StripPrefix("/nuget", nugetHandler.Routes()))
 	r.Mount("/composer", http.StripPrefix("/composer", composerHandler.Routes()))
 	r.Mount("/conan", http.StripPrefix("/conan", conanHandler.Routes()))

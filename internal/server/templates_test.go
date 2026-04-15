@@ -193,7 +193,7 @@ func TestInstallPage(t *testing.T) {
 	body := w.Body.String()
 
 	// Should contain instructions for all registries
-	registries := []string{"npm", "Cargo", "RubyGems", "Go Modules", "PyPI", "Maven", "NuGet", "Composer", "Conan", "Conda", "CRAN"}
+	registries := []string{"npm", "Cargo", "RubyGems", "Go Modules", "PyPI", "Maven", "Gradle Build Cache", "NuGet", "Composer", "Conan", "Conda", "CRAN"}
 	for _, reg := range registries {
 		if !strings.Contains(body, reg) {
 			t.Errorf("install page should contain %s instructions", reg)
@@ -334,7 +334,6 @@ func TestSearchPage_EcosystemFilter(t *testing.T) {
 		t.Errorf("expected status 200, got %d", w.Code)
 	}
 }
-
 
 func TestEcosystemBadgeLabel(t *testing.T) {
 	tests := []struct {

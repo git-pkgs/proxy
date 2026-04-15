@@ -72,12 +72,14 @@ func newTestServer(t *testing.T) *testServer {
 	gemHandler := handler.NewGemHandler(proxy, cfg.BaseURL)
 	goHandler := handler.NewGoHandler(proxy, cfg.BaseURL)
 	pypiHandler := handler.NewPyPIHandler(proxy, cfg.BaseURL)
+	gradleHandler := handler.NewGradleBuildCacheHandler(proxy, cfg.BaseURL)
 
 	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))
 	r.Mount("/cargo", http.StripPrefix("/cargo", cargoHandler.Routes()))
 	r.Mount("/gem", http.StripPrefix("/gem", gemHandler.Routes()))
 	r.Mount("/go", http.StripPrefix("/go", goHandler.Routes()))
 	r.Mount("/pypi", http.StripPrefix("/pypi", pypiHandler.Routes()))
+	r.Mount("/gradle", http.StripPrefix("/gradle", gradleHandler.Routes()))
 
 	// Create a minimal server struct for the handlers
 	s := &Server{
@@ -341,6 +343,33 @@ func TestPyPISimple(t *testing.T) {
 
 	if w.Code == http.StatusNotFound {
 		t.Error("pypi handler should be mounted")
+	}
+}
+
+func TestGradleBuildCachePutGet(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	key := "abc123def456"
+	body := "build-cache-bytes"
+
+	putReq := httptest.NewRequest(http.MethodPut, "/gradle/cache/"+key, strings.NewReader(body))
+	putW := httptest.NewRecorder()
+	ts.handler.ServeHTTP(putW, putReq)
+
+	if putW.Code != http.StatusCreated {
+		t.Fatalf("expected status 201, got %d: %s", putW.Code, putW.Body.String())
+	}
+
+	getReq := httptest.NewRequest(http.MethodGet, "/gradle/cache/"+key, nil)
+	getW := httptest.NewRecorder()
+	ts.handler.ServeHTTP(getW, getReq)
+
+	if getW.Code != http.StatusOK {
+		t.Fatalf("expected status 200, got %d: %s", getW.Code, getW.Body.String())
+	}
+	if got := getW.Body.String(); got != body {
+		t.Fatalf("expected body %q, got %q", body, got)
 	}
 }
 
