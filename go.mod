@@ -13,7 +13,7 @@ require (
 	github.com/git-pkgs/vulns v0.1.4
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/lib/pq v1.12.2
+	github.com/lib/pq v1.12.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/spdx/tools-golang v0.5.7
