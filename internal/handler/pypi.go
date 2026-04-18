@@ -17,11 +17,11 @@ import (
 )
 
 const (
-	pypiUpstream      = "https://pypi.org"
-	minWheelParts     = 5 // name + version + python + abi + platform
-	minSubmatchParts  = 2 // full match + first capture group
-	minPyPIPathParts  = 3 // hash_prefix + hash + filename
-	minPythonTagLen   = 2 // minimum length for a python tag (e.g., "py")
+	pypiUpstream     = "https://pypi.org"
+	minWheelParts    = 5 // name + version + python + abi + platform
+	minSubmatchParts = 2 // full match + first capture group
+	minPyPIPathParts = 3 // hash_prefix + hash + filename
+	minPythonTagLen  = 2 // minimum length for a python tag (e.g., "py")
 )
 
 // PyPIHandler handles PyPI registry protocol requests.

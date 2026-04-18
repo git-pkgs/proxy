@@ -86,7 +86,6 @@ func openArchive(filename string, content io.Reader, ecosystem string) (archives
 	return archives.OpenWithPrefix(fname, bytes.NewReader(data), prefix)
 }
 
-
 // BrowseListResponse contains the file listing for a directory in an archives.
 type BrowseListResponse struct {
 	Path  string           `json:"path"`

@@ -58,11 +58,11 @@ func TestCondaIsPackageFile(t *testing.T) {
 
 func TestCondaCooldownFiltering(t *testing.T) {
 	now := time.Now()
-	oldTimestamp := float64(now.Add(-7*24*time.Hour).UnixMilli())
-	recentTimestamp := float64(now.Add(-1*time.Hour).UnixMilli())
+	oldTimestamp := float64(now.Add(-7 * 24 * time.Hour).UnixMilli())
+	recentTimestamp := float64(now.Add(-1 * time.Hour).UnixMilli())
 
 	repodata := map[string]any{
-		"info":    map[string]any{},
+		"info": map[string]any{},
 		"packages": map[string]any{
 			"numpy-1.24.0-old.tar.bz2": map[string]any{
 				"name":      "numpy",

@@ -169,8 +169,8 @@ func TestHandleBrowseFile(t *testing.T) {
 
 func TestDetectContentType(t *testing.T) {
 	tests := []struct {
-		filename    string
-		expectedCT  string
+		filename   string
+		expectedCT string
 	}{
 		{"file.txt", contentTypePlainText},
 		{"file.md", contentTypePlainText},
@@ -616,9 +616,9 @@ func TestArchiveFilename(t *testing.T) {
 
 func TestOpenArchiveStripsSingleRootDir(t *testing.T) {
 	data := createZipArchive(t, map[string]string{
-		"repo-abc123/README.md":    "hello",
-		"repo-abc123/src/main.go":  "package main",
-		"repo-abc123/go.mod":       "module test",
+		"repo-abc123/README.md":   "hello",
+		"repo-abc123/src/main.go": "package main",
+		"repo-abc123/go.mod":      "module test",
 	})
 	reader, err := openArchive("test.zip", bytes.NewReader(data), "composer")
 	if err != nil {

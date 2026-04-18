@@ -86,8 +86,8 @@ func TestContainerHandler_parseManifestPath(t *testing.T) {
 			wantReference: "sha256:abc123",
 		},
 		{
-			path:       "invalid/path",
-			wantName:   "",
+			path:     "invalid/path",
+			wantName: "",
 		},
 	}
 

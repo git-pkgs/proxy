@@ -306,7 +306,6 @@ func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request,
 	w.WriteHeader(resp.StatusCode)
 }
 
-
 // containerError writes an OCI-compliant error response.
 func (h *ContainerHandler) containerError(w http.ResponseWriter, status int, code, message string) {
 	w.Header().Set("Content-Type", "application/json")

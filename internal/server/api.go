@@ -585,11 +585,11 @@ func (h *APIHandler) HandlePackagesList(w http.ResponseWriter, r *http.Request) 
 
 	validSorts := map[string]bool{
 		defaultSortBy: true,
-		"name":      true,
-		"size":      true,
-		"cached_at": true,
-		"ecosystem": true,
-		"vulns":     true,
+		"name":        true,
+		"size":        true,
+		"cached_at":   true,
+		"ecosystem":   true,
+		"vulns":       true,
 	}
 	if !validSorts[sortBy] {
 		http.Error(w, "invalid sort parameter", http.StatusBadRequest)

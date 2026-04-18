@@ -41,9 +41,9 @@ type JobRequest struct {
 
 // JobStore manages in-memory mirror jobs.
 type JobStore struct {
-	mu      sync.RWMutex
-	jobs    map[string]*Job
-	mirror  *Mirror
+	mu        sync.RWMutex
+	jobs      map[string]*Job
+	mirror    *Mirror
 	parentCtx context.Context
 }
 

@@ -93,16 +93,16 @@ type MetadataCacheEntry struct {
 
 // Vulnerability represents a cached vulnerability record.
 type Vulnerability struct {
-	ID           int64          `db:"id" json:"id"`
-	VulnID       string         `db:"vuln_id" json:"vuln_id"`
-	Ecosystem    string         `db:"ecosystem" json:"ecosystem"`
-	PackageName  string         `db:"package_name" json:"package_name"`
-	Severity     sql.NullString `db:"severity" json:"severity,omitempty"`
-	Summary      sql.NullString `db:"summary" json:"summary,omitempty"`
-	FixedVersion sql.NullString `db:"fixed_version" json:"fixed_version,omitempty"`
+	ID           int64           `db:"id" json:"id"`
+	VulnID       string          `db:"vuln_id" json:"vuln_id"`
+	Ecosystem    string          `db:"ecosystem" json:"ecosystem"`
+	PackageName  string          `db:"package_name" json:"package_name"`
+	Severity     sql.NullString  `db:"severity" json:"severity,omitempty"`
+	Summary      sql.NullString  `db:"summary" json:"summary,omitempty"`
+	FixedVersion sql.NullString  `db:"fixed_version" json:"fixed_version,omitempty"`
 	CVSSScore    sql.NullFloat64 `db:"cvss_score" json:"cvss_score,omitempty"`
-	References   sql.NullString `db:"references" json:"references,omitempty"`
-	FetchedAt    sql.NullTime   `db:"fetched_at" json:"fetched_at,omitempty"`
-	CreatedAt    time.Time      `db:"created_at" json:"created_at"`
-	UpdatedAt    time.Time      `db:"updated_at" json:"updated_at"`
+	References   sql.NullString  `db:"references" json:"references,omitempty"`
+	FetchedAt    sql.NullTime    `db:"fetched_at" json:"fetched_at,omitempty"`
+	CreatedAt    time.Time       `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time       `db:"updated_at" json:"updated_at"`
 }

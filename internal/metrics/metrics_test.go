@@ -48,7 +48,7 @@ func TestRecordStorageOperations(t *testing.T) {
 
 func TestUpdateCacheStats(t *testing.T) {
 	UpdateCacheStats(1024*1024*1024, 100) // 1GB, 100 artifacts
-	UpdateCacheStats(0, 0)                  // Empty cache
+	UpdateCacheStats(0, 0)                // Empty cache
 
 	// No panics = success
 }

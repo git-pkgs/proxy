@@ -335,7 +335,6 @@ func TestSearchPage_EcosystemFilter(t *testing.T) {
 	}
 }
 
-
 func TestEcosystemBadgeLabel(t *testing.T) {
 	tests := []struct {
 		ecosystem string
