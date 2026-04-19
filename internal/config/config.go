@@ -58,6 +58,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/config/cargo"
+	"github.com/git-pkgs/proxy/internal/config/debian"
 	"gopkg.in/yaml.v3"
 )
 
@@ -82,6 +84,9 @@ type Config struct {
 
 	// Upstream configures upstream registry URLs (optional overrides).
 	Upstream UpstreamConfig `json:"upstream" yaml:"upstream"`
+
+	// Ecosystem configures ecosystem routes and upstreams
+	Ecosystem EcosystemConfig `json:"ecosystem" yaml:"ecosystem"`
 
 	// Cooldown configures version age filtering to mitigate supply chain attacks.
 	Cooldown CooldownConfig `json:"cooldown" yaml:"cooldown"`
@@ -306,6 +311,14 @@ func Default() *Config {
 			Level:  "info",
 			Format: "text",
 		},
+		Ecosystem: EcosystemConfig{
+			Cargo: cargo.Config{
+				IncludeDefault: true,
+			},
+			Debian: debian.Config{
+				IncludeDefault: true,
+			},
+		},
 		Upstream: UpstreamConfig{
 			NPM:                "https://registry.npmjs.org",
 			Maven:              "https://repo1.maven.org/maven2",
@@ -446,6 +459,14 @@ func (c *Config) LoadFromEnv() {
 
 // Validate checks the configuration for errors.
 func (c *Config) Validate() error {
+	// finalize the configuration by injecting default routes if requested
+	if c.Ecosystem.Cargo.IncludeDefault {
+		c.Ecosystem.Cargo.Route = append(c.Ecosystem.Cargo.Route, cargo.RouteDefault)
+	}
+	if c.Ecosystem.Debian.IncludeDefault {
+		c.Ecosystem.Debian.Route = append(c.Ecosystem.Debian.Route, debian.RouteDefault)
+	}
+
 	if c.Listen == "" {
 		return fmt.Errorf("listen address is required")
 	}
@@ -513,67 +534,11 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	if err := c.Health.Validate(); err != nil {
+	if err := c.Ecosystem.Cargo.Validate(); err != nil {
 		return err
 	}
-
-	if err := c.Gradle.BuildCache.Validate(); err != nil {
+	if err := c.Ecosystem.Debian.Validate(); err != nil {
 		return err
-	}
-
-	return nil
-}
-
-// Validate checks the /health configuration. An unset interval is allowed
-// (the cache uses its default); explicit values must parse and be non-negative.
-func (h *HealthConfig) Validate() error {
-	if h.StorageProbeInterval == "" || h.StorageProbeInterval == "0" {
-		return nil
-	}
-	d, err := time.ParseDuration(h.StorageProbeInterval)
-	if err != nil {
-		return fmt.Errorf("invalid health.storage_probe_interval %q: %w", h.StorageProbeInterval, err)
-	}
-	if d < 0 {
-		return fmt.Errorf("invalid health.storage_probe_interval %q: must be non-negative", h.StorageProbeInterval)
-	}
-	return nil
-}
-
-// Validate checks Gradle build cache settings, applying the default upload
-// size if unset.
-func (g *GradleBuildCacheConfig) Validate() error {
-	if g.MaxUploadSize == "" {
-		g.MaxUploadSize = defaultGradleMaxUploadSizeStr
-	}
-	uploadSize, err := ParseSize(g.MaxUploadSize)
-	if err != nil {
-		return fmt.Errorf("invalid gradle.build_cache.max_upload_size: %w", err)
-	}
-	if uploadSize <= 0 {
-		return fmt.Errorf("invalid gradle.build_cache.max_upload_size %q: must be > 0", g.MaxUploadSize)
-	}
-
-	if g.MaxAge != "" && g.MaxAge != "0" {
-		if _, err := time.ParseDuration(g.MaxAge); err != nil {
-			return fmt.Errorf("invalid gradle.build_cache.max_age %q: %w", g.MaxAge, err)
-		}
-	}
-
-	if g.MaxSize != "" {
-		if _, err := ParseSize(g.MaxSize); err != nil {
-			return fmt.Errorf("invalid gradle.build_cache.max_size: %w", err)
-		}
-	}
-
-	if g.SweepInterval != "" {
-		d, err := time.ParseDuration(g.SweepInterval)
-		if err != nil {
-			return fmt.Errorf("invalid gradle.build_cache.sweep_interval %q: %w", g.SweepInterval, err)
-		}
-		if d <= 0 {
-			return fmt.Errorf("invalid gradle.build_cache.sweep_interval %q: must be > 0", g.SweepInterval)
-		}
 	}
 
 	return nil

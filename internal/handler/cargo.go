@@ -9,13 +9,11 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/config/cargo"
 	"github.com/git-pkgs/purl"
 )
 
 const (
-	cargoUpstream     = "https://index.crates.io"
-	cargoDownloadBase = "https://static.crates.io/crates"
-
 	cargoIndexLen1 = 1
 	cargoIndexLen2 = 2
 	cargoIndexLen3 = 3
@@ -24,19 +22,25 @@ const (
 // CargoHandler handles cargo registry protocol requests.
 type CargoHandler struct {
 	proxy       *Proxy
+	path        string
 	indexURL    string
 	downloadURL string
 	proxyURL    string
 }
 
 // NewCargoHandler creates a new cargo protocol handler.
-func NewCargoHandler(proxy *Proxy, proxyURL string) *CargoHandler {
+func NewCargoHandler(proxy *Proxy, proxyURL string, cfg cargo.RouteConfig) *CargoHandler {
 	return &CargoHandler{
 		proxy:       proxy,
-		indexURL:    cargoUpstream,
-		downloadURL: cargoDownloadBase,
+		path:        cfg.Path,
+		indexURL:    cfg.Upstream[0].Index,
+		downloadURL: cfg.Upstream[0].Crates,
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 	}
+}
+
+func (h *CargoHandler) Path() string {
+	return h.path
 }
 
 // Routes returns the HTTP handler for cargo requests.
@@ -71,7 +75,7 @@ type CargoConfig struct {
 // handleConfig returns the registry configuration.
 func (h *CargoHandler) handleConfig(w http.ResponseWriter, r *http.Request) {
 	config := CargoConfig{
-		DL: h.proxyURL + "/cargo/crates/{crate}/{version}/download",
+		DL: h.proxyURL + h.path + "/crates/{crate}/{version}/download",
 	}
 
 	w.Header().Set("Content-Type", "application/json")

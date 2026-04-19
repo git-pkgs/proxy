@@ -66,6 +66,145 @@ log:
   # Log format: "text" or "json"
   format: "text"
 
+# Ecosystem support - routes and upstream repositories
+#
+# This section is optional, since 'include_default' in each section
+# defaults to 'true' and the route map will be populated with all of
+# the default routes if no configuration is provided.
+ecosystem:
+  cargo:
+    include_default: true
+    # the default route for crates.io
+    # route:
+    #   - path: /cargo
+    #     upstream:
+    #       - name: crates.io
+    #         index: https://index.crates.io
+    #         crates: https://static.crates.io/crates
+  composer:
+    include_default: true
+    # the default route for packagist.org
+    # route:
+    #   - path: /composer
+    #     upstream:
+    #       - name: packagist.org
+    #         upstream: https://packagist.org
+    #         repository: https://repo.packagist.org
+  conan:
+    include_default: true
+    # the default route for conan.io
+    # route:
+    #   - path: /conan
+    #     upstream:
+    #       - name: conan.io
+    #         upstream: https://center.conan.io
+  conda:
+    include_default: true
+    # the default route for anaconda.org
+    # route:
+    #   - path: /conda
+    #     upstream:
+    #       - name: anaconda.org
+    #         upstream: https://conda.anaconda.org
+  cran:
+    include_default: true
+    # the default route for r-project.org
+    # route:
+    #   - path: /cran
+    #     upstream:
+    #       - name: r-project.org
+    #         upstream: https://cloud.r-project.org
+  debian:
+    include_default: true
+    # the default route for debian.org
+    # route:
+    #   - path: /debian
+    #     upstream:
+    #       - name: debian.org
+    #         upstream: http://deb.debian.org/debian
+  gem:
+    include_default: true
+    # the default route for rubygems.org
+    # route:
+    #   - path: /gem
+    #     upstream:
+    #       - name: rubygems.org
+    #         upstream: https://rubygems.org
+  go:
+    include_default: true
+    # the default route for golang.org
+    # route:
+    #   - path: /go
+    #     upstream:
+    #       - name: golang.org
+    #         upstream: https://proxy.golang.org
+  hex:
+    include_default: true
+    # the default route for hex.pm
+    # route:
+    #   - path: /hex
+    #     upstream:
+    #       - name: hex.pm
+    #         upstream: https://repo.hex.pm
+  maven:
+    include_default: true
+    # the default route for maven.org
+    # route:
+    #   - path: /maven
+    #     upstream:
+    #       - name: maven.org
+    #         upstream: https://repo1.maven.org/maven2
+  npm:
+    include_default: true
+    # the default route for npmjs.org
+    # route:
+    #   - path: /npm
+    #     upstream:
+    #       - name: npmjs.org
+    #         upstream: https://registry.npmjs.org
+  nuget:
+    include_default: true
+    # the default route for nuget.org
+    # route:
+    #   - path: /nuget
+    #     upstream:
+    #       - name: nuget.org
+    #         upstream: https://api.nuget.org
+  oci:
+    include_default: true
+    # the default route for docker.io
+    # route:
+    #   - path: /v2
+    #     upstream:
+    #       - name: docker.io
+    #         registry: https://registry-1.docker.io
+    #         auth: https://auth.docker.io
+  pub:
+    include_default: true
+    # the default route for pub.dev
+    # route:
+    #   - path: /pub
+    #     upstream:
+    #       - name: pub.dev
+    #         upstream: https://pub.dev
+  pypi:
+    include_default: true
+    # the default route for pypi.org
+    # route:
+    #   - path: /pypi
+    #     upstream:
+    #       - name: pypi.org
+    #         index: https://pypi.org
+    #         files_host: files.pythonhosted.org
+  rpm:
+    include_default: true
+    # the default route for fedoraproject.org
+    # route:
+    #   - path: /rpm
+    #     upstream:
+    #       - name: fedoraproject.org
+    #         upstream: https://dl.fedoraproject.org/pub/fedora/linux
+
 # Upstream registry URLs and authentication
 upstream:
   # npm registry URL
