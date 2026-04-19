@@ -173,7 +173,6 @@ func (s *Server) Start() error {
 
 	// Mount protocol handlers
 	npmHandler := handler.NewNPMHandler(proxy, s.cfg.BaseURL)
-	cargoHandler := handler.NewCargoHandler(proxy, s.cfg.BaseURL)
 	gemHandler := handler.NewGemHandler(proxy, s.cfg.BaseURL)
 	goHandler := handler.NewGoHandler(proxy, s.cfg.BaseURL)
 	hexHandler := handler.NewHexHandler(proxy, s.cfg.BaseURL)
@@ -186,11 +185,21 @@ func (s *Server) Start() error {
 	condaHandler := handler.NewCondaHandler(proxy, s.cfg.BaseURL)
 	cranHandler := handler.NewCRANHandler(proxy, s.cfg.BaseURL)
 	containerHandler := handler.NewContainerHandler(proxy, s.cfg.BaseURL)
-	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL)
 	rpmHandler := handler.NewRPMHandler(proxy, s.cfg.BaseURL)
 
+	for _, route := range s.cfg.Ecosystem.Cargo.Route {
+		routeHandler := handler.NewCargoHandler(proxy, s.cfg.BaseURL, route)
+		r.Mount(routeHandler.Path(), http.StripPrefix(routeHandler.Path(), routeHandler.Routes()))
+		s.logger.Info("mounted handler", "ecosystem", "cargo", "path", routeHandler.Path())
+	}
+
+	for _, route := range s.cfg.Ecosystem.Debian.Route {
+		routeHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL, route)
+		r.Mount(routeHandler.Path(), http.StripPrefix(routeHandler.Path(), routeHandler.Routes()))
+		s.logger.Info("mounted handler", "ecosystem", "debian", "path", routeHandler.Path())
+	}
+
 	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))
-	r.Mount("/cargo", http.StripPrefix("/cargo", cargoHandler.Routes()))
 	r.Mount("/gem", http.StripPrefix("/gem", gemHandler.Routes()))
 	r.Mount("/go", http.StripPrefix("/go", goHandler.Routes()))
 	r.Mount("/hex", http.StripPrefix("/hex", hexHandler.Routes()))
@@ -203,7 +212,6 @@ func (s *Server) Start() error {
 	r.Mount("/conda", http.StripPrefix("/conda", condaHandler.Routes()))
 	r.Mount("/cran", http.StripPrefix("/cran", cranHandler.Routes()))
 	r.Mount("/v2", http.StripPrefix("/v2", containerHandler.Routes()))
-	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 
 	// Health, stats, and static endpoints
