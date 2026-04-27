@@ -28,7 +28,7 @@ type GradleBuildCacheHandler struct {
 }
 
 // NewGradleBuildCacheHandler creates a Gradle HttpBuildCache handler.
-func NewGradleBuildCacheHandler(proxy *Proxy, _ string) *GradleBuildCacheHandler {
+func NewGradleBuildCacheHandler(proxy *Proxy) *GradleBuildCacheHandler {
 	return &GradleBuildCacheHandler{proxy: proxy}
 }
 
@@ -90,6 +90,27 @@ func (h *GradleBuildCacheHandler) cacheStoragePath(key string) string {
 
 func (h *GradleBuildCacheHandler) handleGetOrHead(w http.ResponseWriter, r *http.Request, key string) {
 	storagePath := h.cacheStoragePath(key)
+	w.Header().Set("Content-Type", gradleBuildCacheContentType)
+
+	if r.Method == http.MethodHead {
+		exists, err := h.proxy.Storage.Exists(r.Context(), storagePath)
+		if err != nil {
+			h.proxy.Logger.Error("failed to check gradle build cache entry", "key", key, "error", err)
+			http.Error(w, "failed to read cache entry", http.StatusInternalServerError)
+			return
+		}
+		if !exists {
+			http.NotFound(w, r)
+			return
+		}
+
+		if size, err := h.proxy.Storage.Size(r.Context(), storagePath); err == nil && size >= 0 {
+			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		}
+
+		w.WriteHeader(http.StatusOK)
+		return
+	}
 
 	reader, err := h.proxy.Storage.Open(r.Context(), storagePath)
 	if err != nil {
@@ -103,31 +124,18 @@ func (h *GradleBuildCacheHandler) handleGetOrHead(w http.ResponseWriter, r *http
 	}
 	defer func() { _ = reader.Close() }()
 
-	w.Header().Set("Content-Type", gradleBuildCacheContentType)
 	if size, err := h.proxy.Storage.Size(r.Context(), storagePath); err == nil && size >= 0 {
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	}
 
 	w.WriteHeader(http.StatusOK)
-	if r.Method == http.MethodHead {
-		return
-	}
-
 	_, _ = io.Copy(w, reader)
 }
 
 func (h *GradleBuildCacheHandler) handlePut(w http.ResponseWriter, r *http.Request, key string) {
 	storagePath := h.cacheStoragePath(key)
 
-	exists, err := h.proxy.Storage.Exists(r.Context(), storagePath)
-	if err != nil {
-		h.proxy.Logger.Error("failed to check gradle build cache entry", "key", key, "error", err)
-		http.Error(w, "failed to write cache entry", http.StatusInternalServerError)
-		return
-	}
-
-	defer func() { _ = r.Body.Close() }()
-	size, hash, err := h.proxy.Storage.Store(r.Context(), storagePath, r.Body)
+	_, hash, err := h.proxy.Storage.Store(r.Context(), storagePath, r.Body)
 	if err != nil {
 		h.proxy.Logger.Error("failed to store gradle build cache entry", "key", key, "error", err)
 		http.Error(w, "failed to write cache entry", http.StatusInternalServerError)
@@ -136,12 +144,6 @@ func (h *GradleBuildCacheHandler) handlePut(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Length", "0")
 	w.Header().Set("ETag", `"`+hash+`"`)
-	w.Header().Set("X-Cache-Size", strconv.FormatInt(size, 10))
-
-	if exists {
-		w.WriteHeader(http.StatusOK)
-		return
-	}
 
 	w.WriteHeader(http.StatusCreated)
 }

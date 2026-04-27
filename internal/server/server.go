@@ -178,7 +178,7 @@ func (s *Server) Start() error {
 	pubHandler := handler.NewPubHandler(proxy, s.cfg.BaseURL)
 	pypiHandler := handler.NewPyPIHandler(proxy, s.cfg.BaseURL)
 	mavenHandler := handler.NewMavenHandler(proxy, s.cfg.BaseURL)
-	gradleHandler := handler.NewGradleBuildCacheHandler(proxy, s.cfg.BaseURL)
+	gradleHandler := handler.NewGradleBuildCacheHandler(proxy)
 	nugetHandler := handler.NewNuGetHandler(proxy, s.cfg.BaseURL)
 	composerHandler := handler.NewComposerHandler(proxy, s.cfg.BaseURL)
 	conanHandler := handler.NewConanHandler(proxy, s.cfg.BaseURL)

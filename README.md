@@ -225,12 +225,6 @@ buildCache {
 }
 ```
 
-The proxy accepts both Gradle cache URL styles:
-- `http://localhost:8080/gradle/cache/<key>`
-- `http://localhost:8080/gradle/<key>`
-
-This keeps compatibility with clients that include or omit the `cache/` path segment.
-
 ### NuGet
 
 Configure in `nuget.config`:

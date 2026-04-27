@@ -10,7 +10,7 @@ import (
 
 func TestGradleBuildCacheHandler_PutGetHead(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
-	h := NewGradleBuildCacheHandler(proxy, "http://localhost")
+	h := NewGradleBuildCacheHandler(proxy)
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
@@ -70,7 +70,7 @@ func TestGradleBuildCacheHandler_PutGetHead(t *testing.T) {
 
 func TestGradleBuildCacheHandler_RootKeyPath(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
-	h := NewGradleBuildCacheHandler(proxy, "http://localhost")
+	h := NewGradleBuildCacheHandler(proxy)
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
@@ -102,7 +102,7 @@ func TestGradleBuildCacheHandler_RootKeyPath(t *testing.T) {
 
 func TestGradleBuildCacheHandler_GetMiss(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
-	h := NewGradleBuildCacheHandler(proxy, "http://localhost")
+	h := NewGradleBuildCacheHandler(proxy)
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
@@ -119,7 +119,7 @@ func TestGradleBuildCacheHandler_GetMiss(t *testing.T) {
 
 func TestGradleBuildCacheHandler_MethodNotAllowed(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
-	h := NewGradleBuildCacheHandler(proxy, "http://localhost")
+	h := NewGradleBuildCacheHandler(proxy)
 
 	req := httptest.NewRequest(http.MethodPost, "/cache/key", nil)
 	w := httptest.NewRecorder()
@@ -132,7 +132,7 @@ func TestGradleBuildCacheHandler_MethodNotAllowed(t *testing.T) {
 
 func TestGradleBuildCacheHandler_PathTraversalRejected(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
-	h := NewGradleBuildCacheHandler(proxy, "http://localhost")
+	h := NewGradleBuildCacheHandler(proxy)
 
 	req := httptest.NewRequest(http.MethodGet, "/cache/../secret", nil)
 	w := httptest.NewRecorder()
@@ -143,9 +143,9 @@ func TestGradleBuildCacheHandler_PathTraversalRejected(t *testing.T) {
 	}
 }
 
-func TestGradleBuildCacheHandler_PutOverwriteReturnsOK(t *testing.T) {
+func TestGradleBuildCacheHandler_PutOverwriteReturnsCreated(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
-	h := NewGradleBuildCacheHandler(proxy, "http://localhost")
+	h := NewGradleBuildCacheHandler(proxy)
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
@@ -163,9 +163,6 @@ func TestGradleBuildCacheHandler_PutOverwriteReturnsOK(t *testing.T) {
 		_ = resp.Body.Close()
 
 		want := http.StatusCreated
-		if i == 1 {
-			want = http.StatusOK
-		}
 		if resp.StatusCode != want {
 			t.Fatalf("PUT #%d status = %d, want %d", i+1, resp.StatusCode, want)
 		}

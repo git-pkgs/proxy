@@ -72,7 +72,7 @@ func newTestServer(t *testing.T) *testServer {
 	gemHandler := handler.NewGemHandler(proxy, cfg.BaseURL)
 	goHandler := handler.NewGoHandler(proxy, cfg.BaseURL)
 	pypiHandler := handler.NewPyPIHandler(proxy, cfg.BaseURL)
-	gradleHandler := handler.NewGradleBuildCacheHandler(proxy, cfg.BaseURL)
+	gradleHandler := handler.NewGradleBuildCacheHandler(proxy)
 
 	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))
 	r.Mount("/cargo", http.StripPrefix("/cargo", cargoHandler.Routes()))
