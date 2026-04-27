@@ -168,3 +168,49 @@ func TestGradleBuildCacheHandler_PutOverwriteReturnsCreated(t *testing.T) {
 		}
 	}
 }
+
+func TestGradleBuildCacheHandler_PutReadOnly(t *testing.T) {
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.GradleReadOnly = true
+
+	h := NewGradleBuildCacheHandler(proxy)
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/cache/readonly-key", strings.NewReader("payload"))
+	if err != nil {
+		t.Fatalf("failed to create PUT request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusMethodNotAllowed {
+		t.Fatalf("PUT status = %d, want %d", resp.StatusCode, http.StatusMethodNotAllowed)
+	}
+}
+
+func TestGradleBuildCacheHandler_PutTooLarge(t *testing.T) {
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.GradleMaxUploadSize = 4
+
+	h := NewGradleBuildCacheHandler(proxy)
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/cache/oversized-key", strings.NewReader("12345"))
+	if err != nil {
+		t.Fatalf("failed to create PUT request: %v", err)
+	}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("PUT request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusRequestEntityTooLarge {
+		t.Fatalf("PUT status = %d, want %d", resp.StatusCode, http.StatusRequestEntityTooLarge)
+	}
+}

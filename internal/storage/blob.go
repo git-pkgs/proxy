@@ -167,6 +167,42 @@ func (b *Blob) UsedSpace(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
+// ListPrefix returns object metadata for keys under a prefix.
+func (b *Blob) ListPrefix(ctx context.Context, prefix string) ([]ObjectInfo, error) {
+	iter := b.bucket.List(&blob.ListOptions{Prefix: prefix})
+	objects := make([]ObjectInfo, 0)
+
+	for {
+		obj, err := iter.Next(ctx)
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			return nil, fmt.Errorf("listing objects: %w", err)
+		}
+		if obj.IsDir {
+			continue
+		}
+
+		info := ObjectInfo{
+			Path:    obj.Key,
+			Size:    obj.Size,
+			ModTime: obj.ModTime,
+		}
+
+		// Some providers may omit ModTime in list results; fetch attributes as fallback.
+		if info.ModTime.IsZero() {
+			if attrs, err := b.bucket.Attributes(ctx, obj.Key); err == nil {
+				info.ModTime = attrs.ModTime
+			}
+		}
+
+		objects = append(objects, info)
+	}
+
+	return objects, nil
+}
+
 func (b *Blob) Close() error {
 	return b.bucket.Close()
 }

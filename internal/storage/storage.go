@@ -15,6 +15,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"time"
 )
 
 const dirPermissions = 0755
@@ -22,6 +23,13 @@ const dirPermissions = 0755
 var (
 	ErrNotFound = errors.New("artifact not found")
 )
+
+// ObjectInfo contains metadata for a stored object.
+type ObjectInfo struct {
+	Path    string
+	Size    int64
+	ModTime time.Time
+}
 
 // Storage defines the interface for artifact storage backends.
 type Storage interface {

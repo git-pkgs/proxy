@@ -98,6 +98,9 @@ type Config struct {
 	// MirrorAPI enables the /api/mirror endpoints for starting mirror jobs via HTTP.
 	// Disabled by default to prevent unauthenticated users from triggering downloads.
 	MirrorAPI bool `json:"mirror_api" yaml:"mirror_api"`
+
+	// Gradle configures Gradle HttpBuildCache behavior.
+	Gradle GradleConfig `json:"gradle" yaml:"gradle"`
 }
 
 // CooldownConfig configures version cooldown periods.
@@ -133,6 +136,34 @@ type StorageConfig struct {
 	// When exceeded, least recently used artifacts are evicted.
 	// Empty or "0" means unlimited.
 	MaxSize string `json:"max_size" yaml:"max_size"`
+}
+
+// GradleConfig configures Gradle-specific features.
+type GradleConfig struct {
+	// BuildCache configures the /gradle HttpBuildCache endpoint.
+	BuildCache GradleBuildCacheConfig `json:"build_cache" yaml:"build_cache"`
+}
+
+// GradleBuildCacheConfig configures Gradle HttpBuildCache safeguards.
+type GradleBuildCacheConfig struct {
+	// ReadOnly disables PUT uploads and keeps cache reads (GET/HEAD) enabled.
+	ReadOnly bool `json:"read_only" yaml:"read_only"`
+
+	// MaxUploadSize caps a single PUT body size (e.g., "100MB"). Must be > 0.
+	// Default: "100MB".
+	MaxUploadSize string `json:"max_upload_size" yaml:"max_upload_size"`
+
+	// MaxAge evicts entries older than this duration (e.g., "24h", "7d").
+	// Empty or "0" disables age-based eviction.
+	MaxAge string `json:"max_age" yaml:"max_age"`
+
+	// MaxSize evicts oldest entries until total Gradle cache size is <= MaxSize.
+	// Empty or "0" disables size-based eviction.
+	MaxSize string `json:"max_size" yaml:"max_size"`
+
+	// SweepInterval controls periodic eviction frequency.
+	// Default: "10m".
+	SweepInterval string `json:"sweep_interval" yaml:"sweep_interval"`
 }
 
 // DatabaseConfig configures the cache database.
@@ -244,6 +275,15 @@ func Default() *Config {
 			Cargo:         "https://index.crates.io",
 			CargoDownload: "https://static.crates.io/crates",
 		},
+		Gradle: GradleConfig{
+			BuildCache: GradleBuildCacheConfig{
+				ReadOnly:      false,
+				MaxUploadSize: "100MB",
+				MaxAge:        "168h",
+				MaxSize:       "",
+				SweepInterval: "10m",
+			},
+		},
 	}
 }
 
@@ -330,6 +370,21 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("PROXY_METADATA_TTL"); v != "" {
 		c.MetadataTTL = v
 	}
+	if v := os.Getenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY"); v != "" {
+		c.Gradle.BuildCache.ReadOnly = v == "true" || v == "1"
+	}
+	if v := os.Getenv("PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE"); v != "" {
+		c.Gradle.BuildCache.MaxUploadSize = v
+	}
+	if v := os.Getenv("PROXY_GRADLE_BUILD_CACHE_MAX_AGE"); v != "" {
+		c.Gradle.BuildCache.MaxAge = v
+	}
+	if v := os.Getenv("PROXY_GRADLE_BUILD_CACHE_MAX_SIZE"); v != "" {
+		c.Gradle.BuildCache.MaxSize = v
+	}
+	if v := os.Getenv("PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL"); v != "" {
+		c.Gradle.BuildCache.SweepInterval = v
+	}
 }
 
 // Validate checks the configuration for errors.
@@ -386,10 +441,49 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate Gradle build cache upload size (always required and must be > 0).
+	if c.Gradle.BuildCache.MaxUploadSize == "" {
+		c.Gradle.BuildCache.MaxUploadSize = "100MB"
+	}
+	uploadSize, err := ParseSize(c.Gradle.BuildCache.MaxUploadSize)
+	if err != nil {
+		return fmt.Errorf("invalid gradle.build_cache.max_upload_size: %w", err)
+	}
+	if uploadSize <= 0 {
+		return fmt.Errorf("invalid gradle.build_cache.max_upload_size %q: must be > 0", c.Gradle.BuildCache.MaxUploadSize)
+	}
+
+	// Validate Gradle max age if specified.
+	if c.Gradle.BuildCache.MaxAge != "" && c.Gradle.BuildCache.MaxAge != "0" {
+		if _, err := time.ParseDuration(c.Gradle.BuildCache.MaxAge); err != nil {
+			return fmt.Errorf("invalid gradle.build_cache.max_age %q: %w", c.Gradle.BuildCache.MaxAge, err)
+		}
+	}
+
+	// Validate Gradle max size if specified.
+	if c.Gradle.BuildCache.MaxSize != "" {
+		if _, err := ParseSize(c.Gradle.BuildCache.MaxSize); err != nil {
+			return fmt.Errorf("invalid gradle.build_cache.max_size: %w", err)
+		}
+	}
+
+	// Validate Gradle sweep interval if specified.
+	if c.Gradle.BuildCache.SweepInterval != "" {
+		d, err := time.ParseDuration(c.Gradle.BuildCache.SweepInterval)
+		if err != nil {
+			return fmt.Errorf("invalid gradle.build_cache.sweep_interval %q: %w", c.Gradle.BuildCache.SweepInterval, err)
+		}
+		if d <= 0 {
+			return fmt.Errorf("invalid gradle.build_cache.sweep_interval %q: must be > 0", c.Gradle.BuildCache.SweepInterval)
+		}
+	}
+
 	return nil
 }
 
 const defaultMetadataTTL = 5 * time.Minute //nolint:mnd // sensible default
+const defaultGradleBuildCacheMaxUploadSize = 100 << 20
+const defaultGradleBuildCacheSweepInterval = 10 * time.Minute
 
 // ParseMetadataTTL returns the metadata TTL duration.
 // Returns 5 minutes if unset, 0 if explicitly disabled.
@@ -403,6 +497,58 @@ func (c *Config) ParseMetadataTTL() time.Duration {
 	d, err := time.ParseDuration(c.MetadataTTL)
 	if err != nil {
 		return defaultMetadataTTL
+	}
+	return d
+}
+
+// ParseGradleBuildCacheMaxUploadSize returns the max accepted PUT body size.
+// Defaults to 100MB if unset or invalid.
+func (c *Config) ParseGradleBuildCacheMaxUploadSize() int64 {
+	if c.Gradle.BuildCache.MaxUploadSize == "" {
+		return defaultGradleBuildCacheMaxUploadSize
+	}
+	size, err := ParseSize(c.Gradle.BuildCache.MaxUploadSize)
+	if err != nil || size <= 0 {
+		return defaultGradleBuildCacheMaxUploadSize
+	}
+	return size
+}
+
+// ParseGradleBuildCacheMaxAge returns age-based eviction threshold.
+// Returns 0 when disabled or invalid.
+func (c *Config) ParseGradleBuildCacheMaxAge() time.Duration {
+	if c.Gradle.BuildCache.MaxAge == "" || c.Gradle.BuildCache.MaxAge == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(c.Gradle.BuildCache.MaxAge)
+	if err != nil || d <= 0 {
+		return 0
+	}
+	return d
+}
+
+// ParseGradleBuildCacheMaxSize returns total-size cap in bytes.
+// Returns 0 when disabled or invalid.
+func (c *Config) ParseGradleBuildCacheMaxSize() int64 {
+	if c.Gradle.BuildCache.MaxSize == "" || c.Gradle.BuildCache.MaxSize == "0" {
+		return 0
+	}
+	size, err := ParseSize(c.Gradle.BuildCache.MaxSize)
+	if err != nil || size <= 0 {
+		return 0
+	}
+	return size
+}
+
+// ParseGradleBuildCacheSweepInterval returns eviction sweep cadence.
+// Defaults to 10m if unset or invalid.
+func (c *Config) ParseGradleBuildCacheSweepInterval() time.Duration {
+	if c.Gradle.BuildCache.SweepInterval == "" {
+		return defaultGradleBuildCacheSweepInterval
+	}
+	d, err := time.ParseDuration(c.Gradle.BuildCache.SweepInterval)
+	if err != nil || d <= 0 {
+		return defaultGradleBuildCacheSweepInterval
 	}
 	return d
 }

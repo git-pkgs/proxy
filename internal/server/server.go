@@ -149,6 +149,8 @@ func (s *Server) Start() error {
 	proxy.Cooldown = cd
 	proxy.CacheMetadata = s.cfg.CacheMetadata
 	proxy.MetadataTTL = s.cfg.ParseMetadataTTL()
+	proxy.GradleReadOnly = s.cfg.Gradle.BuildCache.ReadOnly
+	proxy.GradleMaxUploadSize = s.cfg.ParseGradleBuildCacheMaxUploadSize()
 
 	// Create router with Chi
 	r := chi.NewRouter()
@@ -238,6 +240,7 @@ func (s *Server) Start() error {
 	// Start background context (used by mirror jobs and cleanup)
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	s.cancel = bgCancel
+	s.startGradleBuildCacheEviction(bgCtx)
 
 	// Mirror API endpoints (opt-in via mirror_api config or PROXY_MIRROR_API env)
 	if s.cfg.MirrorAPI {

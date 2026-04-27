@@ -15,6 +15,7 @@ const (
 	gradleBuildCacheContentType = "application/vnd.gradle.build-cache-artifact.v2"
 	gradleBuildCachePathPrefix  = "cache/"
 	gradleBuildCacheStorageRoot = "_gradle/http-build-cache"
+	defaultGradleMaxUploadSize  = 100 << 20
 )
 
 var gradleBuildCacheKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
@@ -53,6 +54,10 @@ func (h *GradleBuildCacheHandler) Routes() http.Handler {
 		}
 
 		if r.Method == http.MethodPut {
+			if h.proxy.GradleReadOnly {
+				http.Error(w, "gradle build cache is read-only", http.StatusMethodNotAllowed)
+				return
+			}
 			h.handlePut(w, r, key)
 			return
 		}
@@ -134,9 +139,22 @@ func (h *GradleBuildCacheHandler) handleGetOrHead(w http.ResponseWriter, r *http
 
 func (h *GradleBuildCacheHandler) handlePut(w http.ResponseWriter, r *http.Request, key string) {
 	storagePath := h.cacheStoragePath(key)
+	maxUploadSize := h.proxy.GradleMaxUploadSize
+	if maxUploadSize <= 0 {
+		maxUploadSize = defaultGradleMaxUploadSize
+	}
+
+	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
+	defer func() { _ = r.Body.Close() }()
 
 	_, hash, err := h.proxy.Storage.Store(r.Context(), storagePath, r.Body)
 	if err != nil {
+		var maxBytesErr *http.MaxBytesError
+		if errors.As(err, &maxBytesErr) {
+			http.Error(w, "cache entry too large", http.StatusRequestEntityTooLarge)
+			return
+		}
+
 		h.proxy.Logger.Error("failed to store gradle build cache entry", "key", key, "error", err)
 		http.Error(w, "failed to write cache entry", http.StatusInternalServerError)
 		return

@@ -162,6 +162,45 @@ func (fs *Filesystem) UsedSpace(ctx context.Context) (int64, error) {
 	return total, nil
 }
 
+// ListPrefix returns object metadata for paths under a prefix.
+func (fs *Filesystem) ListPrefix(ctx context.Context, prefix string) ([]ObjectInfo, error) {
+	searchRoot := fs.fullPath(prefix)
+	if _, err := os.Stat(searchRoot); err != nil {
+		if os.IsNotExist(err) {
+			return []ObjectInfo{}, nil
+		}
+		return nil, fmt.Errorf("stat prefix: %w", err)
+	}
+
+	objects := make([]ObjectInfo, 0)
+	err := filepath.Walk(searchRoot, func(path string, info os.FileInfo, err error) error {
+		if err != nil {
+			return err
+		}
+		if info.IsDir() {
+			return nil
+		}
+
+		relPath, err := filepath.Rel(fs.root, path)
+		if err != nil {
+			return err
+		}
+
+		objects = append(objects, ObjectInfo{
+			Path:    filepath.ToSlash(relPath),
+			Size:    info.Size(),
+			ModTime: info.ModTime(),
+		})
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walking prefix: %w", err)
+	}
+
+	return objects, nil
+}
+
 // Root returns the root directory of the storage.
 func (fs *Filesystem) Root() string {
 	return fs.root
