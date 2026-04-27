@@ -149,9 +149,9 @@ func TestSBOMSourceSPDXJSON(t *testing.T) {
 		"documentNamespace": "https://example.com/test",
 		"packages": []map[string]any{
 			{
-				"SPDXID":  "SPDXRef-Package",
-				"name":    "lodash",
-				"version": "4.17.21",
+				"SPDXID":           "SPDXRef-Package",
+				"name":             "lodash",
+				"version":          "4.17.21",
 				"downloadLocation": "https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz",
 				"externalRefs": []map[string]any{
 					{

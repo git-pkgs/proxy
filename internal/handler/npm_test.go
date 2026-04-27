@@ -32,9 +32,9 @@ func TestNPMExtractVersionFromFilename(t *testing.T) {
 		{"@babel/core", "core-7.23.0.tgz", "7.23.0"},
 		{"@types/node", "node-20.10.0.tgz", "20.10.0"},
 		{"express", "express-4.18.2.tgz", "4.18.2"},
-		{"lodash", "lodash.tgz", ""},           // no version
-		{"lodash", "lodash-4.17.21.zip", ""},   // wrong extension
-		{"lodash", "other-4.17.21.tgz", ""},    // wrong package name
+		{"lodash", "lodash.tgz", ""},         // no version
+		{"lodash", "lodash-4.17.21.zip", ""}, // wrong extension
+		{"lodash", "other-4.17.21.tgz", ""},  // wrong package name
 	}
 
 	for _, tt := range tests {

@@ -7,13 +7,13 @@ require (
 	github.com/git-pkgs/archives v0.2.2
 	github.com/git-pkgs/enrichment v0.2.2
 	github.com/git-pkgs/purl v0.1.10
-	github.com/git-pkgs/registries v0.4.0
+	github.com/git-pkgs/registries v0.4.1
 	github.com/git-pkgs/spdx v0.1.2
 	github.com/git-pkgs/vers v0.2.4
 	github.com/git-pkgs/vulns v0.1.4
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/jmoiron/sqlx v1.4.0
-	github.com/lib/pq v1.12.2
+	github.com/lib/pq v1.12.3
 	github.com/prometheus/client_golang v1.23.2
 	github.com/prometheus/client_model v0.6.2
 	github.com/spdx/tools-golang v0.5.7
@@ -22,7 +22,7 @@ require (
 	golang.org/x/sync v0.20.0
 	google.golang.org/protobuf v1.36.11
 	gopkg.in/yaml.v3 v3.0.1
-	modernc.org/sqlite v1.48.0
+	modernc.org/sqlite v1.48.2
 )
 
 require (

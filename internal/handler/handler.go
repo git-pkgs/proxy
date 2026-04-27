@@ -236,11 +236,11 @@ func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, u
 
 	// Upsert package
 	pkg := &database.Package{
-		PURL:       pkgPURL,
-		Ecosystem:  ecosystem,
-		Name:       name,
+		PURL:        pkgPURL,
+		Ecosystem:   ecosystem,
+		Name:        name,
 		RegistryURL: sql.NullString{String: upstreamURL, Valid: true},
-		EnrichedAt: sql.NullTime{Time: now, Valid: true},
+		EnrichedAt:  sql.NullTime{Time: now, Valid: true},
 	}
 	if err := p.DB.UpsertPackage(pkg); err != nil {
 		return fmt.Errorf("upserting package: %w", err)
@@ -728,4 +728,3 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 		Cached:      false,
 	}, nil
 }
-

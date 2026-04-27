@@ -11,8 +11,8 @@ import (
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries"
 	_ "github.com/git-pkgs/registries/all"
-	"github.com/spdx/tools-golang/spdx"
 	spdxjson "github.com/spdx/tools-golang/json"
+	"github.com/spdx/tools-golang/spdx"
 	spdxtv "github.com/spdx/tools-golang/tagvalue"
 )
 

@@ -219,9 +219,9 @@ func TestFilesystemUsedSpace(t *testing.T) {
 	}
 
 	// Add some files
-	_, _, _ = fs.Store(ctx, "a.txt", strings.NewReader("aaaa"))     // 4 bytes
-	_, _, _ = fs.Store(ctx, "b.txt", strings.NewReader("bbbbbb"))   // 6 bytes
-	_, _, _ = fs.Store(ctx, "c/d.txt", strings.NewReader("ccccc"))  // 5 bytes
+	_, _, _ = fs.Store(ctx, "a.txt", strings.NewReader("aaaa"))    // 4 bytes
+	_, _, _ = fs.Store(ctx, "b.txt", strings.NewReader("bbbbbb"))  // 6 bytes
+	_, _, _ = fs.Store(ctx, "c/d.txt", strings.NewReader("ccccc")) // 5 bytes
 
 	used, err = fs.UsedSpace(ctx)
 	if err != nil {

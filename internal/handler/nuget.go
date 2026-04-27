@@ -141,10 +141,10 @@ func (h *NuGetHandler) shouldRewriteService(serviceType string) bool {
 func (h *NuGetHandler) rewriteNuGetURL(origURL string) string {
 	// Map known NuGet API endpoints to our proxy paths
 	replacements := map[string]string{
-		"https://api.nuget.org/v3-flatcontainer/":           h.proxyURL + "/nuget/v3-flatcontainer/",
+		"https://api.nuget.org/v3-flatcontainer/":            h.proxyURL + "/nuget/v3-flatcontainer/",
 		"https://api.nuget.org/v3/registration5-gz-semver2/": h.proxyURL + "/nuget/v3/registration5-gz-semver2/",
-		"https://azuresearch-usnc.nuget.org/query":          h.proxyURL + "/nuget/query",
-		"https://azuresearch-usnc.nuget.org/autocomplete":   h.proxyURL + "/nuget/autocomplete",
+		"https://azuresearch-usnc.nuget.org/query":           h.proxyURL + "/nuget/query",
+		"https://azuresearch-usnc.nuget.org/autocomplete":    h.proxyURL + "/nuget/autocomplete",
 	}
 
 	for old, new := range replacements {

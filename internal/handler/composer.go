@@ -61,10 +61,10 @@ func (h *ComposerHandler) Routes() http.Handler {
 func (h *ComposerHandler) handleServiceIndex(w http.ResponseWriter, r *http.Request) {
 	// Return a minimal service index pointing to our proxy
 	index := map[string]any{
-		"packages":          map[string]any{},
-		"metadata-url":      h.proxyURL + "/composer/p2/%package%.json",
-		"notify-batch":      h.upstreamURL + "/downloads/",
-		"search":            h.proxyURL + "/composer/search.json?q=%query%&type=%type%",
+		"packages":           map[string]any{},
+		"metadata-url":       h.proxyURL + "/composer/p2/%package%.json",
+		"notify-batch":       h.upstreamURL + "/downloads/",
+		"search":             h.proxyURL + "/composer/search.json?q=%query%&type=%type%",
 		"providers-lazy-url": h.proxyURL + "/composer/p2/%package%.json",
 	}
 

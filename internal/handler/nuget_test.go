@@ -69,11 +69,11 @@ func TestNuGetRewriteServiceIndex(t *testing.T) {
 	}
 
 	expectations := map[string]string{
-		"PackageBaseAddress/3.0.0":       "http://localhost:8080/nuget/v3-flatcontainer/",
-		"RegistrationsBaseUrl/3.6.0":     "http://localhost:8080/nuget/v3/registration5-gz-semver2/",
-		"SearchQueryService/3.5.0":       "http://localhost:8080/nuget/query",
+		"PackageBaseAddress/3.0.0":        "http://localhost:8080/nuget/v3-flatcontainer/",
+		"RegistrationsBaseUrl/3.6.0":      "http://localhost:8080/nuget/v3/registration5-gz-semver2/",
+		"SearchQueryService/3.5.0":        "http://localhost:8080/nuget/query",
 		"SearchAutocompleteService/3.5.0": "http://localhost:8080/nuget/autocomplete",
-		"SomeOtherService/1.0.0":         "https://example.com/other-service",
+		"SomeOtherService/1.0.0":          "https://example.com/other-service",
 	}
 
 	for _, res := range resources {

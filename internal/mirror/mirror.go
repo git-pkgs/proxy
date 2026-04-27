@@ -40,14 +40,14 @@ func New(proxy *handler.Proxy, db *database.DB, store storage.Storage, logger *s
 
 // Progress tracks the state of a mirror operation.
 type Progress struct {
-	Total     int64        `json:"total"`
-	Completed int64        `json:"completed"`
-	Skipped   int64        `json:"skipped"`
-	Failed    int64        `json:"failed"`
-	Bytes     int64        `json:"bytes"`
+	Total     int64         `json:"total"`
+	Completed int64         `json:"completed"`
+	Skipped   int64         `json:"skipped"`
+	Failed    int64         `json:"failed"`
+	Bytes     int64         `json:"bytes"`
 	Errors    []MirrorError `json:"errors,omitempty"`
-	StartedAt time.Time    `json:"started_at"`
-	Phase     string       `json:"phase"`
+	StartedAt time.Time     `json:"started_at"`
+	Phase     string        `json:"phase"`
 }
 
 // MirrorError records a single failed mirror attempt.
