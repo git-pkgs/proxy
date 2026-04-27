@@ -291,12 +291,12 @@ index-url = ` + baseURL + `/pypi/simple/</code></pre>`),
 			ID:       "gradle",
 			Name:     "Gradle Build Cache",
 			Language: "Java/Kotlin",
-			Endpoint: "/gradle/cache/",
+			Endpoint: "/gradle/",
 			Instructions: template.HTML(`<p class="config-note">Configure Gradle to use the proxy for HttpBuildCache:</p>
 <pre><code>// In settings.gradle(.kts)
 buildCache {
-  remote(HttpBuildCache) {
-    url = uri("` + baseURL + `/gradle/cache/")
+  remote&lt;HttpBuildCache&gt; {
+    url = uri("` + baseURL + `/gradle/")
     push = true
   }
 }</code></pre>`),
