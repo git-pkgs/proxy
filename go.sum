@@ -238,8 +238,8 @@ github.com/git-pkgs/packageurl-go v0.3.1 h1:WM3RBABQZLaRBxgKyYughc3cVBE8KyQxbSC6
 github.com/git-pkgs/packageurl-go v0.3.1/go.mod h1:rcIxiG37BlQLB6FZfgdj9Fm7yjhRQd3l+5o7J0QPAk4=
 github.com/git-pkgs/purl v0.1.10 h1:NMjeF10nzFn3tdQlz6rbmHB+i+YkyrFQxho3e33ePTQ=
 github.com/git-pkgs/purl v0.1.10/go.mod h1:C5Vp/kyZ/wGckCLexx4wPVfUxEiToRkdsOPh5Z7ig/I=
-github.com/git-pkgs/registries v0.4.0 h1:GO7fQ8/jot0ulSQHBdxLSNSX/p8eB3gEXWO+98fmoEo=
-github.com/git-pkgs/registries v0.4.0/go.mod h1:49UCPFWQmwNV7rBEr9TrTDWKR7vYxFcxp3VfdkeFbdE=
+github.com/git-pkgs/registries v0.4.1 h1:4qlKVNhC/6x6Bt87t3wrGJtF3EFrUpHQt9/zKsa5IvU=
+github.com/git-pkgs/registries v0.4.1/go.mod h1:49UCPFWQmwNV7rBEr9TrTDWKR7vYxFcxp3VfdkeFbdE=
 github.com/git-pkgs/spdx v0.1.2 h1:wHSK+CqFsO5N7yDTPvxDmer5LgNEa7vAsiZhi5Aci0A=
 github.com/git-pkgs/spdx v0.1.2/go.mod h1:V98MgZapNgYw54/pdGR82d7RU93qzJoybahbpZqTfw8=
 github.com/git-pkgs/vers v0.2.4 h1:Zr3jR/Xf1i/6cvBaJKPxhCwjzqz7uvYHE0Fhid/GPBk=
