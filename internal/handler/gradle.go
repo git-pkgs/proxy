@@ -145,7 +145,6 @@ func (h *GradleBuildCacheHandler) handlePut(w http.ResponseWriter, r *http.Reque
 	}
 
 	r.Body = http.MaxBytesReader(w, r.Body, maxUploadSize)
-	defer func() { _ = r.Body.Close() }()
 
 	_, hash, err := h.proxy.Storage.Store(r.Context(), storagePath, r.Body)
 	if err != nil {
