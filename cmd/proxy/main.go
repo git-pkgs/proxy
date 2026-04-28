@@ -72,6 +72,11 @@
 //	PROXY_DATABASE_URL     - PostgreSQL connection URL
 //	PROXY_LOG_LEVEL        - Log level
 //	PROXY_LOG_FORMAT       - Log format
+//	PROXY_GRADLE_BUILD_CACHE_READ_ONLY       - Disable Gradle PUT uploads
+//	PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE - Max Gradle PUT request body size
+//	PROXY_GRADLE_BUILD_CACHE_MAX_AGE         - Gradle cache max age eviction
+//	PROXY_GRADLE_BUILD_CACHE_MAX_SIZE        - Gradle cache max total size
+//	PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL  - Gradle cache eviction sweep interval
 //
 // Example:
 //
@@ -193,6 +198,11 @@ func runServe() {
 		fmt.Fprintf(os.Stderr, "  PROXY_DATABASE_URL     PostgreSQL connection URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_LOG_LEVEL        Log level\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_LOG_FORMAT       Log format\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_READ_ONLY       Disable Gradle PUT uploads\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE Max Gradle PUT request body size\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_AGE         Gradle cache max age eviction\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_SIZE        Gradle cache max total size\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL  Gradle cache eviction sweep interval\n")
 	}
 
 	_ = fs.Parse(os.Args[1:])

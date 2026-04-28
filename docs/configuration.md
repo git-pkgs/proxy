@@ -184,6 +184,30 @@ upstream:
       token: "${PRIVATE_TOKEN}"
 ```
 
+## Gradle Build Cache
+
+The `/gradle` endpoint supports optional safeguards for upload control and cache retention.
+
+```yaml
+gradle:
+  build_cache:
+    read_only: false
+    max_upload_size: "100MB"
+    max_age: "168h"
+    max_size: "20GB"
+    sweep_interval: "10m"
+```
+
+| Config | Environment | Description |
+|--------|-------------|-------------|
+| `gradle.build_cache.read_only` | `PROXY_GRADLE_BUILD_CACHE_READ_ONLY` | Disable PUT uploads and keep GET/HEAD read-only |
+| `gradle.build_cache.max_upload_size` | `PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE` | Maximum accepted PUT body size (must be > 0) |
+| `gradle.build_cache.max_age` | `PROXY_GRADLE_BUILD_CACHE_MAX_AGE` | Delete entries older than this duration (default `168h`, set `0` to disable) |
+| `gradle.build_cache.max_size` | `PROXY_GRADLE_BUILD_CACHE_MAX_SIZE` | Total size cap for `_gradle/http-build-cache`, deleting oldest first (`0` disables) |
+| `gradle.build_cache.sweep_interval` | `PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL` | Frequency for background eviction sweeps |
+
+`max_age` and `max_size` are independent and can be combined. When both are set, age-based eviction runs first, then size-based eviction trims remaining entries oldest-first.
+
 ## Cooldown
 
 The cooldown feature hides package versions published too recently, giving the community time to spot malicious releases before they reach your projects. When a version is within its cooldown period, it's stripped from metadata responses so package managers won't install it.

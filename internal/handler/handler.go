@@ -61,15 +61,17 @@ func ReadMetadata(r io.Reader) ([]byte, error) {
 
 // Proxy provides shared functionality for protocol handlers.
 type Proxy struct {
-	DB            *database.DB
-	Storage       storage.Storage
-	Fetcher       fetch.FetcherInterface
-	Resolver      *fetch.Resolver
-	Logger        *slog.Logger
-	Cooldown      *cooldown.Config
-	CacheMetadata bool
-	MetadataTTL   time.Duration
-	HTTPClient    *http.Client
+	DB                  *database.DB
+	Storage             storage.Storage
+	Fetcher             fetch.FetcherInterface
+	Resolver            *fetch.Resolver
+	Logger              *slog.Logger
+	Cooldown            *cooldown.Config
+	CacheMetadata       bool
+	MetadataTTL         time.Duration
+	GradleReadOnly      bool
+	GradleMaxUploadSize int64
+	HTTPClient          *http.Client
 }
 
 // NewProxy creates a new Proxy with the given dependencies.
