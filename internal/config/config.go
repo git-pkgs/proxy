@@ -391,6 +391,19 @@ func (c *Config) Validate() error {
 
 const defaultMetadataTTL = 5 * time.Minute //nolint:mnd // sensible default
 
+// ParseMaxSize returns the maximum cache size in bytes.
+// Returns 0 if unset or explicitly disabled (meaning unlimited).
+func (c *Config) ParseMaxSize() int64 {
+	if c.Storage.MaxSize == "" || c.Storage.MaxSize == "0" {
+		return 0
+	}
+	size, err := ParseSize(c.Storage.MaxSize)
+	if err != nil {
+		return 0
+	}
+	return size
+}
+
 // ParseMetadataTTL returns the metadata TTL duration.
 // Returns 5 minutes if unset, 0 if explicitly disabled.
 func (c *Config) ParseMetadataTTL() time.Duration {

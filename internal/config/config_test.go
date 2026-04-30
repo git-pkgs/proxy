@@ -303,6 +303,31 @@ func TestLoadFileNotFound(t *testing.T) {
 	}
 }
 
+func TestParseMaxSize(t *testing.T) {
+	tests := []struct {
+		name    string
+		maxSize string
+		want    int64
+	}{
+		{"empty means unlimited", "", 0},
+		{"zero means unlimited", "0", 0},
+		{"10GB", "10GB", 10 * 1024 * 1024 * 1024},
+		{"500MB", "500MB", 500 * 1024 * 1024},
+		{"invalid returns 0", "invalid", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Storage.MaxSize = tt.maxSize
+			got := cfg.ParseMaxSize()
+			if got != tt.want {
+				t.Errorf("ParseMaxSize() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseMetadataTTL(t *testing.T) {
 	tests := []struct {
 		name string
