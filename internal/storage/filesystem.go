@@ -8,6 +8,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"strings"
 	"time"
 )
 
@@ -31,12 +32,19 @@ func NewFilesystem(root string) (*Filesystem, error) {
 	return &Filesystem{root: absRoot}, nil
 }
 
-func (fs *Filesystem) fullPath(path string) string {
-	return filepath.Join(fs.root, filepath.FromSlash(path))
+func (fs *Filesystem) fullPath(path string) (string, error) {
+	full := filepath.Clean(filepath.Join(fs.root, filepath.FromSlash(path)))
+	if full != fs.root && !strings.HasPrefix(full, fs.root+string(filepath.Separator)) {
+		return "", fmt.Errorf("%w: path escapes storage root", ErrNotFound)
+	}
+	return full, nil
 }
 
 func (fs *Filesystem) Store(ctx context.Context, path string, r io.Reader) (int64, string, error) {
-	fullPath := fs.fullPath(path)
+	fullPath, err := fs.fullPath(path)
+	if err != nil {
+		return 0, "", err
+	}
 
 	dir := filepath.Dir(fullPath)
 	if err := os.MkdirAll(dir, dirPermissions); err != nil {
@@ -83,7 +91,10 @@ func (fs *Filesystem) Store(ctx context.Context, path string, r io.Reader) (int6
 }
 
 func (fs *Filesystem) Open(ctx context.Context, path string) (io.ReadCloser, error) {
-	fullPath := fs.fullPath(path)
+	fullPath, err := fs.fullPath(path)
+	if err != nil {
+		return nil, err
+	}
 
 	f, err := os.Open(fullPath)
 	if err != nil {
@@ -97,9 +108,12 @@ func (fs *Filesystem) Open(ctx context.Context, path string) (io.ReadCloser, err
 }
 
 func (fs *Filesystem) Exists(ctx context.Context, path string) (bool, error) {
-	fullPath := fs.fullPath(path)
+	fullPath, err := fs.fullPath(path)
+	if err != nil {
+		return false, err
+	}
 
-	_, err := os.Stat(fullPath)
+	_, err = os.Stat(fullPath)
 	if err != nil {
 		if os.IsNotExist(err) {
 			return false, nil
@@ -111,9 +125,12 @@ func (fs *Filesystem) Exists(ctx context.Context, path string) (bool, error) {
 }
 
 func (fs *Filesystem) Delete(ctx context.Context, path string) error {
-	fullPath := fs.fullPath(path)
+	fullPath, err := fs.fullPath(path)
+	if err != nil {
+		return err
+	}
 
-	err := os.Remove(fullPath)
+	err = os.Remove(fullPath)
 	if err != nil && !os.IsNotExist(err) {
 		return fmt.Errorf("removing file: %w", err)
 	}
@@ -135,7 +152,10 @@ func (fs *Filesystem) SignedURL(_ context.Context, _ string, _ time.Duration) (s
 }
 
 func (fs *Filesystem) Size(ctx context.Context, path string) (int64, error) {
-	fullPath := fs.fullPath(path)
+	fullPath, err := fs.fullPath(path)
+	if err != nil {
+		return 0, err
+	}
 
 	info, err := os.Stat(fullPath)
 	if err != nil {
@@ -174,7 +194,8 @@ func (fs *Filesystem) Root() string {
 
 // FullPath returns the full filesystem path for a storage path.
 // Useful for serving files directly or debugging.
-func (fs *Filesystem) FullPath(path string) string {
+// Returns an error if the resulting path would escape the storage root.
+func (fs *Filesystem) FullPath(path string) (string, error) {
 	return fs.fullPath(path)
 }
 
