@@ -18,6 +18,11 @@ import (
 
 const contentTypePlainText = "text/plain; charset=utf-8"
 
+// maxBrowseArchiveSize caps how much data openArchive will buffer for
+// prefix detection. Artifacts larger than this are rejected to prevent
+// memory exhaustion from a single request.
+const maxBrowseArchiveSize = 512 << 20 // 512 MB
+
 // archiveFilename returns a filename suitable for archive format detection.
 // Some ecosystems (e.g. composer) store artifacts with bare hash filenames
 // that have no extension. This adds .zip when the original has no extension
@@ -69,10 +74,13 @@ func openArchive(filename string, content io.Reader, ecosystem string) (archives
 		return archives.OpenWithPrefix(fname, content, "package/")
 	}
 
-	// Read content into memory so we can scan then wrap with prefix
-	data, err := io.ReadAll(content)
+	limited := io.LimitReader(content, maxBrowseArchiveSize+1)
+	data, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("reading artifact: %w", err)
+	}
+	if int64(len(data)) > maxBrowseArchiveSize {
+		return nil, fmt.Errorf("artifact too large for browsing (%d bytes)", len(data))
 	}
 
 	// Open once to detect root prefix
