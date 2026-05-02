@@ -348,11 +348,11 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	}
 	defer func() { _ = fileReader.Close() }()
 
-	// Set content type based on file extension
 	contentType := detectContentType(filePath)
 	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Security-Policy", "sandbox")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 
-	// Set filename for download
 	_, filename := path.Split(filePath)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", filename))
 
@@ -368,8 +368,8 @@ func detectContentType(filename string) string {
 	// Text formats
 	case ".txt", ".md", ".markdown":
 		return contentTypePlainText
-	case ".html", ".htm":
-		return "text/html; charset=utf-8"
+	case ".html", ".htm", ".xhtml":
+		return contentTypePlainText
 	case ".css":
 		return "text/css; charset=utf-8"
 	case ".js", ".mjs":
@@ -423,7 +423,7 @@ func detectContentType(filename string) string {
 	case ".gif":
 		return "image/gif"
 	case ".svg":
-		return "image/svg+xml"
+		return contentTypePlainText
 	case ".ico":
 		return "image/x-icon"
 
