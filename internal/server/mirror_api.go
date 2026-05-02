@@ -20,6 +20,7 @@ func NewMirrorAPIHandler(jobs *mirror.JobStore) *MirrorAPIHandler {
 
 // HandleCreate starts a new mirror job.
 func (h *MirrorAPIHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req mirror.JobRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		w.Header().Set("Content-Type", "application/json")
