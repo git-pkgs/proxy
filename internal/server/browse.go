@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -69,11 +68,6 @@ func detectSingleRootDir(reader archives.Reader) string {
 func openArchive(filename string, content io.Reader, ecosystem string) (archives.Reader, error) { //nolint:ireturn // wraps multiple archive implementations
 	fname := archiveFilename(filename)
 
-	// npm always uses package/ prefix
-	if ecosystem == "npm" {
-		return archives.OpenWithPrefix(fname, content, "package/")
-	}
-
 	limited := io.LimitReader(content, maxBrowseArchiveSize+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
@@ -83,15 +77,18 @@ func openArchive(filename string, content io.Reader, ecosystem string) (archives
 		return nil, fmt.Errorf("artifact too large for browsing (%d bytes)", len(data))
 	}
 
-	// Open once to detect root prefix
-	probe, err := archives.Open(fname, bytes.NewReader(data))
+	if ecosystem == "npm" {
+		return archives.OpenBytesWithPrefix(fname, data, "package/")
+	}
+
+	probe, err := archives.OpenBytes(fname, data)
 	if err != nil {
 		return nil, err
 	}
 	prefix := detectSingleRootDir(probe)
 	_ = probe.Close()
 
-	return archives.OpenWithPrefix(fname, bytes.NewReader(data), prefix)
+	return archives.OpenBytesWithPrefix(fname, data, prefix)
 }
 
 // BrowseListResponse contains the file listing for a directory in an archives.
