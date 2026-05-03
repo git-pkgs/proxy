@@ -133,6 +133,10 @@ type BrowseFileInfo struct {
 func (s *Server) handleBrowsePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
 	wildcard := chi.URLParam(r, "*")
+	if err := validatePackagePath(wildcard); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) < 2 {
@@ -185,6 +189,10 @@ func (s *Server) handleBrowsePath(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleComparePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
 	wildcard := chi.URLParam(r, "*")
+	if err := validatePackagePath(wildcard); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) < 3 {

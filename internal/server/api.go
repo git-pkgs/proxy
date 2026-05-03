@@ -140,6 +140,10 @@ type BulkResponse struct {
 func (h *APIHandler) HandlePackagePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
 	wildcard := chi.URLParam(r, "*")
+	if err := validatePackagePath(wildcard); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) == 0 {
@@ -274,6 +278,10 @@ func (h *APIHandler) getVersion(w http.ResponseWriter, r *http.Request, ecosyste
 func (h *APIHandler) HandleVulnsPath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
 	wildcard := chi.URLParam(r, "*")
+	if err := validatePackagePath(wildcard); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) == 0 {

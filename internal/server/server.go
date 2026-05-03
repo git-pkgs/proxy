@@ -615,6 +615,10 @@ func (s *Server) handlePackagesList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePackagePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
 	wildcard := chi.URLParam(r, "*")
+	if err := validatePackagePath(wildcard); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) == 0 {

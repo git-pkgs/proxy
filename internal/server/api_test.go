@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/git-pkgs/proxy/internal/database"
@@ -45,6 +46,35 @@ func TestHandlePackagePath_MissingParams(t *testing.T) {
 
 	if w.Code != http.StatusBadRequest && w.Code != http.StatusNotFound {
 		t.Errorf("expected status 400 or 404, got %d", w.Code)
+	}
+}
+
+func TestHandlePackagePath_InvalidName(t *testing.T) {
+	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
+	svc := enrichment.New(logger)
+	h := NewAPIHandler(svc, nil)
+
+	r := chi.NewRouter()
+	r.Get("/api/package/{ecosystem}/*", h.HandlePackagePath)
+
+	tests := []struct {
+		name string
+		path string
+	}{
+		{"null byte", "/api/package/npm/lodash%00"},
+		{"too long", "/api/package/npm/" + strings.Repeat("a", maxPackagePathLen+1)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			req := httptest.NewRequest("GET", tt.path, nil)
+			w := httptest.NewRecorder()
+			r.ServeHTTP(w, req)
+
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("expected status 400, got %d", w.Code)
+			}
+		})
 	}
 }
 
