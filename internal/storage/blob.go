@@ -207,13 +207,6 @@ func (b *Blob) ListPrefix(ctx context.Context, prefix string) ([]ObjectInfo, err
 			ModTime: obj.ModTime,
 		}
 
-		// Some providers may omit ModTime in list results; fetch attributes as fallback.
-		if info.ModTime.IsZero() {
-			if attrs, err := b.bucket.Attributes(ctx, obj.Key); err == nil {
-				info.ModTime = attrs.ModTime
-			}
-		}
-
 		objects = append(objects, info)
 	}
 

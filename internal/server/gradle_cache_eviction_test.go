@@ -55,6 +55,10 @@ func (s *fakeGradleCacheStore) Size(_ context.Context, path string) (int64, erro
 	return obj.Size, nil
 }
 
+func (s *fakeGradleCacheStore) SignedURL(_ context.Context, _ string, _ time.Duration) (string, error) {
+	return "", storage.ErrSignedURLUnsupported
+}
+
 func (s *fakeGradleCacheStore) UsedSpace(_ context.Context) (int64, error) {
 	var total int64
 	for _, obj := range s.objects {

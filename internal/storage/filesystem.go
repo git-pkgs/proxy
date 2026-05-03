@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	fsys "io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -189,7 +190,11 @@ func (fs *Filesystem) UsedSpace(ctx context.Context) (int64, error) {
 
 // ListPrefix returns object metadata for paths under a prefix.
 func (fs *Filesystem) ListPrefix(ctx context.Context, prefix string) ([]ObjectInfo, error) {
-	searchRoot := fs.fullPath(prefix)
+	searchRoot, err := fs.fullPath(prefix)
+	if err != nil {
+		return nil, err
+	}
+
 	if _, err := os.Stat(searchRoot); err != nil {
 		if os.IsNotExist(err) {
 			return []ObjectInfo{}, nil
@@ -198,12 +203,17 @@ func (fs *Filesystem) ListPrefix(ctx context.Context, prefix string) ([]ObjectIn
 	}
 
 	objects := make([]ObjectInfo, 0)
-	err := filepath.Walk(searchRoot, func(path string, info os.FileInfo, err error) error {
+	err = filepath.WalkDir(searchRoot, func(path string, entry fsys.DirEntry, err error) error {
 		if err != nil {
 			return err
 		}
-		if info.IsDir() {
+		if entry.IsDir() {
 			return nil
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			return err
 		}
 
 		relPath, err := filepath.Rel(fs.root, path)

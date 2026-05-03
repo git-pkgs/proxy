@@ -129,10 +129,6 @@ func (h *GradleBuildCacheHandler) handleGetOrHead(w http.ResponseWriter, r *http
 	}
 	defer func() { _ = reader.Close() }()
 
-	if size, err := h.proxy.Storage.Size(r.Context(), storagePath); err == nil && size >= 0 {
-		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
-	}
-
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, reader)
 }

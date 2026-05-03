@@ -474,6 +474,9 @@ func TestParseGradleBuildCacheConfig(t *testing.T) {
 	}
 	if got := cfg.ParseGradleBuildCacheSweepInterval(); got != 20*time.Minute {
 		t.Errorf("ParseGradleBuildCacheSweepInterval() = %v, want %v", got, 20*time.Minute)
+	}
+}
+
 func TestParseDirectServeTTL(t *testing.T) {
 	tests := []struct {
 		name string
