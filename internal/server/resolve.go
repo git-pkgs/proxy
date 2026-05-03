@@ -1,10 +1,38 @@
 package server
 
 import (
+	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/git-pkgs/proxy/internal/database"
 )
+
+// maxPackagePathLen bounds the wildcard portion of package routes (name plus
+// version and any suffix). npm caps names at 214 and Maven coordinates can be
+// longer, so 512 leaves room without admitting pathological inputs.
+const maxPackagePathLen = 512
+
+// validatePackagePath rejects wildcard package paths that cannot be valid in
+// any supported ecosystem. It is a coarse filter applied before database or
+// enrichment lookups; ecosystem-specific name rules are layered on top.
+func validatePackagePath(path string) error {
+	if path == "" {
+		return fmt.Errorf("package name required")
+	}
+	if len(path) > maxPackagePathLen {
+		return fmt.Errorf("package path exceeds %d bytes", maxPackagePathLen)
+	}
+	for _, r := range path {
+		if r == 0 {
+			return fmt.Errorf("package path contains null byte")
+		}
+		if unicode.IsControl(r) {
+			return fmt.Errorf("package path contains control character %#U", r)
+		}
+	}
+	return nil
+}
 
 // resolvePackageName determines the package name from a wildcard path by
 // checking the database. This handles namespaced packages like Composer's
