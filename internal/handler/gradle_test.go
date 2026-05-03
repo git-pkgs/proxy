@@ -17,7 +17,7 @@ func TestGradleBuildCacheHandler_PutGetHead(t *testing.T) {
 	key := "a1b2c3d4e5f6"
 	payload := "cache entry content"
 
-	putReq, err := http.NewRequest(http.MethodPut, srv.URL+"/cache/"+key, strings.NewReader(payload))
+	putReq, err := http.NewRequest(http.MethodPut, srv.URL+"/"+key, strings.NewReader(payload))
 	if err != nil {
 		t.Fatalf("failed to create PUT request: %v", err)
 	}
@@ -31,7 +31,7 @@ func TestGradleBuildCacheHandler_PutGetHead(t *testing.T) {
 		t.Fatalf("PUT status = %d, want %d", putResp.StatusCode, http.StatusCreated)
 	}
 
-	getResp, err := http.Get(srv.URL + "/cache/" + key)
+	getResp, err := http.Get(srv.URL + "/" + key)
 	if err != nil {
 		t.Fatalf("GET request failed: %v", err)
 	}
@@ -49,7 +49,7 @@ func TestGradleBuildCacheHandler_PutGetHead(t *testing.T) {
 		t.Fatalf("GET body = %q, want %q", body, payload)
 	}
 
-	headReq, err := http.NewRequest(http.MethodHead, srv.URL+"/cache/"+key, nil)
+	headReq, err := http.NewRequest(http.MethodHead, srv.URL+"/"+key, nil)
 	if err != nil {
 		t.Fatalf("failed to create HEAD request: %v", err)
 	}
@@ -89,7 +89,7 @@ func TestGradleBuildCacheHandler_RootKeyPath(t *testing.T) {
 		t.Fatalf("PUT status = %d, want %d", putResp.StatusCode, http.StatusCreated)
 	}
 
-	getResp, err := http.Get(srv.URL + "/cache/" + key)
+	getResp, err := http.Get(srv.URL + "/" + key)
 	if err != nil {
 		t.Fatalf("GET request failed: %v", err)
 	}
@@ -106,7 +106,7 @@ func TestGradleBuildCacheHandler_GetMiss(t *testing.T) {
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/cache/missing-key")
+	resp, err := http.Get(srv.URL + "/missing-key")
 	if err != nil {
 		t.Fatalf("GET request failed: %v", err)
 	}
@@ -121,7 +121,7 @@ func TestGradleBuildCacheHandler_MethodNotAllowed(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
 	h := NewGradleBuildCacheHandler(proxy)
 
-	req := httptest.NewRequest(http.MethodPost, "/cache/key", nil)
+	req := httptest.NewRequest(http.MethodPost, "/key", nil)
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 
@@ -134,12 +134,25 @@ func TestGradleBuildCacheHandler_PathTraversalRejected(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
 	h := NewGradleBuildCacheHandler(proxy)
 
-	req := httptest.NewRequest(http.MethodGet, "/cache/../secret", nil)
+	req := httptest.NewRequest(http.MethodGet, "/../secret", nil)
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
+func TestGradleBuildCacheHandler_CachePrefixRejected(t *testing.T) {
+	proxy, _, _, _ := setupTestProxy(t)
+	h := NewGradleBuildCacheHandler(proxy)
+
+	req := httptest.NewRequest(http.MethodGet, "/cache/key", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}
 }
 
@@ -152,7 +165,7 @@ func TestGradleBuildCacheHandler_PutOverwriteReturnsCreated(t *testing.T) {
 	key := "overwrite-key"
 
 	for i, payload := range []string{"first", "second"} {
-		req, err := http.NewRequest(http.MethodPut, srv.URL+"/cache/"+key, strings.NewReader(payload))
+		req, err := http.NewRequest(http.MethodPut, srv.URL+"/"+key, strings.NewReader(payload))
 		if err != nil {
 			t.Fatalf("failed to create PUT request: %v", err)
 		}
@@ -177,7 +190,7 @@ func TestGradleBuildCacheHandler_PutReadOnly(t *testing.T) {
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
-	req, err := http.NewRequest(http.MethodPut, srv.URL+"/cache/readonly-key", strings.NewReader("payload"))
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/readonly-key", strings.NewReader("payload"))
 	if err != nil {
 		t.Fatalf("failed to create PUT request: %v", err)
 	}
@@ -200,7 +213,7 @@ func TestGradleBuildCacheHandler_PutTooLarge(t *testing.T) {
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
-	req, err := http.NewRequest(http.MethodPut, srv.URL+"/cache/oversized-key", strings.NewReader("12345"))
+	req, err := http.NewRequest(http.MethodPut, srv.URL+"/oversized-key", strings.NewReader("12345"))
 	if err != nil {
 		t.Fatalf("failed to create PUT request: %v", err)
 	}

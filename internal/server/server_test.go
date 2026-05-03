@@ -353,7 +353,7 @@ func TestGradleBuildCachePutGet(t *testing.T) {
 	key := "abc123def456"
 	body := "build-cache-bytes"
 
-	putReq := httptest.NewRequest(http.MethodPut, "/gradle/cache/"+key, strings.NewReader(body))
+	putReq := httptest.NewRequest(http.MethodPut, "/gradle/"+key, strings.NewReader(body))
 	putW := httptest.NewRecorder()
 	ts.handler.ServeHTTP(putW, putReq)
 
@@ -361,7 +361,7 @@ func TestGradleBuildCachePutGet(t *testing.T) {
 		t.Fatalf("expected status 201, got %d: %s", putW.Code, putW.Body.String())
 	}
 
-	getReq := httptest.NewRequest(http.MethodGet, "/gradle/cache/"+key, nil)
+	getReq := httptest.NewRequest(http.MethodGet, "/gradle/"+key, nil)
 	getW := httptest.NewRecorder()
 	ts.handler.ServeHTTP(getW, getReq)
 

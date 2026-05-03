@@ -13,7 +13,6 @@ import (
 
 const (
 	gradleBuildCacheContentType = "application/vnd.gradle.build-cache-artifact.v2"
-	gradleBuildCachePathPrefix  = "cache/"
 	gradleBuildCacheStorageRoot = "_gradle/http-build-cache"
 	defaultGradleMaxUploadSize  = 100 << 20
 )
@@ -22,8 +21,7 @@ var gradleBuildCacheKeyPattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*
 
 // GradleBuildCacheHandler handles Gradle HttpBuildCache GET/HEAD/PUT requests.
 //
-// Gradle clients commonly use paths like /cache/{key}, but this handler also
-// accepts /{key} so it can be mounted under flexible base URLs.
+// This handler accepts /{key} when mounted under a base URL.
 type GradleBuildCacheHandler struct {
 	proxy *Proxy
 }
@@ -75,8 +73,6 @@ func (h *GradleBuildCacheHandler) parseCacheKey(urlPath string) (string, int) {
 	if containsPathTraversal(keyPath) {
 		return "", http.StatusBadRequest
 	}
-
-	keyPath = strings.TrimPrefix(keyPath, gradleBuildCachePathPrefix)
 
 	if keyPath == "" || strings.Contains(keyPath, "/") {
 		return "", http.StatusNotFound
