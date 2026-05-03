@@ -188,7 +188,16 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 		return nil, nil
 	}
 
-	result.Reader = reader
+	result.Reader = newVerifyingReader(reader, artifact.ContentHash.String, ver.Integrity.String,
+		func(reason string) {
+			p.Logger.Error("cached artifact failed integrity check",
+				"purl", versionPURL, "filename", filename,
+				"path", artifact.StoragePath.String, "reason", reason)
+			metrics.RecordIntegrityFailure(pkg.Ecosystem)
+			if err := p.DB.ClearArtifactCache(versionPURL, filename); err != nil {
+				p.Logger.Warn("failed to clear corrupt artifact from cache", "error", err)
+			}
+		})
 	p.recordCacheHit(pkgPURL, versionPURL, filename)
 	return result, nil
 }
