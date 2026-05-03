@@ -204,17 +204,14 @@ func TestDetectContentType(t *testing.T) {
 
 func TestOpenArchiveSizeLimit(t *testing.T) {
 	huge := bytes.Repeat([]byte("x"), int(maxBrowseArchiveSize)+1)
-	_, err := openArchive("test.tar.gz", bytes.NewReader(huge), "npm")
-	if err != nil {
-		t.Log("npm path streams directly, error is acceptable:", err)
-	}
-
-	_, err = openArchive("test.tar.gz", bytes.NewReader(huge), "go")
-	if err == nil {
-		t.Fatal("expected error for oversized archive, got nil")
-	}
-	if !strings.Contains(err.Error(), "too large") {
-		t.Fatalf("expected 'too large' error, got: %v", err)
+	for _, eco := range []string{"npm", "go"} {
+		_, err := openArchive("test.tar.gz", bytes.NewReader(huge), eco)
+		if err == nil {
+			t.Fatalf("%s: expected error for oversized archive, got nil", eco)
+		}
+		if !strings.Contains(err.Error(), "too large") {
+			t.Fatalf("%s: expected 'too large' error, got: %v", eco, err)
+		}
 	}
 }
 
