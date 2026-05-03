@@ -826,20 +826,20 @@ type StatsResponse struct {
 // @Tags meta
 // @Produce json
 // @Success 200 {object} StatsResponse
-// @Failure 500 {string} string
+// @Failure 500 {object} ErrorResponse
 // @Router /stats [get]
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	count, err := s.db.GetCachedArtifactCount()
 	if err != nil {
-		http.Error(w, "failed to get artifact count", http.StatusInternalServerError)
+		internalError(w, "failed to get artifact count")
 		return
 	}
 
 	size, err := s.db.GetTotalCacheSize()
 	if err != nil {
-		http.Error(w, "failed to get cache size", http.StatusInternalServerError)
+		internalError(w, "failed to get cache size")
 		return
 	}
 
