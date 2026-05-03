@@ -24,9 +24,21 @@ import (
 )
 
 // containsPathTraversal returns true if the path contains ".." segments
-// that could be used to escape the intended directory.
+// that could be used to escape the intended directory. It checks the path
+// as given and after URL-decoding, and treats backslashes as separators.
 func containsPathTraversal(path string) bool {
-	for _, segment := range strings.Split(path, "/") {
+	if hasDotDotSegment(path) {
+		return true
+	}
+	if decoded, err := url.PathUnescape(path); err == nil && decoded != path {
+		return hasDotDotSegment(decoded)
+	}
+	return false
+}
+
+func hasDotDotSegment(path string) bool {
+	path = strings.ReplaceAll(path, "\\", "/")
+	for segment := range strings.SplitSeq(path, "/") {
 		if segment == ".." {
 			return true
 		}
