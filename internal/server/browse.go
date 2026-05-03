@@ -131,7 +131,7 @@ func (s *Server) handleBrowsePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
 	wildcard := chi.URLParam(r, "*")
 	if err := validatePackagePath(wildcard); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		badRequest(w, err.Error())
 		return
 	}
 	segments := splitWildcardPath(wildcard)
@@ -187,7 +187,7 @@ func (s *Server) handleComparePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
 	wildcard := chi.URLParam(r, "*")
 	if err := validatePackagePath(wildcard); err != nil {
-		http.Error(w, err.Error(), http.StatusBadRequest)
+		badRequest(w, err.Error())
 		return
 	}
 	segments := splitWildcardPath(wildcard)
