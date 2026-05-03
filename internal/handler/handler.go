@@ -10,6 +10,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -23,9 +24,21 @@ import (
 )
 
 // containsPathTraversal returns true if the path contains ".." segments
-// that could be used to escape the intended directory.
+// that could be used to escape the intended directory. It checks the path
+// as given and after URL-decoding, and treats backslashes as separators.
 func containsPathTraversal(path string) bool {
-	for _, segment := range strings.Split(path, "/") {
+	if hasDotDotSegment(path) {
+		return true
+	}
+	if decoded, err := url.PathUnescape(path); err == nil && decoded != path {
+		return hasDotDotSegment(decoded)
+	}
+	return false
+}
+
+func hasDotDotSegment(path string) bool {
+	path = strings.ReplaceAll(path, "\\", "/")
+	for segment := range strings.SplitSeq(path, "/") {
 		if segment == ".." {
 			return true
 		}
@@ -71,7 +84,13 @@ type Proxy struct {
 	MetadataTTL         time.Duration
 	GradleReadOnly      bool
 	GradleMaxUploadSize int64
-	HTTPClient          *http.Client
+	DirectServe         bool
+	DirectServeTTL      time.Duration
+	// DirectServeBaseURL, if set, replaces the scheme and host of presigned
+	// URLs so clients receive a public address even when the proxy reaches
+	// storage at an internal one.
+	DirectServeBaseURL string
+	HTTPClient         *http.Client
 }
 
 // NewProxy creates a new Proxy with the given dependencies.
@@ -94,6 +113,7 @@ func NewProxy(db *database.DB, store storage.Storage, fetcher fetch.FetcherInter
 // CacheResult contains information about a cached or fetched artifact.
 type CacheResult struct {
 	Reader      io.ReadCloser
+	RedirectURL string
 	Size        int64
 	ContentType string
 	Hash        string
@@ -140,6 +160,26 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 		return nil, nil
 	}
 
+	result := &CacheResult{
+		Size:        artifact.Size.Int64,
+		ContentType: artifact.ContentType.String,
+		Hash:        artifact.ContentHash.String,
+		Cached:      true,
+	}
+
+	if p.DirectServe {
+		signed, err := p.Storage.SignedURL(ctx, artifact.StoragePath.String, p.DirectServeTTL)
+		if err == nil {
+			result.RedirectURL = rewriteSignedURLHost(signed, p.DirectServeBaseURL)
+			p.recordCacheHit(pkgPURL, versionPURL, filename)
+			return result, nil
+		}
+		if !errors.Is(err, storage.ErrSignedURLUnsupported) {
+			p.Logger.Warn("failed to sign storage URL, falling back to streaming",
+				"path", artifact.StoragePath.String, "error", err)
+		}
+	}
+
 	start := time.Now()
 	reader, err := p.Storage.Open(ctx, artifact.StoragePath.String)
 	metrics.RecordStorageOperation("read", time.Since(start))
@@ -150,20 +190,45 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 		return nil, nil
 	}
 
-	_ = p.DB.RecordArtifactHit(versionPURL, filename)
+	result.Reader = newVerifyingReader(reader, artifact.ContentHash.String, ver.Integrity.String,
+		func(reason string) {
+			p.Logger.Error("cached artifact failed integrity check",
+				"purl", versionPURL, "filename", filename,
+				"path", artifact.StoragePath.String, "reason", reason)
+			metrics.RecordIntegrityFailure(pkg.Ecosystem)
+			if err := p.DB.ClearArtifactCache(versionPURL, filename); err != nil {
+				p.Logger.Warn("failed to clear corrupt artifact from cache", "error", err)
+			}
+		})
+	p.recordCacheHit(pkgPURL, versionPURL, filename)
+	return result, nil
+}
 
-	// Extract ecosystem from pkgPURL for metrics
-	if p, err := purl.Parse(pkgPURL); err == nil {
-		metrics.RecordCacheHit(purl.PURLTypeToEcosystem(p.Type))
+// rewriteSignedURLHost replaces the scheme and host of a signed URL with those
+// from baseURL, preserving the path and query (which carry the signature).
+// Returns signed unchanged if baseURL is empty or either URL fails to parse.
+func rewriteSignedURLHost(signed, baseURL string) string {
+	if baseURL == "" {
+		return signed
 	}
+	s, err := url.Parse(signed)
+	if err != nil {
+		return signed
+	}
+	b, err := url.Parse(baseURL)
+	if err != nil || b.Scheme == "" || b.Host == "" {
+		return signed
+	}
+	s.Scheme = b.Scheme
+	s.Host = b.Host
+	return s.String()
+}
 
-	return &CacheResult{
-		Reader:      reader,
-		Size:        artifact.Size.Int64,
-		ContentType: artifact.ContentType.String,
-		Hash:        artifact.ContentHash.String,
-		Cached:      true,
-	}, nil
+func (p *Proxy) recordCacheHit(pkgPURL, versionPURL, filename string) {
+	_ = p.DB.RecordArtifactHit(versionPURL, filename)
+	if parsed, err := purl.Parse(pkgPURL); err == nil {
+		metrics.RecordCacheHit(purl.PURLTypeToEcosystem(parsed.Type))
+	}
 }
 
 func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL string) (*CacheResult, error) {
@@ -278,6 +343,15 @@ func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, u
 
 // ServeArtifact writes a CacheResult to an HTTP response.
 func ServeArtifact(w http.ResponseWriter, result *CacheResult) {
+	if result.RedirectURL != "" {
+		if result.Hash != "" {
+			w.Header().Set("ETag", fmt.Sprintf(`"%s"`, result.Hash))
+		}
+		w.Header().Set("Location", result.RedirectURL)
+		w.WriteHeader(http.StatusFound)
+		return
+	}
+
 	defer func() { _ = result.Reader.Close() }()
 
 	if result.ContentType != "" {

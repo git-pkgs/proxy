@@ -29,6 +29,23 @@ storage:
   # Empty or "0" means unlimited
   max_size: ""
 
+  # Redirect cached artifact downloads to presigned storage URLs (HTTP 302)
+  # instead of streaming through the proxy. Only effective for S3 and Azure.
+  # Leave disabled if clients reach the proxy through an authenticating gateway,
+  # since presigned URLs bypass it.
+  direct_serve: false
+
+  # How long presigned URLs remain valid (e.g. "5m", "1h"). Default: "15m".
+  direct_serve_ttl: "15m"
+
+  # Public base URL to substitute into presigned URLs. Set this when the
+  # proxy reaches storage at an internal address (127.0.0.1, a Docker
+  # service name) but clients must use a public hostname. Only scheme and
+  # host are used; the signed path and query are preserved. For S3/MinIO
+  # the reverse proxy at this address must forward requests with the
+  # internal Host header or the SigV4 signature will not validate.
+  # direct_serve_base_url: "https://minio.example.com"
+
 # Database configuration
 database:
   # Database driver: "sqlite" (default) or "postgres"

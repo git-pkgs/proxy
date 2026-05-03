@@ -71,6 +71,19 @@ func TestMirrorAPICreateJob(t *testing.T) {
 	}
 }
 
+func TestMirrorAPICreateOversizedBody(t *testing.T) {
+	h := setupMirrorAPI(t)
+
+	body := bytes.Repeat([]byte("x"), int(maxBodySize)+1)
+	req := httptest.NewRequest("POST", "/api/mirror", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.HandleCreate(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
 func TestMirrorAPICreateInvalidBody(t *testing.T) {
 	h := setupMirrorAPI(t)
 

@@ -10,6 +10,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestNewFilesystem(t *testing.T) {
@@ -51,7 +52,10 @@ func TestFilesystemStore(t *testing.T) {
 	}
 
 	// Verify file exists on disk
-	fullPath := fs.FullPath("npm/lodash/4.17.21/lodash.tgz")
+	fullPath, err := fs.FullPath("npm/lodash/4.17.21/lodash.tgz")
+	if err != nil {
+		t.Fatalf("FullPath failed: %v", err)
+	}
 	data, err := os.ReadFile(fullPath)
 	if err != nil {
 		t.Fatalf("reading stored file: %v", err)
@@ -162,7 +166,10 @@ func TestFilesystemDelete(t *testing.T) {
 	}
 
 	// Empty parent directories should be cleaned up
-	nestedDir := fs.FullPath("test/delete/nested")
+	nestedDir, err := fs.FullPath("test/delete/nested")
+	if err != nil {
+		t.Fatalf("FullPath failed: %v", err)
+	}
 	if _, err := os.Stat(nestedDir); !os.IsNotExist(err) {
 		t.Error("empty nested directory not cleaned up")
 	}
@@ -234,6 +241,31 @@ func TestFilesystemUsedSpace(t *testing.T) {
 
 func TestFilesystemLargeFile(t *testing.T) {
 	assertLargeFileRoundTrip(t, createTestFilesystem(t))
+}
+
+func TestFilesystemRejectsTraversal(t *testing.T) {
+	tmp := t.TempDir()
+	fs, err := NewFilesystem(tmp)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range []string{"../etc/passwd", "../../etc/passwd", "a/../../etc/passwd"} {
+		if _, err := fs.Open(context.Background(), p); err == nil {
+			t.Errorf("Open(%q) should reject traversal", p)
+		}
+		if _, _, err := fs.Store(context.Background(), p, strings.NewReader("x")); err == nil {
+			t.Errorf("Store(%q) should reject traversal", p)
+		}
+	}
+}
+
+func TestFilesystemSignedURLUnsupported(t *testing.T) {
+	fs := createTestFilesystem(t)
+
+	_, err := fs.SignedURL(context.Background(), "test/file.txt", time.Minute)
+	if !errors.Is(err, ErrSignedURLUnsupported) {
+		t.Errorf("SignedURL = %v, want ErrSignedURLUnsupported", err)
+	}
 }
 
 func createTestFilesystem(t *testing.T) *Filesystem {

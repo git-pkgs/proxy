@@ -22,6 +22,10 @@ const dirPermissions = 0755
 
 var (
 	ErrNotFound = errors.New("artifact not found")
+
+	// ErrSignedURLUnsupported is returned by SignedURL when the backend
+	// cannot generate presigned URLs (e.g. local filesystem).
+	ErrSignedURLUnsupported = errors.New("signed URLs not supported by storage backend")
 )
 
 // ObjectInfo contains metadata for a stored object.
@@ -52,6 +56,10 @@ type Storage interface {
 	// Size returns the size in bytes of content at path.
 	// Returns ErrNotFound if the path does not exist.
 	Size(ctx context.Context, path string) (int64, error)
+
+	// SignedURL returns a presigned URL granting time-limited GET access to path.
+	// Returns ErrSignedURLUnsupported if the backend cannot generate presigned URLs.
+	SignedURL(ctx context.Context, path string, expiry time.Duration) (string, error)
 
 	// UsedSpace returns the total bytes used by all stored content.
 	UsedSpace(ctx context.Context) (int64, error)

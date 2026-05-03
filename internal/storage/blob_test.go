@@ -10,6 +10,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestOpenBucket(t *testing.T) {
@@ -186,6 +187,18 @@ func TestBlobUsedSpace(t *testing.T) {
 
 func TestBlobLargeFile(t *testing.T) {
 	assertLargeFileRoundTrip(t, createTestBlob(t))
+}
+
+func TestBlobSignedURLUnsupported(t *testing.T) {
+	b := createTestBlob(t)
+	ctx := context.Background()
+
+	// fileblob has no URL signer configured, so this must surface as
+	// ErrSignedURLUnsupported rather than a generic error.
+	_, err := b.SignedURL(ctx, "test/file.txt", time.Minute)
+	if !errors.Is(err, ErrSignedURLUnsupported) {
+		t.Errorf("SignedURL on fileblob = %v, want ErrSignedURLUnsupported", err)
+	}
 }
 
 func TestBlobOverwrite(t *testing.T) {

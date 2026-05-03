@@ -3,6 +3,7 @@ package server
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/git-pkgs/proxy/internal/database"
@@ -116,5 +117,38 @@ func TestSplitWildcardPath(t *testing.T) {
 				t.Errorf("splitWildcardPath(%q)[%d] = %q, want %q", tt.input, i, got[i], tt.want[i])
 			}
 		}
+	}
+}
+
+func TestValidatePackagePath(t *testing.T) {
+	tests := []struct {
+		name    string
+		path    string
+		wantErr bool
+	}{
+		{"simple", "lodash", false},
+		{"with version", "lodash/4.17.21", false},
+		{"npm scoped", "@babel/core/7.0.0", false},
+		{"composer namespaced", "symfony/console/6.0.0", false},
+		{"maven coordinates", "org.apache.commons/commons-lang3/3.12.0", false},
+		{"unicode", "café/1.0.0", false},
+		{"empty", "", true},
+		{"null byte", "lodash\x00/4.17.21", true},
+		{"null byte suffix", "lodash\x00", true},
+		{"newline", "lodash\n4.17.21", true},
+		{"carriage return", "lodash\r", true},
+		{"escape", "lodash\x1b[31m", true},
+		{"delete", "lodash\x7f", true},
+		{"too long", strings.Repeat("a", maxPackagePathLen+1), true},
+		{"at limit", strings.Repeat("a", maxPackagePathLen), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := validatePackagePath(tt.path)
+			if (err != nil) != tt.wantErr {
+				t.Errorf("validatePackagePath(%q) error = %v, wantErr %v", tt.path, err, tt.wantErr)
+			}
+		})
 	}
 }

@@ -140,10 +140,14 @@ type BulkResponse struct {
 func (h *APIHandler) HandlePackagePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
 	wildcard := chi.URLParam(r, "*")
+	if err := validatePackagePath(wildcard); err != nil {
+		badRequest(w, err.Error())
+		return
+	}
 	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) == 0 {
-		http.Error(w, "ecosystem and name are required", http.StatusBadRequest)
+		badRequest(w, "ecosystem and name are required")
 		return
 	}
 
@@ -190,12 +194,12 @@ func (h *APIHandler) HandlePackagePath(w http.ResponseWriter, r *http.Request) {
 func (h *APIHandler) getPackage(w http.ResponseWriter, r *http.Request, ecosystem, name string) {
 	info, err := h.enrichment.EnrichPackage(r.Context(), ecosystem, name)
 	if err != nil {
-		http.Error(w, "failed to enrich package", http.StatusInternalServerError)
+		writeError(w, http.StatusBadGateway, ErrCodeUpstream, "failed to enrich package")
 		return
 	}
 
 	if info == nil {
-		http.Error(w, "package not found", http.StatusNotFound)
+		notFound(w, "package not found")
 		return
 	}
 
@@ -217,7 +221,7 @@ func (h *APIHandler) getPackage(w http.ResponseWriter, r *http.Request, ecosyste
 func (h *APIHandler) getVersion(w http.ResponseWriter, r *http.Request, ecosystem, name, version string) {
 	result, err := h.enrichment.EnrichFull(r.Context(), ecosystem, name, version)
 	if err != nil {
-		http.Error(w, "failed to enrich version", http.StatusInternalServerError)
+		writeError(w, http.StatusBadGateway, ErrCodeUpstream, "failed to enrich version")
 		return
 	}
 
@@ -274,10 +278,14 @@ func (h *APIHandler) getVersion(w http.ResponseWriter, r *http.Request, ecosyste
 func (h *APIHandler) HandleVulnsPath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
 	wildcard := chi.URLParam(r, "*")
+	if err := validatePackagePath(wildcard); err != nil {
+		badRequest(w, err.Error())
+		return
+	}
 	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) == 0 {
-		http.Error(w, "ecosystem and name are required", http.StatusBadRequest)
+		badRequest(w, "ecosystem and name are required")
 		return
 	}
 
@@ -298,7 +306,7 @@ func (h *APIHandler) HandleVulnsPath(w http.ResponseWriter, r *http.Request) {
 
 	vulns, err := h.enrichment.CheckVulnerabilities(r.Context(), ecosystem, name, version)
 	if err != nil {
-		http.Error(w, "failed to check vulnerabilities", http.StatusInternalServerError)
+		writeError(w, http.StatusBadGateway, ErrCodeUpstream, "failed to check vulnerabilities")
 		return
 	}
 
@@ -330,19 +338,19 @@ func (h *APIHandler) HandleVulnsPath(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Param request body OutdatedRequest true "Packages to check"
 // @Success 200 {object} OutdatedResponse
-// @Failure 400 {string} string
-// @Failure 500 {string} string
+// @Failure 400 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
 // @Router /api/outdated [post]
 func (h *APIHandler) HandleOutdated(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req OutdatedRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		badRequest(w, "invalid request body")
 		return
 	}
 
 	if len(req.Packages) == 0 {
-		http.Error(w, "packages list is required", http.StatusBadRequest)
+		badRequest(w, "packages list is required")
 		return
 	}
 
@@ -376,19 +384,19 @@ func (h *APIHandler) HandleOutdated(w http.ResponseWriter, r *http.Request) {
 // @Produce json
 // @Param request body BulkRequest true "PURLs"
 // @Success 200 {object} BulkResponse
-// @Failure 400 {string} string
-// @Failure 500 {string} string
+// @Failure 400 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
 // @Router /api/bulk [post]
 func (h *APIHandler) HandleBulkLookup(w http.ResponseWriter, r *http.Request) {
 	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req BulkRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "invalid request body", http.StatusBadRequest)
+		badRequest(w, "invalid request body")
 		return
 	}
 
 	if len(req.PURLs) == 0 {
-		http.Error(w, "purls list is required", http.StatusBadRequest)
+		badRequest(w, "purls list is required")
 		return
 	}
 
@@ -476,15 +484,15 @@ type SearchPackageResult struct {
 // @Param q query string true "Query"
 // @Param ecosystem query string false "Ecosystem"
 // @Success 200 {object} SearchResponse
-// @Failure 400 {string} string
-// @Failure 500 {string} string
+// @Failure 400 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
 // @Router /api/search [get]
 func (h *APIHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query().Get("q")
 	ecosystem := r.URL.Query().Get("ecosystem")
 
 	if query == "" {
-		http.Error(w, "query parameter 'q' is required", http.StatusBadRequest)
+		badRequest(w, "query parameter 'q' is required")
 		return
 	}
 
@@ -494,7 +502,7 @@ func (h *APIHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 	// Search in database
 	results, err := h.db.SearchPackages(query, ecosystem, limit, (page-1)*limit)
 	if err != nil {
-		http.Error(w, "search failed", http.StatusInternalServerError)
+		internalError(w, "search failed")
 		return
 	}
 
@@ -538,7 +546,7 @@ func (h *APIHandler) HandleSearch(w http.ResponseWriter, r *http.Request) {
 func writeJSON(w http.ResponseWriter, v any) {
 	w.Header().Set("Content-Type", "application/json")
 	if err := json.NewEncoder(w).Encode(v); err != nil {
-		http.Error(w, "failed to encode response", http.StatusInternalServerError)
+		internalError(w, "failed to encode response")
 	}
 }
 
@@ -573,8 +581,8 @@ type PackageListResult struct {
 // @Param ecosystem query string false "Ecosystem"
 // @Param sort query string false "Sort" Enums(hits,name,size,cached_at,ecosystem,vulns)
 // @Success 200 {object} PackagesListResponse
-// @Failure 400 {string} string
-// @Failure 500 {string} string
+// @Failure 400 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
 // @Router /api/packages [get]
 func (h *APIHandler) HandlePackagesList(w http.ResponseWriter, r *http.Request) {
 	ecosystem := r.URL.Query().Get("ecosystem")
@@ -592,7 +600,7 @@ func (h *APIHandler) HandlePackagesList(w http.ResponseWriter, r *http.Request) 
 		"vulns":       true,
 	}
 	if !validSorts[sortBy] {
-		http.Error(w, "invalid sort parameter", http.StatusBadRequest)
+		badRequest(w, "invalid sort parameter")
 		return
 	}
 
@@ -601,7 +609,7 @@ func (h *APIHandler) HandlePackagesList(w http.ResponseWriter, r *http.Request) 
 
 	packages, err := h.db.ListCachedPackages(ecosystem, sortBy, limit, (page-1)*limit)
 	if err != nil {
-		http.Error(w, "failed to list packages", http.StatusInternalServerError)
+		internalError(w, "failed to list packages")
 		return
 	}
 

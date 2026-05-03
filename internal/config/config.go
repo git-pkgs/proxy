@@ -51,6 +51,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -136,6 +137,21 @@ type StorageConfig struct {
 	// When exceeded, least recently used artifacts are evicted.
 	// Empty or "0" means unlimited.
 	MaxSize string `json:"max_size" yaml:"max_size"`
+
+	// DirectServe enables redirecting cached artifact downloads to presigned
+	// storage URLs (HTTP 302) instead of streaming bytes through the proxy.
+	// Only effective for backends that support URL signing (S3, Azure).
+	DirectServe bool `json:"direct_serve" yaml:"direct_serve"`
+
+	// DirectServeTTL is how long presigned URLs remain valid.
+	// Uses Go duration syntax (e.g. "5m", "1h"). Default: "15m".
+	DirectServeTTL string `json:"direct_serve_ttl" yaml:"direct_serve_ttl"`
+
+	// DirectServeBaseURL overrides the scheme and host of presigned URLs
+	// before returning them to clients. Useful when the proxy reaches
+	// storage at an internal address (e.g. 127.0.0.1 or a Docker hostname)
+	// but clients must use a public one.
+	DirectServeBaseURL string `json:"direct_serve_base_url" yaml:"direct_serve_base_url"`
 }
 
 // GradleConfig configures Gradle-specific features.
@@ -343,6 +359,15 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("PROXY_STORAGE_MAX_SIZE"); v != "" {
 		c.Storage.MaxSize = v
 	}
+	if v := os.Getenv("PROXY_STORAGE_DIRECT_SERVE"); v != "" {
+		c.Storage.DirectServe = envBool(v)
+	}
+	if v := os.Getenv("PROXY_STORAGE_DIRECT_SERVE_TTL"); v != "" {
+		c.Storage.DirectServeTTL = v
+	}
+	if v := os.Getenv("PROXY_STORAGE_DIRECT_SERVE_BASE_URL"); v != "" {
+		c.Storage.DirectServeBaseURL = v
+	}
 	if v := os.Getenv("PROXY_DATABASE_DRIVER"); v != "" {
 		c.Database.Driver = v
 	}
@@ -362,10 +387,10 @@ func (c *Config) LoadFromEnv() {
 		c.Cooldown.Default = v
 	}
 	if v := os.Getenv("PROXY_CACHE_METADATA"); v != "" {
-		c.CacheMetadata = v == "true" || v == "1"
+		c.CacheMetadata = envBool(v)
 	}
 	if v := os.Getenv("PROXY_MIRROR_API"); v != "" {
-		c.MirrorAPI = v == "true" || v == "1"
+		c.MirrorAPI = envBool(v)
 	}
 	if v := os.Getenv("PROXY_METADATA_TTL"); v != "" {
 		c.MetadataTTL = v
@@ -434,6 +459,21 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate direct serve TTL if specified
+	if c.Storage.DirectServeTTL != "" {
+		if _, err := time.ParseDuration(c.Storage.DirectServeTTL); err != nil {
+			return fmt.Errorf("invalid storage.direct_serve_ttl %q: %w", c.Storage.DirectServeTTL, err)
+		}
+	}
+
+	// Validate direct serve base URL if specified
+	if c.Storage.DirectServeBaseURL != "" {
+		u, err := url.Parse(c.Storage.DirectServeBaseURL)
+		if err != nil || u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf("invalid storage.direct_serve_base_url %q: must be an absolute URL", c.Storage.DirectServeBaseURL)
+		}
+	}
+
 	// Validate metadata TTL if specified
 	if c.MetadataTTL != "" && c.MetadataTTL != "0" {
 		if _, err := time.ParseDuration(c.MetadataTTL); err != nil {
@@ -481,9 +521,25 @@ func (c *Config) Validate() error {
 	return nil
 }
 
-const defaultMetadataTTL = 5 * time.Minute //nolint:mnd // sensible default
 const defaultGradleBuildCacheMaxUploadSize = 100 << 20
 const defaultGradleBuildCacheSweepInterval = 10 * time.Minute
+const (
+	defaultMetadataTTL    = 5 * time.Minute  //nolint:mnd // sensible default
+	defaultDirectServeTTL = 15 * time.Minute //nolint:mnd // sensible default
+)
+
+// ParseMaxSize returns the maximum cache size in bytes.
+// Returns 0 if unset or explicitly disabled (meaning unlimited).
+func (c *Config) ParseMaxSize() int64 {
+	if c.Storage.MaxSize == "" || c.Storage.MaxSize == "0" {
+		return 0
+	}
+	size, err := ParseSize(c.Storage.MaxSize)
+	if err != nil {
+		return 0
+	}
+	return size
+}
 
 // ParseMetadataTTL returns the metadata TTL duration.
 // Returns 5 minutes if unset, 0 if explicitly disabled.
@@ -549,6 +605,19 @@ func (c *Config) ParseGradleBuildCacheSweepInterval() time.Duration {
 	d, err := time.ParseDuration(c.Gradle.BuildCache.SweepInterval)
 	if err != nil || d <= 0 {
 		return defaultGradleBuildCacheSweepInterval
+	}
+	return d
+}
+
+// ParseDirectServeTTL returns the presigned URL expiry duration.
+// Returns 15 minutes if unset.
+func (c *Config) ParseDirectServeTTL() time.Duration {
+	if c.Storage.DirectServeTTL == "" {
+		return defaultDirectServeTTL
+	}
+	d, err := time.ParseDuration(c.Storage.DirectServeTTL)
+	if err != nil {
+		return defaultDirectServeTTL
 	}
 	return d
 }
@@ -632,4 +701,8 @@ func (a *AuthConfig) Header() (name, value string) {
 // expandEnv expands ${VAR_NAME} references in a string.
 func expandEnv(s string) string {
 	return os.Expand(s, os.Getenv)
+}
+
+func envBool(v string) bool {
+	return v == "true" || v == "1"
 }

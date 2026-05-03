@@ -1,7 +1,6 @@
 package server
 
 import (
-	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -17,6 +16,11 @@ import (
 )
 
 const contentTypePlainText = "text/plain; charset=utf-8"
+
+// maxBrowseArchiveSize caps how much data openArchive will buffer for
+// prefix detection. Artifacts larger than this are rejected to prevent
+// memory exhaustion from a single request.
+const maxBrowseArchiveSize = 512 << 20 // 512 MB
 
 // archiveFilename returns a filename suitable for archive format detection.
 // Some ecosystems (e.g. composer) store artifacts with bare hash filenames
@@ -64,26 +68,27 @@ func detectSingleRootDir(reader archives.Reader) string {
 func openArchive(filename string, content io.Reader, ecosystem string) (archives.Reader, error) { //nolint:ireturn // wraps multiple archive implementations
 	fname := archiveFilename(filename)
 
-	// npm always uses package/ prefix
-	if ecosystem == "npm" {
-		return archives.OpenWithPrefix(fname, content, "package/")
-	}
-
-	// Read content into memory so we can scan then wrap with prefix
-	data, err := io.ReadAll(content)
+	limited := io.LimitReader(content, maxBrowseArchiveSize+1)
+	data, err := io.ReadAll(limited)
 	if err != nil {
 		return nil, fmt.Errorf("reading artifact: %w", err)
 	}
+	if int64(len(data)) > maxBrowseArchiveSize {
+		return nil, fmt.Errorf("artifact too large for browsing (%d bytes)", len(data))
+	}
 
-	// Open once to detect root prefix
-	probe, err := archives.Open(fname, bytes.NewReader(data))
+	if ecosystem == "npm" {
+		return archives.OpenBytesWithPrefix(fname, data, "package/")
+	}
+
+	probe, err := archives.OpenBytes(fname, data)
 	if err != nil {
 		return nil, err
 	}
 	prefix := detectSingleRootDir(probe)
 	_ = probe.Close()
 
-	return archives.OpenWithPrefix(fname, bytes.NewReader(data), prefix)
+	return archives.OpenBytesWithPrefix(fname, data, prefix)
 }
 
 // BrowseListResponse contains the file listing for a directory in an archives.
@@ -112,8 +117,8 @@ type BrowseFileInfo struct {
 // @Param version path string true "Version"
 // @Param path query string false "Directory path inside the archive"
 // @Success 200 {object} BrowseListResponse
-// @Failure 404 {string} string
-// @Failure 500 {string} string
+// @Failure 404 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
 // @Router /api/browse/{ecosystem}/{name}/{version} [get]
 // handleBrowsePath dispatches /api/browse/{ecosystem}/* to the appropriate browse handler.
 // It resolves namespaced package names by consulting the database.
@@ -125,10 +130,14 @@ type BrowseFileInfo struct {
 func (s *Server) handleBrowsePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
 	wildcard := chi.URLParam(r, "*")
+	if err := validatePackagePath(wildcard); err != nil {
+		badRequest(w, err.Error())
+		return
+	}
 	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) < 2 {
-		http.Error(w, "ecosystem, name, and version required", http.StatusBadRequest)
+		badRequest(w, "ecosystem, name, and version required")
 		return
 	}
 
@@ -152,7 +161,7 @@ func (s *Server) handleBrowsePath(w http.ResponseWriter, r *http.Request) {
 			rest = nameVersionSegments[len(nameVersionSegments)-1:]
 		}
 		if len(rest) != 1 {
-			http.Error(w, "not found", http.StatusNotFound)
+			notFound(w, "not found")
 			return
 		}
 		s.browseFile(w, r, ecosystem, name, rest[0], filePath)
@@ -166,7 +175,7 @@ func (s *Server) handleBrowsePath(w http.ResponseWriter, r *http.Request) {
 		rest = segments[len(segments)-1:]
 	}
 	if len(rest) != 1 {
-		http.Error(w, "not found", http.StatusNotFound)
+		notFound(w, "not found")
 		return
 	}
 	s.browseList(w, r, ecosystem, name, rest[0])
@@ -177,10 +186,14 @@ func (s *Server) handleBrowsePath(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handleComparePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
 	wildcard := chi.URLParam(r, "*")
+	if err := validatePackagePath(wildcard); err != nil {
+		badRequest(w, err.Error())
+		return
+	}
 	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) < 3 {
-		http.Error(w, "ecosystem, name, fromVersion, and toVersion required", http.StatusBadRequest)
+		badRequest(w, "ecosystem, name, fromVersion, and toVersion required")
 		return
 	}
 
@@ -200,12 +213,12 @@ func (s *Server) browseList(w http.ResponseWriter, r *http.Request, ecosystem, n
 	versionPURL := purl.MakePURLString(ecosystem, name, version)
 	artifacts, err := s.db.GetArtifactsByVersionPURL(versionPURL)
 	if err != nil {
-		http.Error(w, "version not found", http.StatusNotFound)
+		notFound(w, "version not found")
 		return
 	}
 
 	if len(artifacts) == 0 {
-		http.Error(w, "no artifacts cached", http.StatusNotFound)
+		notFound(w, "no artifacts cached")
 		return
 	}
 
@@ -219,7 +232,7 @@ func (s *Server) browseList(w http.ResponseWriter, r *http.Request, ecosystem, n
 	}
 
 	if cachedArtifact == nil {
-		http.Error(w, "artifact not cached", http.StatusNotFound)
+		notFound(w, "artifact not cached")
 		return
 	}
 
@@ -227,7 +240,7 @@ func (s *Server) browseList(w http.ResponseWriter, r *http.Request, ecosystem, n
 	artifactReader, err := s.storage.Open(r.Context(), cachedArtifact.StoragePath.String)
 	if err != nil {
 		s.logger.Error("failed to read artifact from storage", "error", err)
-		http.Error(w, "failed to read artifact", http.StatusInternalServerError)
+		internalError(w, "failed to read artifact")
 		return
 	}
 	defer func() { _ = artifactReader.Close() }()
@@ -236,7 +249,7 @@ func (s *Server) browseList(w http.ResponseWriter, r *http.Request, ecosystem, n
 	archiveReader, err := openArchive(cachedArtifact.Filename, artifactReader, ecosystem)
 	if err != nil {
 		s.logger.Error("failed to open archive", "error", err, "filename", cachedArtifact.Filename)
-		http.Error(w, "failed to open archive", http.StatusInternalServerError)
+		internalError(w, "failed to open archive")
 		return
 	}
 	defer func() { _ = archiveReader.Close() }()
@@ -245,7 +258,7 @@ func (s *Server) browseList(w http.ResponseWriter, r *http.Request, ecosystem, n
 	files, err := archiveReader.ListDir(dirPath)
 	if err != nil {
 		s.logger.Error("failed to list directory", "error", err, "path", dirPath)
-		http.Error(w, "failed to list directory", http.StatusInternalServerError)
+		internalError(w, "failed to list directory")
 		return
 	}
 
@@ -280,13 +293,13 @@ func (s *Server) browseList(w http.ResponseWriter, r *http.Request, ecosystem, n
 // @Param version path string true "Version"
 // @Param filepath path string true "File path inside the archive"
 // @Success 200 {file} file
-// @Failure 400 {string} string
-// @Failure 404 {string} string
-// @Failure 500 {string} string
+// @Failure 400 {object} ErrorResponse
+// @Failure 404 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
 // @Router /api/browse/{ecosystem}/{name}/{version}/file/{filepath} [get]
 func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, name, version, filePath string) {
 	if filePath == "" {
-		http.Error(w, "file path required", http.StatusBadRequest)
+		badRequest(w, "file path required")
 		return
 	}
 
@@ -294,12 +307,12 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	versionPURL := purl.MakePURLString(ecosystem, name, version)
 	artifacts, err := s.db.GetArtifactsByVersionPURL(versionPURL)
 	if err != nil {
-		http.Error(w, "version not found", http.StatusNotFound)
+		notFound(w, "version not found")
 		return
 	}
 
 	if len(artifacts) == 0 {
-		http.Error(w, "no artifacts cached", http.StatusNotFound)
+		notFound(w, "no artifacts cached")
 		return
 	}
 
@@ -313,7 +326,7 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	}
 
 	if cachedArtifact == nil {
-		http.Error(w, "artifact not cached", http.StatusNotFound)
+		notFound(w, "artifact not cached")
 		return
 	}
 
@@ -321,7 +334,7 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	artifactReader, err := s.storage.Open(r.Context(), cachedArtifact.StoragePath.String)
 	if err != nil {
 		s.logger.Error("failed to read artifact from storage", "error", err)
-		http.Error(w, "failed to read artifact", http.StatusInternalServerError)
+		internalError(w, "failed to read artifact")
 		return
 	}
 	defer func() { _ = artifactReader.Close() }()
@@ -330,7 +343,7 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	archiveReader, err := openArchive(cachedArtifact.Filename, artifactReader, ecosystem)
 	if err != nil {
 		s.logger.Error("failed to open archive", "error", err, "filename", cachedArtifact.Filename)
-		http.Error(w, "failed to open archive", http.StatusInternalServerError)
+		internalError(w, "failed to open archive")
 		return
 	}
 	defer func() { _ = archiveReader.Close() }()
@@ -339,20 +352,20 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	fileReader, err := archiveReader.Extract(filePath)
 	if err != nil {
 		if strings.Contains(err.Error(), "not found") {
-			http.Error(w, "file not found", http.StatusNotFound)
+			notFound(w, "file not found")
 			return
 		}
 		s.logger.Error("failed to extract file", "error", err, "path", filePath)
-		http.Error(w, "failed to extract file", http.StatusInternalServerError)
+		internalError(w, "failed to extract file")
 		return
 	}
 	defer func() { _ = fileReader.Close() }()
 
-	// Set content type based on file extension
 	contentType := detectContentType(filePath)
 	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Security-Policy", "sandbox")
+	w.Header().Set("X-Content-Type-Options", "nosniff")
 
-	// Set filename for download
 	_, filename := path.Split(filePath)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", filename))
 
@@ -368,8 +381,8 @@ func detectContentType(filename string) string {
 	// Text formats
 	case ".txt", ".md", ".markdown":
 		return contentTypePlainText
-	case ".html", ".htm":
-		return "text/html; charset=utf-8"
+	case ".html", ".htm", ".xhtml":
+		return contentTypePlainText
 	case ".css":
 		return "text/css; charset=utf-8"
 	case ".js", ".mjs":
@@ -423,7 +436,7 @@ func detectContentType(filename string) string {
 	case ".gif":
 		return "image/gif"
 	case ".svg":
-		return "image/svg+xml"
+		return contentTypePlainText
 	case ".ico":
 		return "image/x-icon"
 
@@ -483,8 +496,8 @@ type BrowseSourceData struct {
 // @Param fromVersion path string true "From version"
 // @Param toVersion path string true "To version"
 // @Success 200 {object} map[string]any
-// @Failure 404 {string} string
-// @Failure 500 {string} string
+// @Failure 404 {object} ErrorResponse
+// @Failure 500 {object} ErrorResponse
 // @Router /api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion} [get]
 func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, name, fromVersion, toVersion string) {
 	// Get artifacts for both versions
@@ -493,13 +506,13 @@ func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, 
 
 	fromArtifacts, err := s.db.GetArtifactsByVersionPURL(fromPURL)
 	if err != nil || len(fromArtifacts) == 0 {
-		http.Error(w, "from version not found or not cached", http.StatusNotFound)
+		notFound(w, "from version not found or not cached")
 		return
 	}
 
 	toArtifacts, err := s.db.GetArtifactsByVersionPURL(toPURL)
 	if err != nil || len(toArtifacts) == 0 {
-		http.Error(w, "to version not found or not cached", http.StatusNotFound)
+		notFound(w, "to version not found or not cached")
 		return
 	}
 
@@ -519,7 +532,7 @@ func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, 
 	}
 
 	if fromArtifact == nil || toArtifact == nil {
-		http.Error(w, "one or both versions not cached", http.StatusNotFound)
+		notFound(w, "one or both versions not cached")
 		return
 	}
 
@@ -527,7 +540,7 @@ func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, 
 	fromReader, err := s.storage.Open(r.Context(), fromArtifact.StoragePath.String)
 	if err != nil {
 		s.logger.Error("failed to open from artifact", "error", err)
-		http.Error(w, "failed to read from version", http.StatusInternalServerError)
+		internalError(w, "failed to read from version")
 		return
 	}
 	defer func() { _ = fromReader.Close() }()
@@ -535,7 +548,7 @@ func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, 
 	toReader, err := s.storage.Open(r.Context(), toArtifact.StoragePath.String)
 	if err != nil {
 		s.logger.Error("failed to open to artifact", "error", err)
-		http.Error(w, "failed to read to version", http.StatusInternalServerError)
+		internalError(w, "failed to read to version")
 		return
 	}
 	defer func() { _ = toReader.Close() }()
@@ -543,7 +556,7 @@ func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, 
 	fromArchive, err := openArchive(fromArtifact.Filename, fromReader, ecosystem)
 	if err != nil {
 		s.logger.Error("failed to open from archive", "error", err)
-		http.Error(w, "failed to open from archive", http.StatusInternalServerError)
+		internalError(w, "failed to open from archive")
 		return
 	}
 	defer func() { _ = fromArchive.Close() }()
@@ -551,7 +564,7 @@ func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, 
 	toArchive, err := openArchive(toArtifact.Filename, toReader, ecosystem)
 	if err != nil {
 		s.logger.Error("failed to open to archive", "error", err)
-		http.Error(w, "failed to open to archive", http.StatusInternalServerError)
+		internalError(w, "failed to open to archive")
 		return
 	}
 	defer func() { _ = toArchive.Close() }()
@@ -560,7 +573,7 @@ func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, 
 	result, err := diff.Compare(fromArchive, toArchive)
 	if err != nil {
 		s.logger.Error("failed to generate diff", "error", err)
-		http.Error(w, "failed to generate diff", http.StatusInternalServerError)
+		internalError(w, "failed to generate diff")
 		return
 	}
 

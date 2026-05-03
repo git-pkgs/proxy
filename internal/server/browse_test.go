@@ -179,6 +179,10 @@ func TestDetectContentType(t *testing.T) {
 		{"file.go", "text/x-go; charset=utf-8"},
 		{"file.py", "text/x-python; charset=utf-8"},
 		{"file.rs", "text/x-rust; charset=utf-8"},
+		{"file.html", contentTypePlainText},
+		{"file.htm", contentTypePlainText},
+		{"file.xhtml", contentTypePlainText},
+		{"file.svg", contentTypePlainText},
 		{"file.png", "image/png"},
 		{"file.jpg", "image/jpeg"},
 		{"README", contentTypePlainText},
@@ -195,6 +199,19 @@ func TestDetectContentType(t *testing.T) {
 				t.Errorf("detectContentType(%q) = %q, want %q", tt.filename, got, tt.expectedCT)
 			}
 		})
+	}
+}
+
+func TestOpenArchiveSizeLimit(t *testing.T) {
+	huge := bytes.Repeat([]byte("x"), int(maxBrowseArchiveSize)+1)
+	for _, eco := range []string{"npm", "go"} {
+		_, err := openArchive("test.tar.gz", bytes.NewReader(huge), eco)
+		if err == nil {
+			t.Fatalf("%s: expected error for oversized archive, got nil", eco)
+		}
+		if !strings.Contains(err.Error(), "too large") {
+			t.Fatalf("%s: expected 'too large' error, got: %v", eco, err)
+		}
 	}
 }
 

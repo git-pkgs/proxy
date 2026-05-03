@@ -21,9 +21,11 @@ import (
 
 // mockStorage implements storage.Storage for testing.
 type mockStorage struct {
-	files    map[string][]byte
-	storeErr error
-	openErr  error
+	files     map[string][]byte
+	storeErr  error
+	openErr   error
+	signedURL string
+	signErr   error
 }
 
 func newMockStorage() *mockStorage {
@@ -77,6 +79,16 @@ func (s *mockStorage) UsedSpace(_ context.Context) (int64, error) {
 		total += int64(len(data))
 	}
 	return total, nil
+}
+
+func (s *mockStorage) SignedURL(_ context.Context, _ string, _ time.Duration) (string, error) {
+	if s.signErr != nil {
+		return "", s.signErr
+	}
+	if s.signedURL == "" {
+		return "", storage.ErrSignedURLUnsupported
+	}
+	return s.signedURL, nil
 }
 
 func (s *mockStorage) URL() string { return "mem://" }
@@ -308,6 +320,213 @@ func TestGetOrFetchArtifactFromURL_CacheMiss_StorageMissing(t *testing.T) {
 	storagePath := storage.ArtifactPath("npm", "", "missing", "1.0.0", "missing-1.0.0.tgz")
 	if _, ok := store.files[storagePath]; !ok {
 		t.Error("refetched artifact should be stored")
+	}
+}
+
+func TestGetOrFetchArtifact_DirectServe_Redirect(t *testing.T) {
+	proxy, db, store, fetcher := setupTestProxy(t)
+	seedPackage(t, db, store, "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz", "cached content")
+
+	proxy.DirectServe = true
+	proxy.DirectServeTTL = 15 * time.Minute
+	store.signedURL = "https://bucket.s3.amazonaws.com/npm/lodash?X-Amz-Signature=abc"
+
+	result, err := proxy.GetOrFetchArtifact(context.Background(), "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	if !result.Cached {
+		t.Error("expected result to be cached")
+	}
+	if result.RedirectURL != store.signedURL {
+		t.Errorf("RedirectURL = %q, want %q", result.RedirectURL, store.signedURL)
+	}
+	if result.Reader != nil {
+		t.Error("Reader should be nil when redirecting")
+	}
+	if fetcher.fetchCalled {
+		t.Error("fetcher should not be called on cache hit")
+	}
+
+	// Hit count should still be recorded on the redirect path.
+	art, _ := db.GetArtifact("pkg:npm/lodash@4.17.21", "lodash-4.17.21.tgz")
+	if art == nil || art.HitCount != 1 {
+		t.Errorf("artifact hit count not recorded: %+v", art)
+	}
+}
+
+func TestGetOrFetchArtifact_DirectServe_BaseURLRewrite(t *testing.T) {
+	proxy, db, store, _ := setupTestProxy(t)
+	seedPackage(t, db, store, "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz", "cached content")
+
+	proxy.DirectServe = true
+	proxy.DirectServeBaseURL = "https://cdn.example.com"
+	store.signedURL = "http://127.0.0.1:9000/bucket/npm/lodash?X-Amz-Signature=abc&X-Amz-Expires=900"
+
+	result, err := proxy.GetOrFetchArtifact(context.Background(), "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+
+	want := "https://cdn.example.com/bucket/npm/lodash?X-Amz-Signature=abc&X-Amz-Expires=900"
+	if result.RedirectURL != want {
+		t.Errorf("RedirectURL = %q, want %q", result.RedirectURL, want)
+	}
+}
+
+func TestRewriteSignedURLHost(t *testing.T) {
+	tests := []struct {
+		name    string
+		signed  string
+		baseURL string
+		want    string
+	}{
+		{
+			"empty base url is no-op",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+			"",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+		},
+		{
+			"replaces scheme and host",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+			"https://cdn.example.com",
+			"https://cdn.example.com/bucket/key?sig=abc",
+		},
+		{
+			"preserves path and query",
+			"http://minio:9000/bucket/npm/lodash/4.17.21/lodash.tgz?X-Amz-Signature=abc&X-Amz-Date=20260101",
+			"https://files.example.com",
+			"https://files.example.com/bucket/npm/lodash/4.17.21/lodash.tgz?X-Amz-Signature=abc&X-Amz-Date=20260101",
+		},
+		{
+			"ignores base url path",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+			"https://cdn.example.com/ignored",
+			"https://cdn.example.com/bucket/key?sig=abc",
+		},
+		{
+			"invalid base url is no-op",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+			"://bad",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rewriteSignedURLHost(tt.signed, tt.baseURL)
+			if got != tt.want {
+				t.Errorf("rewriteSignedURLHost(%q, %q) = %q, want %q", tt.signed, tt.baseURL, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestGetOrFetchArtifact_DirectServe_FallbackOnUnsupported(t *testing.T) {
+	proxy, db, store, _ := setupTestProxy(t)
+	seedPackage(t, db, store, "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz", "cached content")
+
+	proxy.DirectServe = true
+	// store.signedURL is empty so SignedURL returns ErrSignedURLUnsupported.
+
+	result, err := proxy.GetOrFetchArtifact(context.Background(), "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer func() { _ = result.Reader.Close() }()
+
+	if result.RedirectURL != "" {
+		t.Errorf("RedirectURL should be empty, got %q", result.RedirectURL)
+	}
+	if result.Reader == nil {
+		t.Fatal("Reader should be set when signing is unsupported")
+	}
+	body, _ := io.ReadAll(result.Reader)
+	if string(body) != "cached content" {
+		t.Errorf("got body %q, want %q", body, "cached content")
+	}
+}
+
+func TestGetOrFetchArtifact_DirectServe_FallbackOnError(t *testing.T) {
+	proxy, db, store, _ := setupTestProxy(t)
+	seedPackage(t, db, store, "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz", "cached content")
+
+	proxy.DirectServe = true
+	store.signErr = errors.New("signing failed")
+
+	result, err := proxy.GetOrFetchArtifact(context.Background(), "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer func() { _ = result.Reader.Close() }()
+
+	if result.RedirectURL != "" {
+		t.Errorf("RedirectURL should be empty on signing error, got %q", result.RedirectURL)
+	}
+	if result.Reader == nil {
+		t.Fatal("Reader should be set when signing fails")
+	}
+}
+
+func TestGetOrFetchArtifact_DirectServe_DisabledIgnoresSigning(t *testing.T) {
+	proxy, db, store, _ := setupTestProxy(t)
+	seedPackage(t, db, store, "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz", "cached content")
+
+	proxy.DirectServe = false
+	store.signedURL = "https://bucket.example/should-not-be-used"
+
+	result, err := proxy.GetOrFetchArtifact(context.Background(), "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz")
+	if err != nil {
+		t.Fatalf("unexpected error: %v", err)
+	}
+	defer func() { _ = result.Reader.Close() }()
+
+	if result.RedirectURL != "" {
+		t.Errorf("RedirectURL should be empty when DirectServe is off, got %q", result.RedirectURL)
+	}
+}
+
+func TestServeArtifact_Redirect(t *testing.T) {
+	w := httptest.NewRecorder()
+	ServeArtifact(w, &CacheResult{
+		RedirectURL: "https://bucket.s3.amazonaws.com/file?sig=abc",
+		Hash:        "abc123",
+		Cached:      true,
+	})
+
+	if w.Code != http.StatusFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusFound)
+	}
+	if loc := w.Header().Get("Location"); loc != "https://bucket.s3.amazonaws.com/file?sig=abc" {
+		t.Errorf("Location = %q", loc)
+	}
+	if etag := w.Header().Get("ETag"); etag != `"abc123"` {
+		t.Errorf("ETag = %q, want %q", etag, `"abc123"`)
+	}
+	if cl := w.Header().Get("Content-Length"); cl != "" {
+		t.Errorf("Content-Length should not be set on redirect, got %q", cl)
+	}
+}
+
+func TestServeArtifact_Stream(t *testing.T) {
+	w := httptest.NewRecorder()
+	ServeArtifact(w, &CacheResult{
+		Reader:      io.NopCloser(strings.NewReader("payload")),
+		Size:        7,
+		ContentType: "application/octet-stream",
+		Hash:        "abc123",
+	})
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if w.Body.String() != "payload" {
+		t.Errorf("body = %q, want %q", w.Body.String(), "payload")
+	}
+	if ct := w.Header().Get("Content-Type"); ct != "application/octet-stream" {
+		t.Errorf("Content-Type = %q", ct)
 	}
 }
 

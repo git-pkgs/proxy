@@ -364,6 +364,31 @@ func TestLoadFileNotFound(t *testing.T) {
 	}
 }
 
+func TestParseMaxSize(t *testing.T) {
+	tests := []struct {
+		name    string
+		maxSize string
+		want    int64
+	}{
+		{"empty means unlimited", "", 0},
+		{"zero means unlimited", "0", 0},
+		{"10GB", "10GB", 10 * 1024 * 1024 * 1024},
+		{"500MB", "500MB", 500 * 1024 * 1024},
+		{"invalid returns 0", "invalid", 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Storage.MaxSize = tt.maxSize
+			got := cfg.ParseMaxSize()
+			if got != tt.want {
+				t.Errorf("ParseMaxSize() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestParseMetadataTTL(t *testing.T) {
 	tests := []struct {
 		name string
@@ -449,5 +474,76 @@ func TestParseGradleBuildCacheConfig(t *testing.T) {
 	}
 	if got := cfg.ParseGradleBuildCacheSweepInterval(); got != 20*time.Minute {
 		t.Errorf("ParseGradleBuildCacheSweepInterval() = %v, want %v", got, 20*time.Minute)
+func TestParseDirectServeTTL(t *testing.T) {
+	tests := []struct {
+		name string
+		ttl  string
+		want time.Duration
+	}{
+		{"empty defaults to 15m", "", 15 * time.Minute},
+		{"5 minutes", "5m", 5 * time.Minute},
+		{"1 hour", "1h", 1 * time.Hour},
+		{"invalid defaults to 15m", "not-a-duration", 15 * time.Minute},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Storage.DirectServeTTL = tt.ttl
+			got := cfg.ParseDirectServeTTL()
+			if got != tt.want {
+				t.Errorf("ParseDirectServeTTL() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateDirectServeTTL(t *testing.T) {
+	cfg := Default()
+	cfg.Storage.DirectServeTTL = "invalid"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for invalid storage.direct_serve_ttl")
+	}
+
+	cfg.Storage.DirectServeTTL = "5m"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for valid storage.direct_serve_ttl: %v", err)
+	}
+}
+
+func TestLoadDirectServeFromEnv(t *testing.T) {
+	cfg := Default()
+	t.Setenv("PROXY_STORAGE_DIRECT_SERVE", "true")
+	t.Setenv("PROXY_STORAGE_DIRECT_SERVE_TTL", "30m")
+	t.Setenv("PROXY_STORAGE_DIRECT_SERVE_BASE_URL", "https://cdn.example.com")
+	cfg.LoadFromEnv()
+
+	if !cfg.Storage.DirectServe {
+		t.Error("Storage.DirectServe should be true")
+	}
+	if cfg.Storage.DirectServeTTL != "30m" {
+		t.Errorf("Storage.DirectServeTTL = %q, want %q", cfg.Storage.DirectServeTTL, "30m")
+	}
+	if cfg.Storage.DirectServeBaseURL != "https://cdn.example.com" {
+		t.Errorf("Storage.DirectServeBaseURL = %q, want %q", cfg.Storage.DirectServeBaseURL, "https://cdn.example.com")
+	}
+}
+
+func TestValidateDirectServeBaseURL(t *testing.T) {
+	cfg := Default()
+
+	cfg.Storage.DirectServeBaseURL = "not a url"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for relative direct_serve_base_url")
+	}
+
+	cfg.Storage.DirectServeBaseURL = "://bad"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for unparseable direct_serve_base_url")
+	}
+
+	cfg.Storage.DirectServeBaseURL = "https://cdn.example.com"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for valid direct_serve_base_url: %v", err)
 	}
 }

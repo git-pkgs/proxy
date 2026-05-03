@@ -151,6 +151,9 @@ func (s *Server) Start() error {
 	proxy.MetadataTTL = s.cfg.ParseMetadataTTL()
 	proxy.GradleReadOnly = s.cfg.Gradle.BuildCache.ReadOnly
 	proxy.GradleMaxUploadSize = s.cfg.ParseGradleBuildCacheMaxUploadSize()
+	proxy.DirectServe = s.cfg.Storage.DirectServe
+	proxy.DirectServeTTL = s.cfg.ParseDirectServeTTL()
+	proxy.DirectServeBaseURL = s.cfg.Storage.DirectServeBaseURL
 
 	// Create router with Chi
 	r := chi.NewRouter()
@@ -267,6 +270,7 @@ func (s *Server) Start() error {
 		"storage", s.storage.URL(),
 		"database", s.cfg.Database.Path)
 	go s.updateCacheStatsMetrics()
+	go s.startEvictionLoop(bgCtx)
 
 	return s.http.ListenAndServe()
 }
@@ -617,6 +621,10 @@ func (s *Server) handlePackagesList(w http.ResponseWriter, r *http.Request) {
 func (s *Server) handlePackagePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
 	wildcard := chi.URLParam(r, "*")
+	if err := validatePackagePath(wildcard); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) == 0 {
@@ -824,20 +832,20 @@ type StatsResponse struct {
 // @Tags meta
 // @Produce json
 // @Success 200 {object} StatsResponse
-// @Failure 500 {string} string
+// @Failure 500 {object} ErrorResponse
 // @Router /stats [get]
 func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 	ctx := r.Context()
 
 	count, err := s.db.GetCachedArtifactCount()
 	if err != nil {
-		http.Error(w, "failed to get artifact count", http.StatusInternalServerError)
+		internalError(w, "failed to get artifact count")
 		return
 	}
 
 	size, err := s.db.GetTotalCacheSize()
 	if err != nil {
-		http.Error(w, "failed to get cache size", http.StatusInternalServerError)
+		internalError(w, "failed to get cache size")
 		return
 	}
 

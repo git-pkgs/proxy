@@ -6,12 +6,15 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"net/http"
 	"os"
 	"path/filepath"
 	"runtime"
 	"strings"
+	"time"
 
 	"gocloud.dev/blob"
+	_ "gocloud.dev/blob/azureblob"
 	_ "gocloud.dev/blob/fileblob"
 	_ "gocloud.dev/blob/s3blob"
 	"gocloud.dev/gcerrors"
@@ -136,6 +139,20 @@ func (b *Blob) Delete(ctx context.Context, path string) error {
 		return fmt.Errorf("deleting object: %w", err)
 	}
 	return nil
+}
+
+func (b *Blob) SignedURL(ctx context.Context, path string, expiry time.Duration) (string, error) {
+	url, err := b.bucket.SignedURL(ctx, path, &blob.SignedURLOptions{
+		Method: http.MethodGet,
+		Expiry: expiry,
+	})
+	if err != nil {
+		if gcerrors.Code(err) == gcerrors.Unimplemented {
+			return "", ErrSignedURLUnsupported
+		}
+		return "", fmt.Errorf("signing URL: %w", err)
+	}
+	return url, nil
 }
 
 func (b *Blob) Size(ctx context.Context, path string) (int64, error) {
