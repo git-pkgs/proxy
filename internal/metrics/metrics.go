@@ -120,6 +120,14 @@ var (
 			Help: "Number of currently active requests",
 		},
 	)
+
+	IntegrityFailures = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_integrity_failures_total",
+			Help: "Cached artifacts that failed hash verification on read",
+		},
+		[]string{"ecosystem"},
+	)
 )
 
 func init() {
@@ -138,6 +146,7 @@ func init() {
 		StorageOperationDuration,
 		StorageErrors,
 		ActiveRequests,
+		IntegrityFailures,
 	)
 }
 
@@ -176,6 +185,11 @@ func RecordUpstreamError(ecosystem, errorType string) {
 // RecordStorageOperation tracks storage operation duration.
 func RecordStorageOperation(operation string, duration time.Duration) {
 	StorageOperationDuration.WithLabelValues(operation).Observe(duration.Seconds())
+}
+
+// RecordIntegrityFailure increments the integrity failure counter.
+func RecordIntegrityFailure(ecosystem string) {
+	IntegrityFailures.WithLabelValues(ecosystem).Inc()
 }
 
 // RecordStorageError increments storage error counter.
