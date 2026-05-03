@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/config/cargo"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/storage"
@@ -68,13 +69,13 @@ func newTestServer(t *testing.T) *testServer {
 
 	// Mount handlers
 	npmHandler := handler.NewNPMHandler(proxy, cfg.BaseURL)
-	cargoHandler := handler.NewCargoHandler(proxy, cfg.BaseURL)
+	cargoHandler := handler.NewCargoHandler(proxy, cfg.BaseURL, cargo.RouteDefault)
 	gemHandler := handler.NewGemHandler(proxy, cfg.BaseURL)
 	goHandler := handler.NewGoHandler(proxy, cfg.BaseURL)
 	pypiHandler := handler.NewPyPIHandler(proxy, cfg.BaseURL)
 
 	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))
-	r.Mount("/cargo", http.StripPrefix("/cargo", cargoHandler.Routes()))
+	r.Mount(cargoHandler.Path(), http.StripPrefix(cargoHandler.Path(), cargoHandler.Routes()))
 	r.Mount("/gem", http.StripPrefix("/gem", gemHandler.Routes()))
 	r.Mount("/go", http.StripPrefix("/go", goHandler.Routes()))
 	r.Mount("/pypi", http.StripPrefix("/pypi", pypiHandler.Routes()))

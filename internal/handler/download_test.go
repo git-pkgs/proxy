@@ -10,6 +10,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/config/debian"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
@@ -897,7 +898,7 @@ func TestDebianHandler_DownloadCacheMiss(t *testing.T) {
 		ContentType: "application/vnd.debian.binary-package",
 	}
 
-	h := NewDebianHandler(proxy, "http://localhost")
+	h := NewDebianHandler(proxy, "http://localhost", debian.RouteDefault)
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 

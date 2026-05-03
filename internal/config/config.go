@@ -58,6 +58,8 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/config/cargo"
+	"github.com/git-pkgs/proxy/internal/config/debian"
 	"gopkg.in/yaml.v3"
 )
 
@@ -82,6 +84,9 @@ type Config struct {
 
 	// Upstream configures upstream registry URLs (optional overrides).
 	Upstream UpstreamConfig `json:"upstream" yaml:"upstream"`
+
+	// Ecosystem configures ecosystem routes and upstreams
+	Ecosystem EcosystemConfig `json:"ecosystem" yaml:"ecosystem"`
 
 	// Cooldown configures version age filtering to mitigate supply chain attacks.
 	Cooldown CooldownConfig `json:"cooldown" yaml:"cooldown"`
@@ -255,6 +260,14 @@ func Default() *Config {
 			Level:  "info",
 			Format: "text",
 		},
+		Ecosystem: EcosystemConfig{
+			Cargo: cargo.Config{
+				IncludeDefault: true,
+			},
+			Debian: debian.Config{
+				IncludeDefault: true,
+			},
+		},
 		Upstream: UpstreamConfig{
 			NPM:           "https://registry.npmjs.org",
 			Cargo:         "https://index.crates.io",
@@ -359,6 +372,14 @@ func (c *Config) LoadFromEnv() {
 
 // Validate checks the configuration for errors.
 func (c *Config) Validate() error {
+	// finalize the configuration by injecting default routes if requested
+	if c.Ecosystem.Cargo.IncludeDefault {
+		c.Ecosystem.Cargo.Route = append(c.Ecosystem.Cargo.Route, cargo.RouteDefault)
+	}
+	if c.Ecosystem.Debian.IncludeDefault {
+		c.Ecosystem.Debian.Route = append(c.Ecosystem.Debian.Route, debian.RouteDefault)
+	}
+
 	if c.Listen == "" {
 		return fmt.Errorf("listen address is required")
 	}
@@ -424,6 +445,13 @@ func (c *Config) Validate() error {
 		if _, err := time.ParseDuration(c.MetadataTTL); err != nil {
 			return fmt.Errorf("invalid metadata_ttl %q: %w", c.MetadataTTL, err)
 		}
+	}
+
+	if err := c.Ecosystem.Cargo.Validate(); err != nil {
+		return err
+	}
+	if err := c.Ecosystem.Debian.Validate(); err != nil {
+		return err
 	}
 
 	return nil

@@ -48,6 +48,7 @@ func TestCargoBuildIndexPath(t *testing.T) {
 func TestCargoConfigEndpoint(t *testing.T) {
 	h := &CargoHandler{
 		proxyURL: "http://localhost:8080",
+		path:     "/xyzzy",
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/config.json", nil)
@@ -64,7 +65,7 @@ func TestCargoConfigEndpoint(t *testing.T) {
 		t.Fatalf("failed to parse config: %v", err)
 	}
 
-	expectedDL := "http://localhost:8080/cargo/crates/{crate}/{version}/download"
+	expectedDL := "http://localhost:8080/xyzzy/crates/{crate}/{version}/download"
 	if config.DL != expectedDL {
 		t.Errorf("DL = %q, want %q", config.DL, expectedDL)
 	}
