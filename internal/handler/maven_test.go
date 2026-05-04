@@ -52,6 +52,7 @@ func TestMavenIsArtifactFile(t *testing.T) {
 	}{
 		{"guava-32.1.3-jre.jar", true},
 		{"guava-32.1.3-jre.pom", true},
+		{"guava-32.1.3-jre.module", true},
 		{"app-1.0.war", true},
 		{"lib-1.0.aar", true},
 		{"maven-metadata.xml", false},

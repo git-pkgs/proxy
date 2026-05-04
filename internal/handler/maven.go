@@ -8,23 +8,34 @@ import (
 )
 
 const (
-	mavenUpstream = "https://repo1.maven.org/maven2"
-	minMavenParts = 4 // group path segments + artifact + version + filename
+	mavenCentralUpstream       = "https://repo1.maven.org/maven2"
+	gradlePluginPortalUpstream = "https://plugins.gradle.org/m2"
+	minMavenParts              = 4 // group path segments + artifact + version + filename
+	gradlePluginMarkerSuffix   = ".gradle.plugin"
 )
 
 // MavenHandler handles Maven repository protocol requests.
 type MavenHandler struct {
-	proxy       *Proxy
-	upstreamURL string
-	proxyURL    string
+	proxy                   *Proxy
+	upstreamURL             string
+	pluginPortalUpstreamURL string
+	proxyURL                string
 }
 
 // NewMavenHandler creates a new Maven repository handler.
-func NewMavenHandler(proxy *Proxy, proxyURL string) *MavenHandler {
+func NewMavenHandler(proxy *Proxy, proxyURL, upstreamURL, pluginPortalUpstreamURL string) *MavenHandler {
+	if strings.TrimSpace(upstreamURL) == "" {
+		upstreamURL = mavenCentralUpstream
+	}
+	if strings.TrimSpace(pluginPortalUpstreamURL) == "" {
+		pluginPortalUpstreamURL = gradlePluginPortalUpstream
+	}
+
 	return &MavenHandler{
-		proxy:       proxy,
-		upstreamURL: mavenUpstream,
-		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
+		proxy:                   proxy,
+		upstreamURL:             strings.TrimSuffix(upstreamURL, "/"),
+		pluginPortalUpstreamURL: strings.TrimSuffix(pluginPortalUpstreamURL, "/"),
+		proxyURL:                strings.TrimSuffix(proxyURL, "/"),
 	}
 }
 
@@ -85,6 +96,12 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, ur
 	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, urlPath)
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "maven", name, version, filename, upstreamURL)
+	if err != nil && h.shouldFallbackToPluginPortal(group, artifact, filename) {
+		pluginPortalURL := fmt.Sprintf("%s/%s", h.pluginPortalUpstreamURL, urlPath)
+		h.proxy.Logger.Info("maven artifact not found in primary upstream, trying Gradle Plugin Portal",
+			"group", group, "artifact", artifact, "version", version, "filename", filename)
+		result, err = h.proxy.GetOrFetchArtifactFromURL(r.Context(), "maven", name, version, filename, pluginPortalURL)
+	}
 	if err != nil {
 		h.proxy.Logger.Error("failed to get artifact", "error", err)
 		http.Error(w, "failed to fetch artifact", http.StatusBadGateway)
@@ -115,13 +132,28 @@ func (h *MavenHandler) parsePath(urlPath string) (group, artifact, version, file
 // isArtifactFile returns true if the filename looks like a Maven artifact.
 func (h *MavenHandler) isArtifactFile(filename string) bool {
 	// Common artifact extensions
-	extensions := []string{".jar", ".war", ".ear", ".pom", ".aar", ".klib"}
+	extensions := []string{".jar", ".war", ".ear", ".pom", ".aar", ".klib", ".module"}
 	for _, ext := range extensions {
 		if strings.HasSuffix(filename, ext) {
 			return true
 		}
 	}
 	return false
+}
+
+func (h *MavenHandler) shouldFallbackToPluginPortal(group, artifact, filename string) bool {
+	if h.pluginPortalUpstreamURL == "" {
+		return false
+	}
+	if !strings.HasSuffix(filename, ".pom") && !strings.HasSuffix(filename, ".module") {
+		return false
+	}
+	if !strings.HasSuffix(artifact, gradlePluginMarkerSuffix) {
+		return false
+	}
+
+	markerPrefix := strings.TrimSuffix(artifact, gradlePluginMarkerSuffix)
+	return markerPrefix != "" && markerPrefix == group
 }
 
 // isMetadataFile returns true if the filename is Maven metadata.

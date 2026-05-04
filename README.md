@@ -209,6 +209,34 @@ Add to your `~/.m2/settings.xml`:
 </settings>
 ```
 
+The `/maven/` endpoint uses Maven Central as primary upstream and falls back to the Gradle Plugin Portal for Gradle plugin marker artifacts (POM/module-only coordinates like `*.gradle.plugin`).
+
+For Gradle plugin resolution via the same proxy endpoint:
+
+```kotlin
+pluginManagement {
+  repositories {
+    maven(url = "http://localhost:8080/maven/")
+  }
+}
+```
+
+### Gradle HTTP Build Cache
+
+Configure in `settings.gradle(.kts)`:
+
+```kotlin
+buildCache {
+  local {
+    enabled = false
+  }
+  remote<HttpBuildCache> {
+    url = uri("http://localhost:8080/gradle/")
+    push = true
+  }
+}
+```
+
 ### Gradle HTTP Build Cache
 
 Configure in `settings.gradle(.kts)`:

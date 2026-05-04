@@ -182,7 +182,12 @@ func (s *Server) Start() error {
 	hexHandler := handler.NewHexHandler(proxy, s.cfg.BaseURL)
 	pubHandler := handler.NewPubHandler(proxy, s.cfg.BaseURL)
 	pypiHandler := handler.NewPyPIHandler(proxy, s.cfg.BaseURL)
-	mavenHandler := handler.NewMavenHandler(proxy, s.cfg.BaseURL)
+	mavenHandler := handler.NewMavenHandler(
+		proxy,
+		s.cfg.BaseURL,
+		s.cfg.Upstream.Maven,
+		s.cfg.Upstream.GradlePluginPortal,
+	)
 	gradleHandler := handler.NewGradleBuildCacheHandler(proxy)
 	nugetHandler := handler.NewNuGetHandler(proxy, s.cfg.BaseURL)
 	composerHandler := handler.NewComposerHandler(proxy, s.cfg.BaseURL)

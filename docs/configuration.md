@@ -114,6 +114,8 @@ Override default upstream registry URLs:
 ```yaml
 upstream:
   npm: "https://registry.npmjs.org"
+  maven: "https://repo1.maven.org/maven2"
+  gradle_plugin_portal: "https://plugins.gradle.org/m2"
   cargo: "https://index.crates.io"
   cargo_download: "https://static.crates.io/crates"
 ```

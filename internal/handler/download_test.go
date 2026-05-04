@@ -2,6 +2,7 @@ package handler
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -673,7 +674,7 @@ func TestMavenHandler_DownloadCacheHit(t *testing.T) {
 	proxy, db, store, _ := setupTestProxy(t)
 	seedPackageWithPURL(t, db, store, "maven", "com.google.guava:guava", "32.1.3-jre", "guava-32.1.3-jre.jar", "jar content")
 
-	h := NewMavenHandler(proxy, "http://localhost")
+	h := NewMavenHandler(proxy, "http://localhost", "", "")
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
@@ -730,7 +731,7 @@ func TestMavenHandler_MetadataProxied(t *testing.T) {
 
 func TestMavenHandler_EmptyPathNotFound(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
-	h := NewMavenHandler(proxy, "http://localhost")
+	h := NewMavenHandler(proxy, "http://localhost", "", "")
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
@@ -748,7 +749,7 @@ func TestMavenHandler_EmptyPathNotFound(t *testing.T) {
 func TestMavenHandler_ArtifactExtensions(t *testing.T) {
 	proxy, _, _, fetcher := setupTestProxy(t)
 
-	extensions := []string{".jar", ".war", ".ear", ".pom", ".aar", ".klib"}
+	extensions := []string{".jar", ".war", ".ear", ".pom", ".aar", ".klib", ".module"}
 	for _, ext := range extensions {
 		fetcher.artifact = &fetch.Artifact{
 			Body:        io.NopCloser(strings.NewReader("artifact")),
@@ -756,7 +757,7 @@ func TestMavenHandler_ArtifactExtensions(t *testing.T) {
 		}
 		fetcher.fetchCalled = false
 
-		h := NewMavenHandler(proxy, "http://localhost")
+		h := NewMavenHandler(proxy, "http://localhost", "", "")
 
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			t.Errorf("should not proxy artifact file %s to upstream", ext)
@@ -789,7 +790,7 @@ func TestMavenHandler_CacheMiss(t *testing.T) {
 		ContentType: "application/java-archive",
 	}
 
-	h := NewMavenHandler(proxy, "http://localhost")
+	h := NewMavenHandler(proxy, "http://localhost", "", "")
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
@@ -806,6 +807,114 @@ func TestMavenHandler_CacheMiss(t *testing.T) {
 	want := "https://repo1.maven.org/maven2/org/apache/commons/commons-lang3/3.14.0/commons-lang3-3.14.0.jar"
 	if fetcher.fetchedURL != want {
 		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
+	}
+}
+
+func TestMavenHandler_GradlePluginMarkerFallbackAndCache(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+
+	primaryUpstream := "https://repo1.maven.org/maven2"
+	pluginPortalUpstream := "https://plugins.gradle.org/m2"
+	markerPath := "/com/diffplug/spotless/com.diffplug.spotless.gradle.plugin/8.4.0/com.diffplug.spotless.gradle.plugin-8.4.0.pom"
+	primaryURL := primaryUpstream + markerPath
+
+	fetcher.fetchErrByURL = map[string]error{
+		primaryURL: errors.New("404 not found"),
+	}
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("<project/>")),
+		ContentType: "application/xml",
+	}
+
+	h := NewMavenHandler(proxy, "http://localhost", primaryUpstream, pluginPortalUpstream)
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + markerPath)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if string(body) != "<project/>" {
+		t.Fatalf("body = %q, want %q", body, "<project/>")
+	}
+
+	wantFallbackURL := pluginPortalUpstream + markerPath
+	if fetcher.fetchedURL != wantFallbackURL {
+		t.Fatalf("fallback URL = %q, want %q", fetcher.fetchedURL, wantFallbackURL)
+	}
+
+	fetcher.fetchCalled = false
+	resp, err = http.Get(srv.URL + markerPath)
+	if err != nil {
+		t.Fatalf("second request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if fetcher.fetchCalled {
+		t.Fatal("expected plugin marker POM to be served from cache on second request")
+	}
+}
+
+func TestMavenHandler_GradlePluginMarkerFallbackAndCache_BenManes(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+
+	primaryUpstream := "https://repo1.maven.org/maven2"
+	pluginPortalUpstream := "https://plugins.gradle.org/m2"
+	markerPath := "/com/github/ben-manes/versions/com.github.ben-manes.versions.gradle.plugin/0.54.0/com.github.ben-manes.versions.gradle.plugin-0.54.0.pom"
+	primaryURL := primaryUpstream + markerPath
+
+	fetcher.fetchErrByURL = map[string]error{
+		primaryURL: errors.New("404 not found"),
+	}
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("<project/>")),
+		ContentType: "application/xml",
+	}
+
+	h := NewMavenHandler(proxy, "http://localhost", primaryUpstream, pluginPortalUpstream)
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + markerPath)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if string(body) != "<project/>" {
+		t.Fatalf("body = %q, want %q", body, "<project/>")
+	}
+
+	wantFallbackURL := pluginPortalUpstream + markerPath
+	if fetcher.fetchedURL != wantFallbackURL {
+		t.Fatalf("fallback URL = %q, want %q", fetcher.fetchedURL, wantFallbackURL)
+	}
+
+	fetcher.fetchCalled = false
+	resp, err = http.Get(srv.URL + markerPath)
+	if err != nil {
+		t.Fatalf("second request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("second status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if fetcher.fetchCalled {
+		t.Fatal("expected plugin marker POM to be served from cache on second request")
 	}
 }
 
