@@ -237,22 +237,6 @@ buildCache {
 }
 ```
 
-### Gradle HTTP Build Cache
-
-Configure in `settings.gradle(.kts)`:
-
-```kotlin
-buildCache {
-  local {
-    enabled = false
-  }
-  remote<HttpBuildCache> {
-    url = uri("http://localhost:8080/gradle/")
-    push = true
-  }
-}
-```
-
 ### NuGet
 
 Configure in `nuget.config`:
