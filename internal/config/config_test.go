@@ -25,6 +25,12 @@ func TestDefault(t *testing.T) {
 	if cfg.Database.Path == "" {
 		t.Error("Database.Path should not be empty")
 	}
+	if cfg.Gradle.BuildCache.MaxUploadSize != "100MB" {
+		t.Errorf("Gradle.BuildCache.MaxUploadSize = %q, want %q", cfg.Gradle.BuildCache.MaxUploadSize, "100MB")
+	}
+	if cfg.Gradle.BuildCache.MaxAge != "168h" {
+		t.Errorf("Gradle.BuildCache.MaxAge = %q, want %q", cfg.Gradle.BuildCache.MaxAge, "168h")
+	}
 }
 
 func TestValidate(t *testing.T) {
@@ -96,6 +102,41 @@ func TestValidate(t *testing.T) {
 		{
 			name:    "valid max size",
 			modify:  func(c *Config) { c.Storage.MaxSize = "10GB" },
+			wantErr: false,
+		},
+		{
+			name:    "invalid gradle upload size",
+			modify:  func(c *Config) { c.Gradle.BuildCache.MaxUploadSize = testInvalid },
+			wantErr: true,
+		},
+		{
+			name:    "zero gradle upload size",
+			modify:  func(c *Config) { c.Gradle.BuildCache.MaxUploadSize = "0" },
+			wantErr: true,
+		},
+		{
+			name:    "invalid gradle max age",
+			modify:  func(c *Config) { c.Gradle.BuildCache.MaxAge = testInvalid },
+			wantErr: true,
+		},
+		{
+			name:    "valid gradle max age",
+			modify:  func(c *Config) { c.Gradle.BuildCache.MaxAge = "24h" },
+			wantErr: false,
+		},
+		{
+			name:    "invalid gradle max size",
+			modify:  func(c *Config) { c.Gradle.BuildCache.MaxSize = testInvalid },
+			wantErr: true,
+		},
+		{
+			name:    "invalid gradle sweep interval",
+			modify:  func(c *Config) { c.Gradle.BuildCache.SweepInterval = "0" },
+			wantErr: true,
+		},
+		{
+			name:    "valid gradle sweep interval",
+			modify:  func(c *Config) { c.Gradle.BuildCache.SweepInterval = "30m" },
 			wantErr: false,
 		},
 	}
@@ -223,6 +264,11 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("PROXY_BASE_URL", "https://env.example.com")
 	t.Setenv("PROXY_STORAGE_PATH", "/env/cache")
 	t.Setenv("PROXY_LOG_LEVEL", testLevelDebug)
+	t.Setenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY", "true")
+	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE", "32MB")
+	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_AGE", "12h")
+	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_SIZE", "10GB")
+	t.Setenv("PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL", "15m")
 
 	cfg.LoadFromEnv()
 
@@ -237,6 +283,21 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.Log.Level != testLevelDebug {
 		t.Errorf("Log.Level = %q, want %q", cfg.Log.Level, testLevelDebug)
+	}
+	if !cfg.Gradle.BuildCache.ReadOnly {
+		t.Error("Gradle.BuildCache.ReadOnly = false, want true")
+	}
+	if cfg.Gradle.BuildCache.MaxUploadSize != "32MB" {
+		t.Errorf("Gradle.BuildCache.MaxUploadSize = %q, want %q", cfg.Gradle.BuildCache.MaxUploadSize, "32MB")
+	}
+	if cfg.Gradle.BuildCache.MaxAge != "12h" {
+		t.Errorf("Gradle.BuildCache.MaxAge = %q, want %q", cfg.Gradle.BuildCache.MaxAge, "12h")
+	}
+	if cfg.Gradle.BuildCache.MaxSize != "10GB" {
+		t.Errorf("Gradle.BuildCache.MaxSize = %q, want %q", cfg.Gradle.BuildCache.MaxSize, "10GB")
+	}
+	if cfg.Gradle.BuildCache.SweepInterval != "15m" {
+		t.Errorf("Gradle.BuildCache.SweepInterval = %q, want %q", cfg.Gradle.BuildCache.SweepInterval, "15m")
 	}
 }
 
@@ -378,6 +439,41 @@ func TestLoadMetadataTTLFromEnv(t *testing.T) {
 
 	if cfg.MetadataTTL != "10m" {
 		t.Errorf("MetadataTTL = %q, want %q", cfg.MetadataTTL, "10m")
+	}
+}
+
+func TestParseGradleBuildCacheConfig(t *testing.T) {
+	cfg := Default()
+
+	if got := cfg.ParseGradleBuildCacheMaxUploadSize(); got != 100*1024*1024 {
+		t.Errorf("ParseGradleBuildCacheMaxUploadSize() = %d, want %d", got, 100*1024*1024)
+	}
+	if got := cfg.ParseGradleBuildCacheMaxAge(); got != 168*time.Hour {
+		t.Errorf("ParseGradleBuildCacheMaxAge() = %v, want %v", got, 168*time.Hour)
+	}
+	if got := cfg.ParseGradleBuildCacheMaxSize(); got != 0 {
+		t.Errorf("ParseGradleBuildCacheMaxSize() = %d, want 0", got)
+	}
+	if got := cfg.ParseGradleBuildCacheSweepInterval(); got != 10*time.Minute {
+		t.Errorf("ParseGradleBuildCacheSweepInterval() = %v, want %v", got, 10*time.Minute)
+	}
+
+	cfg.Gradle.BuildCache.MaxUploadSize = "64MB"
+	cfg.Gradle.BuildCache.MaxAge = "48h"
+	cfg.Gradle.BuildCache.MaxSize = "2GB"
+	cfg.Gradle.BuildCache.SweepInterval = "20m"
+
+	if got := cfg.ParseGradleBuildCacheMaxUploadSize(); got != 64*1024*1024 {
+		t.Errorf("ParseGradleBuildCacheMaxUploadSize() = %d, want %d", got, 64*1024*1024)
+	}
+	if got := cfg.ParseGradleBuildCacheMaxAge(); got != 48*time.Hour {
+		t.Errorf("ParseGradleBuildCacheMaxAge() = %v, want %v", got, 48*time.Hour)
+	}
+	if got := cfg.ParseGradleBuildCacheMaxSize(); got != 2*1024*1024*1024 {
+		t.Errorf("ParseGradleBuildCacheMaxSize() = %d, want %d", got, 2*1024*1024*1024)
+	}
+	if got := cfg.ParseGradleBuildCacheSweepInterval(); got != 20*time.Minute {
+		t.Errorf("ParseGradleBuildCacheSweepInterval() = %v, want %v", got, 20*time.Minute)
 	}
 }
 

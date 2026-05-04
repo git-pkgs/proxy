@@ -108,6 +108,26 @@ upstream:
     #   header_name: "X-Auth-Token"
     #   header_value: "${MAVEN_TOKEN}"
 
+# Gradle HttpBuildCache configuration
+gradle:
+  build_cache:
+    # Set to true to disable PUT uploads (read-only cache mode)
+    read_only: false
+
+    # Maximum accepted Gradle cache upload body size
+    # Required and must be > 0
+    max_upload_size: "100MB"
+
+    # Evict entries older than this age (set to "0" to disable age-based eviction)
+    max_age: "168h"
+
+    # Cap total Gradle cache size; oldest entries are deleted first
+    # ("0" disables size-based eviction)
+    # max_size: "20GB"
+
+    # How often eviction runs when max_age or max_size is set
+    sweep_interval: "10m"
+
 # Version cooldown configuration
 # Hides package versions published too recently, giving the community time
 # to spot malicious releases before they're pulled into projects.

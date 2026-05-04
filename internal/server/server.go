@@ -9,6 +9,7 @@
 //   - /pub/*      - pub.dev registry protocol
 //   - /pypi/*     - PyPI registry protocol
 //   - /maven/*    - Maven repository protocol
+//   - /gradle/*   - Gradle HttpBuildCache protocol
 //   - /nuget/*    - NuGet V3 API protocol
 //   - /composer/* - Composer/Packagist protocol
 //   - /conan/*    - Conan C/C++ protocol
@@ -148,6 +149,8 @@ func (s *Server) Start() error {
 	proxy.Cooldown = cd
 	proxy.CacheMetadata = s.cfg.CacheMetadata
 	proxy.MetadataTTL = s.cfg.ParseMetadataTTL()
+	proxy.GradleReadOnly = s.cfg.Gradle.BuildCache.ReadOnly
+	proxy.GradleMaxUploadSize = s.cfg.ParseGradleBuildCacheMaxUploadSize()
 	proxy.DirectServe = s.cfg.Storage.DirectServe
 	proxy.DirectServeTTL = s.cfg.ParseDirectServeTTL()
 	proxy.DirectServeBaseURL = s.cfg.Storage.DirectServeBaseURL
@@ -180,6 +183,7 @@ func (s *Server) Start() error {
 	pubHandler := handler.NewPubHandler(proxy, s.cfg.BaseURL)
 	pypiHandler := handler.NewPyPIHandler(proxy, s.cfg.BaseURL)
 	mavenHandler := handler.NewMavenHandler(proxy, s.cfg.BaseURL)
+	gradleHandler := handler.NewGradleBuildCacheHandler(proxy)
 	nugetHandler := handler.NewNuGetHandler(proxy, s.cfg.BaseURL)
 	composerHandler := handler.NewComposerHandler(proxy, s.cfg.BaseURL)
 	conanHandler := handler.NewConanHandler(proxy, s.cfg.BaseURL)
@@ -197,6 +201,7 @@ func (s *Server) Start() error {
 	r.Mount("/pub", http.StripPrefix("/pub", pubHandler.Routes()))
 	r.Mount("/pypi", http.StripPrefix("/pypi", pypiHandler.Routes()))
 	r.Mount("/maven", http.StripPrefix("/maven", mavenHandler.Routes()))
+	r.Mount("/gradle", http.StripPrefix("/gradle", gradleHandler.Routes()))
 	r.Mount("/nuget", http.StripPrefix("/nuget", nugetHandler.Routes()))
 	r.Mount("/composer", http.StripPrefix("/composer", composerHandler.Routes()))
 	r.Mount("/conan", http.StripPrefix("/conan", conanHandler.Routes()))
@@ -238,6 +243,7 @@ func (s *Server) Start() error {
 	// Start background context (used by mirror jobs and cleanup)
 	bgCtx, bgCancel := context.WithCancel(context.Background())
 	s.cancel = bgCancel
+	s.startGradleBuildCacheEviction(bgCtx)
 
 	// Mirror API endpoints (opt-in via mirror_api config or PROXY_MIRROR_API env)
 	if s.cfg.MirrorAPI {

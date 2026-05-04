@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	fsys "io/fs"
 	"os"
 	"path/filepath"
 	"strings"
@@ -185,6 +186,54 @@ func (fs *Filesystem) UsedSpace(ctx context.Context) (int64, error) {
 	}
 
 	return total, nil
+}
+
+// ListPrefix returns object metadata for paths under a prefix.
+func (fs *Filesystem) ListPrefix(ctx context.Context, prefix string) ([]ObjectInfo, error) {
+	searchRoot, err := fs.fullPath(prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	if _, err := os.Stat(searchRoot); err != nil {
+		if os.IsNotExist(err) {
+			return []ObjectInfo{}, nil
+		}
+		return nil, fmt.Errorf("stat prefix: %w", err)
+	}
+
+	objects := make([]ObjectInfo, 0)
+	err = filepath.WalkDir(searchRoot, func(path string, entry fsys.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		if entry.IsDir() {
+			return nil
+		}
+
+		info, err := entry.Info()
+		if err != nil {
+			return err
+		}
+
+		relPath, err := filepath.Rel(fs.root, path)
+		if err != nil {
+			return err
+		}
+
+		objects = append(objects, ObjectInfo{
+			Path:    filepath.ToSlash(relPath),
+			Size:    info.Size(),
+			ModTime: info.ModTime(),
+		})
+
+		return nil
+	})
+	if err != nil {
+		return nil, fmt.Errorf("walking prefix: %w", err)
+	}
+
+	return objects, nil
 }
 
 // Root returns the root directory of the storage.

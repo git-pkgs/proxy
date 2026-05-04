@@ -32,6 +32,7 @@ Resolution order: package override, then ecosystem override, then global default
 | pub.dev | Dart | Yes | ✓ |
 | PyPI | Python | Yes | ✓ |
 | Maven | Java | | ✓ |
+| Gradle Build Cache | Java/Kotlin | | ✓ |
 | NuGet | .NET | Yes | ✓ |
 | Composer | PHP | Yes | ✓ |
 | Conan | C/C++ | | ✓ |
@@ -206,6 +207,22 @@ Add to your `~/.m2/settings.xml`:
     </mirror>
   </mirrors>
 </settings>
+```
+
+### Gradle HTTP Build Cache
+
+Configure in `settings.gradle(.kts)`:
+
+```kotlin
+buildCache {
+  local {
+    enabled = false
+  }
+  remote<HttpBuildCache> {
+    url = uri("http://localhost:8080/gradle/")
+    push = true
+  }
+}
 ```
 
 ### NuGet

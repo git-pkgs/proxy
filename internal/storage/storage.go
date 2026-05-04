@@ -28,6 +28,13 @@ var (
 	ErrSignedURLUnsupported = errors.New("signed URLs not supported by storage backend")
 )
 
+// ObjectInfo contains metadata for a stored object.
+type ObjectInfo struct {
+	Path    string
+	Size    int64
+	ModTime time.Time
+}
+
 // Storage defines the interface for artifact storage backends.
 type Storage interface {
 	// Store writes content from r to the given path.

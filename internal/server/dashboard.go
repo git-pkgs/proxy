@@ -288,6 +288,20 @@ index-url = ` + baseURL + `/pypi/simple/</code></pre>`),
 &lt;/settings&gt;</code></pre>`),
 		},
 		{
+			ID:       "gradle",
+			Name:     "Gradle Build Cache",
+			Language: "Java/Kotlin",
+			Endpoint: "/gradle/",
+			Instructions: template.HTML(`<p class="config-note">Configure Gradle to use the proxy for HttpBuildCache:</p>
+<pre><code>// In settings.gradle(.kts)
+buildCache {
+  remote&lt;HttpBuildCache&gt; {
+    url = uri("` + baseURL + `/gradle/")
+    push = true
+  }
+}</code></pre>`),
+		},
+		{
 			ID:       "nuget",
 			Name:     "NuGet",
 			Language: ".NET",

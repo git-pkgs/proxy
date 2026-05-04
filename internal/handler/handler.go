@@ -74,16 +74,18 @@ func ReadMetadata(r io.Reader) ([]byte, error) {
 
 // Proxy provides shared functionality for protocol handlers.
 type Proxy struct {
-	DB             *database.DB
-	Storage        storage.Storage
-	Fetcher        fetch.FetcherInterface
-	Resolver       *fetch.Resolver
-	Logger         *slog.Logger
-	Cooldown       *cooldown.Config
-	CacheMetadata  bool
-	MetadataTTL    time.Duration
-	DirectServe    bool
-	DirectServeTTL time.Duration
+	DB                  *database.DB
+	Storage             storage.Storage
+	Fetcher             fetch.FetcherInterface
+	Resolver            *fetch.Resolver
+	Logger              *slog.Logger
+	Cooldown            *cooldown.Config
+	CacheMetadata       bool
+	MetadataTTL         time.Duration
+	GradleReadOnly      bool
+	GradleMaxUploadSize int64
+	DirectServe         bool
+	DirectServeTTL      time.Duration
 	// DirectServeBaseURL, if set, replaces the scheme and host of presigned
 	// URLs so clients receive a public address even when the proxy reaches
 	// storage at an internal one.
