@@ -159,5 +159,5 @@ func (h *CRANHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
 
 // proxyUpstream forwards a request to CRAN without caching.
 func (h *CRANHandler) proxyUpstream(w http.ResponseWriter, r *http.Request) {
-	h.proxy.ProxyUpstream(w, r, h.upstreamURL+r.URL.Path, []string{"Accept-Encoding"})
+	h.proxy.ProxyUpstream(w, r, h.upstreamURL+r.URL.Path, []string{headerAcceptEncoding})
 }

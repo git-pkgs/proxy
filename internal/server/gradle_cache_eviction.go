@@ -81,23 +81,7 @@ func sweepGradleBuildCache(
 		return 0, 0, nil
 	}
 
-	sort.Slice(entries, func(i, j int) bool {
-		iTime := entries[i].ModTime
-		jTime := entries[j].ModTime
-
-		switch {
-		case iTime.IsZero() && jTime.IsZero():
-			return entries[i].Path < entries[j].Path
-		case iTime.IsZero():
-			return true
-		case jTime.IsZero():
-			return false
-		case iTime.Equal(jTime):
-			return entries[i].Path < entries[j].Path
-		default:
-			return iTime.Before(jTime)
-		}
-	})
+	sortOldestFirst(entries)
 
 	deletedCount := 0
 	freedBytes := int64(0)
@@ -153,4 +137,13 @@ func sweepGradleBuildCache(
 	}
 
 	return deletedCount, freedBytes, nil
+}
+
+func sortOldestFirst(entries []storage.ObjectInfo) {
+	sort.Slice(entries, func(i, j int) bool {
+		if entries[i].ModTime.Equal(entries[j].ModTime) {
+			return entries[i].Path < entries[j].Path
+		}
+		return entries[i].ModTime.Before(entries[j].ModTime)
+	})
 }

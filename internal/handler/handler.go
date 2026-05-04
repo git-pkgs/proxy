@@ -50,6 +50,8 @@ const defaultHTTPTimeout = 30 * time.Second
 
 const contentTypeJSON = "application/json"
 
+const headerAcceptEncoding = "Accept-Encoding"
+
 // maxMetadataSize is the maximum size of upstream metadata responses (100 MB).
 // Package metadata (e.g. npm with many versions) can be large, but unbounded
 // reads risk OOM if an upstream misbehaves.
@@ -726,7 +728,7 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 	}
 	req.Header.Set("Accept", accept)
 
-	for _, header := range []string{"Accept-Encoding", "If-Modified-Since", "If-None-Match"} {
+	for _, header := range []string{headerAcceptEncoding, "If-Modified-Since", "If-None-Match"} {
 		if v := r.Header.Get(header); v != "" {
 			req.Header.Set(header, v)
 		}

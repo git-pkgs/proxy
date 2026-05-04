@@ -182,7 +182,7 @@ func (h *GemHandler) fetchCompactIndex(r *http.Request, name string) (*http.Resp
 	if err != nil {
 		return nil, err
 	}
-	for _, hdr := range []string{"Accept", "Accept-Encoding", "If-None-Match", "If-Modified-Since"} {
+	for _, hdr := range []string{"Accept", headerAcceptEncoding, "If-None-Match", "If-Modified-Since"} {
 		if v := r.Header.Get(hdr); v != "" {
 			req.Header.Set(hdr, v)
 		}
@@ -311,7 +311,7 @@ func (h *GemHandler) proxyUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Copy relevant headers
-	for _, h := range []string{"Accept", "Accept-Encoding", "If-None-Match", "If-Modified-Since"} {
+	for _, h := range []string{"Accept", headerAcceptEncoding, "If-None-Match", "If-Modified-Since"} {
 		if v := r.Header.Get(h); v != "" {
 			req.Header.Set(h, v)
 		}
