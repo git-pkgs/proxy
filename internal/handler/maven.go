@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"path"
+	"strconv"
 	"strings"
 )
 
@@ -62,8 +64,7 @@ func (h *MavenHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	filename := path.Base(urlPath)
 
 	if h.isMetadataFile(filename) {
-		cacheKey := strings.ReplaceAll(urlPath, "/", "_")
-		h.proxy.ProxyCached(w, r, h.upstreamURL+r.URL.Path, "maven", cacheKey, "*/*")
+		h.handleMetadata(w, r, urlPath, filename)
 		return
 	}
 
@@ -75,6 +76,68 @@ func (h *MavenHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	// Proxy everything else (directory listings, checksums, etc.)
 	h.proxyUpstream(w, r)
+}
+
+func (h *MavenHandler) handleMetadata(w http.ResponseWriter, r *http.Request, urlPath, filename string) {
+	cacheKey := strings.ReplaceAll(urlPath, "/", "_")
+	if !h.shouldFallbackToPluginPortal(urlPath, filename) {
+		h.proxy.ProxyCached(w, r, h.upstreamURL+r.URL.Path, "maven", cacheKey, "*/*")
+		return
+	}
+
+	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, urlPath)
+
+	body, contentType, err := h.proxy.FetchOrCacheMetadata(r.Context(), "maven", cacheKey, upstreamURL, "*/*")
+	if err != nil && h.shouldFallbackToPluginPortal(urlPath, filename) {
+		pluginPortalURL := fmt.Sprintf("%s/%s", h.pluginPortalUpstreamURL, urlPath)
+		h.proxy.Logger.Info("maven metadata unavailable in primary upstream, trying Gradle Plugin Portal",
+			"path", urlPath, "filename", filename)
+		body, contentType, err = h.proxy.FetchOrCacheMetadata(r.Context(), "maven", cacheKey, pluginPortalURL, "*/*")
+	}
+	if err != nil {
+		if errors.Is(err, ErrUpstreamNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
+		h.proxy.Logger.Error("metadata fetch failed", "error", err)
+		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
+		return
+	}
+
+	h.writeMetadataResponse(w, r, cacheKey, body, contentType)
+}
+
+func (h *MavenHandler) writeMetadataResponse(w http.ResponseWriter, r *http.Request, cacheKey string, body []byte, contentType string) {
+	cm := h.proxy.lookupCachedMeta("maven", cacheKey)
+
+	if cm.etag != "" {
+		if match := r.Header.Get("If-None-Match"); match != "" && match == cm.etag {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
+	if !cm.lastModified.IsZero() {
+		if ims := r.Header.Get("If-Modified-Since"); ims != "" {
+			if t, err := http.ParseTime(ims); err == nil && !cm.lastModified.After(t) {
+				w.WriteHeader(http.StatusNotModified)
+				return
+			}
+		}
+	}
+
+	w.Header().Set("Content-Type", contentType)
+	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	if cm.etag != "" {
+		w.Header().Set("ETag", cm.etag)
+	}
+	if !cm.lastModified.IsZero() {
+		w.Header().Set("Last-Modified", cm.lastModified.UTC().Format(http.TimeFormat))
+	}
+	if cm.stale {
+		w.Header().Set("Warning", `110 - "Response is Stale"`)
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(body)
 }
 
 // handleDownload serves an artifact file, fetching and caching from upstream if needed.
@@ -96,7 +159,7 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, ur
 	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, urlPath)
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "maven", name, version, filename, upstreamURL)
-	if err != nil && h.shouldFallbackToPluginPortal(group, artifact, filename) {
+	if err != nil && h.shouldFallbackToPluginPortal(urlPath, filename) {
 		pluginPortalURL := fmt.Sprintf("%s/%s", h.pluginPortalUpstreamURL, urlPath)
 		h.proxy.Logger.Info("maven artifact not found in primary upstream, trying Gradle Plugin Portal",
 			"group", group, "artifact", artifact, "version", version, "filename", filename)
@@ -141,19 +204,61 @@ func (h *MavenHandler) isArtifactFile(filename string) bool {
 	return false
 }
 
-func (h *MavenHandler) shouldFallbackToPluginPortal(group, artifact, filename string) bool {
-	if h.pluginPortalUpstreamURL == "" {
+func (h *MavenHandler) shouldFallbackToPluginPortal(urlPath, filename string) bool {
+	if !h.isPluginPortalFallbackFile(filename) {
 		return false
 	}
-	if !strings.HasSuffix(filename, ".pom") && !strings.HasSuffix(filename, ".module") {
+
+	group, artifact, ok := h.extractGroupAndArtifactFromPath(urlPath, filename)
+	if !ok {
 		return false
 	}
+
 	if !strings.HasSuffix(artifact, gradlePluginMarkerSuffix) {
 		return false
 	}
 
 	markerPrefix := strings.TrimSuffix(artifact, gradlePluginMarkerSuffix)
 	return markerPrefix != "" && markerPrefix == group
+}
+
+func (h *MavenHandler) isPluginPortalFallbackFile(filename string) bool {
+	if filename == "maven-metadata.xml" || strings.HasPrefix(filename, "maven-metadata.xml.") {
+		return true
+	}
+	if strings.HasSuffix(filename, ".pom") || strings.HasSuffix(filename, ".module") {
+		return true
+	}
+
+	for _, suffix := range []string{".sha1", ".sha256", ".sha512", ".md5", ".asc"} {
+		if !strings.HasSuffix(filename, suffix) {
+			continue
+		}
+
+		base := strings.TrimSuffix(filename, suffix)
+		return strings.HasSuffix(base, ".pom") || strings.HasSuffix(base, ".module")
+	}
+
+	return false
+}
+
+func (h *MavenHandler) extractGroupAndArtifactFromPath(urlPath, filename string) (group, artifact string, ok bool) {
+	parts := strings.Split(urlPath, "/")
+
+	groupEnd := len(parts) - 3
+	artifactIdx := len(parts) - 3
+	if filename == "maven-metadata.xml" || strings.HasPrefix(filename, "maven-metadata.xml.") {
+		groupEnd = len(parts) - 2
+		artifactIdx = len(parts) - 2
+	}
+
+	if groupEnd <= 0 || artifactIdx < 0 || artifactIdx >= len(parts) {
+		return "", "", false
+	}
+
+	group = strings.Join(parts[:groupEnd], ".")
+	artifact = parts[artifactIdx]
+	return group, artifact, group != "" && artifact != ""
 }
 
 // isMetadataFile returns true if the filename is Maven metadata.
