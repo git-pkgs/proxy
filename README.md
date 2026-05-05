@@ -229,13 +229,11 @@ Configure in `settings.gradle(.kts)`:
 
 ```kotlin
 buildCache {
-  local {
-    enabled = false
-  }
-  remote<HttpBuildCache> {
-    url = uri("http://localhost:8080/gradle/")
-    push = true
-  }
+    remote<HttpBuildCache> {
+        url = uri("http://localhost:8080/gradle/")
+        isAllowInsecureProtocol = true // if not using HTTPS
+        isPush = true
+    }
 }
 ```
 
@@ -384,6 +382,7 @@ sudo dnf update
 ## Configuration
 
 The proxy can be configured via:
+
 1. Command line flags (highest priority)
 2. Environment variables
 3. Configuration file (YAML or JSON)
@@ -955,6 +954,7 @@ The proxy will recreate the database on next start.
 ## Building from Source
 
 Requirements:
+
 - Go 1.25 or later
 
 ```bash
