@@ -944,6 +944,37 @@ func TestMavenHandler_GradlePluginMarkerMetadataFallback(t *testing.T) {
 	}
 }
 
+func TestMavenHandler_GradlePluginImplementation_NoPluginPortalFallback(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+
+	primaryUpstream := "https://repo1.maven.org/maven2"
+	pluginPortalUpstream := "https://plugins.gradle.org/m2"
+	implPath := "/com/diffplug/spotless/spotless-plugin-gradle/8.4.0/spotless-plugin-gradle-8.4.0.jar"
+	primaryURL := primaryUpstream + implPath
+
+	fetcher.fetchErrByURL = map[string]error{
+		primaryURL: errors.New("404 not found"),
+	}
+
+	h := NewMavenHandler(proxy, "http://localhost", primaryUpstream, pluginPortalUpstream)
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	resp, err := http.Get(srv.URL + implPath)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	_ = resp.Body.Close()
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusBadGateway)
+	}
+
+	if fetcher.fetchedURL != primaryURL {
+		t.Fatalf("implementation artifact should not fallback to plugin portal; fetched URL = %q, want %q", fetcher.fetchedURL, primaryURL)
+	}
+}
+
 func TestNuGetHandler_DownloadCacheMiss(t *testing.T) {
 	proxy, _, _, fetcher := setupTestProxy(t)
 	fetcher.artifact = &fetch.Artifact{
