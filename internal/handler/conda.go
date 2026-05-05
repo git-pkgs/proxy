@@ -140,7 +140,7 @@ func (h *CondaHandler) handleRepodata(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to create request", http.StatusInternalServerError)
 		return
 	}
-	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set(headerAcceptEncoding, "gzip")
 
 	resp, err := h.proxy.HTTPClient.Do(req)
 	if err != nil {
@@ -241,5 +241,5 @@ func (h *CondaHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
 
 // proxyUpstream forwards a request to Anaconda without caching.
 func (h *CondaHandler) proxyUpstream(w http.ResponseWriter, r *http.Request) {
-	h.proxy.ProxyUpstream(w, r, h.upstreamURL+r.URL.Path, []string{"Accept-Encoding"})
+	h.proxy.ProxyUpstream(w, r, h.upstreamURL+r.URL.Path, []string{headerAcceptEncoding})
 }

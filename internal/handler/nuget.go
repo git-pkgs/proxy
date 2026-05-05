@@ -172,7 +172,7 @@ func (h *NuGetHandler) handleRegistration(w http.ResponseWriter, r *http.Request
 		http.Error(w, "failed to create request", http.StatusInternalServerError)
 		return
 	}
-	req.Header.Set("Accept-Encoding", "gzip")
+	req.Header.Set(headerAcceptEncoding, "gzip")
 
 	resp, err := h.proxy.HTTPClient.Do(req)
 	if err != nil {
@@ -338,8 +338,8 @@ func (h *NuGetHandler) proxyUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Copy accept-encoding for compression
-	if ae := r.Header.Get("Accept-Encoding"); ae != "" {
-		req.Header.Set("Accept-Encoding", ae)
+	if ae := r.Header.Get(headerAcceptEncoding); ae != "" {
+		req.Header.Set(headerAcceptEncoding, ae)
 	}
 
 	resp, err := h.proxy.HTTPClient.Do(req)

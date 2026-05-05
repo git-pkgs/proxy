@@ -294,10 +294,10 @@ func Default() *Config {
 		Gradle: GradleConfig{
 			BuildCache: GradleBuildCacheConfig{
 				ReadOnly:      false,
-				MaxUploadSize: "100MB",
+				MaxUploadSize: defaultGradleMaxUploadSizeStr,
 				MaxAge:        "168h",
 				MaxSize:       "",
-				SweepInterval: "10m",
+				SweepInterval: defaultGradleSweepIntervalStr,
 			},
 		},
 	}
@@ -481,51 +481,59 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Validate Gradle build cache upload size (always required and must be > 0).
-	if c.Gradle.BuildCache.MaxUploadSize == "" {
-		c.Gradle.BuildCache.MaxUploadSize = "100MB"
+	if err := c.Gradle.BuildCache.Validate(); err != nil {
+		return err
 	}
-	uploadSize, err := ParseSize(c.Gradle.BuildCache.MaxUploadSize)
+
+	return nil
+}
+
+// Validate checks Gradle build cache settings, applying the default upload
+// size if unset.
+func (g *GradleBuildCacheConfig) Validate() error {
+	if g.MaxUploadSize == "" {
+		g.MaxUploadSize = defaultGradleMaxUploadSizeStr
+	}
+	uploadSize, err := ParseSize(g.MaxUploadSize)
 	if err != nil {
 		return fmt.Errorf("invalid gradle.build_cache.max_upload_size: %w", err)
 	}
 	if uploadSize <= 0 {
-		return fmt.Errorf("invalid gradle.build_cache.max_upload_size %q: must be > 0", c.Gradle.BuildCache.MaxUploadSize)
+		return fmt.Errorf("invalid gradle.build_cache.max_upload_size %q: must be > 0", g.MaxUploadSize)
 	}
 
-	// Validate Gradle max age if specified.
-	if c.Gradle.BuildCache.MaxAge != "" && c.Gradle.BuildCache.MaxAge != "0" {
-		if _, err := time.ParseDuration(c.Gradle.BuildCache.MaxAge); err != nil {
-			return fmt.Errorf("invalid gradle.build_cache.max_age %q: %w", c.Gradle.BuildCache.MaxAge, err)
+	if g.MaxAge != "" && g.MaxAge != "0" {
+		if _, err := time.ParseDuration(g.MaxAge); err != nil {
+			return fmt.Errorf("invalid gradle.build_cache.max_age %q: %w", g.MaxAge, err)
 		}
 	}
 
-	// Validate Gradle max size if specified.
-	if c.Gradle.BuildCache.MaxSize != "" {
-		if _, err := ParseSize(c.Gradle.BuildCache.MaxSize); err != nil {
+	if g.MaxSize != "" {
+		if _, err := ParseSize(g.MaxSize); err != nil {
 			return fmt.Errorf("invalid gradle.build_cache.max_size: %w", err)
 		}
 	}
 
-	// Validate Gradle sweep interval if specified.
-	if c.Gradle.BuildCache.SweepInterval != "" {
-		d, err := time.ParseDuration(c.Gradle.BuildCache.SweepInterval)
+	if g.SweepInterval != "" {
+		d, err := time.ParseDuration(g.SweepInterval)
 		if err != nil {
-			return fmt.Errorf("invalid gradle.build_cache.sweep_interval %q: %w", c.Gradle.BuildCache.SweepInterval, err)
+			return fmt.Errorf("invalid gradle.build_cache.sweep_interval %q: %w", g.SweepInterval, err)
 		}
 		if d <= 0 {
-			return fmt.Errorf("invalid gradle.build_cache.sweep_interval %q: must be > 0", c.Gradle.BuildCache.SweepInterval)
+			return fmt.Errorf("invalid gradle.build_cache.sweep_interval %q: must be > 0", g.SweepInterval)
 		}
 	}
 
 	return nil
 }
 
-const defaultGradleBuildCacheMaxUploadSize = 100 << 20
-const defaultGradleBuildCacheSweepInterval = 10 * time.Minute
 const (
-	defaultMetadataTTL    = 5 * time.Minute  //nolint:mnd // sensible default
-	defaultDirectServeTTL = 15 * time.Minute //nolint:mnd // sensible default
+	defaultMetadataTTL                   = 5 * time.Minute  //nolint:mnd // sensible default
+	defaultDirectServeTTL                = 15 * time.Minute //nolint:mnd // sensible default
+	defaultGradleBuildCacheMaxUploadSize = 100 << 20
+	defaultGradleBuildCacheSweepInterval = 10 * time.Minute
+	defaultGradleMaxUploadSizeStr        = "100MB"
+	defaultGradleSweepIntervalStr        = "10m"
 )
 
 // ParseMaxSize returns the maximum cache size in bytes.
