@@ -243,13 +243,18 @@ func (h *MavenHandler) isPluginPortalFallbackFile(filename string) bool {
 }
 
 func (h *MavenHandler) extractGroupAndArtifactFromPath(urlPath, filename string) (group, artifact string, ok bool) {
+	const (
+		artifactVersionPathOffset = 3 // .../{artifact}/{version}/{filename}
+		metadataPathOffset        = 2 // .../{artifact}/maven-metadata.xml
+	)
+
 	parts := strings.Split(urlPath, "/")
 
-	groupEnd := len(parts) - 3
-	artifactIdx := len(parts) - 3
+	groupEnd := len(parts) - artifactVersionPathOffset
+	artifactIdx := len(parts) - artifactVersionPathOffset
 	if filename == "maven-metadata.xml" || strings.HasPrefix(filename, "maven-metadata.xml.") {
-		groupEnd = len(parts) - 2
-		artifactIdx = len(parts) - 2
+		groupEnd = len(parts) - metadataPathOffset
+		artifactIdx = len(parts) - metadataPathOffset
 	}
 
 	if groupEnd <= 0 || artifactIdx < 0 || artifactIdx >= len(parts) {
