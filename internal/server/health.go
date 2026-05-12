@@ -76,13 +76,9 @@ func storageProbe(ctx context.Context, s storage.Storage) error {
 	// Close explicitly (not deferred) so the file handle is released before
 	// Delete — on Windows, an open handle prevents deletion.
 	data, readErr := io.ReadAll(rc)
-	closeErr := rc.Close()
+	_ = rc.Close()
 	if readErr != nil {
 		return &probeError{step: "read", err: readErr}
-	}
-	if closeErr != nil {
-		// Non-fatal on the happy path; log at the caller level.
-		_ = closeErr
 	}
 	// 5. Verify
 	if !bytes.Equal(data, payload) {
