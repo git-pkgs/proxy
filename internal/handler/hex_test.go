@@ -11,7 +11,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/git-pkgs/proxy/internal/cooldown"
+	"github.com/git-pkgs/cooldown"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 

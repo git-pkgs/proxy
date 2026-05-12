@@ -5,9 +5,10 @@ go 1.25.6
 require (
 	github.com/CycloneDX/cyclonedx-go v0.10.0
 	github.com/git-pkgs/archives v0.3.0
+	github.com/git-pkgs/cooldown v0.1.1
 	github.com/git-pkgs/enrichment v0.2.2
 	github.com/git-pkgs/purl v0.1.12
-	github.com/git-pkgs/registries v0.5.1
+	github.com/git-pkgs/registries v0.6.0
 	github.com/git-pkgs/spdx v0.1.3
 	github.com/git-pkgs/vers v0.2.5
 	github.com/git-pkgs/vulns v0.1.5
