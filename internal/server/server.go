@@ -40,6 +40,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"log/slog"
 	"net/http"
@@ -79,7 +80,8 @@ type Server struct {
 	logger    *slog.Logger
 	http      *http.Server
 	templates *Templates
-	cancel    context.CancelFunc
+	cancel      context.CancelFunc
+	healthCache *healthCache
 }
 
 // New creates a new Server with the given configuration.
@@ -125,12 +127,20 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("verifying storage connectivity: %w", err)
 	}
 
+	hc, err := newHealthCache(store, cfg.Health.StorageProbeInterval, logger)
+	if err != nil {
+		_ = store.Close()
+		_ = db.Close()
+		return nil, fmt.Errorf("initializing health cache: %w", err)
+	}
+
 	return &Server{
-		cfg:       cfg,
-		db:        db,
-		storage:   store,
-		logger:    logger,
-		templates: &Templates{},
+		cfg:         cfg,
+		db:          db,
+		storage:     store,
+		logger:      logger,
+		templates:   &Templates{},
+		healthCache: hc,
 	}, nil
 }
 
@@ -799,23 +809,46 @@ func (s *Server) showComparePage(w http.ResponseWriter, ecosystem, name, version
 	}
 }
 
-// handleHealth responds with a simple health check.
+// handleHealth responds with a structured JSON health report.
+//
 // @Summary Health check
 // @Tags meta
-// @Produce plain
-// @Success 200 {string} string
-// @Failure 503 {string} string
+// @Produce json
+// @Success 200 {object} HealthResponse
+// @Failure 503 {object} HealthResponse
 // @Router /health [get]
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
-	// Check database connectivity
+	w.Header().Set("Content-Type", "application/json")
+
+	resp := HealthResponse{Status: "ok", Checks: map[string]HealthCheck{}}
+
+	// Database check (short-circuit; do not waste a storage probe call when DB is down).
 	if _, err := s.db.SchemaVersion(); err != nil {
+		resp.Status = "error"
+		resp.Checks["database"] = HealthCheck{Status: "error", Error: err.Error()}
 		w.WriteHeader(http.StatusServiceUnavailable)
-		_, _ = fmt.Fprint(w, "database error")
+		_ = json.NewEncoder(w).Encode(resp)
 		return
 	}
+	resp.Checks["database"] = HealthCheck{Status: "ok"}
+
+	// Storage probe (via cache).
+	if err := s.healthCache.Check(r.Context()); err != nil {
+		resp.Status = "error"
+		sc := HealthCheck{Status: "error", Error: err.Error()}
+		var pe *probeError
+		if errors.As(err, &pe) {
+			sc.Step = pe.step
+		}
+		resp.Checks["storage"] = sc
+		w.WriteHeader(http.StatusServiceUnavailable)
+		_ = json.NewEncoder(w).Encode(resp)
+		return
+	}
+	resp.Checks["storage"] = HealthCheck{Status: "ok"}
 
 	w.WriteHeader(http.StatusOK)
-	_, _ = fmt.Fprint(w, "ok")
+	_ = json.NewEncoder(w).Encode(resp)
 }
 
 // StatsResponse contains cache statistics.
