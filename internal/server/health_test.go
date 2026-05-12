@@ -1,16 +1,20 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"io"
+	"log/slog"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // fakeStorage is a minimal storage.Storage for probe tests with per-step failure injection.
@@ -35,6 +39,9 @@ type fakeStorage struct {
 	sizeDelta    int64  // added to the reported size from Store
 	readOverride []byte // if non-nil, Open returns a reader yielding these bytes instead of stored content
 
+	// storeBlock, if non-nil, causes Store to block until the channel is closed or ctx is done.
+	storeBlock chan struct{}
+
 	stored map[string][]byte
 }
 
@@ -44,6 +51,13 @@ func (f *fakeStorage) Store(ctx context.Context, path string, r io.Reader) (int6
 	f.storeCalls.Add(1)
 	if f.storeErr != nil {
 		return 0, "", f.storeErr
+	}
+	if f.storeBlock != nil {
+		select {
+		case <-f.storeBlock:
+		case <-ctx.Done():
+			return 0, "", ctx.Err()
+		}
 	}
 	data, err := io.ReadAll(r)
 	if err != nil {
@@ -239,5 +253,176 @@ func TestStorageProbe_PathUniqueness(t *testing.T) {
 			t.Errorf("duplicate path: %q", p)
 		}
 		seen[p] = true
+	}
+}
+
+// helper: a healthCache wired to a fakeStorage and a discard logger.
+func newTestCache(fs *fakeStorage, interval time.Duration) *healthCache {
+	return &healthCache{
+		storage:      fs,
+		interval:     interval,
+		probeTimeout: 5 * time.Second,
+		logger:       discardLogger(),
+	}
+}
+
+func discardLogger() *slog.Logger {
+	return slog.New(slog.NewTextHandler(io.Discard, nil))
+}
+
+func TestHealthCache_CacheHit(t *testing.T) {
+	fs := newFakeStorage()
+	c := newTestCache(fs, 30*time.Second)
+	if err := c.Check(context.Background()); err != nil {
+		t.Fatalf("first check: %v", err)
+	}
+	if err := c.Check(context.Background()); err != nil {
+		t.Fatalf("second check: %v", err)
+	}
+	if got := fs.storeCalls.Load(); got != 1 {
+		t.Errorf("storeCalls = %d, want 1 (second call should be cached)", got)
+	}
+}
+
+func TestHealthCache_MissAfterTTL(t *testing.T) {
+	fs := newFakeStorage()
+	c := newTestCache(fs, 10*time.Millisecond)
+	_ = c.Check(context.Background())
+	time.Sleep(20 * time.Millisecond)
+	_ = c.Check(context.Background())
+	if got := fs.storeCalls.Load(); got != 2 {
+		t.Errorf("storeCalls = %d, want 2", got)
+	}
+}
+
+func TestHealthCache_Disabled(t *testing.T) {
+	fs := newFakeStorage()
+	c := newTestCache(fs, 0) // interval = 0 means probe every call
+	_ = c.Check(context.Background())
+	_ = c.Check(context.Background())
+	if got := fs.storeCalls.Load(); got != 2 {
+		t.Errorf("storeCalls = %d, want 2", got)
+	}
+}
+
+func TestHealthCache_LastAtNotAdvancedOnHit(t *testing.T) {
+	fs := newFakeStorage()
+	c := newTestCache(fs, 30*time.Second)
+	for i := 0; i < 100; i++ {
+		_ = c.Check(context.Background())
+	}
+	if got := fs.storeCalls.Load(); got != 1 {
+		t.Errorf("storeCalls = %d, want 1 across 100 hits", got)
+	}
+}
+
+func TestHealthCache_ConcurrentSingleFlight(t *testing.T) {
+	fs := newFakeStorage()
+	c := newTestCache(fs, 30*time.Second)
+	var wg sync.WaitGroup
+	for i := 0; i < 20; i++ {
+		wg.Add(1)
+		go func() { defer wg.Done(); _ = c.Check(context.Background()) }()
+	}
+	wg.Wait()
+	if got := fs.storeCalls.Load(); got != 1 {
+		t.Errorf("storeCalls = %d, want 1 with 20 concurrent callers", got)
+	}
+}
+
+func TestHealthCache_CallerCancellationNotPoisoning(t *testing.T) {
+	fs := newFakeStorage()
+	c := newTestCache(fs, 30*time.Second)
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel() // Already cancelled before the call
+	if err := c.Check(ctx); err != nil {
+		t.Fatalf("Check with cancelled caller ctx should still succeed: %v", err)
+	}
+}
+
+func TestHealthCache_FailureCounterIncrement(t *testing.T) {
+	fs := newFakeStorage()
+	fs.storeErr = errors.New("boom")
+	c := newTestCache(fs, 30*time.Second)
+
+	before := testutil.ToFloat64(metrics.HealthProbeFailures.WithLabelValues("write"))
+
+	// First call: fresh probe → counter +1
+	_ = c.Check(context.Background())
+	afterFirst := testutil.ToFloat64(metrics.HealthProbeFailures.WithLabelValues("write"))
+	if afterFirst-before != 1 {
+		t.Errorf("counter delta after first call = %v, want 1", afterFirst-before)
+	}
+
+	// Second call: cache hit → counter NOT re-incremented
+	_ = c.Check(context.Background())
+	afterSecond := testutil.ToFloat64(metrics.HealthProbeFailures.WithLabelValues("write"))
+	if afterSecond != afterFirst {
+		t.Errorf("counter changed on cache hit: %v → %v", afterFirst, afterSecond)
+	}
+}
+
+func TestHealthCache_ProbeTimeout(t *testing.T) {
+	fs := newFakeStorage()
+	fs.storeBlock = make(chan struct{}) // Store will block until channel is closed (or never)
+	t.Cleanup(func() { close(fs.storeBlock) })
+
+	c := &healthCache{
+		storage:      fs,
+		interval:     30 * time.Second,
+		probeTimeout: 50 * time.Millisecond,
+		logger:       discardLogger(),
+	}
+	start := time.Now()
+	err := c.Check(context.Background())
+	elapsed := time.Since(start)
+
+	if err == nil {
+		t.Fatal("expected timeout error, got nil")
+	}
+	if elapsed > 500*time.Millisecond {
+		t.Errorf("probe took %v, expected ~50ms (timeout not respected)", elapsed)
+	}
+}
+
+func TestHealthCache_TransitionLogging(t *testing.T) {
+	fs := newFakeStorage()
+	var buf bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&buf, &slog.HandlerOptions{Level: slog.LevelInfo}))
+	c := &healthCache{
+		storage:      fs,
+		interval:     0, // probe every call
+		probeTimeout: 5 * time.Second,
+		logger:       logger,
+	}
+
+	// Steady ok state — should not log
+	_ = c.Check(context.Background())
+	_ = c.Check(context.Background())
+	if got := strings.Count(buf.String(), "storage probe"); got != 0 {
+		t.Errorf("steady-state logs = %d, want 0; output: %s", got, buf.String())
+	}
+
+	// ok → err transition: exactly one Error log
+	buf.Reset()
+	fs.storeErr = errors.New("boom")
+	_ = c.Check(context.Background())
+	if !strings.Contains(buf.String(), "storage probe failed") {
+		t.Errorf("missing failure log on transition; output: %s", buf.String())
+	}
+
+	// err steady state — should not log again
+	buf.Reset()
+	_ = c.Check(context.Background())
+	if buf.Len() != 0 {
+		t.Errorf("steady-err logs = %q, want empty", buf.String())
+	}
+
+	// err → ok transition: exactly one Info log
+	buf.Reset()
+	fs.storeErr = nil
+	_ = c.Check(context.Background())
+	if !strings.Contains(buf.String(), "storage probe recovered") {
+		t.Errorf("missing recovery log on transition; output: %s", buf.String())
 	}
 }

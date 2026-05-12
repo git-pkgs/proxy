@@ -6,11 +6,15 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"errors"
 	"fmt"
 	"io"
+	"log/slog"
 	"strconv"
+	"sync"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
 )
 
@@ -97,4 +101,81 @@ func randomSuffix() (string, error) {
 		return "", err
 	}
 	return hex.EncodeToString(b), nil
+}
+
+// healthCache memoizes the result of storageProbe for a configurable TTL.
+// It is safe for concurrent use.
+type healthCache struct {
+	storage      storage.Storage
+	interval     time.Duration
+	probeTimeout time.Duration
+	logger       *slog.Logger
+
+	mu      sync.Mutex
+	lastAt  time.Time
+	lastErr error
+}
+
+// newHealthCache builds a cache, parsing the interval from a duration string.
+// Empty interval string defaults to 30s. "0" or "0s" disables caching.
+func newHealthCache(s storage.Storage, intervalStr string, logger *slog.Logger) (*healthCache, error) {
+	interval := defaultProbeTTL
+	if intervalStr != "" {
+		d, err := time.ParseDuration(intervalStr)
+		if err != nil {
+			return nil, fmt.Errorf("parsing storage_probe_interval %q: %w", intervalStr, err)
+		}
+		interval = d
+	}
+	return &healthCache{
+		storage:      s,
+		interval:     interval,
+		probeTimeout: defaultProbeTimeout,
+		logger:       logger,
+	}, nil
+}
+
+// Check returns the cached probe result if still fresh, otherwise runs a fresh probe.
+// The callerCtx parameter is accepted for symmetry with handler signatures but is
+// intentionally NOT passed to the probe — the probe runs under a context derived
+// from context.Background() with a fixed timeout so that caller cancellation
+// (e.g. client disconnect) cannot poison the cache with context.Canceled.
+func (c *healthCache) Check(callerCtx context.Context) error {
+	_ = callerCtx // see comment above
+	c.mu.Lock()
+	defer c.mu.Unlock()
+
+	// Cache hit
+	if c.interval > 0 && !c.lastAt.IsZero() && time.Since(c.lastAt) < c.interval {
+		return c.lastErr
+	}
+
+	// Fresh probe under a detached context
+	probeCtx, cancel := context.WithTimeout(context.Background(), c.probeTimeout)
+	defer cancel()
+	err := storageProbe(probeCtx, c.storage)
+
+	// Transition logging and metric increment happen only on the fresh-probe path.
+	c.logTransition(c.lastErr, err)
+	if err != nil {
+		var pe *probeError
+		if errors.As(err, &pe) {
+			metrics.RecordHealthProbeFailure(pe.step)
+		} else {
+			metrics.RecordHealthProbeFailure("unknown")
+		}
+	}
+
+	c.lastErr = err
+	c.lastAt = time.Now()
+	return err
+}
+
+func (c *healthCache) logTransition(prev, curr error) {
+	switch {
+	case prev != nil && curr == nil:
+		c.logger.Info("storage probe recovered")
+	case prev == nil && curr != nil:
+		c.logger.Error("storage probe failed", "error", curr.Error())
+	}
 }
