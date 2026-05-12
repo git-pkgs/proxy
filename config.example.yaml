@@ -128,6 +128,15 @@ gradle:
     # How often eviction runs when max_age or max_size is set
     sweep_interval: "10m"
 
+# Health endpoint configuration.
+health:
+  # Minimum time between storage backend probes.
+  # The /health endpoint runs a write/read/verify/delete round-trip
+  # against the configured storage backend and caches the result for
+  # this interval. Set to "0" to probe on every request.
+  # Default: "30s".
+  storage_probe_interval: "30s"
+
 # Version cooldown configuration
 # Hides package versions published too recently, giving the community time
 # to spot malicious releases before they're pulled into projects.

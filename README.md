@@ -577,7 +577,7 @@ Recently cached:
 | Endpoint | Description |
 |----------|-------------|
 | `GET /` | Dashboard (web UI) |
-| `GET /health` | Health check (returns "ok" if healthy) |
+| `GET /health` | Health check (JSON; HTTP 200 healthy, 503 unhealthy) |
 | `GET /stats` | Cache statistics (JSON) |
 | `GET /metrics` | Prometheus metrics |
 | `GET /npm/*` | npm registry protocol |
@@ -815,8 +815,27 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 | `proxy_storage_operation_duration_seconds` | histogram | `operation` | Storage read/write latency |
 | `proxy_storage_errors_total` | counter | `operation` | Storage read/write failures |
 | `proxy_active_requests` | gauge | | In-flight requests |
+| `proxy_health_probe_failures_total` | Counter | `step` | Storage health probe failures by failing step (`write`, `size`, `read`, `verify`, `delete`). |
 
 Cache size and artifact count are refreshed every 60 seconds. The remaining metrics update on each request.
+
+### Health Check
+
+`/health` returns a structured JSON report of subsystem health. HTTP 200 if all checks pass; 503 if any fail.
+
+```json
+{
+  "status": "ok",
+  "checks": {
+    "database": {"status": "ok"},
+    "storage":  {"status": "ok"}
+  }
+}
+```
+
+Failing checks include an `"error"` field. Storage failures also include a `"step"` field identifying which probe step failed (`write`, `size`, `read`, `verify`, `delete`).
+
+Storage probe results are cached for `health.storage_probe_interval` (default 30s) to bound the cost of probing remote backends.
 
 Scrape config for Prometheus:
 

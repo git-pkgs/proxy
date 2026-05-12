@@ -277,7 +277,7 @@ HTTP server setup, web UI, and API handlers.
 - Web UI: dashboard, package browser, source browser, version comparison
 - Templates are embedded in the binary via `//go:embed`
 - Enrichment API for package metadata, vulnerability scanning, and outdated detection
-- Health, stats, and Prometheus metrics endpoints
+- Health, stats, and Prometheus metrics endpoints. `/health` runs an active write → read → verify → delete probe against the storage backend and returns a structured JSON response (`HealthResponse`) with `"ok"` / `"error"` status per subsystem. Probe results are cached (default 30 s, configurable via `health.storage_probe_interval`) to avoid overwhelming remote backends.
 
 ### `internal/metrics`
 
