@@ -399,7 +399,7 @@ const docTemplate = `{
         "/health": {
             "get": {
                 "produces": [
-                    "text/plain"
+                    "application/json"
                 ],
                 "tags": [
                     "meta"
@@ -409,13 +409,13 @@ const docTemplate = `{
                     "200": {
                         "description": "OK",
                         "schema": {
-                            "type": "string"
+                            "$ref": "#/definitions/server.HealthResponse"
                         }
                     },
                     "503": {
                         "description": "Service Unavailable",
                         "schema": {
-                            "type": "string"
+                            "$ref": "#/definitions/server.HealthResponse"
                         }
                     }
                 }
@@ -511,6 +511,34 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.HealthCheck": {
+            "type": "object",
+            "properties": {
+                "error": {
+                    "type": "string"
+                },
+                "status": {
+                    "type": "string"
+                },
+                "step": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.HealthResponse": {
+            "type": "object",
+            "properties": {
+                "checks": {
+                    "type": "object",
+                    "additionalProperties": {
+                        "$ref": "#/definitions/server.HealthCheck"
+                    }
+                },
+                "status": {
                     "type": "string"
                 }
             }
