@@ -14,7 +14,7 @@ The proxy is a caching HTTP server that sits between package manager clients and
 │  │  /npm/*     -> NPMHandler      /health  -> healthHandler  │    │
 │  │  /cargo/*   -> CargoHandler    /stats   -> statsHandler   │    │
 │  │  /gem/*     -> GemHandler      /metrics -> prometheus     │    │
-│  │  ...16 ecosystems              /api/*   -> APIHandler     │    │
+│  │  ...17 ecosystems              /api/*   -> APIHandler     │    │
 │  │                                /        -> Web UI         │    │
 │  └──────────────────────────────────────────────────────────┘    │
 │         │                    │                    │               │
