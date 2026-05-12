@@ -81,13 +81,21 @@ func newTestServer(t *testing.T) *testServer {
 	r.Mount("/pypi", http.StripPrefix("/pypi", pypiHandler.Routes()))
 	r.Mount("/gradle", http.StripPrefix("/gradle", gradleHandler.Routes()))
 
+	hc, err := newHealthCache(store, "30s", logger)
+	if err != nil {
+		_ = db.Close()
+		_ = os.RemoveAll(tempDir)
+		t.Fatalf("failed to create health cache: %v", err)
+	}
+
 	// Create a minimal server struct for the handlers
 	s := &Server{
-		cfg:       cfg,
-		db:        db,
-		storage:   store,
-		logger:    logger,
-		templates: &Templates{},
+		cfg:         cfg,
+		db:          db,
+		storage:     store,
+		logger:      logger,
+		templates:   &Templates{},
+		healthCache: hc,
 	}
 
 	r.Get("/health", s.handleHealth)
@@ -179,12 +187,52 @@ func TestHealthEndpoint(t *testing.T) {
 	ts.handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", w.Code)
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
+	if got := w.Header().Get("Content-Type"); got != "application/json" {
+		t.Errorf("Content-Type = %q, want application/json", got)
+	}
+	var resp HealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp.Status != "ok" {
+		t.Errorf("status = %q, want ok", resp.Status)
+	}
+	if resp.Checks["database"].Status != "ok" {
+		t.Errorf("database check = %+v, want ok", resp.Checks["database"])
+	}
+	if resp.Checks["storage"].Status != "ok" {
+		t.Errorf("storage check = %+v, want ok", resp.Checks["storage"])
+	}
+}
 
-	body := w.Body.String()
-	if body != "ok" {
-		t.Errorf("expected body 'ok', got %q", body)
+func TestHealthEndpoint_DBFailureShortCircuits(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	// Force DB failure by closing the connection.
+	_ = ts.db.Close()
+
+	req := httptest.NewRequest("GET", "/health", nil)
+	w := httptest.NewRecorder()
+	ts.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusServiceUnavailable {
+		t.Fatalf("status = %d, want 503; body: %s", w.Code, w.Body.String())
+	}
+	var resp HealthResponse
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decoding: %v", err)
+	}
+	if resp.Status != "error" {
+		t.Errorf("status = %q, want error", resp.Status)
+	}
+	if resp.Checks["database"].Status != "error" {
+		t.Errorf("database check = %+v, want error", resp.Checks["database"])
+	}
+	if _, present := resp.Checks["storage"]; present {
+		t.Errorf("storage key should be absent on DB short-circuit, got %+v", resp.Checks["storage"])
 	}
 }
 

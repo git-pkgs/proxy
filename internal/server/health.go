@@ -72,16 +72,18 @@ func storageProbe(ctx context.Context, s storage.Storage) error {
 	if err != nil {
 		return &probeError{step: "read", err: err}
 	}
-	defer func() {
-		if cerr := rc.Close(); cerr != nil {
-			// Logged at the caller level; not fatal.
-			_ = cerr
-		}
-	}()
 	// 4. Read all (classify mid-stream errors as read, not verify)
-	data, err := io.ReadAll(rc)
-	if err != nil {
-		return &probeError{step: "read", err: err}
+	data, readErr := io.ReadAll(rc)
+	// Close the reader explicitly before Delete; on some platforms (Windows) an
+	// open file handle prevents deletion. The defer below is a safety net for
+	// early returns on read errors.
+	closeErr := rc.Close()
+	if readErr != nil {
+		return &probeError{step: "read", err: readErr}
+	}
+	if closeErr != nil {
+		// Non-fatal on the happy path; log at the caller level.
+		_ = closeErr
 	}
 	// 5. Verify
 	if !bytes.Equal(data, payload) {
