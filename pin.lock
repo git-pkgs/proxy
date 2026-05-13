@@ -1,0 +1,122 @@
+{
+  "bomFormat": "CycloneDX",
+  "components": [
+    {
+      "bom-ref": "pkg:npm/diff2html@3.4.56",
+      "components": [
+        {
+          "bom-ref": "pkg:npm/diff2html@3.4.56#bundles/css/diff2html.min.css",
+          "externalReferences": [
+            {
+              "type": "distribution",
+              "url": "https://cdn.jsdelivr.net/npm/diff2html@3.4.56/bundles/css/diff2html.min.css"
+            }
+          ],
+          "hashes": [
+            {
+              "alg": "SHA-384",
+              "content": "3dd4421bffabd706b26ed5dfb8307d2a6bf687b006a0de96693679385f9cb4f791f411a77b415a29142751e195e270cb"
+            }
+          ],
+          "name": "bundles/css/diff2html.min.css",
+          "properties": [
+            {
+              "name": "pin:out",
+              "value": "diff2html/diff2html.min.css"
+            },
+            {
+              "name": "pin:type",
+              "value": "style"
+            },
+            {
+              "name": "pin:size",
+              "value": "17331"
+            }
+          ],
+          "type": "file"
+        },
+        {
+          "bom-ref": "pkg:npm/diff2html@3.4.56#bundles/js/diff2html-ui.min.js",
+          "externalReferences": [
+            {
+              "type": "distribution",
+              "url": "https://cdn.jsdelivr.net/npm/diff2html@3.4.56/bundles/js/diff2html-ui.min.js"
+            }
+          ],
+          "hashes": [
+            {
+              "alg": "SHA-384",
+              "content": "3517798bf0b0bd9db4989110b77c9a0d4d4b794fadbb46eac956288d78bc77b2dfd41d3f4c8b362b7153be57fc68eee9"
+            }
+          ],
+          "name": "bundles/js/diff2html-ui.min.js",
+          "properties": [
+            {
+              "name": "pin:out",
+              "value": "diff2html/diff2html-ui.min.js"
+            },
+            {
+              "name": "pin:type",
+              "value": "script"
+            },
+            {
+              "name": "pin:format",
+              "value": "umd"
+            },
+            {
+              "name": "pin:size",
+              "value": "1048945"
+            }
+          ],
+          "type": "file"
+        }
+      ],
+      "externalReferences": [
+        {
+          "type": "vcs",
+          "url": "https://github.com/rtfpessoa/diff2html"
+        }
+      ],
+      "hashes": [
+        {
+          "alg": "SHA-512",
+          "content": "bbd81f9fe0656c77323bbbc8b42202e33e3d2c90d4b77d6d383cce7c0b89e51d44ec876544be8a8ee81c07dccea5e8c3f97891f9d0d96ec9c7490de0e80feef0"
+        }
+      ],
+      "licenses": [
+        {
+          "license": {
+            "id": "MIT"
+          }
+        }
+      ],
+      "name": "diff2html",
+      "purl": "pkg:npm/diff2html@3.4.56",
+      "type": "library",
+      "version": "3.4.56"
+    }
+  ],
+  "metadata": {
+    "properties": [
+      {
+        "name": "pin:lockfile_version",
+        "value": "1"
+      },
+      {
+        "name": "pin:out_dir",
+        "value": "internal/server/static/vendor"
+      }
+    ],
+    "tools": {
+      "components": [
+        {
+          "name": "pin",
+          "type": "application",
+          "version": "0.1.0"
+        }
+      ]
+    }
+  },
+  "specVersion": "1.6",
+  "version": 1
+}

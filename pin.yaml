@@ -1,0 +1,2 @@
+out: "internal/server/static/vendor"
+assets: [{name: diff2html, version: ^3.4, files: [bundles/css/diff2html.min.css, bundles/js/diff2html-ui.min.js]}]
