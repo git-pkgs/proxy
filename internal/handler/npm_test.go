@@ -8,7 +8,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/git-pkgs/proxy/internal/cooldown"
+	"github.com/git-pkgs/cooldown"
 )
 
 const testVersion100 = "1.0.0"

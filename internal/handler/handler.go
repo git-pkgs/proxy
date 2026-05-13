@@ -15,7 +15,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/git-pkgs/proxy/internal/cooldown"
+	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"

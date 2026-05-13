@@ -49,7 +49,7 @@ import (
 
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
 	"github.com/git-pkgs/proxy/internal/config"
-	"github.com/git-pkgs/proxy/internal/cooldown"
+	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/enrichment"
 	"github.com/git-pkgs/proxy/internal/handler"
