@@ -127,6 +127,7 @@ func supportedEcosystems() []string {
 		"gem",
 		"golang",
 		"hex",
+		"julia",
 		"maven",
 		"npm",
 		"nuget",
@@ -176,6 +177,8 @@ func ecosystemBadgeClasses(ecosystem string) string {
 		return base + " bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300"
 	case "cran":
 		return base + " bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+	case "julia":
+		return base + " bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
 	case "oci":
 		return base + " bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300"
 	case "deb":
@@ -377,6 +380,17 @@ local({
   r["CRAN"] &lt;- "` + baseURL + `/cran"
   options(repos = r)
 })</code></pre>`),
+		},
+		{
+			ID:       "julia",
+			Name:     "Julia",
+			Language: "Julia",
+			Endpoint: "/julia/",
+			Instructions: template.HTML(`<p class="config-note">Set the Pkg server before starting Julia:</p>
+<pre><code>export JULIA_PKG_SERVER=` + baseURL + `/julia</code></pre>
+<p class="config-note">Or inside a running session:</p>
+<pre><code>ENV["JULIA_PKG_SERVER"] = "` + baseURL + `/julia"
+using Pkg; Pkg.update()</code></pre>`),
 		},
 		{
 			ID:       "oci",
