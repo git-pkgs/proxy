@@ -432,6 +432,29 @@ func TestValidateMetadataTTL(t *testing.T) {
 	}
 }
 
+func TestValidateHealthStorageProbeInterval(t *testing.T) {
+	cfg := Default()
+	cfg.Health.StorageProbeInterval = "not-a-duration"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for invalid health.storage_probe_interval")
+	}
+
+	cfg.Health.StorageProbeInterval = "30s"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for valid health.storage_probe_interval: %v", err)
+	}
+
+	cfg.Health.StorageProbeInterval = "0"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for zero health.storage_probe_interval: %v", err)
+	}
+
+	cfg.Health.StorageProbeInterval = ""
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for empty health.storage_probe_interval: %v", err)
+	}
+}
+
 func TestLoadMetadataTTLFromEnv(t *testing.T) {
 	cfg := Default()
 	t.Setenv("PROXY_METADATA_TTL", "10m")

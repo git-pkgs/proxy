@@ -496,6 +496,13 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	// Validate health probe interval if specified
+	if c.Health.StorageProbeInterval != "" && c.Health.StorageProbeInterval != "0" {
+		if _, err := time.ParseDuration(c.Health.StorageProbeInterval); err != nil {
+			return fmt.Errorf("invalid health.storage_probe_interval %q: %w", c.Health.StorageProbeInterval, err)
+		}
+	}
+
 	if err := c.Gradle.BuildCache.Validate(); err != nil {
 		return err
 	}
