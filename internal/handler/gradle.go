@@ -82,7 +82,7 @@ func (h *GradleBuildCacheHandler) parseCacheKey(urlPath string) (string, int) {
 		return "", http.StatusBadRequest
 	}
 
-	if keyPath == "" || strings.Contains(keyPath, "/") {
+	if strings.Contains(keyPath, "/") {
 		return "", http.StatusNotFound
 	}
 

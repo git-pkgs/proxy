@@ -7,7 +7,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/git-pkgs/proxy/internal/cooldown"
+	"github.com/git-pkgs/cooldown"
 )
 
 func TestComposerRewriteMetadata(t *testing.T) {

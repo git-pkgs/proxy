@@ -6,7 +6,11 @@ import (
 	"time"
 )
 
-const postgresTimestamp = "TIMESTAMP"
+const (
+	postgresTimestamp = "TIMESTAMP"
+	sqliteDatetime    = "DATETIME"
+	colTypeText       = "TEXT"
+)
 
 // Schema for proxy-specific tables. The packages and versions tables
 // are compatible with git-pkgs, allowing the proxy to use an existing
@@ -369,9 +373,9 @@ func isTableNotFound(err error) bool {
 func (db *DB) createMigrationsTable() error {
 	var ts string
 	if db.dialect == DialectPostgres {
-		ts = "TIMESTAMP"
+		ts = postgresTimestamp
 	} else {
-		ts = "DATETIME"
+		ts = sqliteDatetime
 	}
 
 	query := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS migrations (
@@ -457,12 +461,12 @@ func (db *DB) MigrateSchema() error {
 
 func migrateAddPackagesEnrichmentColumns(db *DB) error {
 	columns := map[string]string{
-		"registry_url":    "TEXT",
-		"supplier_name":   "TEXT",
-		"supplier_type":   "TEXT",
-		"source":          "TEXT",
-		"enriched_at":     "DATETIME",
-		"vulns_synced_at": "DATETIME",
+		"registry_url":    colTypeText,
+		"supplier_name":   colTypeText,
+		"supplier_type":   colTypeText,
+		"source":          colTypeText,
+		"enriched_at":     sqliteDatetime,
+		"vulns_synced_at": sqliteDatetime,
 	}
 
 	if db.dialect == DialectPostgres {
@@ -487,10 +491,10 @@ func migrateAddPackagesEnrichmentColumns(db *DB) error {
 
 func migrateAddVersionsEnrichmentColumns(db *DB) error {
 	columns := map[string]string{
-		"integrity":   "TEXT",
+		"integrity":   colTypeText,
 		"yanked":      "INTEGER DEFAULT 0",
-		"source":      "TEXT",
-		"enriched_at": "DATETIME",
+		"source":      colTypeText,
+		"enriched_at": sqliteDatetime,
 	}
 
 	if db.dialect == DialectPostgres {

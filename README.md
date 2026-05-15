@@ -38,6 +38,7 @@ Resolution order: package override, then ecosystem override, then global default
 | Conan | C/C++ | | ✓ |
 | Conda | Python/R | Yes | ✓ |
 | CRAN | R | | ✓ |
+| Julia | Julia | | ✓ |
 | Container | Docker/OCI | | ✓ |
 | Debian | Debian/Ubuntu | | ✓ |
 | RPM | RHEL/Fedora | | ✓ |
@@ -324,6 +325,21 @@ local({
 })
 ```
 
+### Julia
+
+Set the Pkg server before starting Julia:
+
+```bash
+export JULIA_PKG_SERVER=http://localhost:8080/julia
+```
+
+Or inside a running session:
+
+```julia
+ENV["JULIA_PKG_SERVER"] = "http://localhost:8080/julia"
+using Pkg; Pkg.update()
+```
+
 ### Docker / Container Registry
 
 Configure Docker to use the proxy as a registry mirror in `/etc/docker/daemon.json`:
@@ -606,6 +622,7 @@ Recently cached:
 | `GET /conan/*` | Conan C/C++ protocol |
 | `GET /conda/*` | Conda/Anaconda protocol |
 | `GET /cran/*` | CRAN (R) protocol |
+| `GET /julia/*` | Julia Pkg server protocol |
 | `GET /v2/*` | OCI/Docker registry protocol |
 | `GET /debian/*` | Debian/APT repository protocol |
 | `GET /rpm/*` | RPM/Yum repository protocol |

@@ -14,7 +14,7 @@ The proxy is a caching HTTP server that sits between package manager clients and
 │  │  /npm/*     -> NPMHandler      /health  -> healthHandler  │    │
 │  │  /cargo/*   -> CargoHandler    /stats   -> statsHandler   │    │
 │  │  /gem/*     -> GemHandler      /metrics -> prometheus     │    │
-│  │  ...16 ecosystems              /api/*   -> APIHandler     │    │
+│  │  ...17 ecosystems              /api/*   -> APIHandler     │    │
 │  │                                /        -> Web UI         │    │
 │  └──────────────────────────────────────────────────────────┘    │
 │         │                    │                    │               │
@@ -283,9 +283,9 @@ HTTP server setup, web UI, and API handlers.
 
 Prometheus metrics for cache performance, upstream latency, storage operations, and active requests. See the Monitoring section of the README for the full metric list.
 
-### `internal/cooldown`
+### Cooldown
 
-Version age filtering for supply chain attack mitigation. Configurable at global, ecosystem, and per-package levels. Supported by npm, PyPI, pub.dev, and Composer handlers.
+Version age filtering for supply chain attack mitigation, provided by [github.com/git-pkgs/cooldown](https://github.com/git-pkgs/cooldown). Configurable at global, ecosystem, and per-package levels. Supported by npm, PyPI, pub.dev, and Composer handlers.
 
 ### `internal/enrichment`
 

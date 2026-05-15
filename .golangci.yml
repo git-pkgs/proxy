@@ -1,0 +1,28 @@
+version: "2"
+
+linters:
+  enable:
+    - gocritic
+    - gocognit
+    - gocyclo
+    - maintidx
+    - dupl
+    - mnd
+    - unparam
+    - ireturn
+    - goconst
+    - errcheck
+  settings:
+    goconst:
+      min-len: 4
+      min-occurrences: 5
+      ignore-tests: true
+      ignore-string-values:
+        - "^[a-z]+$"
+  exclusions:
+    rules:
+      - path: _test\.go
+        linters:
+          - goconst
+          - dupl
+          - mnd

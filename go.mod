@@ -3,11 +3,13 @@ module github.com/git-pkgs/proxy
 go 1.25.6
 
 require (
+	github.com/BurntSushi/toml v1.6.0
 	github.com/CycloneDX/cyclonedx-go v0.10.0
 	github.com/git-pkgs/archives v0.3.0
+	github.com/git-pkgs/cooldown v0.1.1
 	github.com/git-pkgs/enrichment v0.2.2
 	github.com/git-pkgs/purl v0.1.12
-	github.com/git-pkgs/registries v0.5.1
+	github.com/git-pkgs/registries v0.6.0
 	github.com/git-pkgs/spdx v0.1.3
 	github.com/git-pkgs/vers v0.2.5
 	github.com/git-pkgs/vulns v0.1.5
@@ -49,7 +51,6 @@ require (
 	github.com/Azure/go-autorest v14.2.0+incompatible // indirect
 	github.com/Azure/go-autorest/autorest/to v0.4.1 // indirect
 	github.com/AzureAD/microsoft-authentication-library-for-go v1.6.0 // indirect
-	github.com/BurntSushi/toml v1.6.0 // indirect
 	github.com/Djarvur/go-err113 v0.1.1 // indirect
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/Masterminds/semver/v3 v3.4.0 // indirect
