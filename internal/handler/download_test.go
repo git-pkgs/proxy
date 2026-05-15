@@ -2,7 +2,6 @@ package handler
 
 import (
 	"database/sql"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -834,7 +833,7 @@ func TestMavenHandler_GradlePluginMarkerFallbackAndCache(t *testing.T) {
 			primaryURL := primaryUpstream + tt.markerPath
 
 			fetcher.fetchErrByURL = map[string]error{
-				primaryURL: errors.New("404 not found"),
+				primaryURL: ErrUpstreamNotFound,
 			}
 			fetcher.artifact = &fetch.Artifact{
 				Body:        io.NopCloser(strings.NewReader("<project/>")),
@@ -953,7 +952,7 @@ func TestMavenHandler_GradlePluginImplementation_NoPluginPortalFallback(t *testi
 	primaryURL := primaryUpstream + implPath
 
 	fetcher.fetchErrByURL = map[string]error{
-		primaryURL: errors.New("404 not found"),
+		primaryURL: ErrUpstreamNotFound,
 	}
 
 	h := NewMavenHandler(proxy, "http://localhost", primaryUpstream, pluginPortalUpstream)
