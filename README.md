@@ -815,7 +815,7 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 | `proxy_storage_operation_duration_seconds` | histogram | `operation` | Storage read/write latency |
 | `proxy_storage_errors_total` | counter | `operation` | Storage read/write failures |
 | `proxy_active_requests` | gauge | | In-flight requests |
-| `proxy_health_probe_failures_total` | Counter | `step` | Storage health probe failures by failing step (`write`, `size`, `read`, `verify`, `delete`). |
+| `proxy_health_probe_failures_total` | counter | `step` | Storage health probe failures by failing step (`write`, `size`, `read`, `verify`, `delete`). |
 
 Cache size and artifact count are refreshed every 60 seconds. The remaining metrics update on each request.
 
