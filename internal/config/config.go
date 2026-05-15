@@ -102,6 +102,9 @@ type Config struct {
 
 	// Gradle configures Gradle HttpBuildCache behavior.
 	Gradle GradleConfig `json:"gradle" yaml:"gradle"`
+
+	// Health configures the /health endpoint behavior.
+	Health HealthConfig `json:"health" yaml:"health"`
 }
 
 // CooldownConfig configures version cooldown periods.
@@ -180,6 +183,14 @@ type GradleBuildCacheConfig struct {
 	// SweepInterval controls periodic eviction frequency.
 	// Default: "10m".
 	SweepInterval string `json:"sweep_interval" yaml:"sweep_interval"`
+}
+
+// HealthConfig configures the /health endpoint.
+type HealthConfig struct {
+	// StorageProbeInterval is the minimum time between storage backend probes.
+	// Uses Go duration syntax (e.g. "30s", "1m"). Default: "30s".
+	// Set to "0" to probe on every /health request (useful for low-traffic deployments).
+	StorageProbeInterval string `json:"storage_probe_interval" yaml:"storage_probe_interval"`
 }
 
 // DatabaseConfig configures the cache database.
@@ -343,6 +354,7 @@ func Load(path string) (*Config, error) {
 //   - PROXY_DATABASE_PATH
 //   - PROXY_LOG_LEVEL
 //   - PROXY_LOG_FORMAT
+//   - PROXY_HEALTH_STORAGE_PROBE_INTERVAL
 func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("PROXY_LISTEN"); v != "" {
 		c.Listen = v
@@ -409,6 +421,9 @@ func (c *Config) LoadFromEnv() {
 	}
 	if v := os.Getenv("PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL"); v != "" {
 		c.Gradle.BuildCache.SweepInterval = v
+	}
+	if v := os.Getenv("PROXY_HEALTH_STORAGE_PROBE_INTERVAL"); v != "" {
+		c.Health.StorageProbeInterval = v
 	}
 }
 
@@ -481,10 +496,30 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if err := c.Health.Validate(); err != nil {
+		return err
+	}
+
 	if err := c.Gradle.BuildCache.Validate(); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+// Validate checks the /health configuration. An unset interval is allowed
+// (the cache uses its default); explicit values must parse and be non-negative.
+func (h *HealthConfig) Validate() error {
+	if h.StorageProbeInterval == "" || h.StorageProbeInterval == "0" {
+		return nil
+	}
+	d, err := time.ParseDuration(h.StorageProbeInterval)
+	if err != nil {
+		return fmt.Errorf("invalid health.storage_probe_interval %q: %w", h.StorageProbeInterval, err)
+	}
+	if d < 0 {
+		return fmt.Errorf("invalid health.storage_probe_interval %q: must be non-negative", h.StorageProbeInterval)
+	}
 	return nil
 }
 

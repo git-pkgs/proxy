@@ -128,6 +128,14 @@ var (
 		},
 		[]string{"ecosystem"},
 	)
+
+	HealthProbeFailures = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_health_probe_failures_total",
+			Help: "Total number of storage health probe failures, by step (write|size|read|verify|delete).",
+		},
+		[]string{"step"},
+	)
 )
 
 func init() {
@@ -147,6 +155,7 @@ func init() {
 		StorageErrors,
 		ActiveRequests,
 		IntegrityFailures,
+		HealthProbeFailures,
 	)
 }
 
@@ -190,6 +199,12 @@ func RecordStorageOperation(operation string, duration time.Duration) {
 // RecordIntegrityFailure increments the integrity failure counter.
 func RecordIntegrityFailure(ecosystem string) {
 	IntegrityFailures.WithLabelValues(ecosystem).Inc()
+}
+
+// RecordHealthProbeFailure increments the health probe failure counter.
+// step is one of: "write", "size", "read", "verify", "delete".
+func RecordHealthProbeFailure(step string) {
+	HealthProbeFailures.WithLabelValues(step).Inc()
 }
 
 // RecordStorageError increments storage error counter.
