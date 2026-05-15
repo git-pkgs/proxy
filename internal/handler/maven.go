@@ -128,7 +128,7 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, ur
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "maven", name, version, filename, upstreamURL)
 	if err != nil {
-		if errors.Is(err, ErrUpstreamNotFound) && h.shouldFallbackToPluginPortal(urlPath, filename) {
+		if errors.Is(err, ErrUpstreamNotFound) {
 			pluginPortalURL := fmt.Sprintf("%s/%s", h.pluginPortalUpstreamURL, urlPath)
 			h.proxy.Logger.Info("maven artifact not found in primary upstream, trying Gradle Plugin Portal",
 				"group", group, "artifact", artifact, "version", version, "filename", filename)

@@ -210,11 +210,9 @@ Add to your `~/.m2/settings.xml`:
 </settings>
 ```
 
-The `/maven/` endpoint uses Maven Central as primary upstream and falls back to the Gradle Plugin Portal for Gradle plugin marker artifacts (POM/module-only coordinates like `*.gradle.plugin`).
+The `/maven/` endpoint uses Maven Central as primary upstream and falls back to the Gradle Plugin Portal for Gradle plugin marker metadata and related artifacts when the primary upstream returns not found.
 
-Current limitation: fallback is marker-only. After marker resolution, implementation artifacts (for example, `com.diffplug.spotless:spotless-plugin-gradle`) are still fetched from the primary Maven upstream only. If a plugin implementation is available only on the Gradle Plugin Portal, resolution can still fail unless that upstream is configured separately.
-
-For Gradle plugin resolution via the same proxy endpoint (marker resolution is supported; see limitation above):
+For Gradle plugin resolution via the same proxy endpoint:
 
 ```kotlin
 pluginManagement {
@@ -230,10 +228,12 @@ Configure in `settings.gradle(.kts)`:
 
 ```kotlin
 buildCache {
+  local {
+    enabled = false
+  }
     remote<HttpBuildCache> {
         url = uri("http://localhost:8080/gradle/")
-        isAllowInsecureProtocol = true // if not using HTTPS
-        isPush = true
+    push = true
     }
 }
 ```
