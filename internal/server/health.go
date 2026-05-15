@@ -50,27 +50,36 @@ func (e *probeError) Unwrap() error { return e.err }
 
 // storageProbe runs a write → size-check → read → verify → delete round-trip
 // against the storage backend. Returns nil on success or a *probeError on failure.
-func storageProbe(ctx context.Context, s storage.Storage) error {
-	suffix, err := randomSuffix()
-	if err != nil {
-		return &probeError{step: "write", err: fmt.Errorf("generating random suffix: %w", err)}
+func storageProbe(ctx context.Context, s storage.Storage) (err error) {
+	suffix, suffixErr := randomSuffix()
+	if suffixErr != nil {
+		return &probeError{step: "write", err: fmt.Errorf("generating random suffix: %w", suffixErr)}
 	}
 	path := probePathPrefix + strconv.FormatInt(time.Now().UnixNano(), 10) + "-" + suffix
 	payload := []byte(probeMarker + suffix)
 
 	// 1. Store
-	size, _, err := s.Store(ctx, path, bytes.NewReader(payload))
-	if err != nil {
-		return &probeError{step: "write", err: err}
+	size, _, storeErr := s.Store(ctx, path, bytes.NewReader(payload))
+	if storeErr != nil {
+		return &probeError{step: "write", err: storeErr}
 	}
+	// After Store succeeds, always attempt to delete on the way out so probe
+	// objects don't accumulate when a later step (size/open/read/verify) fails.
+	// Delete is reported as the primary error only if no earlier failure
+	// already set one.
+	defer func() {
+		if delErr := s.Delete(ctx, path); delErr != nil && err == nil {
+			err = &probeError{step: "delete", err: delErr}
+		}
+	}()
 	// 2. Size check
 	if size != int64(len(payload)) {
 		return &probeError{step: "size", err: fmt.Errorf("wrote %d bytes, expected %d", size, len(payload))}
 	}
 	// 3. Open
-	rc, err := s.Open(ctx, path)
-	if err != nil {
-		return &probeError{step: "read", err: err}
+	rc, openErr := s.Open(ctx, path)
+	if openErr != nil {
+		return &probeError{step: "read", err: openErr}
 	}
 	// 4. Read all (classify mid-stream errors as read, not verify).
 	// Close explicitly (not deferred) so the file handle is released before
@@ -84,10 +93,7 @@ func storageProbe(ctx context.Context, s storage.Storage) error {
 	if !bytes.Equal(data, payload) {
 		return &probeError{step: "verify", err: fmt.Errorf("content mismatch")}
 	}
-	// 6. Delete
-	if err := s.Delete(ctx, path); err != nil {
-		return &probeError{step: "delete", err: err}
-	}
+	// 6. Delete is handled via the deferred cleanup above.
 	return nil
 }
 

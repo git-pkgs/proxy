@@ -228,6 +228,36 @@ func TestStorageProbe_DeleteFails(t *testing.T) {
 	}
 }
 
+// TestStorageProbe_CleanupOnNonDeleteFailure asserts that the probe object is
+// deleted even when a step after Store (size/open/read/verify) fails, so
+// probe artifacts don't accumulate in the storage backend.
+func TestStorageProbe_CleanupOnNonDeleteFailure(t *testing.T) {
+	cases := []struct {
+		name    string
+		inject  func(*fakeStorage)
+		wantErr string
+	}{
+		{"size mismatch", func(fs *fakeStorage) { fs.sizeDelta = -1 }, "size"},
+		{"open fails", func(fs *fakeStorage) { fs.openErr = errors.New("open boom") }, "read"},
+		{"read mid-stream", func(fs *fakeStorage) { fs.readErr = errors.New("mid-stream boom") }, "read"},
+		{"content mismatch", func(fs *fakeStorage) { fs.readOverride = []byte("wrong") }, "verify"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			fs := newFakeStorage()
+			tc.inject(fs)
+			err := storageProbe(context.Background(), fs)
+			var pe *probeError
+			if !errors.As(err, &pe) || pe.step != tc.wantErr {
+				t.Fatalf("step = %v, want %q; err = %v", pe, tc.wantErr, err)
+			}
+			if got := fs.deleteCalls.Load(); got != 1 {
+				t.Errorf("deleteCalls = %d, want 1 (cleanup should run on non-delete failures)", got)
+			}
+		})
+	}
+}
+
 func TestStorageProbe_ReaderClosedOnReadFailure(t *testing.T) {
 	fs := newFakeStorage()
 	fs.readErr = errors.New("read error")
