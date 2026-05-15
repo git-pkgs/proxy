@@ -231,8 +231,11 @@ func TestHealthEndpoint_DBFailureShortCircuits(t *testing.T) {
 	if resp.Checks["database"].Status != "error" {
 		t.Errorf("database check = %+v, want error", resp.Checks["database"])
 	}
-	if _, present := resp.Checks["storage"]; present {
-		t.Errorf("storage key should be absent on DB short-circuit, got %+v", resp.Checks["storage"])
+	storage, present := resp.Checks["storage"]
+	if !present {
+		t.Error("storage key should be present (with status=skipped) on DB short-circuit")
+	} else if storage.Status != "skipped" {
+		t.Errorf("storage check = %+v, want status=skipped", storage)
 	}
 }
 

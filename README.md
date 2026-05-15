@@ -833,9 +833,9 @@ Cache size and artifact count are refreshed every 60 seconds. The remaining metr
 }
 ```
 
-Failing checks include an `"error"` field. Storage failures also include a `"step"` field identifying which probe step failed (`write`, `size`, `read`, `verify`, `delete`).
+Failing checks include an `"error"` field. Storage failures also include a `"step"` field identifying which probe step failed (`write`, `size`, `read`, `verify`, `delete`). When the database check fails, the storage entry reports `{"status": "skipped"}` so the response always carries the same key set.
 
-Storage probe results are cached for `health.storage_probe_interval` (default 30s) to bound the cost of probing remote backends.
+Storage probe results are cached for `health.storage_probe_interval` (default 30s) to bound the cost of probing remote backends. A probe holds an internal mutex for up to 10 seconds (the hardcoded per-probe timeout), so `/health` is intended as a Kubernetes **readiness** probe rather than a liveness probe — a slow S3 round-trip should pull the pod from rotation, not restart it.
 
 Scrape config for Prometheus:
 

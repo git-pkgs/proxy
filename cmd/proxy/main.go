@@ -77,7 +77,7 @@
 //	PROXY_GRADLE_BUILD_CACHE_MAX_AGE         - Gradle cache max age eviction
 //	PROXY_GRADLE_BUILD_CACHE_MAX_SIZE        - Gradle cache max total size
 //	PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL  - Gradle cache eviction sweep interval
-//	PROXY_HEALTH_STORAGE_PROBE_INTERVAL - Storage health probe cache interval (default "30s")
+//	PROXY_HEALTH_STORAGE_PROBE_INTERVAL      - Storage health probe cache interval (default "30s")
 //
 // Example:
 //

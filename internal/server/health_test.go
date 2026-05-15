@@ -303,10 +303,10 @@ func discardLogger() *slog.Logger {
 func TestHealthCache_CacheHit(t *testing.T) {
 	fs := newFakeStorage()
 	c := newTestCache(fs, 30*time.Second)
-	if err := c.Check(context.Background()); err != nil {
+	if err := c.Check(); err != nil {
 		t.Fatalf("first check: %v", err)
 	}
-	if err := c.Check(context.Background()); err != nil {
+	if err := c.Check(); err != nil {
 		t.Fatalf("second check: %v", err)
 	}
 	if got := fs.storeCalls.Load(); got != 1 {
@@ -317,9 +317,9 @@ func TestHealthCache_CacheHit(t *testing.T) {
 func TestHealthCache_MissAfterTTL(t *testing.T) {
 	fs := newFakeStorage()
 	c := newTestCache(fs, 10*time.Millisecond)
-	_ = c.Check(context.Background())
+	_ = c.Check()
 	time.Sleep(20 * time.Millisecond)
-	_ = c.Check(context.Background())
+	_ = c.Check()
 	if got := fs.storeCalls.Load(); got != 2 {
 		t.Errorf("storeCalls = %d, want 2", got)
 	}
@@ -328,8 +328,8 @@ func TestHealthCache_MissAfterTTL(t *testing.T) {
 func TestHealthCache_Disabled(t *testing.T) {
 	fs := newFakeStorage()
 	c := newTestCache(fs, 0) // interval = 0 means probe every call
-	_ = c.Check(context.Background())
-	_ = c.Check(context.Background())
+	_ = c.Check()
+	_ = c.Check()
 	if got := fs.storeCalls.Load(); got != 2 {
 		t.Errorf("storeCalls = %d, want 2", got)
 	}
@@ -339,7 +339,7 @@ func TestHealthCache_LastAtNotAdvancedOnHit(t *testing.T) {
 	fs := newFakeStorage()
 	c := newTestCache(fs, 30*time.Second)
 	for i := 0; i < 100; i++ {
-		_ = c.Check(context.Background())
+		_ = c.Check()
 	}
 	if got := fs.storeCalls.Load(); got != 1 {
 		t.Errorf("storeCalls = %d, want 1 across 100 hits", got)
@@ -352,21 +352,11 @@ func TestHealthCache_ConcurrentSingleFlight(t *testing.T) {
 	var wg sync.WaitGroup
 	for i := 0; i < 20; i++ {
 		wg.Add(1)
-		go func() { defer wg.Done(); _ = c.Check(context.Background()) }()
+		go func() { defer wg.Done(); _ = c.Check() }()
 	}
 	wg.Wait()
 	if got := fs.storeCalls.Load(); got != 1 {
 		t.Errorf("storeCalls = %d, want 1 with 20 concurrent callers", got)
-	}
-}
-
-func TestHealthCache_CallerCancellationNotPoisoning(t *testing.T) {
-	fs := newFakeStorage()
-	c := newTestCache(fs, 30*time.Second)
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel() // Already cancelled before the call
-	if err := c.Check(ctx); err != nil {
-		t.Fatalf("Check with cancelled caller ctx should still succeed: %v", err)
 	}
 }
 
@@ -378,14 +368,14 @@ func TestHealthCache_FailureCounterIncrement(t *testing.T) {
 	before := testutil.ToFloat64(metrics.HealthProbeFailures.WithLabelValues("write"))
 
 	// First call: fresh probe → counter +1
-	_ = c.Check(context.Background())
+	_ = c.Check()
 	afterFirst := testutil.ToFloat64(metrics.HealthProbeFailures.WithLabelValues("write"))
 	if afterFirst-before != 1 {
 		t.Errorf("counter delta after first call = %v, want 1", afterFirst-before)
 	}
 
 	// Second call: cache hit → counter NOT re-incremented
-	_ = c.Check(context.Background())
+	_ = c.Check()
 	afterSecond := testutil.ToFloat64(metrics.HealthProbeFailures.WithLabelValues("write"))
 	if afterSecond != afterFirst {
 		t.Errorf("counter changed on cache hit: %v → %v", afterFirst, afterSecond)
@@ -404,7 +394,7 @@ func TestHealthCache_ProbeTimeout(t *testing.T) {
 		logger:       discardLogger(),
 	}
 	start := time.Now()
-	err := c.Check(context.Background())
+	err := c.Check()
 	elapsed := time.Since(start)
 
 	if err == nil {
@@ -427,8 +417,8 @@ func TestHealthCache_TransitionLogging(t *testing.T) {
 	}
 
 	// Steady ok state — should not log
-	_ = c.Check(context.Background())
-	_ = c.Check(context.Background())
+	_ = c.Check()
+	_ = c.Check()
 	if got := strings.Count(buf.String(), "storage probe"); got != 0 {
 		t.Errorf("steady-state logs = %d, want 0; output: %s", got, buf.String())
 	}
@@ -436,14 +426,14 @@ func TestHealthCache_TransitionLogging(t *testing.T) {
 	// ok → err transition: exactly one Error log
 	buf.Reset()
 	fs.storeErr = errors.New("boom")
-	_ = c.Check(context.Background())
+	_ = c.Check()
 	if !strings.Contains(buf.String(), "storage probe failed") {
 		t.Errorf("missing failure log on transition; output: %s", buf.String())
 	}
 
 	// err steady state — should not log again
 	buf.Reset()
-	_ = c.Check(context.Background())
+	_ = c.Check()
 	if buf.Len() != 0 {
 		t.Errorf("steady-err logs = %q, want empty", buf.String())
 	}
@@ -451,7 +441,7 @@ func TestHealthCache_TransitionLogging(t *testing.T) {
 	// err → ok transition: exactly one Info log
 	buf.Reset()
 	fs.storeErr = nil
-	_ = c.Check(context.Background())
+	_ = c.Check()
 	if !strings.Contains(buf.String(), "storage probe recovered") {
 		t.Errorf("missing recovery log on transition; output: %s", buf.String())
 	}

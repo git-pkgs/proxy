@@ -453,6 +453,11 @@ func TestValidateHealthStorageProbeInterval(t *testing.T) {
 	if err := cfg.Validate(); err != nil {
 		t.Errorf("unexpected error for empty health.storage_probe_interval: %v", err)
 	}
+
+	cfg.Health.StorageProbeInterval = "-5s"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for negative health.storage_probe_interval")
+	}
 }
 
 func TestLoadMetadataTTLFromEnv(t *testing.T) {

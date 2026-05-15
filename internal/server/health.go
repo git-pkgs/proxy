@@ -139,12 +139,10 @@ func newHealthCache(s storage.Storage, intervalStr string, logger *slog.Logger) 
 }
 
 // Check returns the cached probe result if still fresh, otherwise runs a fresh probe.
-// The callerCtx parameter is accepted for symmetry with handler signatures but is
-// intentionally NOT passed to the probe — the probe runs under a context derived
-// from context.Background() with a fixed timeout so that caller cancellation
-// (e.g. client disconnect) cannot poison the cache with context.Canceled.
-func (c *healthCache) Check(callerCtx context.Context) error {
-	_ = callerCtx // see comment above
+// The probe runs under a context derived from context.Background() with a fixed
+// timeout so that caller cancellation (e.g. client disconnect) cannot poison the
+// cache with context.Canceled.
+func (c *healthCache) Check() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 

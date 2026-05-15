@@ -496,17 +496,30 @@ func (c *Config) Validate() error {
 		}
 	}
 
-	// Validate health probe interval if specified
-	if c.Health.StorageProbeInterval != "" && c.Health.StorageProbeInterval != "0" {
-		if _, err := time.ParseDuration(c.Health.StorageProbeInterval); err != nil {
-			return fmt.Errorf("invalid health.storage_probe_interval %q: %w", c.Health.StorageProbeInterval, err)
-		}
+	if err := c.Health.Validate(); err != nil {
+		return err
 	}
 
 	if err := c.Gradle.BuildCache.Validate(); err != nil {
 		return err
 	}
 
+	return nil
+}
+
+// Validate checks the /health configuration. An unset interval is allowed
+// (the cache uses its default); explicit values must parse and be non-negative.
+func (h *HealthConfig) Validate() error {
+	if h.StorageProbeInterval == "" || h.StorageProbeInterval == "0" {
+		return nil
+	}
+	d, err := time.ParseDuration(h.StorageProbeInterval)
+	if err != nil {
+		return fmt.Errorf("invalid health.storage_probe_interval %q: %w", h.StorageProbeInterval, err)
+	}
+	if d < 0 {
+		return fmt.Errorf("invalid health.storage_probe_interval %q: must be non-negative", h.StorageProbeInterval)
+	}
 	return nil
 }
 

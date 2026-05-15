@@ -823,9 +823,12 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp := HealthResponse{Status: "ok", Checks: map[string]HealthCheck{}}
 
 	// Database check (short-circuit; do not waste a storage probe call when DB is down).
+	// On DB failure the storage entry reports "skipped" rather than being omitted so
+	// the response always carries the same key set for monitors that expect it.
 	if _, err := s.db.SchemaVersion(); err != nil {
 		resp.Status = "error"
 		resp.Checks["database"] = HealthCheck{Status: "error", Error: err.Error()}
+		resp.Checks["storage"] = HealthCheck{Status: "skipped"}
 		w.WriteHeader(http.StatusServiceUnavailable)
 		_ = json.NewEncoder(w).Encode(resp)
 		return
@@ -833,7 +836,7 @@ func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	resp.Checks["database"] = HealthCheck{Status: "ok"}
 
 	// Storage probe (via cache).
-	if err := s.healthCache.Check(r.Context()); err != nil {
+	if err := s.healthCache.Check(); err != nil {
 		resp.Status = "error"
 		sc := HealthCheck{Status: "error", Error: err.Error()}
 		var pe *probeError
