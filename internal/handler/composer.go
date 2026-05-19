@@ -16,6 +16,7 @@ import (
 const (
 	composerUpstream   = "https://packagist.org"
 	composerRepo       = "https://repo.packagist.org"
+	composerUnset      = "__unset"
 	vendorPackageParts = 2
 )
 
@@ -150,7 +151,8 @@ func (h *ComposerHandler) rewriteMetadata(body []byte) ([]byte, error) {
 
 // expandMinifiedVersions expands the Composer v2 minified format where each
 // version entry only contains fields that differ from the previous entry.
-// The "~dev" sentinel string resets the inheritance chain.
+// The "~dev" sentinel string resets the inheritance chain, and the "__unset"
+// value removes a field from the inherited state.
 func expandMinifiedVersions(versionList []any) []any {
 	expanded := make([]any, 0, len(versionList))
 	inherited := map[string]any{}
@@ -174,6 +176,10 @@ func expandMinifiedVersions(versionList []any) []any {
 			merged[k] = deepCopyValue(val)
 		}
 		for k, val := range vmap {
+			if val == composerUnset {
+				delete(merged, k)
+				continue
+			}
 			merged[k] = val
 		}
 
