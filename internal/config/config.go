@@ -210,6 +210,15 @@ type UpstreamConfig struct {
 	// Default: https://registry.npmjs.org
 	NPM string `json:"npm" yaml:"npm"`
 
+	// Maven is the upstream Maven repository URL.
+	// Default: https://repo1.maven.org/maven2
+	Maven string `json:"maven" yaml:"maven"`
+
+	// GradlePluginPortal is the upstream Gradle Plugin Portal Maven URL.
+	// Used to resolve Gradle plugin marker artifacts.
+	// Default: https://plugins.gradle.org/m2
+	GradlePluginPortal string `json:"gradle_plugin_portal" yaml:"gradle_plugin_portal"`
+
 	// Cargo is the upstream cargo index URL.
 	// Default: https://index.crates.io
 	Cargo string `json:"cargo" yaml:"cargo"`
@@ -287,9 +296,11 @@ func Default() *Config {
 			Format: "text",
 		},
 		Upstream: UpstreamConfig{
-			NPM:           "https://registry.npmjs.org",
-			Cargo:         "https://index.crates.io",
-			CargoDownload: "https://static.crates.io/crates",
+			NPM:                "https://registry.npmjs.org",
+			Maven:              "https://repo1.maven.org/maven2",
+			GradlePluginPortal: "https://plugins.gradle.org/m2",
+			Cargo:              "https://index.crates.io",
+			CargoDownload:      "https://static.crates.io/crates",
 		},
 		Gradle: GradleConfig{
 			BuildCache: GradleBuildCacheConfig{
@@ -382,6 +393,12 @@ func (c *Config) LoadFromEnv() {
 	}
 	if v := os.Getenv("PROXY_LOG_FORMAT"); v != "" {
 		c.Log.Format = v
+	}
+	if v := os.Getenv("PROXY_UPSTREAM_MAVEN"); v != "" {
+		c.Upstream.Maven = v
+	}
+	if v := os.Getenv("PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL"); v != "" {
+		c.Upstream.GradlePluginPortal = v
 	}
 	if v := os.Getenv("PROXY_COOLDOWN_DEFAULT"); v != "" {
 		c.Cooldown.Default = v
