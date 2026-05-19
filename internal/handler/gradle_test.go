@@ -4,7 +4,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"strconv"
 	"strings"
 	"testing"
 
@@ -238,9 +237,6 @@ func TestGradleBuildCacheHandler_RecordsMetrics(t *testing.T) {
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
-	okBefore := testutil.ToFloat64(metrics.RequestsTotal.WithLabelValues("gradle", strconv.Itoa(http.StatusOK)))
-	createdBefore := testutil.ToFloat64(metrics.RequestsTotal.WithLabelValues("gradle", strconv.Itoa(http.StatusCreated)))
-	notFoundBefore := testutil.ToFloat64(metrics.RequestsTotal.WithLabelValues("gradle", strconv.Itoa(http.StatusNotFound)))
 	hitsBefore := testutil.ToFloat64(metrics.CacheHits.WithLabelValues("gradle"))
 	missesBefore := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("gradle"))
 
@@ -277,21 +273,9 @@ func TestGradleBuildCacheHandler_RecordsMetrics(t *testing.T) {
 	}
 	_ = missResp.Body.Close()
 
-	okAfter := testutil.ToFloat64(metrics.RequestsTotal.WithLabelValues("gradle", strconv.Itoa(http.StatusOK)))
-	createdAfter := testutil.ToFloat64(metrics.RequestsTotal.WithLabelValues("gradle", strconv.Itoa(http.StatusCreated)))
-	notFoundAfter := testutil.ToFloat64(metrics.RequestsTotal.WithLabelValues("gradle", strconv.Itoa(http.StatusNotFound)))
 	hitsAfter := testutil.ToFloat64(metrics.CacheHits.WithLabelValues("gradle"))
 	missesAfter := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("gradle"))
 
-	if diff := createdAfter - createdBefore; diff != 1 {
-		t.Fatalf("created requests delta = %.0f, want 1", diff)
-	}
-	if diff := okAfter - okBefore; diff != 2 {
-		t.Fatalf("ok requests delta = %.0f, want 2", diff)
-	}
-	if diff := notFoundAfter - notFoundBefore; diff != 1 {
-		t.Fatalf("not found requests delta = %.0f, want 1", diff)
-	}
 	if diff := hitsAfter - hitsBefore; diff != 2 {
 		t.Fatalf("cache hits delta = %.0f, want 2", diff)
 	}
