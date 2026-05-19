@@ -36,39 +36,33 @@ func NewGradleBuildCacheHandler(proxy *Proxy) *GradleBuildCacheHandler {
 // Routes returns the HTTP handler for Gradle HttpBuildCache requests.
 func (h *GradleBuildCacheHandler) Routes() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		start := time.Now()
-		rw := &statusCapturingResponseWriter{ResponseWriter: w, status: http.StatusOK}
-		defer func() {
-			metrics.RecordRequest("gradle", rw.status, time.Since(start))
-		}()
-
 		switch r.Method {
 		case http.MethodGet, http.MethodHead, http.MethodPut:
 		default:
-			http.Error(rw, "method not allowed", http.StatusMethodNotAllowed)
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 
 		key, statusCode := h.parseCacheKey(r.URL.Path)
 		if statusCode != http.StatusOK {
 			if statusCode == http.StatusNotFound {
-				http.NotFound(rw, r)
+				http.NotFound(w, r)
 				return
 			}
-			http.Error(rw, "invalid cache key", statusCode)
+			http.Error(w, "invalid cache key", statusCode)
 			return
 		}
 
 		if r.Method == http.MethodPut {
 			if h.proxy.GradleReadOnly {
-				http.Error(rw, "gradle build cache is read-only", http.StatusMethodNotAllowed)
+				http.Error(w, "gradle build cache is read-only", http.StatusMethodNotAllowed)
 				return
 			}
-			h.handlePut(rw, r, key)
+			h.handlePut(w, r, key)
 			return
 		}
 
-		h.handleGetOrHead(rw, r, key)
+		h.handleGetOrHead(w, r, key)
 	})
 }
 
@@ -119,12 +113,12 @@ func (h *GradleBuildCacheHandler) handleGetOrHead(w http.ResponseWriter, r *http
 		metrics.RecordCacheHit("gradle")
 
 		sizeStart := time.Now()
-		if size, err := h.proxy.Storage.Size(r.Context(), storagePath); err == nil && size >= 0 {
-			metrics.RecordStorageOperation("read", time.Since(sizeStart))
-			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
-		} else if err != nil {
-			metrics.RecordStorageOperation("read", time.Since(sizeStart))
+		size, err := h.proxy.Storage.Size(r.Context(), storagePath)
+		metrics.RecordStorageOperation("read", time.Since(sizeStart))
+		if err != nil {
 			metrics.RecordStorageError("read")
+		} else if size >= 0 {
+			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 		}
 
 		w.WriteHeader(http.StatusOK)
@@ -181,14 +175,4 @@ func (h *GradleBuildCacheHandler) handlePut(w http.ResponseWriter, r *http.Reque
 	w.Header().Set("ETag", `"`+hash+`"`)
 
 	w.WriteHeader(http.StatusCreated)
-}
-
-type statusCapturingResponseWriter struct {
-	http.ResponseWriter
-	status int
-}
-
-func (rw *statusCapturingResponseWriter) WriteHeader(code int) {
-	rw.status = code
-	rw.ResponseWriter.WriteHeader(code)
 }
