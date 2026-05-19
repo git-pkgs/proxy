@@ -177,6 +177,80 @@ func TestComposerRewriteMetadataMinifiedDevReset(t *testing.T) {
 	}
 }
 
+func TestComposerRewriteMetadataUnset(t *testing.T) {
+	h := &ComposerHandler{
+		proxy:    &Proxy{Logger: slog.Default()},
+		proxyURL: "http://localhost:8080",
+	}
+
+	// In the minified format, "__unset" removes a field from the inherited
+	// state. v1.29.0 has require-dev, v1.28.0 unsets it, v1.27.0 inherits the
+	// unset state. Composer rejects metadata where require-dev (or any link
+	// field) is the literal string "__unset" rather than an object.
+	input := `{
+		"minified": "composer/2.0",
+		"packages": {
+			"venturecraft/revisionable": [
+				{
+					"name": "venturecraft/revisionable",
+					"version": "1.29.0",
+					"require": {"php": ">=5.4"},
+					"require-dev": {"orchestra/testbench": "~3.0"},
+					"dist": {"url": "https://example.com/a.zip", "type": "zip"}
+				},
+				{
+					"version": "1.28.0",
+					"require-dev": "__unset"
+				},
+				{
+					"version": "1.27.0"
+				},
+				{
+					"version": "1.26.0",
+					"require-dev": {"foo/bar": "1.0"}
+				}
+			]
+		}
+	}`
+
+	output, err := h.rewriteMetadata([]byte(input))
+	if err != nil {
+		t.Fatalf("rewriteMetadata failed: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	versions := result["packages"].(map[string]any)["venturecraft/revisionable"].([]any)
+	if len(versions) != 4 {
+		t.Fatalf("expected 4 versions, got %d", len(versions))
+	}
+
+	byVersion := map[string]map[string]any{}
+	for _, v := range versions {
+		vmap := v.(map[string]any)
+		byVersion[vmap["version"].(string)] = vmap
+	}
+
+	if _, ok := byVersion["1.29.0"]["require-dev"].(map[string]any); !ok {
+		t.Errorf("1.29.0 require-dev should be an object, got %T", byVersion["1.29.0"]["require-dev"])
+	}
+	if rd, ok := byVersion["1.28.0"]["require-dev"]; ok {
+		t.Errorf("1.28.0 require-dev should be absent, got %v", rd)
+	}
+	if rd, ok := byVersion["1.27.0"]["require-dev"]; ok {
+		t.Errorf("1.27.0 require-dev should be absent (inherited unset), got %v", rd)
+	}
+	if _, ok := byVersion["1.26.0"]["require-dev"].(map[string]any); !ok {
+		t.Errorf("1.26.0 require-dev should be an object, got %T", byVersion["1.26.0"]["require-dev"])
+	}
+	if _, ok := byVersion["1.27.0"]["require"].(map[string]any); !ok {
+		t.Error("1.27.0 should still inherit require from 1.29.0")
+	}
+}
+
 func TestComposerRewriteMetadataCooldownPreservesNames(t *testing.T) {
 	now := time.Now()
 	old := now.Add(-10 * 24 * time.Hour).Format(time.RFC3339)
