@@ -11,7 +11,7 @@ require (
 	github.com/git-pkgs/purl v0.1.12
 	github.com/git-pkgs/registries v0.6.0
 	github.com/git-pkgs/spdx v0.1.3
-	github.com/git-pkgs/vers v0.2.5
+	github.com/git-pkgs/vers v0.2.6
 	github.com/git-pkgs/vulns v0.1.5
 	github.com/go-chi/chi/v5 v5.2.5
 	github.com/jmoiron/sqlx v1.4.0
