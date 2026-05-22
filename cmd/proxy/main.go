@@ -77,6 +77,7 @@
 //	PROXY_GRADLE_BUILD_CACHE_MAX_AGE         - Gradle cache max age eviction
 //	PROXY_GRADLE_BUILD_CACHE_MAX_SIZE        - Gradle cache max total size
 //	PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL  - Gradle cache eviction sweep interval
+//	PROXY_HEALTH_STORAGE_PROBE_INTERVAL      - Storage health probe cache interval (default "30s")
 //
 // Example:
 //
@@ -203,6 +204,7 @@ func runServe() {
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_AGE         Gradle cache max age eviction\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_SIZE        Gradle cache max total size\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL  Gradle cache eviction sweep interval\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_HEALTH_STORAGE_PROBE_INTERVAL      Storage health probe cache interval\n")
 	}
 
 	_ = fs.Parse(os.Args[1:])
