@@ -31,6 +31,12 @@ func TestDefault(t *testing.T) {
 	if cfg.Gradle.BuildCache.MaxAge != "168h" {
 		t.Errorf("Gradle.BuildCache.MaxAge = %q, want %q", cfg.Gradle.BuildCache.MaxAge, "168h")
 	}
+	if cfg.Upstream.Maven != "https://repo1.maven.org/maven2" {
+		t.Errorf("Upstream.Maven = %q, want %q", cfg.Upstream.Maven, "https://repo1.maven.org/maven2")
+	}
+	if cfg.Upstream.GradlePluginPortal != "https://plugins.gradle.org/m2" {
+		t.Errorf("Upstream.GradlePluginPortal = %q, want %q", cfg.Upstream.GradlePluginPortal, "https://plugins.gradle.org/m2")
+	}
 }
 
 func TestValidate(t *testing.T) {
@@ -264,6 +270,8 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("PROXY_BASE_URL", "https://env.example.com")
 	t.Setenv("PROXY_STORAGE_PATH", "/env/cache")
 	t.Setenv("PROXY_LOG_LEVEL", testLevelDebug)
+	t.Setenv("PROXY_UPSTREAM_MAVEN", "https://maven.example.com/repository/maven-public")
+	t.Setenv("PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL", "https://plugins.example.com/m2")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY", "true")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE", "32MB")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_AGE", "12h")
@@ -283,6 +291,12 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.Log.Level != testLevelDebug {
 		t.Errorf("Log.Level = %q, want %q", cfg.Log.Level, testLevelDebug)
+	}
+	if cfg.Upstream.Maven != "https://maven.example.com/repository/maven-public" {
+		t.Errorf("Upstream.Maven = %q, want %q", cfg.Upstream.Maven, "https://maven.example.com/repository/maven-public")
+	}
+	if cfg.Upstream.GradlePluginPortal != "https://plugins.example.com/m2" {
+		t.Errorf("Upstream.GradlePluginPortal = %q, want %q", cfg.Upstream.GradlePluginPortal, "https://plugins.example.com/m2")
 	}
 	if !cfg.Gradle.BuildCache.ReadOnly {
 		t.Error("Gradle.BuildCache.ReadOnly = false, want true")
