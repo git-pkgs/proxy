@@ -1,4 +1,4 @@
-FROM golang:1.25-alpine AS builder
+FROM golang:1.26.3-alpine AS builder
 
 WORKDIR /src
 
@@ -15,7 +15,7 @@ COPY . .
 # Build the binary
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /proxy ./cmd/proxy
 
-FROM alpine:3.21
+FROM alpine:3.23.4
 
 RUN apk add --no-cache ca-certificates
 
