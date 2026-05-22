@@ -943,6 +943,67 @@ func TestMavenHandler_GradlePluginMarkerMetadataFallback(t *testing.T) {
 	}
 }
 
+func TestMavenHandler_GradlePluginImplementationMetadataFallback(t *testing.T) {
+	paths := map[string]string{
+		"/com/diffplug/spotless/spotless-plugin-gradle/8.4.0/spotless-plugin-gradle-8.4.0.jar.sha1":   "impl-sha1",
+		"/com/diffplug/spotless/spotless-plugin-gradle/8.4.0/spotless-plugin-gradle-8.4.0.jar.sha256": "impl-sha256",
+	}
+
+	primaryHits := map[string]int{}
+	pluginHits := map[string]int{}
+
+	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		primaryHits[r.URL.Path]++
+		if _, ok := paths[r.URL.Path]; ok {
+			http.NotFound(w, r)
+			return
+		}
+		t.Fatalf("unexpected path to primary upstream: %s", r.URL.Path)
+	}))
+	defer primary.Close()
+
+	pluginPortal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		pluginHits[r.URL.Path]++
+		body, ok := paths[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, body)
+	}))
+	defer pluginPortal.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = primary.Client()
+
+	h := NewMavenHandler(proxy, "http://localhost", primary.URL, pluginPortal.URL)
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	for reqPath, wantBody := range paths {
+		resp, err := http.Get(srv.URL + reqPath)
+		if err != nil {
+			t.Fatalf("GET %s failed: %v", reqPath, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+
+		if resp.StatusCode != http.StatusOK {
+			t.Fatalf("GET %s: status = %d, want %d", reqPath, resp.StatusCode, http.StatusOK)
+		}
+		if string(body) != wantBody {
+			t.Fatalf("GET %s: body = %q, want %q", reqPath, body, wantBody)
+		}
+
+		if primaryHits[reqPath] == 0 {
+			t.Fatalf("GET %s did not hit primary upstream", reqPath)
+		}
+		if pluginHits[reqPath] == 0 {
+			t.Fatalf("GET %s did not hit plugin portal fallback", reqPath)
+		}
+	}
+}
+
 func TestMavenHandler_GradlePluginImplementation_FallbackToPluginPortal(t *testing.T) {
 	proxy, _, _, fetcher := setupTestProxy(t)
 
