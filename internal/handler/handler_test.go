@@ -127,15 +127,15 @@ func (f *mockFetcher) Head(_ context.Context, _ string) (int64, string, error) {
 }
 
 // setupTestProxy creates a Proxy with a real DB (SQLite in temp dir) and mock storage/fetcher.
-func setupTestProxy(t *testing.T) (*Proxy, *database.DB, *mockStorage, *mockFetcher) {
-	t.Helper()
+func setupTestProxy(tb testing.TB) (*Proxy, *database.DB, *mockStorage, *mockFetcher) {
+	tb.Helper()
 
-	dir := t.TempDir()
+	dir := tb.TempDir()
 	db, err := database.Create(dir + "/test.db")
 	if err != nil {
-		t.Fatalf("failed to create test database: %v", err)
+		tb.Fatalf("failed to create test database: %v", err)
 	}
-	t.Cleanup(func() { _ = db.Close() })
+	tb.Cleanup(func() { _ = db.Close() })
 
 	store := newMockStorage()
 	fetcher := &mockFetcher{}
