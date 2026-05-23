@@ -101,14 +101,19 @@ func newTestServer(t *testing.T) *testServer {
 	r.Get("/health", s.handleHealth)
 	r.Get("/stats", s.handleStats)
 	r.Get("/openapi.json", s.handleOpenAPIJSON)
-	r.Mount("/static", http.StripPrefix("/static/", staticHandler()))
-	r.Get("/search", s.handleSearch)
-	r.Get("/package/{ecosystem}/*", s.handlePackagePath)
-	r.Get("/api/browse/{ecosystem}/*", s.handleBrowsePath)
-	r.Get("/api/compare/{ecosystem}/*", s.handleComparePath)
-	r.Get("/", s.handleRoot)
-	r.Get("/install", s.handleInstall)
-	r.Get("/packages", s.handlePackagesList)
+	r.Route("/ui", func(ui chi.Router) {
+		ui.Mount("/static", http.StripPrefix("/ui/static/", staticHandler()))
+		ui.Get("/", s.handleRoot)
+		ui.Get("/install", s.handleInstall)
+		ui.Get("/search", s.handleSearch)
+		ui.Get("/packages", s.handlePackagesList)
+		ui.Get("/package/{ecosystem}/*", s.handlePackagePath)
+		ui.Get("/api/browse/{ecosystem}/*", s.handleBrowsePath)
+		ui.Get("/api/compare/{ecosystem}/*", s.handleComparePath)
+	})
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/ui/", http.StatusFound)
+	})
 
 	return &testServer{
 		handler: r,
@@ -274,7 +279,7 @@ func TestDashboard(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
-	req := httptest.NewRequest("GET", "/", nil)
+	req := httptest.NewRequest("GET", "/ui/", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -445,8 +450,8 @@ func TestStaticFiles(t *testing.T) {
 		path         string
 		contentTypes []string
 	}{
-		{"/static/tailwind.js", []string{"text/javascript", "application/javascript"}},
-		{"/static/style.css", []string{"text/css"}},
+		{"/ui/static/tailwind.js", []string{"text/javascript", "application/javascript"}},
+		{"/ui/static/style.css", []string{"text/css"}},
 	}
 
 	for _, tc := range tests {
@@ -497,11 +502,27 @@ func TestCategorizeLicenseCSS(t *testing.T) {
 	}
 }
 
-func TestDashboardWithEnrichmentStats(t *testing.T) {
+func TestRootRedirectsToUI(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
 	req := httptest.NewRequest("GET", "/", nil)
+	w := httptest.NewRecorder()
+	ts.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Errorf("expected status 302, got %d", w.Code)
+	}
+	if loc := w.Header().Get("Location"); loc != "/ui/" {
+		t.Errorf("expected redirect to /ui/, got %q", loc)
+	}
+}
+
+func TestDashboardWithEnrichmentStats(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	req := httptest.NewRequest("GET", "/ui/", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -512,7 +533,7 @@ func TestDashboardWithEnrichmentStats(t *testing.T) {
 	body := w.Body.String()
 
 	// Dashboard should link to Tailwind JS
-	if !strings.Contains(body, "/static/tailwind.js") {
+	if !strings.Contains(body, "/ui/static/tailwind.js") {
 		t.Error("dashboard should link to Tailwind JS")
 	}
 
@@ -553,7 +574,7 @@ func TestVersionShowWithHitCount(t *testing.T) {
 		t.Fatalf("failed to upsert artifact: %v", err)
 	}
 
-	req := httptest.NewRequest("GET", "/package/npm/test/1.0.0", nil)
+	req := httptest.NewRequest("GET", "/ui/package/npm/test/1.0.0", nil)
 	w := httptest.NewRecorder()
 
 	ts.handler.ServeHTTP(w, req)
@@ -605,7 +626,7 @@ func TestSearchWithNullValues(t *testing.T) {
 		t.Fatalf("failed to upsert artifact: %v", err)
 	}
 
-	req := httptest.NewRequest("GET", "/search?q=test", nil)
+	req := httptest.NewRequest("GET", "/ui/search?q=test", nil)
 	w := httptest.NewRecorder()
 
 	ts.handler.ServeHTTP(w, req)
@@ -697,7 +718,7 @@ func TestSearchRedirectsWhenEmpty(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
-	req := httptest.NewRequest("GET", "/search", nil)
+	req := httptest.NewRequest("GET", "/ui/search", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -706,8 +727,8 @@ func TestSearchRedirectsWhenEmpty(t *testing.T) {
 	}
 
 	loc := w.Header().Get("Location")
-	if loc != "/" {
-		t.Errorf("expected redirect to /, got %q", loc)
+	if loc != "/ui/" {
+		t.Errorf("expected redirect to /ui/, got %q", loc)
 	}
 }
 
@@ -715,7 +736,7 @@ func TestPackageShowPage_NotFoundServer(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
-	req := httptest.NewRequest("GET", "/package/npm/nonexistent-srv", nil)
+	req := httptest.NewRequest("GET", "/ui/package/npm/nonexistent-srv", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -728,7 +749,7 @@ func TestVersionShowPage_NotFoundServer(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
-	req := httptest.NewRequest("GET", "/package/npm/nonexistent-srv/1.0.0", nil)
+	req := httptest.NewRequest("GET", "/ui/package/npm/nonexistent-srv/1.0.0", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -759,7 +780,7 @@ func TestPackageShowPage_WithLicense(t *testing.T) {
 		t.Fatalf("failed to upsert version: %v", err)
 	}
 
-	req := httptest.NewRequest("GET", "/package/npm/show-test-lic", nil)
+	req := httptest.NewRequest("GET", "/ui/package/npm/show-test-lic", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -801,8 +822,8 @@ func TestComposerNamespacedPackageRoutes(t *testing.T) {
 		url  string
 		want string
 	}{
-		{"package show", "/package/composer/monolog/monolog", "monolog/monolog"},
-		{"version show", "/package/composer/symfony/console/6.0.0", "symfony/console"},
+		{"package show", "/ui/package/composer/monolog/monolog", "monolog/monolog"},
+		{"version show", "/ui/package/composer/symfony/console/6.0.0", "symfony/console"},
 	}
 
 	for _, tt := range tests {
@@ -859,11 +880,11 @@ func TestNamespacedPackageRoutes(t *testing.T) {
 		url  string
 		want int
 	}{
-		{"npm scoped package show", "/package/npm/@babel/core", http.StatusOK},
-		{"golang module show", "/package/golang/github.com/stretchr/testify", http.StatusOK},
-		{"oci image show", "/package/oci/library/nginx", http.StatusOK},
-		{"conda package show", "/package/conda/conda-forge/numpy", http.StatusOK},
-		{"conan package show", "/package/conan/zlib/1.2.13@demo/stable", http.StatusOK},
+		{"npm scoped package show", "/ui/package/npm/@babel/core", http.StatusOK},
+		{"golang module show", "/ui/package/golang/github.com/stretchr/testify", http.StatusOK},
+		{"oci image show", "/ui/package/oci/library/nginx", http.StatusOK},
+		{"conda package show", "/ui/package/conda/conda-forge/numpy", http.StatusOK},
+		{"conan package show", "/ui/package/conan/zlib/1.2.13@demo/stable", http.StatusOK},
 	}
 
 	for _, tt := range tests {
@@ -886,7 +907,7 @@ func TestSearchPage_WithSeededResults(t *testing.T) {
 
 	seedTestPackage(t, ts.db, "searchable-pkg")
 
-	req := httptest.NewRequest("GET", "/search?q=searchable", nil)
+	req := httptest.NewRequest("GET", "/ui/search?q=searchable", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -934,7 +955,7 @@ func TestSearchPage_PaginationMultiPage(t *testing.T) {
 	}
 
 	// First page
-	req := httptest.NewRequest("GET", "/search?q=page-test", nil)
+	req := httptest.NewRequest("GET", "/ui/search?q=page-test", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -948,7 +969,7 @@ func TestSearchPage_PaginationMultiPage(t *testing.T) {
 	}
 
 	// Second page
-	req = httptest.NewRequest("GET", "/search?q=page-test&page=2", nil)
+	req = httptest.NewRequest("GET", "/ui/search?q=page-test&page=2", nil)
 	w = httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -1014,7 +1035,7 @@ func TestSearchPage_EcosystemFilterWithSeededData(t *testing.T) {
 	}
 
 	// Search with ecosystem filter for npm only
-	req := httptest.NewRequest("GET", "/search?q=eco-filter&ecosystem=npm", nil)
+	req := httptest.NewRequest("GET", "/ui/search?q=eco-filter&ecosystem=npm", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -1037,7 +1058,7 @@ func TestHandlePackagesListPage(t *testing.T) {
 
 	seedTestPackage(t, ts.db, "list-test")
 
-	req := httptest.NewRequest("GET", "/packages", nil)
+	req := httptest.NewRequest("GET", "/ui/packages", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 

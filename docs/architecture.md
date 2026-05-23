@@ -15,7 +15,7 @@ The proxy is a caching HTTP server that sits between package manager clients and
 │  │  /cargo/*   -> CargoHandler    /stats   -> statsHandler   │    │
 │  │  /gem/*     -> GemHandler      /metrics -> prometheus     │    │
 │  │  ...17 ecosystems              /api/*   -> APIHandler     │    │
-│  │                                /        -> Web UI         │    │
+│  │                                /ui/*    -> Web UI         │    │
 │  └──────────────────────────────────────────────────────────┘    │
 │         │                    │                    │               │
 │         ▼                    ▼                    ▼               │
@@ -274,7 +274,7 @@ HTTP server setup, web UI, and API handlers.
 - Creates and wires together all components
 - Mounts protocol handlers at ecosystem-specific paths
 - Middleware: request ID, real IP, logging, panic recovery, active request tracking
-- Web UI: dashboard, package browser, source browser, version comparison
+- Web UI under `/ui`: dashboard, package browser, source browser, version comparison
 - Templates are embedded in the binary via `//go:embed`
 - Enrichment API for package metadata, vulnerability scanning, and outdated detection
 - Health, stats, and Prometheus metrics endpoints. `/health` runs an active write → size-check → read → verify → delete probe against the storage backend and returns a structured JSON response (`HealthResponse`) with `"ok"` / `"error"` status per subsystem. Probe results are cached (default 30 s, configurable via `health.storage_probe_interval`) to avoid overwhelming remote backends.

@@ -39,7 +39,7 @@
             <div class="min-w-0 flex-1">
                 <div class="flex items-center gap-2">
                     {{template "ecosystem_badge" .Ecosystem}}
-                    <a href="/package/{{.Ecosystem}}/{{.Name}}" class="font-medium truncate hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
+                    <a href="/ui/package/{{.Ecosystem}}/{{.Name}}" class="font-medium truncate hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
                     {{if .LatestVersion}}
                     <span class="text-gray-500 dark:text-gray-400">@{{.LatestVersion}}</span>
                     {{end}}
@@ -67,7 +67,7 @@
 {{else}}
 <div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-12 text-center">
     <p class="text-gray-500 dark:text-gray-400">No cached packages found{{if .Ecosystem}} in {{.Ecosystem}}{{end}}</p>
-    <a href="/" class="mt-4 inline-block text-sm text-blue-600 dark:text-blue-400 hover:underline">Return to dashboard</a>
+    <a href="/ui/" class="mt-4 inline-block text-sm text-blue-600 dark:text-blue-400 hover:underline">Return to dashboard</a>
 </div>
 {{end}}
 

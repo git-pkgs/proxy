@@ -15,135 +15,6 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
-        "/api/browse/{ecosystem}/{name}/{version}": {
-            "get": {
-                "description": "Lists files from the first cached artifact for a package version.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "browse"
-                ],
-                "summary": "List files inside a cached artifact",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Ecosystem",
-                        "name": "ecosystem",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Package name",
-                        "name": "name",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Version",
-                        "name": "version",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Directory path inside the archive",
-                        "name": "path",
-                        "in": "query"
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "$ref": "#/definitions/server.BrowseListResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/server.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/server.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/browse/{ecosystem}/{name}/{version}/file/{filepath}": {
-            "get": {
-                "description": "Streams a single file from the cached artifact. The file path may contain slashes.",
-                "produces": [
-                    "application/octet-stream"
-                ],
-                "tags": [
-                    "browse"
-                ],
-                "summary": "Fetch a file inside a cached artifact",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Ecosystem",
-                        "name": "ecosystem",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Package name",
-                        "name": "name",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Version",
-                        "name": "version",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "File path inside the archive",
-                        "name": "filepath",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "file"
-                        }
-                    },
-                    "400": {
-                        "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/server.ErrorResponse"
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
-                        "schema": {
-                            "$ref": "#/definitions/server.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/server.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
         "/api/bulk": {
             "post": {
                 "consumes": [
@@ -176,69 +47,6 @@ const docTemplate = `{
                     },
                     "400": {
                         "description": "Bad Request",
-                        "schema": {
-                            "$ref": "#/definitions/server.ErrorResponse"
-                        }
-                    },
-                    "500": {
-                        "description": "Internal Server Error",
-                        "schema": {
-                            "$ref": "#/definitions/server.ErrorResponse"
-                        }
-                    }
-                }
-            }
-        },
-        "/api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion}": {
-            "get": {
-                "description": "Returns a structured diff for two cached versions.",
-                "produces": [
-                    "application/json"
-                ],
-                "tags": [
-                    "browse"
-                ],
-                "summary": "Compare two cached versions",
-                "parameters": [
-                    {
-                        "type": "string",
-                        "description": "Ecosystem",
-                        "name": "ecosystem",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "Package name",
-                        "name": "name",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "From version",
-                        "name": "fromVersion",
-                        "in": "path",
-                        "required": true
-                    },
-                    {
-                        "type": "string",
-                        "description": "To version",
-                        "name": "toVersion",
-                        "in": "path",
-                        "required": true
-                    }
-                ],
-                "responses": {
-                    "200": {
-                        "description": "OK",
-                        "schema": {
-                            "type": "object",
-                            "additionalProperties": true
-                        }
-                    },
-                    "404": {
-                        "description": "Not Found",
                         "schema": {
                             "$ref": "#/definitions/server.ErrorResponse"
                         }
@@ -435,6 +243,198 @@ const docTemplate = `{
                         "description": "OK",
                         "schema": {
                             "$ref": "#/definitions/server.StatsResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/ui/api/browse/{ecosystem}/{name}/{version}": {
+            "get": {
+                "description": "Lists files from the first cached artifact for a package version.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "browse"
+                ],
+                "summary": "List files inside a cached artifact",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Ecosystem",
+                        "name": "ecosystem",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Package name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Version",
+                        "name": "version",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Directory path inside the archive",
+                        "name": "path",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.BrowseListResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/ui/api/browse/{ecosystem}/{name}/{version}/file/{filepath}": {
+            "get": {
+                "description": "Streams a single file from the cached artifact. The file path may contain slashes.",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "browse"
+                ],
+                "summary": "Fetch a file inside a cached artifact",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Ecosystem",
+                        "name": "ecosystem",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Package name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Version",
+                        "name": "version",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "File path inside the archive",
+                        "name": "filepath",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    },
+                    "500": {
+                        "description": "Internal Server Error",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/ui/api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion}": {
+            "get": {
+                "description": "Returns a structured diff for two cached versions.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "browse"
+                ],
+                "summary": "Compare two cached versions",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Ecosystem",
+                        "name": "ecosystem",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Package name",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "From version",
+                        "name": "fromVersion",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "To version",
+                        "name": "toVersion",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "object",
+                            "additionalProperties": true
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
                         }
                     },
                     "500": {

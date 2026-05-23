@@ -67,7 +67,7 @@
                 <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-2">
                         {{template "ecosystem_badge" .Ecosystem}}
-                        <a href="/package/{{.Ecosystem}}/{{.Name}}" class="font-medium truncate hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
+                        <a href="/ui/package/{{.Ecosystem}}/{{.Name}}" class="font-medium truncate hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
                     </div>
                     <div class="flex items-center gap-2 mt-1">
                         {{if .License}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-100 text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-700 dark:bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-900 dark:text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-300">{{.License}}</span>{{end}}
@@ -81,7 +81,7 @@
             </div>
             {{end}}
             <div class="px-6 py-3 text-center border-t border-gray-200 dark:border-gray-800">
-                <a href="/packages?sort=hits" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">See all packages →</a>
+                <a href="/ui/packages?sort=hits" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">See all packages →</a>
             </div>
             {{else}}
             <div class="px-6 py-12 text-center text-gray-500 dark:text-gray-400">No packages cached yet</div>
@@ -101,7 +101,7 @@
                 <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-2">
                         {{template "ecosystem_badge" .Ecosystem}}
-                        <a href="/package/{{.Ecosystem}}/{{.Name}}" class="font-medium truncate hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
+                        <a href="/ui/package/{{.Ecosystem}}/{{.Name}}" class="font-medium truncate hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
                         <span class="text-gray-500 dark:text-gray-400">@{{.Version}}</span>
                     </div>
                     <div class="flex items-center gap-2 mt-1">
@@ -117,7 +117,7 @@
             </div>
             {{end}}
             <div class="px-6 py-3 text-center border-t border-gray-200 dark:border-gray-800">
-                <a href="/packages?sort=cached_at" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">See all packages →</a>
+                <a href="/ui/packages?sort=cached_at" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">See all packages →</a>
             </div>
             {{else}}
             <div class="px-6 py-12 text-center text-gray-500 dark:text-gray-400">No packages cached yet</div>

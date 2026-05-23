@@ -21,11 +21,20 @@
 //   - /rpm/*      - RPM/Yum repository protocol
 //
 // Additional endpoints:
-//   - /health    - Health check endpoint
-//   - /stats     - Cache statistics (JSON)
+//   - /health       - Health check endpoint
+//   - /stats        - Cache statistics (JSON)
 //   - /openapi.json - OpenAPI spec (JSON)
-//   - /packages  - List all cached packages (HTML)
-//   - /search    - Search packages (HTML)
+//   - /metrics      - Prometheus metrics
+//
+// Web UI (HTML), mounted under /ui so reverse proxies can gate it
+// separately from the package endpoints:
+//   - /ui/                - Dashboard
+//   - /ui/install         - Client configuration guide
+//   - /ui/packages        - List all cached packages
+//   - /ui/search          - Search packages
+//   - /ui/package/...     - Package and version detail pages
+//   - /ui/api/browse/...  - Archive browsing (used by the UI)
+//   - /ui/api/compare/... - Archive diffing (used by the UI)
 //
 // API endpoints for enrichment data:
 //   - GET  /api/package/{ecosystem}/{name}          - Package metadata
@@ -229,19 +238,29 @@ func (s *Server) Start() error {
 	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 
-	// Health, stats, and static endpoints
+	// Health, stats, and metrics endpoints
 	r.Get("/health", s.handleHealth)
 	r.Get("/stats", s.handleStats)
 	r.Get("/openapi.json", s.handleOpenAPIJSON)
 	r.Get("/metrics", func(w http.ResponseWriter, r *http.Request) {
 		metrics.Handler().ServeHTTP(w, r)
 	})
-	r.Mount("/static", http.StripPrefix("/static/", staticHandler()))
-	r.Get("/", s.handleRoot)
-	r.Get("/install", s.handleInstall)
-	r.Get("/search", s.handleSearch)
-	r.Get("/packages", s.handlePackagesList)
-	r.Get("/package/{ecosystem}/*", s.handlePackagePath)
+
+	// Web UI. Mounted under /ui so a reverse proxy can apply different
+	// access rules to it than to the package endpoints above (#123).
+	r.Route("/ui", func(ui chi.Router) {
+		ui.Mount("/static", http.StripPrefix("/ui/static/", staticHandler()))
+		ui.Get("/", s.handleRoot)
+		ui.Get("/install", s.handleInstall)
+		ui.Get("/search", s.handleSearch)
+		ui.Get("/packages", s.handlePackagesList)
+		ui.Get("/package/{ecosystem}/*", s.handlePackagePath)
+		ui.Get("/api/browse/{ecosystem}/*", s.handleBrowsePath)
+		ui.Get("/api/compare/{ecosystem}/*", s.handleComparePath)
+	})
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/ui/", http.StatusFound)
+	})
 
 	// API endpoints for enrichment data
 	enrichSvc := enrichment.New(s.logger)
@@ -253,10 +272,6 @@ func (s *Server) Start() error {
 	r.Post("/api/bulk", apiHandler.HandleBulkLookup)
 	r.Get("/api/search", apiHandler.HandleSearch)
 	r.Get("/api/packages", apiHandler.HandlePackagesList)
-
-	// Archive browsing and comparison endpoints also use wildcard for namespaced packages
-	r.Get("/api/browse/{ecosystem}/*", s.handleBrowsePath)
-	r.Get("/api/compare/{ecosystem}/*", s.handleComparePath)
 
 	// Start background context (used by mirror jobs and cleanup)
 	bgCtx, bgCancel := context.WithCancel(context.Background())
@@ -488,7 +503,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	ecosystem := r.URL.Query().Get("ecosystem")
 
 	if query == "" {
-		http.Redirect(w, r, "/", http.StatusSeeOther)
+		http.Redirect(w, r, "/ui/", http.StatusSeeOther)
 		return
 	}
 

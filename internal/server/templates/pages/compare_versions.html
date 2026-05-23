@@ -3,9 +3,9 @@
 {{define "content"}}
 <div class="mb-6">
     <nav class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        <a href="/" class="hover:text-gray-900 dark:hover:text-gray-100">Home</a>
+        <a href="/ui/" class="hover:text-gray-900 dark:hover:text-gray-100">Home</a>
         <span class="mx-2">/</span>
-        <a href="/package/{{.Ecosystem}}/{{.PackageName}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.PackageName}}</a>
+        <a href="/ui/package/{{.Ecosystem}}/{{.PackageName}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.PackageName}}</a>
         <span class="mx-2">/</span>
         <span>Compare Versions</span>
     </nav>
@@ -79,7 +79,7 @@ const toVersion = '{{.ToVersion}}';
 
 async function loadDiff() {
     try {
-        const url = `/api/compare/${ecosystem}/${packageName}/${fromVersion}/${toVersion}`;
+        const url = `/ui/api/compare/${ecosystem}/${packageName}/${fromVersion}/${toVersion}`;
         const response = await fetch(url);
 
         if (!response.ok) {
