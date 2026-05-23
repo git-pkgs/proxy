@@ -943,64 +943,66 @@ func TestMavenHandler_GradlePluginMarkerMetadataFallback(t *testing.T) {
 	}
 }
 
-func TestMavenHandler_GradlePluginImplementationMetadataFallback(t *testing.T) {
-	paths := map[string]string{
-		"/com/diffplug/spotless/spotless-plugin-gradle/8.4.0/spotless-plugin-gradle-8.4.0.jar.sha1":   "impl-sha1",
-		"/com/diffplug/spotless/spotless-plugin-gradle/8.4.0/spotless-plugin-gradle-8.4.0.jar.sha256": "impl-sha256",
-	}
+func TestMavenHandler_GradlePluginMarkerMetadataFallback_ForwardsConditionalHeadersWithoutCache(t *testing.T) {
+	const (
+		requestPath = "/com/diffplug/spotless/com.diffplug.spotless.gradle.plugin/maven-metadata.xml"
+		etagValue   = `"marker-etag"`
+	)
 
-	primaryHits := map[string]int{}
-	pluginHits := map[string]int{}
+	primaryHits := 0
+	pluginHits := 0
 
 	primary := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		primaryHits[r.URL.Path]++
-		if _, ok := paths[r.URL.Path]; ok {
-			http.NotFound(w, r)
-			return
+		primaryHits++
+		if r.URL.Path != requestPath {
+			t.Fatalf("unexpected path to primary upstream: %s", r.URL.Path)
 		}
-		t.Fatalf("unexpected path to primary upstream: %s", r.URL.Path)
+		http.NotFound(w, r)
 	}))
 	defer primary.Close()
 
 	pluginPortal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		pluginHits[r.URL.Path]++
-		body, ok := paths[r.URL.Path]
-		if !ok {
-			http.NotFound(w, r)
+		pluginHits++
+		if r.URL.Path != requestPath {
+			t.Fatalf("unexpected path to plugin portal: %s", r.URL.Path)
+		}
+		if got := r.Header.Get("If-None-Match"); got == etagValue {
+			w.WriteHeader(http.StatusNotModified)
 			return
 		}
-		_, _ = io.WriteString(w, body)
+
+		w.Header().Set("ETag", etagValue)
+		_, _ = io.WriteString(w, "<metadata/>")
 	}))
 	defer pluginPortal.Close()
 
 	proxy, _, _, _ := setupTestProxy(t)
-	proxy.HTTPClient = primary.Client()
+	proxy.CacheMetadata = false
 
 	h := NewMavenHandler(proxy, "http://localhost", primary.URL, pluginPortal.URL)
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
-	for reqPath, wantBody := range paths {
-		resp, err := http.Get(srv.URL + reqPath)
-		if err != nil {
-			t.Fatalf("GET %s failed: %v", reqPath, err)
-		}
-		body, _ := io.ReadAll(resp.Body)
-		_ = resp.Body.Close()
+	req, err := http.NewRequest(http.MethodGet, srv.URL+requestPath, nil)
+	if err != nil {
+		t.Fatalf("failed to build request: %v", err)
+	}
+	req.Header.Set("If-None-Match", etagValue)
 
-		if resp.StatusCode != http.StatusOK {
-			t.Fatalf("GET %s: status = %d, want %d", reqPath, resp.StatusCode, http.StatusOK)
-		}
-		if string(body) != wantBody {
-			t.Fatalf("GET %s: body = %q, want %q", reqPath, body, wantBody)
-		}
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	_ = resp.Body.Close()
 
-		if primaryHits[reqPath] == 0 {
-			t.Fatalf("GET %s did not hit primary upstream", reqPath)
-		}
-		if pluginHits[reqPath] == 0 {
-			t.Fatalf("GET %s did not hit plugin portal fallback", reqPath)
-		}
+	if resp.StatusCode != http.StatusNotModified {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusNotModified)
+	}
+	if primaryHits != 1 {
+		t.Fatalf("primary hits = %d, want 1", primaryHits)
+	}
+	if pluginHits != 1 {
+		t.Fatalf("plugin portal hits = %d, want 1", pluginHits)
 	}
 }
 

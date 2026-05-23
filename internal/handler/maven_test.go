@@ -67,61 +67,64 @@ func TestMavenIsArtifactFile(t *testing.T) {
 	}
 }
 
-func TestMavenIsMetadataFile(t *testing.T) {
+func TestMavenShouldFallbackToPluginPortal(t *testing.T) {
 	h := &MavenHandler{}
 
 	tests := []struct {
 		name     string
+		urlPath  string
 		filename string
 		want     bool
 	}{
 		{
-			name:     "pom is artifact, not metadata",
+			name:     "marker pom",
+			urlPath:  "com/diffplug/spotless/com.diffplug.spotless.gradle.plugin/8.4.0/com.diffplug.spotless.gradle.plugin-8.4.0.pom",
 			filename: "com.diffplug.spotless.gradle.plugin-8.4.0.pom",
-			want:     false,
+			want:     true,
 		},
 		{
-			name:     "pom checksum is metadata",
+			name:     "marker pom checksum",
+			urlPath:  "com/diffplug/spotless/com.diffplug.spotless.gradle.plugin/8.4.0/com.diffplug.spotless.gradle.plugin-8.4.0.pom.sha1",
 			filename: "com.diffplug.spotless.gradle.plugin-8.4.0.pom.sha1",
 			want:     true,
 		},
 		{
-			name:     "metadata file",
+			name:     "marker metadata",
+			urlPath:  "com/diffplug/spotless/com.diffplug.spotless.gradle.plugin/maven-metadata.xml",
 			filename: "maven-metadata.xml",
 			want:     true,
 		},
 		{
-			name:     "metadata checksum",
+			name:     "marker metadata checksum",
+			urlPath:  "com/diffplug/spotless/com.diffplug.spotless.gradle.plugin/maven-metadata.xml.sha256",
 			filename: "maven-metadata.xml.sha256",
 			want:     true,
 		},
 		{
-			name:     "jar checksum is metadata",
-			filename: "guava-32.1.3-jre.jar.sha1",
-			want:     true,
-		},
-		{
-			name:     "asc signature is metadata",
-			filename: "guava-32.1.3-jre.jar.asc",
-			want:     true,
-		},
-		{
-			name:     "regular jar is not metadata",
-			filename: "guava-32.1.3-jre.jar",
+			name:     "non marker pom checksum",
+			urlPath:  "com/google/guava/guava/32.1.3-jre/guava-32.1.3-jre.pom.sha1",
+			filename: "guava-32.1.3-jre.pom.sha1",
 			want:     false,
 		},
 		{
-			name:     "pom checksum is metadata",
-			filename: "guava-32.1.3-jre.pom.sha1",
-			want:     true,
+			name:     "jar checksum",
+			urlPath:  "com/diffplug/spotless/com.diffplug.spotless.gradle.plugin/8.4.0/com.diffplug.spotless.gradle.plugin-8.4.0.jar.sha1",
+			filename: "com.diffplug.spotless.gradle.plugin-8.4.0.jar.sha1",
+			want:     false,
+		},
+		{
+			name:     "path too short",
+			urlPath:  "com.diffplug.spotless.gradle.plugin/maven-metadata.xml",
+			filename: "maven-metadata.xml",
+			want:     false,
 		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := h.isMetadataFile(tt.filename)
+			got := h.shouldFallbackToPluginPortal(tt.urlPath, tt.filename)
 			if got != tt.want {
-				t.Errorf("isMetadataFile(%q) = %v, want %v", tt.filename, got, tt.want)
+				t.Errorf("shouldFallbackToPluginPortal(%q, %q) = %v, want %v", tt.urlPath, tt.filename, got, tt.want)
 			}
 		})
 	}

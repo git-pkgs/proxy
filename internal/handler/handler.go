@@ -721,10 +721,46 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 // proxyMetadataStream forwards an upstream metadata response by streaming it to the client
 // without buffering the full body in memory.
 func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upstreamURL string, acceptHeaders ...string) {
+	resp, err := p.fetchMetadataStreamResponse(r, upstreamURL, acceptHeaders...)
+	if err != nil {
+		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	p.writeMetadataStreamResponse(w, resp)
+}
+
+// proxyMetadataStreamWithFallback streams metadata from the primary upstream and
+// retries against fallbackURL only when the primary returns 404 Not Found.
+func (p *Proxy) proxyMetadataStreamWithFallback(w http.ResponseWriter, r *http.Request, primaryURL, fallbackURL string, acceptHeaders ...string) {
+	resp, err := p.fetchMetadataStreamResponse(r, primaryURL, acceptHeaders...)
+	if err != nil {
+		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
+		return
+	}
+
+	if resp.StatusCode != http.StatusNotFound || fallbackURL == "" {
+		defer func() { _ = resp.Body.Close() }()
+		p.writeMetadataStreamResponse(w, resp)
+		return
+	}
+	_ = resp.Body.Close()
+
+	fallbackResp, fallbackErr := p.fetchMetadataStreamResponse(r, fallbackURL, acceptHeaders...)
+	if fallbackErr != nil {
+		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = fallbackResp.Body.Close() }()
+
+	p.writeMetadataStreamResponse(w, fallbackResp)
+}
+
+func (p *Proxy) fetchMetadataStreamResponse(r *http.Request, upstreamURL string, acceptHeaders ...string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
 	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
+		return nil, err
 	}
 
 	accept := contentTypeJSON
@@ -739,12 +775,10 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 		}
 	}
 
-	resp, err := p.HTTPClient.Do(req)
-	if err != nil {
-		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
+	return p.HTTPClient.Do(req)
+}
+
+func (p *Proxy) writeMetadataStreamResponse(w http.ResponseWriter, resp *http.Response) {
 
 	for _, header := range []string{"Content-Type", "Content-Length", "Last-Modified", "ETag"} {
 		if v := resp.Header.Get(header); v != "" {
