@@ -97,10 +97,11 @@ func (s *mockStorage) Close() error { return nil }
 
 // mockFetcher implements fetch.FetcherInterface for testing.
 type mockFetcher struct {
-	artifact    *fetch.Artifact
-	fetchErr    error
-	fetchCalled bool
-	fetchedURL  string
+	artifact      *fetch.Artifact
+	fetchErr      error
+	fetchErrByURL map[string]error
+	fetchCalled   bool
+	fetchedURL    string
 }
 
 func (f *mockFetcher) Fetch(ctx context.Context, url string) (*fetch.Artifact, error) {
@@ -110,6 +111,11 @@ func (f *mockFetcher) Fetch(ctx context.Context, url string) (*fetch.Artifact, e
 func (f *mockFetcher) FetchWithHeaders(_ context.Context, url string, _ http.Header) (*fetch.Artifact, error) {
 	f.fetchCalled = true
 	f.fetchedURL = url
+	if f.fetchErrByURL != nil {
+		if err, ok := f.fetchErrByURL[url]; ok {
+			return nil, err
+		}
+	}
 	if f.fetchErr != nil {
 		return nil, f.fetchErr
 	}

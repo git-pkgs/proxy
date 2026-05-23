@@ -7,10 +7,10 @@ require (
 	github.com/CycloneDX/cyclonedx-go v0.11.0
 	github.com/git-pkgs/archives v0.3.0
 	github.com/git-pkgs/cooldown v0.1.1
-	github.com/git-pkgs/enrichment v0.2.2
+	github.com/git-pkgs/enrichment v0.2.3
 	github.com/git-pkgs/purl v0.1.12
-	github.com/git-pkgs/registries v0.6.0
-	github.com/git-pkgs/spdx v0.1.3
+	github.com/git-pkgs/registries v0.6.1
+	github.com/git-pkgs/spdx v0.1.4
 	github.com/git-pkgs/vers v0.2.6
 	github.com/git-pkgs/vulns v0.1.5
 	github.com/go-chi/chi/v5 v5.2.5
@@ -129,7 +129,7 @@ require (
 	github.com/ghostiam/protogetter v0.3.20 // indirect
 	github.com/git-pkgs/packageurl-go v0.3.1 // indirect
 	github.com/git-pkgs/pom v0.1.4 // indirect
-	github.com/github/go-spdx/v2 v2.6.0 // indirect
+	github.com/github/go-spdx/v2 v2.7.0 // indirect
 	github.com/go-critic/go-critic v0.14.3 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

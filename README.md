@@ -210,6 +210,18 @@ Add to your `~/.m2/settings.xml`:
 </settings>
 ```
 
+The `/maven/` endpoint uses Maven Central as primary upstream and falls back to the Gradle Plugin Portal for Gradle plugin marker metadata and related artifacts when the primary upstream returns not found.
+
+For Gradle plugin resolution via the same proxy endpoint:
+
+```kotlin
+pluginManagement {
+  repositories {
+    maven(url = "http://localhost:8080/maven/")
+  }
+}
+```
+
 ### Gradle HTTP Build Cache
 
 Configure in `settings.gradle(.kts)`:
@@ -386,6 +398,7 @@ sudo dnf update
 ## Configuration
 
 The proxy can be configured via:
+
 1. Command line flags (highest priority)
 2. Environment variables
 3. Configuration file (YAML or JSON)
@@ -977,6 +990,7 @@ The proxy will recreate the database on next start.
 ## Building from Source
 
 Requirements:
+
 - Go 1.25 or later
 
 ```bash

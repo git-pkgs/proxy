@@ -680,9 +680,14 @@ func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL,
 		return
 	}
 
+	p.writeMetadataCachedResponse(w, r, ecosystem, cacheKey, body, contentType)
+}
+
+// writeMetadataCachedResponse writes a cached metadata response and handles
+// conditional request headers using metadata cache validators.
+func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, body []byte, contentType string) {
 	cm := p.lookupCachedMeta(ecosystem, cacheKey)
 
-	// Honor client conditional request headers
 	if cm.etag != "" {
 		if match := r.Header.Get("If-None-Match"); match != "" && match == cm.etag {
 			w.WriteHeader(http.StatusNotModified)
