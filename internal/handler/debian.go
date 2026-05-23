@@ -2,31 +2,37 @@ package handler
 
 import (
 	"fmt"
+	"github.com/git-pkgs/proxy/internal/config/debian"
 	"net/http"
 	"regexp"
 	"strings"
 )
 
 const (
-	debianUpstream = "http://deb.debian.org/debian"
-	debMatchCount  = 4 // full match + name + version + arch
+	debMatchCount = 4 // full match + name + version + arch
 )
 
 // DebianHandler handles APT/Debian repository protocol requests.
 // It proxies requests to upstream Debian/Ubuntu repositories and caches .deb packages.
 type DebianHandler struct {
 	proxy       *Proxy
+	path        string
 	upstreamURL string
 	proxyURL    string
 }
 
 // NewDebianHandler creates a new Debian/APT protocol handler.
-func NewDebianHandler(proxy *Proxy, proxyURL string) *DebianHandler {
+func NewDebianHandler(proxy *Proxy, proxyURL string, cfg debian.RouteConfig) *DebianHandler {
 	return &DebianHandler{
 		proxy:       proxy,
-		upstreamURL: debianUpstream,
+		path:        cfg.Path,
+		upstreamURL: cfg.Upstream[0].Upstream,
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 	}
+}
+
+func (h *DebianHandler) Path() string {
+	return h.path
 }
 
 // Routes returns the HTTP handler for Debian requests.
