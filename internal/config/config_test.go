@@ -428,6 +428,52 @@ func TestParseMetadataTTL(t *testing.T) {
 	}
 }
 
+func TestParseMetadataMaxSize(t *testing.T) {
+	tests := []struct {
+		name string
+		size string
+		want int64
+	}{
+		{"unset uses default", "", defaultMetadataMaxSize},
+		{"explicit value", "250MB", 250 << 20},
+		{"bytes", "1024", 1024},
+		{"invalid uses default", "lots", defaultMetadataMaxSize},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.MetadataMaxSize = tt.size
+			got := cfg.ParseMetadataMaxSize()
+			if got != tt.want {
+				t.Errorf("ParseMetadataMaxSize() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateMetadataMaxSize(t *testing.T) {
+	cfg := Default()
+	cfg.MetadataMaxSize = "not-a-size"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for invalid metadata_max_size")
+	}
+
+	cfg.MetadataMaxSize = "0"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for zero metadata_max_size")
+	}
+
+	cfg.MetadataMaxSize = "250MB"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for valid metadata_max_size: %v", err)
+	}
+
+	cfg.MetadataMaxSize = ""
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for unset metadata_max_size: %v", err)
+	}
+}
+
 func TestValidateMetadataTTL(t *testing.T) {
 	cfg := Default()
 	cfg.MetadataTTL = "invalid"

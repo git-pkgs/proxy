@@ -161,7 +161,7 @@ func (h *CondaHandler) handleRepodata(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	body, err := ReadMetadata(resp.Body)
+	body, err := h.proxy.ReadMetadata(resp.Body)
 	if err != nil {
 		http.Error(w, "failed to read response", http.StatusInternalServerError)
 		return
