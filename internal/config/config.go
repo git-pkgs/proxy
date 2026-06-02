@@ -96,6 +96,11 @@ type Config struct {
 	// Default: "5m". Set to "0" to always revalidate.
 	MetadataTTL string `json:"metadata_ttl" yaml:"metadata_ttl"`
 
+	// MetadataMaxSize is the maximum size of an upstream metadata response
+	// the proxy will buffer (e.g. "100MB", "250MB"). Responses over this
+	// size return ErrMetadataTooLarge. Default: "100MB".
+	MetadataMaxSize string `json:"metadata_max_size" yaml:"metadata_max_size"`
+
 	// MirrorAPI enables the /api/mirror endpoints for starting mirror jobs via HTTP.
 	// Disabled by default to prevent unauthenticated users from triggering downloads.
 	MirrorAPI bool `json:"mirror_api" yaml:"mirror_api"`
@@ -424,6 +429,9 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("PROXY_METADATA_TTL"); v != "" {
 		c.MetadataTTL = v
 	}
+	if v := os.Getenv("PROXY_METADATA_MAX_SIZE"); v != "" {
+		c.MetadataMaxSize = v
+	}
 	if v := os.Getenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY"); v != "" {
 		c.Gradle.BuildCache.ReadOnly = v == "true" || v == "1"
 	}
@@ -513,6 +521,10 @@ func (c *Config) Validate() error {
 		}
 	}
 
+	if err := validateMetadataMaxSize(c.MetadataMaxSize); err != nil {
+		return err
+	}
+
 	if err := c.Health.Validate(); err != nil {
 		return err
 	}
@@ -582,6 +594,7 @@ func (g *GradleBuildCacheConfig) Validate() error {
 const (
 	defaultMetadataTTL                   = 5 * time.Minute  //nolint:mnd // sensible default
 	defaultDirectServeTTL                = 15 * time.Minute //nolint:mnd // sensible default
+	defaultMetadataMaxSize               = 100 << 20
 	defaultGradleBuildCacheMaxUploadSize = 100 << 20
 	defaultGradleBuildCacheSweepInterval = 10 * time.Minute
 	defaultGradleMaxUploadSizeStr        = "100MB"
@@ -597,6 +610,33 @@ func (c *Config) ParseMaxSize() int64 {
 	size, err := ParseSize(c.Storage.MaxSize)
 	if err != nil {
 		return 0
+	}
+	return size
+}
+
+func validateMetadataMaxSize(s string) error {
+	if s == "" {
+		return nil
+	}
+	size, err := ParseSize(s)
+	if err != nil {
+		return fmt.Errorf("invalid metadata_max_size: %w", err)
+	}
+	if size <= 0 {
+		return fmt.Errorf("invalid metadata_max_size %q: must be positive", s)
+	}
+	return nil
+}
+
+// ParseMetadataMaxSize returns the maximum metadata response size in bytes.
+// Returns 100MB if unset or invalid.
+func (c *Config) ParseMetadataMaxSize() int64 {
+	if c.MetadataMaxSize == "" {
+		return defaultMetadataMaxSize
+	}
+	size, err := ParseSize(c.MetadataMaxSize)
+	if err != nil || size <= 0 {
+		return defaultMetadataMaxSize
 	}
 	return size
 }

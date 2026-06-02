@@ -160,6 +160,7 @@ func (s *Server) Start() error {
 	proxy.Cooldown = cd
 	proxy.CacheMetadata = s.cfg.CacheMetadata
 	proxy.MetadataTTL = s.cfg.ParseMetadataTTL()
+	proxy.MetadataMaxSize = s.cfg.ParseMetadataMaxSize()
 	proxy.GradleReadOnly = s.cfg.Gradle.BuildCache.ReadOnly
 	proxy.GradleMaxUploadSize = s.cfg.ParseGradleBuildCacheMaxUploadSize()
 	proxy.DirectServe = s.cfg.Storage.DirectServe

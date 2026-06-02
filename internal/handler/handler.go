@@ -52,23 +52,25 @@ const contentTypeJSON = "application/json"
 
 const headerAcceptEncoding = "Accept-Encoding"
 
-// maxMetadataSize is the maximum size of upstream metadata responses (100 MB).
-// Package metadata (e.g. npm with many versions) can be large, but unbounded
-// reads risk OOM if an upstream misbehaves.
-const maxMetadataSize = 100 << 20
+// defaultMetadataMaxSize is used when Proxy.MetadataMaxSize is unset.
+const defaultMetadataMaxSize = 100 << 20
 
-// ErrMetadataTooLarge is returned when upstream metadata exceeds maxMetadataSize.
+// ErrMetadataTooLarge is returned when upstream metadata exceeds the configured limit.
 var ErrMetadataTooLarge = errors.New("metadata response exceeds size limit")
 
 // ReadMetadata reads an upstream response body with a size limit to prevent OOM
 // from unexpectedly large responses. Returns ErrMetadataTooLarge if the response
 // is truncated by the limit.
-func ReadMetadata(r io.Reader) ([]byte, error) {
-	data, err := io.ReadAll(io.LimitReader(r, maxMetadataSize+1))
+func (p *Proxy) ReadMetadata(r io.Reader) ([]byte, error) {
+	limit := p.MetadataMaxSize
+	if limit <= 0 {
+		limit = defaultMetadataMaxSize
+	}
+	data, err := io.ReadAll(io.LimitReader(r, limit+1))
 	if err != nil {
 		return nil, err
 	}
-	if int64(len(data)) > maxMetadataSize {
+	if int64(len(data)) > limit {
 		return nil, ErrMetadataTooLarge
 	}
 	return data, nil
@@ -84,6 +86,7 @@ type Proxy struct {
 	Cooldown            *cooldown.Config
 	CacheMetadata       bool
 	MetadataTTL         time.Duration
+	MetadataMaxSize     int64
 	GradleReadOnly      bool
 	GradleMaxUploadSize int64
 	DirectServe         bool
@@ -474,7 +477,7 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 			cached, readErr := p.Storage.Open(ctx, entry.StoragePath)
 			if readErr == nil {
 				defer func() { _ = cached.Close() }()
-				data, readErr := ReadMetadata(cached)
+				data, readErr := p.ReadMetadata(cached)
 				if readErr == nil {
 					ct := contentTypeJSON
 					if entry.ContentType.Valid {
@@ -519,7 +522,7 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 	}
 	defer func() { _ = cached.Close() }()
 
-	data, readErr := ReadMetadata(cached)
+	data, readErr := p.ReadMetadata(cached)
 	if readErr != nil {
 		return nil, "", fmt.Errorf("upstream failed and cached read error: %w", err)
 	}
@@ -561,7 +564,7 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 			return nil, "", "", zeroTime, errStale304
 		}
 		defer func() { _ = cached.Close() }()
-		data, readErr := ReadMetadata(cached)
+		data, readErr := p.ReadMetadata(cached)
 		if readErr != nil {
 			return nil, "", "", zeroTime, errStale304
 		}
@@ -583,7 +586,7 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		return nil, "", "", zeroTime, fmt.Errorf("upstream returned %d", resp.StatusCode)
 	}
 
-	body, err := ReadMetadata(resp.Body)
+	body, err := p.ReadMetadata(resp.Body)
 	if err != nil {
 		return nil, "", "", zeroTime, fmt.Errorf("reading response: %w", err)
 	}

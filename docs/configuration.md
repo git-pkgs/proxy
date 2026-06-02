@@ -265,6 +265,16 @@ Set to `"0"` to always revalidate with upstream (ETag-based conditional requests
 
 When upstream is unreachable and the cached entry is past its TTL, the proxy serves the stale cached copy with a `Warning: 110 - "Response is Stale"` header so clients can tell the data may be outdated.
 
+### Metadata size limit
+
+Upstream metadata responses are buffered in memory before being rewritten and served. `metadata_max_size` caps that buffer to protect against OOM from a misbehaving upstream. Some npm packages with thousands of versions (for example `renovate`) exceed the 100 MB default, so raise this if you see `metadata response exceeds size limit` in the logs.
+
+```yaml
+metadata_max_size: "100MB"   # default
+```
+
+Or via environment variable: `PROXY_METADATA_MAX_SIZE=250MB`.
+
 ## Mirror API
 
 The `/api/mirror` endpoints are disabled by default. Enable them to allow starting mirror jobs via HTTP:

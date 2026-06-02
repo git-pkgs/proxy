@@ -470,6 +470,7 @@ func runMirror() {
 	proxy := handler.NewProxy(db, store, fetcher, resolver, logger)
 	proxy.CacheMetadata = true // mirror always caches metadata
 	proxy.MetadataTTL = cfg.ParseMetadataTTL()
+	proxy.MetadataMaxSize = cfg.ParseMetadataMaxSize()
 
 	m := mirror.New(proxy, db, store, logger, *concurrency)
 
