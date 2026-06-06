@@ -173,7 +173,6 @@ func (s *Server) Start() error {
 	// Add middleware
 	r.Use(middleware.RequestID)
 	r.Use(RequestIDMiddleware)
-	r.Use(middleware.RealIP)
 	r.Use(s.LoggerMiddleware)
 	r.Use(middleware.Recoverer)
 	r.Use(func(next http.Handler) http.Handler {
