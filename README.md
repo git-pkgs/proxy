@@ -950,6 +950,33 @@ server {
 }
 ```
 
+The UI is mounted under `/ui` so you can apply different access rules to it than to the package endpoints — for example, require auth for humans browsing the UI while leaving `/npm`, `/pypi`, and other package endpoints open to unauthenticated build machines:
+
+```nginx
+server {
+    listen 443 ssl;
+    server_name proxy.example.com;
+
+    # Web UI — require auth
+    location /ui/ {
+        auth_basic "git-pkgs proxy";
+        auth_basic_user_file /etc/nginx/.htpasswd;
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;
+    }
+
+    # Package endpoints — open to build machines
+    location / {
+        proxy_pass http://127.0.0.1:8080;
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_buffering off;
+    }
+}
+```
+
 ## Cache Management
 
 The proxy stores artifacts in the configured storage directory with this structure:
