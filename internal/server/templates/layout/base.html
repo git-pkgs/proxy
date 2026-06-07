@@ -5,6 +5,12 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{{block "title" .}}git-pkgs proxy{{end}}</title>
+    {{if .UIBaseURL}}
+    <link rel="canonical" href="{{.UIBaseURL}}{{.CanonicalPath}}">
+    <meta property="og:url" content="{{.UIBaseURL}}{{.CanonicalPath}}">
+    <meta property="og:title" content="{{template "title" .}}">
+    <meta property="og:site_name" content="git-pkgs proxy">
+    {{end}}
     <script src="/ui/static/tailwind.js"></script>
     <script>
       tailwind.config = { darkMode: 'class' }

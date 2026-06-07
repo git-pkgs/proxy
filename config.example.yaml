@@ -4,9 +4,16 @@
 # Server listen address
 listen: ":8080"
 
-# Public URL where this proxy is accessible
-# Used for rewriting package metadata URLs
+# Public URL where package endpoints are reachable.
+# Used for rewriting package metadata URLs and shown in install guide snippets
+# so users know what to point their package manager at.
 base_url: "http://localhost:8080"
+
+# Public URL where the web UI is reached. Defaults to base_url when unset.
+# Set this separately when the UI is served on a different hostname than the
+# package endpoints — for example, the UI on a public domain behind auth while
+# build machines hit a Docker network alias for the package endpoints.
+# ui_base_url: "https://proxy.example.com/ui"
 
 # Artifact storage configuration
 storage:

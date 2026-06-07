@@ -300,6 +300,7 @@ func (s *Server) Start() error {
 	s.logger.Info("starting server",
 		"listen", s.cfg.Listen,
 		"base_url", s.cfg.BaseURL,
+		"ui_url", s.cfg.UIBaseURL,
 		"storage", s.storage.URL(),
 		"database", s.cfg.Database.Path)
 	go s.updateCacheStatsMetrics()
@@ -402,6 +403,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 
 	// Build dashboard data
 	data := DashboardData{
+		Layout: s.layoutFor(r),
 		Stats: DashboardStats{
 			CachedArtifacts: stats.TotalArtifacts,
 			TotalSize:       formatSize(stats.TotalSize),
@@ -488,8 +490,12 @@ func (s *Server) handleOpenAPIJSON(w http.ResponseWriter, _ *http.Request) {
 
 func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
 	data := struct {
+		Layout
+		BaseURL    string
 		Registries []RegistryConfig
 	}{
+		Layout:     s.layoutFor(r),
+		BaseURL:    s.cfg.BaseURL,
 		Registries: getRegistryConfigs(s.cfg.BaseURL),
 	}
 
@@ -552,6 +558,7 @@ func (s *Server) handleSearch(w http.ResponseWriter, r *http.Request) {
 	totalPages := int((total + int64(limit) - 1) / int64(limit))
 
 	data := SearchPageData{
+		Layout:     s.layoutFor(r),
 		Query:      query,
 		Ecosystem:  ecosystem,
 		Results:    items,
@@ -627,6 +634,7 @@ func (s *Server) handlePackagesList(w http.ResponseWriter, r *http.Request) {
 	totalPages := int((total + int64(limit) - 1) / int64(limit))
 
 	data := PackagesListPageData{
+		Layout:     s.layoutFor(r),
 		Ecosystem:  ecosystem,
 		SortBy:     sortBy,
 		Results:    items,
@@ -670,7 +678,7 @@ func (s *Server) handlePackagePath(w http.ResponseWriter, r *http.Request) {
 		if seg == "compare" && i > 0 && i < len(segments)-1 {
 			name := strings.Join(segments[:i], "/")
 			versions := strings.Join(segments[i+1:], "/")
-			s.showComparePage(w, ecosystem, name, versions)
+			s.showComparePage(w, r, ecosystem, name, versions)
 			return
 		}
 	}
@@ -690,7 +698,7 @@ func (s *Server) handlePackagePath(w http.ResponseWriter, r *http.Request) {
 		// segment is a version (if present) and everything else is the name.
 		if len(segments) == 1 {
 			// Single segment, no DB match: try package show (will 404).
-			s.showPackage(w, ecosystem, segments[0])
+			s.showPackage(w, r, ecosystem, segments[0])
 			return
 		}
 		name = strings.Join(segments[:len(segments)-1], "/")
@@ -699,17 +707,17 @@ func (s *Server) handlePackagePath(w http.ResponseWriter, r *http.Request) {
 
 	switch {
 	case len(rest) == 0 && !browse:
-		s.showPackage(w, ecosystem, name)
+		s.showPackage(w, r, ecosystem, name)
 	case len(rest) == 1 && browse:
-		s.showBrowseSource(w, ecosystem, name, rest[0])
+		s.showBrowseSource(w, r, ecosystem, name, rest[0])
 	case len(rest) == 1:
-		s.showVersion(w, ecosystem, name, rest[0])
+		s.showVersion(w, r, ecosystem, name, rest[0])
 	default:
 		http.Error(w, "not found", http.StatusNotFound)
 	}
 }
 
-func (s *Server) showPackage(w http.ResponseWriter, ecosystem, name string) {
+func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, name string) {
 	pkg, err := s.db.GetPackageByEcosystemName(ecosystem, name)
 	if err != nil {
 		s.logger.Error("failed to get package", "error", err, "ecosystem", ecosystem, "name", name)
@@ -734,6 +742,7 @@ func (s *Server) showPackage(w http.ResponseWriter, ecosystem, name string) {
 	}
 
 	data := PackageShowData{
+		Layout:          s.layoutFor(r),
 		Package:         pkg,
 		Versions:        versions,
 		Vulnerabilities: vulns,
@@ -745,7 +754,7 @@ func (s *Server) showPackage(w http.ResponseWriter, ecosystem, name string) {
 	}
 }
 
-func (s *Server) showVersion(w http.ResponseWriter, ecosystem, name, version string) {
+func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, name, version string) {
 	pkg, err := s.db.GetPackageByEcosystemName(ecosystem, name)
 	if err != nil || pkg == nil {
 		s.logger.Error("failed to get package", "error", err)
@@ -784,6 +793,7 @@ func (s *Server) showVersion(w http.ResponseWriter, ecosystem, name, version str
 	}
 
 	data := VersionShowData{
+		Layout:            s.layoutFor(r),
 		Package:           pkg,
 		Version:           ver,
 		Artifacts:         artifacts,
@@ -798,8 +808,9 @@ func (s *Server) showVersion(w http.ResponseWriter, ecosystem, name, version str
 	}
 }
 
-func (s *Server) showBrowseSource(w http.ResponseWriter, ecosystem, name, version string) {
+func (s *Server) showBrowseSource(w http.ResponseWriter, r *http.Request, ecosystem, name, version string) {
 	data := BrowseSourceData{
+		Layout:      s.layoutFor(r),
 		Ecosystem:   ecosystem,
 		PackageName: name,
 		Version:     version,
@@ -811,7 +822,7 @@ func (s *Server) showBrowseSource(w http.ResponseWriter, ecosystem, name, versio
 	}
 }
 
-func (s *Server) showComparePage(w http.ResponseWriter, ecosystem, name, versions string) {
+func (s *Server) showComparePage(w http.ResponseWriter, r *http.Request, ecosystem, name, versions string) {
 	const compareVersionParts = 2
 	parts := strings.Split(versions, "...")
 	if len(parts) != compareVersionParts {
@@ -820,6 +831,7 @@ func (s *Server) showComparePage(w http.ResponseWriter, ecosystem, name, version
 	}
 
 	data := ComparePageData{
+		Layout:      s.layoutFor(r),
 		Ecosystem:   ecosystem,
 		PackageName: name,
 		FromVersion: parts[0],

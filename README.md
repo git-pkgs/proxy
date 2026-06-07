@@ -424,6 +424,7 @@ The proxy can be configured via:
 ```bash
 PROXY_LISTEN=:8080
 PROXY_BASE_URL=http://localhost:8080
+PROXY_UI_URL=http://localhost:8080  # Optional; defaults to PROXY_BASE_URL
 PROXY_STORAGE_URL=file:///var/cache/proxy/artifacts
 PROXY_DATABASE_DRIVER=sqlite
 PROXY_DATABASE_PATH=./cache/proxy.db
@@ -934,47 +935,45 @@ When running behind nginx, Apache, or another reverse proxy, set `base_url` to y
 base_url: "https://proxy.example.com"
 ```
 
-nginx example:
+If the UI is reached on a different hostname than the package endpoints — for example, the UI exposed publicly on a domain while build machines hit a Docker network alias — set `ui_base_url` separately. `base_url` is the URL package managers and metadata rewriting use; `ui_base_url` is the URL advertised to humans visiting the web UI (canonical/`og:url` tags and the install guide banner):
+
+```yaml
+base_url: "http://pkg-proxy:8080"        # internal alias for build machines
+ui_base_url: "https://proxy.example.com/ui"  # public UI URL
+```
+
+When unset, `ui_base_url` defaults to `base_url`.
+
+> **Warning:** the proxy serves the UI and package endpoints on the same listener. Setting `ui_base_url` only changes what URL the UI advertises to humans; it does not stop package endpoints from being reachable on the same hostname and port. When fronting the proxy with a public reverse proxy, restrict the public route to `PathPrefix(/ui)` (or your proxy's equivalent), otherwise `/npm`, `/pypi`, and the other package endpoints stay exposed alongside the UI.
+
+nginx example, restricting the public host to the UI while leaving package endpoints reachable only on the internal listener:
 
 ```nginx
 server {
     listen 443 ssl;
     server_name proxy.example.com;
 
-    location / {
+    location /ui/ {
         proxy_pass http://127.0.0.1:8080;
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_buffering off;
+    }
+
+    location / {
+        return 404;
     }
 }
 ```
 
-The UI is mounted under `/ui` so you can apply different access rules to it than to the package endpoints — for example, require auth for humans browsing the UI while leaving `/npm`, `/pypi`, and other package endpoints open to unauthenticated build machines:
+Traefik example using `PathPrefix(/ui)` so the public router only matches UI traffic:
 
-```nginx
-server {
-    listen 443 ssl;
-    server_name proxy.example.com;
-
-    # Web UI — require auth
-    location /ui/ {
-        auth_basic "git-pkgs proxy";
-        auth_basic_user_file /etc/nginx/.htpasswd;
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_buffering off;
-    }
-
-    # Package endpoints — open to build machines
-    location / {
-        proxy_pass http://127.0.0.1:8080;
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_buffering off;
-    }
-}
+```yaml
+labels:
+  traefik.enable: "true"
+  traefik.http.services.pkg-proxy.loadbalancer.server.port: "8080"
+  traefik.http.routers.pkg-proxy.rule: "Host(`proxy.example.com`) && PathPrefix(`/ui`)"
+  traefik.http.routers.pkg-proxy.entrypoints: "websecure"
 ```
 
 ## Cache Management

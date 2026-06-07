@@ -478,6 +478,7 @@ func isLikelyText(filename string) bool {
 
 // BrowseSourceData contains data for the browse source page.
 type BrowseSourceData struct {
+	Layout
 	Ecosystem   string
 	PackageName string
 	Version     string
@@ -583,6 +584,7 @@ func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, 
 
 // ComparePageData contains data for the version comparison page.
 type ComparePageData struct {
+	Layout
 	Ecosystem   string
 	PackageName string
 	FromVersion string

@@ -37,7 +37,12 @@ func TestTemplatesRenderAllPages(t *testing.T) {
 				{Ecosystem: "cargo", Name: "serde", Version: "1.0.0", Size: "200 KB", CachedAt: "1 hour ago"},
 			},
 		}},
-		{"install", struct{ Registries []RegistryConfig }{
+		{"install", struct {
+			Layout
+			BaseURL    string
+			Registries []RegistryConfig
+		}{
+			BaseURL:    "http://localhost:8080",
 			Registries: getRegistryConfigs("http://localhost:8080"),
 		}},
 		{"search", SearchPageData{
@@ -150,6 +155,108 @@ func TestTemplatesRenderAllPages(t *testing.T) {
 				t.Error("rendered page doesn't look like HTML")
 			}
 		})
+	}
+}
+
+func TestRenderEmitsCanonicalAndOG(t *testing.T) {
+	templates := &Templates{}
+
+	data := DashboardData{
+		Layout: Layout{
+			UIBaseURL:     "https://ui.example.com/ui",
+			CanonicalPath: "/ui/",
+		},
+	}
+
+	w := httptest.NewRecorder()
+	if err := templates.Render(w, "dashboard", data); err != nil {
+		t.Fatalf("Render failed: %v", err)
+	}
+
+	body := w.Body.String()
+	want := []string{
+		`<link rel="canonical" href="https://ui.example.com/ui/ui/">`,
+		`<meta property="og:url" content="https://ui.example.com/ui/ui/">`,
+		`<meta property="og:site_name" content="git-pkgs proxy">`,
+	}
+	for _, s := range want {
+		if !strings.Contains(body, s) {
+			t.Errorf("rendered body missing %q", s)
+		}
+	}
+}
+
+func TestRenderOmitsCanonicalWhenUIBaseURLUnset(t *testing.T) {
+	templates := &Templates{}
+
+	w := httptest.NewRecorder()
+	if err := templates.Render(w, "dashboard", DashboardData{}); err != nil {
+		t.Fatalf("Render failed: %v", err)
+	}
+
+	body := w.Body.String()
+	if strings.Contains(body, `rel="canonical"`) {
+		t.Error("canonical tag should be omitted when UIBaseURL is empty")
+	}
+	if strings.Contains(body, `property="og:url"`) {
+		t.Error("og:url tag should be omitted when UIBaseURL is empty")
+	}
+}
+
+func TestInstallPageBannerWhenUIDiffersFromBaseURL(t *testing.T) {
+	templates := &Templates{}
+
+	data := struct {
+		Layout
+		BaseURL    string
+		Registries []RegistryConfig
+	}{
+		Layout: Layout{
+			UIBaseURL:     "https://ui.example.com/ui",
+			CanonicalPath: "/ui/install",
+		},
+		BaseURL:    "http://pkg-proxy:8080",
+		Registries: getRegistryConfigs("http://pkg-proxy:8080"),
+	}
+
+	w := httptest.NewRecorder()
+	if err := templates.Render(w, "install", data); err != nil {
+		t.Fatalf("Render failed: %v", err)
+	}
+
+	body := w.Body.String()
+	if !strings.Contains(body, "https://ui.example.com/ui") || !strings.Contains(body, "http://pkg-proxy:8080") {
+		t.Error("install banner should mention both UIBaseURL and BaseURL when they differ")
+	}
+	if !strings.Contains(body, "package managers should be configured") {
+		t.Error("install banner copy missing")
+	}
+}
+
+func TestInstallPageNoBannerWhenURLsMatch(t *testing.T) {
+	templates := &Templates{}
+
+	data := struct {
+		Layout
+		BaseURL    string
+		Registries []RegistryConfig
+	}{
+		Layout: Layout{
+			UIBaseURL:     "http://localhost:8080",
+			CanonicalPath: "/ui/install",
+		},
+		BaseURL:    "http://localhost:8080",
+		Registries: getRegistryConfigs("http://localhost:8080"),
+	}
+
+	w := httptest.NewRecorder()
+	if err := templates.Render(w, "install", data); err != nil {
+		t.Fatalf("Render failed: %v", err)
+	}
+
+	body := w.Body.String()
+	if strings.Contains(body, "package managers should be configured") {
+		t.Error("install banner should be hidden when UIBaseURL == BaseURL")
 	}
 }
 

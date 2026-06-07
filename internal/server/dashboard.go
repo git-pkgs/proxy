@@ -8,6 +8,7 @@ import (
 
 // DashboardData contains data for rendering the dashboard.
 type DashboardData struct {
+	Layout
 	Stats           DashboardStats
 	EnrichmentStats EnrichmentStatsView
 	RecentPackages  []PackageInfo
@@ -60,6 +61,7 @@ type RegistryConfig struct {
 
 // PackageShowData contains data for rendering the package show page.
 type PackageShowData struct {
+	Layout
 	Package         *database.Package
 	Versions        []database.Version
 	Vulnerabilities []database.Vulnerability
@@ -68,6 +70,7 @@ type PackageShowData struct {
 
 // VersionShowData contains data for rendering the version show page.
 type VersionShowData struct {
+	Layout
 	Package           *database.Package
 	Version           *database.Version
 	Artifacts         []database.Artifact
@@ -79,6 +82,7 @@ type VersionShowData struct {
 
 // SearchPageData contains data for rendering the search results page.
 type SearchPageData struct {
+	Layout
 	Query      string
 	Ecosystem  string
 	Results    []SearchResultItem
@@ -104,6 +108,7 @@ type SearchResultItem struct {
 
 // PackagesListPageData contains data for rendering the packages list page.
 type PackagesListPageData struct {
+	Layout
 	Ecosystem  string
 	SortBy     string
 	Results    []SearchResultItem

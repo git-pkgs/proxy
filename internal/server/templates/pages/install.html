@@ -8,6 +8,15 @@
     </p>
 </div>
 
+{{if and .UIBaseURL .BaseURL (ne .UIBaseURL .BaseURL)}}
+<div class="mb-8 p-4 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-900 rounded-xl text-sm">
+    <p class="text-amber-900 dark:text-amber-100">
+        This UI is hosted at <code class="font-mono">{{.UIBaseURL}}</code>, but package managers should be configured to use
+        <code class="font-mono">{{.BaseURL}}</code> for the URLs shown below.
+    </p>
+</div>
+{{end}}
+
 <div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
     <div class="divide-y divide-gray-200 dark:divide-gray-800">
         {{range .Registries}}

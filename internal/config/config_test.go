@@ -268,6 +268,7 @@ func TestLoadFromEnv(t *testing.T) {
 
 	t.Setenv("PROXY_LISTEN", ":9000")
 	t.Setenv("PROXY_BASE_URL", "https://env.example.com")
+	t.Setenv("PROXY_UI_URL", "https://ui.env.example.com/ui")
 	t.Setenv("PROXY_STORAGE_PATH", "/env/cache")
 	t.Setenv("PROXY_LOG_LEVEL", testLevelDebug)
 	t.Setenv("PROXY_UPSTREAM_MAVEN", "https://maven.example.com/repository/maven-public")
@@ -285,6 +286,9 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.BaseURL != "https://env.example.com" {
 		t.Errorf("BaseURL = %q, want %q", cfg.BaseURL, "https://env.example.com")
+	}
+	if cfg.UIBaseURL != "https://ui.env.example.com/ui" {
+		t.Errorf("UIBaseURL = %q, want %q", cfg.UIBaseURL, "https://ui.env.example.com/ui")
 	}
 	if cfg.Storage.Path != "/env/cache" {
 		t.Errorf("Storage.Path = %q, want %q", cfg.Storage.Path, "/env/cache")
@@ -617,6 +621,40 @@ func TestLoadDirectServeFromEnv(t *testing.T) {
 	}
 	if cfg.Storage.DirectServeBaseURL != "https://cdn.example.com" {
 		t.Errorf("Storage.DirectServeBaseURL = %q, want %q", cfg.Storage.DirectServeBaseURL, "https://cdn.example.com")
+	}
+}
+
+func TestValidateUIBaseURLDefaultsToBaseURL(t *testing.T) {
+	cfg := Default()
+	cfg.BaseURL = "https://proxy.example.com"
+	cfg.UIBaseURL = ""
+
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("unexpected validation error: %v", err)
+	}
+	if cfg.UIBaseURL != "https://proxy.example.com" {
+		t.Errorf("UIBaseURL = %q, want it to default to BaseURL %q", cfg.UIBaseURL, "https://proxy.example.com")
+	}
+}
+
+func TestValidateUIBaseURL(t *testing.T) {
+	cfg := Default()
+
+	cfg.UIBaseURL = "not a url"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for relative ui_base_url")
+	}
+
+	cfg = Default()
+	cfg.UIBaseURL = "://bad"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for unparseable ui_base_url")
+	}
+
+	cfg = Default()
+	cfg.UIBaseURL = "https://ui.example.com/ui"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for valid ui_base_url: %v", err)
 	}
 }
 

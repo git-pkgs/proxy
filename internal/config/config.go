@@ -66,10 +66,19 @@ type Config struct {
 	// Listen is the address to listen on (e.g., ":8080", "127.0.0.1:8080").
 	Listen string `json:"listen" yaml:"listen"`
 
-	// BaseURL is the public URL where this proxy is accessible.
-	// Used for rewriting package metadata URLs.
+	// BaseURL is the public URL where package endpoints are reachable.
+	// Used for rewriting package metadata URLs and shown to humans on the
+	// install guide so they know what to point their package manager at.
 	// Example: "https://proxy.example.com" or "http://localhost:8080"
 	BaseURL string `json:"base_url" yaml:"base_url"`
+
+	// UIBaseURL is the public URL where the web UI is reachable. Defaults to
+	// BaseURL when unset. Set this separately when the UI is served on a
+	// different hostname than the package endpoints — for example, the UI on a
+	// public domain behind auth while build machines hit a Docker network alias
+	// for the package endpoints.
+	// Example: "https://proxy.example.com/ui"
+	UIBaseURL string `json:"ui_base_url" yaml:"ui_base_url"`
 
 	// Storage configures artifact storage.
 	Storage StorageConfig `json:"storage" yaml:"storage"`
@@ -365,6 +374,7 @@ func Load(path string) (*Config, error) {
 // Environment variables use the PROXY_ prefix:
 //   - PROXY_LISTEN
 //   - PROXY_BASE_URL
+//   - PROXY_UI_URL
 //   - PROXY_STORAGE_PATH
 //   - PROXY_STORAGE_MAX_SIZE
 //   - PROXY_DATABASE_PATH
@@ -377,6 +387,9 @@ func (c *Config) LoadFromEnv() {
 	}
 	if v := os.Getenv("PROXY_BASE_URL"); v != "" {
 		c.BaseURL = v
+	}
+	if v := os.Getenv("PROXY_UI_URL"); v != "" {
+		c.UIBaseURL = v
 	}
 	if v := os.Getenv("PROXY_STORAGE_URL"); v != "" {
 		c.Storage.URL = v
@@ -452,6 +465,16 @@ func (c *Config) LoadFromEnv() {
 	}
 }
 
+// validateAbsoluteURL returns an error if value is not a parseable URL with
+// both a scheme and host. fieldName is used in the error message.
+func validateAbsoluteURL(fieldName, value string) error {
+	u, err := url.Parse(value)
+	if err != nil || u.Scheme == "" || u.Host == "" {
+		return fmt.Errorf("invalid %s %q: must be an absolute URL", fieldName, value)
+	}
+	return nil
+}
+
 // Validate checks the configuration for errors.
 func (c *Config) Validate() error {
 	if c.Listen == "" {
@@ -459,6 +482,11 @@ func (c *Config) Validate() error {
 	}
 	if c.BaseURL == "" {
 		return fmt.Errorf("base_url is required")
+	}
+	if c.UIBaseURL == "" {
+		c.UIBaseURL = c.BaseURL
+	} else if err := validateAbsoluteURL("ui_base_url", c.UIBaseURL); err != nil {
+		return err
 	}
 	if c.Storage.URL == "" && c.Storage.Path == "" {
 		return fmt.Errorf("storage.url or storage.path is required")
@@ -508,9 +536,8 @@ func (c *Config) Validate() error {
 
 	// Validate direct serve base URL if specified
 	if c.Storage.DirectServeBaseURL != "" {
-		u, err := url.Parse(c.Storage.DirectServeBaseURL)
-		if err != nil || u.Scheme == "" || u.Host == "" {
-			return fmt.Errorf("invalid storage.direct_serve_base_url %q: must be an absolute URL", c.Storage.DirectServeBaseURL)
+		if err := validateAbsoluteURL("storage.direct_serve_base_url", c.Storage.DirectServeBaseURL); err != nil {
+			return err
 		}
 	}
 

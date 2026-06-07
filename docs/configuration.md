@@ -17,7 +17,8 @@ See `config.example.yaml` in the repository root for a complete example.
 | Config | Environment | Flag | Default | Description |
 |--------|-------------|------|---------|-------------|
 | `listen` | `PROXY_LISTEN` | `-listen` | `:8080` | Address to listen on |
-| `base_url` | `PROXY_BASE_URL` | `-base-url` | `http://localhost:8080` | Public URL for the proxy |
+| `base_url` | `PROXY_BASE_URL` | `-base-url` | `http://localhost:8080` | Public URL package managers use to reach this proxy |
+| `ui_base_url` | `PROXY_UI_URL` | - | (defaults to `base_url`) | Public URL where the web UI is reached. Set separately when the UI lives behind a different hostname than package endpoints (e.g. public domain vs Docker network alias). Used for canonical/og:url tags and the install guide banner. The proxy still serves package endpoints on the same listener, so any reverse proxy fronting the UI publicly should restrict the public route to `PathPrefix(/ui)` to avoid exposing package endpoints. |
 
 ## Storage
 
