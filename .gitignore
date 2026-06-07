@@ -14,8 +14,8 @@ proxy
 coverage.html
 coverage.txt
 
-# Dependency directories
-vendor/
+# Go vendor directory (repo root only; embedded UI vendor dirs are tracked)
+/vendor/
 
 # Go workspace file
 go.work

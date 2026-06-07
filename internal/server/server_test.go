@@ -450,7 +450,8 @@ func TestStaticFiles(t *testing.T) {
 		path         string
 		contentTypes []string
 	}{
-		{"/ui/static/tailwind.js", []string{"text/javascript", "application/javascript"}},
+		{"/ui/static/vendor/tailwind.js", []string{"text/javascript", "application/javascript"}},
+		{"/ui/static/vendor/lucide.min.js", []string{"text/javascript", "application/javascript"}},
 		{"/ui/static/style.css", []string{"text/css"}},
 	}
 
@@ -533,7 +534,7 @@ func TestDashboardWithEnrichmentStats(t *testing.T) {
 	body := w.Body.String()
 
 	// Dashboard should link to Tailwind JS
-	if !strings.Contains(body, "/ui/static/tailwind.js") {
+	if !strings.Contains(body, "/ui/static/vendor/tailwind.js") {
 		t.Error("dashboard should link to Tailwind JS")
 	}
 
