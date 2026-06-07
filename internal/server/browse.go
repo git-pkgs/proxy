@@ -119,7 +119,7 @@ type BrowseFileInfo struct {
 // @Success 200 {object} BrowseListResponse
 // @Failure 404 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
-// @Router /api/browse/{ecosystem}/{name}/{version} [get]
+// @Router /ui/api/browse/{ecosystem}/{name}/{version} [get]
 // handleBrowsePath dispatches /api/browse/{ecosystem}/* to the appropriate browse handler.
 // It resolves namespaced package names by consulting the database.
 //
@@ -296,7 +296,7 @@ func (s *Server) browseList(w http.ResponseWriter, r *http.Request, ecosystem, n
 // @Failure 400 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
-// @Router /api/browse/{ecosystem}/{name}/{version}/file/{filepath} [get]
+// @Router /ui/api/browse/{ecosystem}/{name}/{version}/file/{filepath} [get]
 func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, name, version, filePath string) {
 	if filePath == "" {
 		badRequest(w, "file path required")
@@ -498,7 +498,7 @@ type BrowseSourceData struct {
 // @Success 200 {object} map[string]any
 // @Failure 404 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
-// @Router /api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion} [get]
+// @Router /ui/api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion} [get]
 func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, name, fromVersion, toVersion string) {
 	// Get artifacts for both versions
 	fromPURL := purl.MakePURLString(ecosystem, name, fromVersion)

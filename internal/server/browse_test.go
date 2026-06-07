@@ -65,7 +65,7 @@ func TestHandleBrowseList(t *testing.T) {
 	}
 
 	// Test listing root directory
-	req := httptest.NewRequest("GET", "/api/browse/npm/test-browse/1.0.0", nil)
+	req := httptest.NewRequest("GET", "/ui/api/browse/npm/test-browse/1.0.0", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -83,7 +83,7 @@ func TestHandleBrowseList(t *testing.T) {
 	}
 
 	// Test listing subdirectory
-	req = httptest.NewRequest("GET", "/api/browse/npm/test-browse/1.0.0?path=lib", nil)
+	req = httptest.NewRequest("GET", "/ui/api/browse/npm/test-browse/1.0.0?path=lib", nil)
 	w = httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -138,7 +138,7 @@ func TestHandleBrowseFile(t *testing.T) {
 	}
 
 	// Test fetching a file
-	req := httptest.NewRequest("GET", "/api/browse/npm/test-browse/1.0.0/file/README.md", nil)
+	req := httptest.NewRequest("GET", "/ui/api/browse/npm/test-browse/1.0.0/file/README.md", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -158,7 +158,7 @@ func TestHandleBrowseFile(t *testing.T) {
 	}
 
 	// Test fetching non-existent file
-	req = httptest.NewRequest("GET", "/api/browse/npm/test-browse/1.0.0/file/nonexistent.txt", nil)
+	req = httptest.NewRequest("GET", "/ui/api/browse/npm/test-browse/1.0.0/file/nonexistent.txt", nil)
 	w = httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -314,7 +314,7 @@ func TestBrowseNonCachedArtifact(t *testing.T) {
 	}
 
 	// Try to browse
-	req := httptest.NewRequest("GET", "/api/browse/npm/not-cached/1.0.0", nil)
+	req := httptest.NewRequest("GET", "/ui/api/browse/npm/not-cached/1.0.0", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -368,7 +368,7 @@ func TestHandleBrowseSourcePage(t *testing.T) {
 	}
 
 	// Test the browse source page loads
-	req := httptest.NewRequest("GET", "/package/npm/test-browse/1.0.0/browse", nil)
+	req := httptest.NewRequest("GET", "/ui/package/npm/test-browse/1.0.0/browse", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -501,7 +501,7 @@ func TestHandleCompareDiff(t *testing.T) {
 	}
 
 	// Test the compare endpoint
-	req := httptest.NewRequest("GET", "/api/compare/npm/test-compare/1.0.0/2.0.0", nil)
+	req := httptest.NewRequest("GET", "/ui/api/compare/npm/test-compare/1.0.0/2.0.0", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -572,7 +572,7 @@ func TestHandleComparePage(t *testing.T) {
 	defer ts.close()
 
 	// Test valid format with ... separator
-	req := httptest.NewRequest("GET", "/package/npm/test/compare/1.0.0...2.0.0", nil)
+	req := httptest.NewRequest("GET", "/ui/package/npm/test/compare/1.0.0...2.0.0", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -591,7 +591,7 @@ func TestHandleComparePage(t *testing.T) {
 	}
 
 	// Test invalid format (missing separator)
-	req = httptest.NewRequest("GET", "/package/npm/test/compare/invalid", nil)
+	req = httptest.NewRequest("GET", "/ui/package/npm/test/compare/invalid", nil)
 	w = httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -600,7 +600,7 @@ func TestHandleComparePage(t *testing.T) {
 	}
 
 	// Test with only one dot (should fail)
-	req = httptest.NewRequest("GET", "/package/npm/test/compare/1.0.0.2.0.0", nil)
+	req = httptest.NewRequest("GET", "/ui/package/npm/test/compare/1.0.0.2.0.0", nil)
 	w = httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 

@@ -3,11 +3,11 @@
 {{define "content"}}
 <div class="mb-6">
     <nav class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        <a href="/" class="hover:text-gray-900 dark:hover:text-gray-100">Home</a>
+        <a href="/ui/" class="hover:text-gray-900 dark:hover:text-gray-100">Home</a>
         <span class="mx-2">/</span>
-        <a href="/package/{{.Ecosystem}}/{{.PackageName}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.PackageName}}</a>
+        <a href="/ui/package/{{.Ecosystem}}/{{.PackageName}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.PackageName}}</a>
         <span class="mx-2">/</span>
-        <a href="/package/{{.Ecosystem}}/{{.PackageName}}/{{.Version}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.Version}}</a>
+        <a href="/ui/package/{{.Ecosystem}}/{{.PackageName}}/{{.Version}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.Version}}</a>
         <span class="mx-2">/</span>
         <span>Browse Source</span>
     </nav>
@@ -65,7 +65,7 @@ function escapeHTML(str) {
 // Load file tree for a directory
 async function loadFileTree(path = '') {
     try {
-        const url = `/api/browse/${ecosystem}/${packageName}/${version}?path=${encodeURIComponent(path)}`;
+        const url = `/ui/api/browse/${ecosystem}/${packageName}/${version}?path=${encodeURIComponent(path)}`;
         const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to load directory');
 
@@ -134,7 +134,7 @@ function renderFileTree(files, basePath) {
 // Load and display file content
 async function loadFile(path) {
     try {
-        const url = `/api/browse/${ecosystem}/${packageName}/${version}/file/${path}`;
+        const url = `/ui/api/browse/${ecosystem}/${packageName}/${version}/file/${path}`;
         const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to load file');
 

@@ -3,9 +3,9 @@
 {{define "content"}}
 <div class="mb-6">
     <nav class="text-sm text-gray-600 dark:text-gray-400 mb-4">
-        <a href="/" class="hover:text-gray-900 dark:hover:text-gray-100">Home</a>
+        <a href="/ui/" class="hover:text-gray-900 dark:hover:text-gray-100">Home</a>
         <span class="mx-2">/</span>
-        <a href="/package/{{.Package.Ecosystem}}/{{.Package.Name}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.Package.Name}}</a>
+        <a href="/ui/package/{{.Package.Ecosystem}}/{{.Package.Name}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.Package.Name}}</a>
     </nav>
     <div class="flex items-center gap-3 mb-2">
         {{template "ecosystem_badge" .Package.Ecosystem}}
@@ -22,7 +22,7 @@
     {{end}}
     {{if .HasCachedArtifact}}
     <div class="mt-4">
-        <a href="/package/{{.Package.Ecosystem}}/{{.Package.Name}}/{{.Version.Version}}/browse"
+        <a href="/ui/package/{{.Package.Ecosystem}}/{{.Package.Name}}/{{.Version.Version}}/browse"
            class="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors">
             <svg class="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M3 7v10a2 2 0 002 2h14a2 2 0 002-2V9a2 2 0 00-2-2h-6l-2-2H5a2 2 0 00-2 2z"></path>

@@ -182,7 +182,7 @@ func TestInstallPage(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
-	req := httptest.NewRequest("GET", "/install", nil)
+	req := httptest.NewRequest("GET", "/ui/install", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -221,7 +221,7 @@ func TestPackageShowPage(t *testing.T) {
 		t.Fatalf("failed to upsert version: %v", err)
 	}
 
-	req := httptest.NewRequest("GET", "/package/npm/test-show", nil)
+	req := httptest.NewRequest("GET", "/ui/package/npm/test-show", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -245,7 +245,7 @@ func TestPackageShowPage_NotFound(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
-	req := httptest.NewRequest("GET", "/package/npm/nonexistent", nil)
+	req := httptest.NewRequest("GET", "/ui/package/npm/nonexistent", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -258,7 +258,7 @@ func TestVersionShowPage_NotFound(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
-	req := httptest.NewRequest("GET", "/package/npm/nonexistent/1.0.0", nil)
+	req := httptest.NewRequest("GET", "/ui/package/npm/nonexistent/1.0.0", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -271,7 +271,7 @@ func TestSearchPage_EmptyQuery(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
-	req := httptest.NewRequest("GET", "/search", nil)
+	req := httptest.NewRequest("GET", "/ui/search", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -285,7 +285,7 @@ func TestSearchPage_WithQuery(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
-	req := httptest.NewRequest("GET", "/search?q=test", nil)
+	req := httptest.NewRequest("GET", "/ui/search?q=test", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -304,7 +304,7 @@ func TestSearchPage_Pagination(t *testing.T) {
 	defer ts.close()
 
 	// Page 0 or negative should default to page 1
-	req := httptest.NewRequest("GET", "/search?q=test&page=0", nil)
+	req := httptest.NewRequest("GET", "/ui/search?q=test&page=0", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -313,7 +313,7 @@ func TestSearchPage_Pagination(t *testing.T) {
 	}
 
 	// Non-numeric page should default to page 1
-	req = httptest.NewRequest("GET", "/search?q=test&page=abc", nil)
+	req = httptest.NewRequest("GET", "/ui/search?q=test&page=abc", nil)
 	w = httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
@@ -326,7 +326,7 @@ func TestSearchPage_EcosystemFilter(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
-	req := httptest.NewRequest("GET", "/search?q=test&ecosystem=npm", nil)
+	req := httptest.NewRequest("GET", "/ui/search?q=test&ecosystem=npm", nil)
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
