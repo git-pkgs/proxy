@@ -11,19 +11,23 @@
     <meta property="og:title" content="{{template "title" .}}">
     <meta property="og:site_name" content="git-pkgs proxy">
     {{end}}
-    <script src="/ui/static/tailwind.js"></script>
+    <script src="/ui/static/vendor/tailwind.js"></script>
+    <script src="/ui/static/vendor/lucide.min.js" defer></script>
     <script>
       tailwind.config = { darkMode: 'class' }
       if (localStorage.theme === 'dark' || (!('theme' in localStorage) && window.matchMedia('(prefers-color-scheme: dark)').matches)) {
         document.documentElement.classList.add('dark')
       }
+      document.addEventListener('DOMContentLoaded', () => {
+        if (window.lucide) lucide.createIcons({ attrs: { 'aria-hidden': 'true', focusable: 'false' } })
+      })
     </script>
     {{block "head" .}}{{end}}
 </head>
-<body class="h-full bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100">
+<body class="min-h-full flex flex-col bg-gray-50 dark:bg-gray-950 text-gray-900 dark:text-gray-100">
     {{template "header" .}}
 
-    <main class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
+    <main class="flex-1 w-full max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-8">
         {{block "content" .}}{{end}}
     </main>
 

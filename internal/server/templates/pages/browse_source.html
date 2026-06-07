@@ -100,35 +100,38 @@ function renderFileTree(files, basePath) {
     if (basePath) {
         const parentPath = basePath.split('/').slice(0, -2).join('/');
         html += `
-            <div class="px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded cursor-pointer text-sm"
+            <div class="px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded cursor-pointer text-sm flex items-center gap-2 text-gray-500 dark:text-gray-400"
                  onclick="loadFileTree('${escapeHTML(parentPath)}'); currentPath='${escapeHTML(parentPath)}';">
-                <span class="text-gray-500 dark:text-gray-400">📁 ..</span>
+                <i data-lucide="corner-left-up" class="w-4 h-4 shrink-0"></i><span>..</span>
             </div>
         `;
     }
 
     // Render files and directories
     for (const file of files) {
-        const icon = file.is_dir ? '📁' : '📄';
-        const classes = 'px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded cursor-pointer text-sm truncate';
+        const iconName = file.is_dir ? 'folder' : 'file';
+        const iconClass = file.is_dir ? 'text-amber-500 dark:text-amber-400' : 'text-gray-500 dark:text-gray-400';
+        const classes = 'px-2 py-1 hover:bg-gray-100 dark:hover:bg-gray-800 rounded cursor-pointer text-sm flex items-center gap-2';
+        const iconHTML = `<i data-lucide="${iconName}" class="w-4 h-4 shrink-0 ${iconClass}"></i>`;
 
         if (file.is_dir) {
             html += `
                 <div class="${classes}" onclick="loadFileTree('${escapeHTML(file.path)}'); currentPath='${escapeHTML(file.path)}';">
-                    <span>${icon} ${escapeHTML(file.name)}</span>
+                    ${iconHTML}<span class="truncate">${escapeHTML(file.name)}</span>
                 </div>
             `;
         } else {
             html += `
                 <div class="${classes}" onclick="loadFile('${escapeHTML(file.path)}')">
-                    <span>${icon} ${escapeHTML(file.name)}</span>
-                    <span class="text-xs text-gray-500 dark:text-gray-400 ml-2">${formatSize(file.size)}</span>
+                    ${iconHTML}<span class="truncate">${escapeHTML(file.name)}</span>
+                    <span class="text-xs text-gray-500 dark:text-gray-400 ml-auto shrink-0">${formatSize(file.size)}</span>
                 </div>
             `;
         }
     }
 
     container.innerHTML = html;
+    if (window.lucide) lucide.createIcons({ attrs: { 'aria-hidden': 'true', focusable: 'false' } });
 }
 
 // Load and display file content

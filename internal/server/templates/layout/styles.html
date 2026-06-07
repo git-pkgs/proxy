@@ -9,5 +9,18 @@
             localStorage.theme = 'dark';
         }
     });
+
+    (function() {
+        const toggle = document.getElementById('nav-toggle');
+        const menu = document.getElementById('mobile-nav');
+        if (!toggle || !menu) return;
+        toggle.addEventListener('click', function() {
+            const open = toggle.getAttribute('aria-expanded') === 'true';
+            toggle.setAttribute('aria-expanded', String(!open));
+            menu.classList.toggle('hidden');
+            toggle.querySelector('.nav-icon-open').classList.toggle('hidden');
+            toggle.querySelector('.nav-icon-close').classList.toggle('hidden');
+        });
+    })();
 </script>
 {{end}}
