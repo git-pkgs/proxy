@@ -409,7 +409,7 @@ The proxy can be configured via:
 -config string           Path to configuration file
 -listen string           Address to listen on (default ":8080")
 -base-url string         Public URL of this proxy (default "http://localhost:8080")
--storage-url string      Storage URL (file:// or s3://)
+-storage-url string      Storage URL (file://, s3://, gs://, azblob://)
 -storage-path string     Path to artifact storage directory (deprecated, use -storage-url)
 -database-driver string  Database driver: sqlite or postgres (default "sqlite")
 -database-path string    Path to SQLite database file (default "./cache/proxy.db")
@@ -503,6 +503,57 @@ storage:
 ```
 
 Set credentials via standard AWS environment variables (`AWS_ACCESS_KEY_ID`, `AWS_SECRET_ACCESS_KEY`, `AWS_REGION`).
+
+### Google Cloud Storage
+
+The proxy can store cached artifacts in a GCS bucket using the `gs://` URL scheme.
+
+```yaml
+storage:
+  url: "gs://my-bucket-name"
+```
+
+Authentication uses [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials), which means no credentials need to be embedded in the config or environment. Supported sources, in order:
+
+- **GKE Workload Identity** — bind the Kubernetes service account running the proxy to a Google service account that has `roles/storage.objectAdmin` on the bucket. The proxy will use the workload's token automatically.
+- **Attached service account** on GCE, Cloud Run, Cloud Functions, etc.
+- **`GOOGLE_APPLICATION_CREDENTIALS`** environment variable pointing at a service account JSON key file.
+- **`gcloud auth application-default login`** for local development.
+
+#### GKE Workload Identity setup
+
+```bash
+# 1. Create a Google service account
+gcloud iam service-accounts create git-pkgs-proxy \
+  --project=PROJECT_ID
+
+# 2. Grant it access to the bucket
+gsutil iam ch \
+  serviceAccount:git-pkgs-proxy@PROJECT_ID.iam.gserviceaccount.com:objectAdmin \
+  gs://my-bucket-name
+
+# 3. Bind the Kubernetes service account to it
+gcloud iam service-accounts add-iam-policy-binding \
+  git-pkgs-proxy@PROJECT_ID.iam.gserviceaccount.com \
+  --role=roles/iam.workloadIdentityUser \
+  --member="serviceAccount:PROJECT_ID.svc.id.goog[NAMESPACE/KSA_NAME]"
+
+# 4. Annotate the Kubernetes service account
+kubectl annotate serviceaccount KSA_NAME \
+  --namespace=NAMESPACE \
+  iam.gke.io/gcp-service-account=git-pkgs-proxy@PROJECT_ID.iam.gserviceaccount.com
+```
+
+#### Direct serve (signed URLs) with Workload Identity
+
+When `direct_serve: true` is enabled, the proxy issues HTTP 302 redirects to presigned GCS URLs. Because Workload Identity provides no private key, the gcsblob driver falls back to the [IAM Credentials `signBlob` API](https://cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/signBlob). For this to work, grant the service account the token-creator role on itself:
+
+```bash
+gcloud iam service-accounts add-iam-policy-binding \
+  git-pkgs-proxy@PROJECT_ID.iam.gserviceaccount.com \
+  --role=roles/iam.serviceAccountTokenCreator \
+  --member="serviceAccount:git-pkgs-proxy@PROJECT_ID.iam.gserviceaccount.com"
+```
 
 ## CLI Commands
 
