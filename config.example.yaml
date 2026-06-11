@@ -22,9 +22,20 @@ storage:
   #   - file:///path/to/dir - Local filesystem (default)
   #   - s3://bucket-name - Amazon S3
   #   - s3://bucket?endpoint=http://localhost:9000 - S3-compatible (MinIO)
+  #   - gs://bucket-name - Google Cloud Storage
+  #   - azblob://container-name - Azure Blob Storage
   #
   # For S3, configure credentials via environment variables:
   #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+  #
+  # For GCS, authentication uses Application Default Credentials. On GKE with
+  # Workload Identity, bind the Kubernetes service account to a Google service
+  # account that has roles/storage.objectAdmin on the bucket. No extra config
+  # is needed in this file. For local development, run:
+  #   gcloud auth application-default login
+  # If direct_serve is enabled, the service account also needs
+  # roles/iam.serviceAccountTokenCreator on itself so the IAM Credentials
+  # signBlob API can sign URLs without a private key.
   url: ""
 
   # Local filesystem path (used when url is empty)
@@ -37,7 +48,7 @@ storage:
   max_size: ""
 
   # Redirect cached artifact downloads to presigned storage URLs (HTTP 302)
-  # instead of streaming through the proxy. Only effective for S3 and Azure.
+  # instead of streaming through the proxy. Only effective for S3, GCS, and Azure.
   # Leave disabled if clients reach the proxy through an authenticating gateway,
   # since presigned URLs bypass it.
   direct_serve: false
