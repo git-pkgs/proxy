@@ -16,6 +16,7 @@ import (
 	"gocloud.dev/blob"
 	_ "gocloud.dev/blob/azureblob"
 	_ "gocloud.dev/blob/fileblob"
+	_ "gocloud.dev/blob/gcsblob"
 	_ "gocloud.dev/blob/s3blob"
 	"gocloud.dev/gcerrors"
 )
@@ -35,6 +36,9 @@ type Blob struct {
 //   - file:///path/to/dir - Local filesystem storage
 //   - s3://bucket-name - Amazon S3 (uses AWS_* environment variables)
 //   - s3://bucket-name?region=us-east-1&endpoint=http://localhost:9000 - S3-compatible (MinIO, etc.)
+//   - gs://bucket-name - Google Cloud Storage (uses Application Default Credentials;
+//     supports Workload Identity on GKE/GCE without any extra configuration)
+//   - azblob://container-name - Azure Blob Storage
 //
 // For local filesystem, the directory is created if it doesn't exist.
 func OpenBucket(ctx context.Context, urlStr string) (*Blob, error) {
