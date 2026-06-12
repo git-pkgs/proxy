@@ -167,3 +167,81 @@ cooldown:
   # packages:
   #   "pkg:npm/lodash": "0"
   #   "pkg:npm/@babel/core": "14d"
+
+# Scanner configuration
+# Runs pluggable security scanners (e.g. OSV) on artifacts at ingest time.
+# Cache hits are not re-scanned; results are deduped per content hash.
+# Default is off; opt in by setting `enabled: true`.
+scanners:
+  enabled: false
+
+  # Severity at which the scanner pipeline blocks the request with
+  # HTTP 451 Unavailable For Legal Reasons. Must be >= warn_at_severity.
+  # One of: critical, high, medium, low.
+  block_at_severity: critical
+
+  # Severity at which findings are logged as warnings but the artifact
+  # is still served.
+  warn_at_severity: high
+
+  # How long a content-hash scan result remains valid before the
+  # pipeline re-runs the scanner. "0" disables the TTL (results never
+  # expire — re-scans only happen for new content hashes).
+  findings_ttl: "168h"
+
+  # How the mirror command treats scanner decisions:
+  #   block: same behavior as the live proxy (default)
+  #   skip:  scanners are not run during mirror jobs
+  #   warn:  block decisions are clamped to warn (findings are
+  #          recorded, artifact is kept)
+  mirror_mode: block
+
+  # Scanner providers run concurrently. Each provider has its own
+  # fail mode (open = log + ignore on error, closed = synthesize a
+  # critical finding so the policy blocks) and per-scanner timeout.
+  #
+  # Supported provider types:
+  #   - osv:   query OSV.dev for CVEs by (ecosystem, name, version).
+  #            Covers npm, pypi, cargo, gem, maven, go, nuget, composer,
+  #            hex, pub. Ecosystems outside this set (oci/deb/rpm/conda/
+  #            cran/julia/conan/gradle) are silently skipped.
+  #   - trivy: invoke the `trivy` CLI against the cached artifact bytes
+  #            (per-blob `trivy fs`) AND, when configured, gate OCI
+  #            manifest responses by invoking `trivy image` directly
+  #            against the upstream registry. Per-blob scans cannot see
+  #            the assembled image (rootfs, dpkg/rpm status DB) so the
+  #            manifest gate is what catches OS-level CVEs on debian/
+  #            ubuntu/alpine base images.
+  #
+  #            The manifest gate is enabled automatically whenever a
+  #            trivy provider is configured: GET /v2/<repo>/manifests/
+  #            <ref> calls `trivy image <repo>@<digest>` synchronously
+  #            and returns 451 if the policy blocks. Verdicts are
+  #            cached per manifest digest in artifact_scans for
+  #            findings_ttl.
+  #
+  #            Requires the `trivy` binary on PATH. First run pulls
+  #            the vuln DB (~50MB) unless `server:` points at a trivy
+  #            server with a warm DB.
+  providers:
+    - type: osv
+      fail_mode: open
+      timeout: "30s"
+
+    # Uncomment to enable Trivy. Useful for ecosystems OSV does not
+    # index — most notably OCI image layers and deb/rpm packages —
+    # and required for the OCI manifest gate.
+    # - type: trivy
+    #   fail_mode: open
+    #   timeout: "120s"
+    #   binary: trivy            # optional; defaults to "trivy" on PATH
+    #   server: ""               # optional; URL of a `trivy server` instance.
+    #                            # When set, the CLI runs `--server <url>`
+    #                            # and offloads vuln-DB matching. Useful for
+    #                            # sharing a warm DB across replicas and for
+    #                            # `trivy image` invocations from the OCI
+    #                            # manifest gate.
+    #   extra_args:              # optional; appended before the target
+    #     - --severity
+    #     - HIGH,CRITICAL
+    #     - --skip-db-update     # if you pre-warm the DB out-of-band

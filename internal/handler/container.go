@@ -7,6 +7,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/git-pkgs/proxy/internal/scanner"
 )
 
 const (
@@ -117,6 +119,9 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 	)
 
 	if err != nil {
+		if WriteArtifactError(w, err) {
+			return
+		}
 		h.proxy.Logger.Error("failed to fetch blob", "error", err)
 		h.containerError(w, http.StatusBadGateway, "BLOB_UNKNOWN", "failed to fetch blob")
 		return
@@ -185,6 +190,36 @@ func (h *ContainerHandler) handleManifest(w http.ResponseWriter, r *http.Request
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// Gate the manifest through the scanner before serving. We must
+	// buffer the body so we can return it on an Allow verdict; manifests
+	// are small (a few KB) so this is fine.
+	var bodyBytes []byte
+	if resp.StatusCode == http.StatusOK && h.proxy.OCIGate != nil && r.Method == http.MethodGet {
+		bodyBytes, err = io.ReadAll(resp.Body)
+		if err != nil {
+			h.proxy.Logger.Error("failed to read manifest body", "error", err)
+			h.containerError(w, http.StatusBadGateway, "INTERNAL_ERROR", "failed to read upstream response")
+			return
+		}
+		digest := resp.Header.Get("Docker-Content-Digest")
+		imageRef := buildImageRef(name, reference, digest)
+		decision, gerr := h.proxy.OCIGate.Check(r.Context(), imageRef, digest)
+		if gerr != nil {
+			h.proxy.Logger.Error("oci gate failed", "image", imageRef, "error", gerr)
+			h.containerError(w, http.StatusBadGateway, "INTERNAL_ERROR", "scanner gate failed")
+			return
+		}
+		if decision.Action == scanner.ActionBlock {
+			qe := &scanner.QuarantineError{
+				Highest:  decision.HighestSeverity,
+				Findings: decision.Findings,
+			}
+			if WriteArtifactError(w, qe) {
+				return
+			}
+		}
+	}
+
 	// Copy relevant headers
 	for _, header := range []string{"Content-Type", "Content-Length", "Docker-Content-Digest", "ETag"} {
 		if v := resp.Header.Get(header); v != "" {
@@ -193,7 +228,29 @@ func (h *ContainerHandler) handleManifest(w http.ResponseWriter, r *http.Request
 	}
 
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	if bodyBytes != nil {
+		_, _ = w.Write(bodyBytes)
+	} else {
+		_, _ = io.Copy(w, resp.Body)
+	}
+}
+
+// buildImageRef constructs a trivy-friendly image reference. When the
+// upstream returned a Docker-Content-Digest we prefer the digest form
+// for reproducibility; otherwise we fall back to <name>:<tag>.
+func buildImageRef(name, reference, digest string) string {
+	repo := name
+	// Bare Docker Hub repos like "library/nginx" need the registry
+	// hostname for trivy to resolve them. Trivy does default to
+	// docker.io but being explicit avoids surprises with cross-registry
+	// mirrors.
+	if !strings.Contains(name, "/") || !strings.Contains(strings.SplitN(name, "/", 2)[0], ".") {
+		repo = "docker.io/" + name
+	}
+	if digest != "" {
+		return repo + "@" + digest
+	}
+	return repo + ":" + reference
 }
 
 // handleTagsList proxies tag list requests to upstream.

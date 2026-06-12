@@ -119,6 +119,74 @@ type Config struct {
 
 	// Health configures the /health endpoint behavior.
 	Health HealthConfig `json:"health" yaml:"health"`
+
+	// Scanners configures the artifact scanner pipeline that runs on
+	// first-time ingest. Disabled by default.
+	Scanners ScannersConfig `json:"scanners" yaml:"scanners"`
+}
+
+// ScannersConfig configures the artifact scanner pipeline.
+type ScannersConfig struct {
+	// Enabled turns the pipeline on. When false the proxy ingests
+	// artifacts exactly as it did before scanners existed.
+	Enabled bool `json:"enabled" yaml:"enabled"`
+
+	// BlockAtSeverity is the minimum severity that causes an artifact
+	// to be blocked (HTTP 451) and removed from storage. One of:
+	// "critical", "high", "medium", "low". Default: "critical".
+	BlockAtSeverity string `json:"block_at_severity" yaml:"block_at_severity"`
+
+	// WarnAtSeverity is the minimum severity that triggers a warning
+	// log line without blocking. Must be less than or equal to
+	// BlockAtSeverity. Default: "high".
+	WarnAtSeverity string `json:"warn_at_severity" yaml:"warn_at_severity"`
+
+	// FindingsTTL is how long an artifact_scans row counts as fresh
+	// before the pipeline will re-run scanners against the same bytes.
+	// Default: "168h" (7 days). Set to "0" to disable expiry.
+	FindingsTTL string `json:"findings_ttl" yaml:"findings_ttl"`
+
+	// MirrorMode controls how the pipeline behaves when invoked from
+	// the mirror command:
+	//   - "block" (default): identical to live ingest (blocked artifacts roll back)
+	//   - "warn":            findings are still recorded but blocks become warnings
+	//   - "skip":            scanners are not invoked at all
+	MirrorMode string `json:"mirror_mode" yaml:"mirror_mode"`
+
+	// Providers lists the individual scanners to register with the
+	// pipeline. Currently only "osv" is supported.
+	Providers []ScannerProviderConfig `json:"providers" yaml:"providers"`
+}
+
+// ScannerProviderConfig configures a single scanner provider.
+type ScannerProviderConfig struct {
+	// Type is the scanner type: "osv" or "trivy".
+	Type string `json:"type" yaml:"type"`
+
+	// FailMode controls how a scanner error is interpreted:
+	//   - "open" (default): log and treat as no findings
+	//   - "closed":         synthesize a critical finding (blocks)
+	FailMode string `json:"fail_mode" yaml:"fail_mode"`
+
+	// Timeout is the maximum per-call duration for this scanner.
+	// Default: "30s".
+	Timeout string `json:"timeout" yaml:"timeout"`
+
+	// Binary is the path to the scanner executable. Used by the "trivy"
+	// provider; defaults to "trivy" (resolved via PATH).
+	Binary string `json:"binary,omitempty" yaml:"binary,omitempty"`
+
+	// ExtraArgs are appended to the scanner's command line. Used by the
+	// "trivy" provider for flags like `--severity HIGH,CRITICAL`,
+	// `--offline-scan`, `--skip-db-update`.
+	ExtraArgs []string `json:"extra_args,omitempty" yaml:"extra_args,omitempty"`
+
+	// Server is the URL of a `trivy server` instance. When set, the trivy
+	// CLI runs locally with `--server <url>` and offloads vulnerability-DB
+	// matching to the remote server. Useful for sharing a warm vuln DB
+	// across multiple proxy replicas. Used by the "trivy" provider only;
+	// also required by the OCI manifest gate for image-mode scans.
+	Server string `json:"server,omitempty" yaml:"server,omitempty"`
 }
 
 // CooldownConfig configures version cooldown periods.
@@ -463,6 +531,65 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("PROXY_HEALTH_STORAGE_PROBE_INTERVAL"); v != "" {
 		c.Health.StorageProbeInterval = v
 	}
+	if v := os.Getenv("PROXY_SCANNERS_ENABLED"); v != "" {
+		c.Scanners.Enabled = envBool(v)
+	}
+	if v := os.Getenv("PROXY_SCANNERS_BLOCK_AT_SEVERITY"); v != "" {
+		c.Scanners.BlockAtSeverity = v
+	}
+	if v := os.Getenv("PROXY_SCANNERS_WARN_AT_SEVERITY"); v != "" {
+		c.Scanners.WarnAtSeverity = v
+	}
+	if v := os.Getenv("PROXY_SCANNERS_FINDINGS_TTL"); v != "" {
+		c.Scanners.FindingsTTL = v
+	}
+	if v := os.Getenv("PROXY_SCANNERS_MIRROR_MODE"); v != "" {
+		c.Scanners.MirrorMode = v
+	}
+}
+
+const defaultScannersFindingsTTL = 168 * time.Hour //nolint:mnd // 7 days
+
+// ParseFindingsTTL returns the configured findings TTL.
+// Returns the default (7 days) when unset, 0 when explicitly disabled.
+func (s *ScannersConfig) ParseFindingsTTL() time.Duration {
+	if s.FindingsTTL == "" {
+		return defaultScannersFindingsTTL
+	}
+	if s.FindingsTTL == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(s.FindingsTTL)
+	if err != nil {
+		return defaultScannersFindingsTTL
+	}
+	return d
+}
+
+// ResolvedBlockSeverity returns block_at_severity with the default
+// applied when the field is empty.
+func (s *ScannersConfig) ResolvedBlockSeverity() string {
+	if s.BlockAtSeverity == "" {
+		return "critical"
+	}
+	return strings.ToLower(s.BlockAtSeverity)
+}
+
+// ResolvedWarnSeverity returns warn_at_severity with the default
+// applied when the field is empty.
+func (s *ScannersConfig) ResolvedWarnSeverity() string {
+	if s.WarnAtSeverity == "" {
+		return "high"
+	}
+	return strings.ToLower(s.WarnAtSeverity)
+}
+
+// ResolvedMirrorMode returns mirror_mode with the default applied.
+func (s *ScannersConfig) ResolvedMirrorMode() string {
+	if s.MirrorMode == "" {
+		return "block"
+	}
+	return strings.ToLower(s.MirrorMode)
 }
 
 // validateAbsoluteURL returns an error if value is not a parseable URL with
@@ -560,7 +687,111 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := c.Scanners.Validate(); err != nil {
+		return err
+	}
+
 	return nil
+}
+
+// Validate checks the scanners configuration. Severity strings must be
+// known names, durations must parse, and provider types must be
+// recognized. When Enabled is false validation is permissive — values
+// can stay at their defaults.
+func (s *ScannersConfig) Validate() error {
+	if !s.Enabled && len(s.Providers) == 0 {
+		// Nothing to validate when the pipeline is fully off.
+		return nil
+	}
+	block := s.BlockAtSeverity
+	if block == "" {
+		block = "critical"
+	}
+	warn := s.WarnAtSeverity
+	if warn == "" {
+		warn = "high"
+	}
+	if !isKnownSeverity(block) {
+		return fmt.Errorf("invalid scanners.block_at_severity %q (must be critical, high, medium, or low)", block)
+	}
+	if !isKnownSeverity(warn) {
+		return fmt.Errorf("invalid scanners.warn_at_severity %q (must be critical, high, medium, or low)", warn)
+	}
+	if severityRank(warn) > severityRank(block) {
+		return fmt.Errorf("scanners.warn_at_severity %q must be <= block_at_severity %q", warn, block)
+	}
+	if s.FindingsTTL != "" && s.FindingsTTL != "0" {
+		if _, err := time.ParseDuration(s.FindingsTTL); err != nil {
+			return fmt.Errorf("invalid scanners.findings_ttl %q: %w", s.FindingsTTL, err)
+		}
+	}
+	switch strings.ToLower(s.MirrorMode) {
+	case "", "block", "warn", "skip":
+		// OK
+	default:
+		return fmt.Errorf("invalid scanners.mirror_mode %q (must be block, warn, or skip)", s.MirrorMode)
+	}
+	for i, p := range s.Providers {
+		if err := p.Validate(); err != nil {
+			return fmt.Errorf("scanners.providers[%d]: %w", i, err)
+		}
+	}
+	return nil
+}
+
+// Validate checks a provider entry's type, fail_mode, and timeout.
+func (p *ScannerProviderConfig) Validate() error {
+	switch strings.ToLower(p.Type) {
+	case "osv", "trivy":
+		// OK
+	case "":
+		return fmt.Errorf("type is required")
+	default:
+		return fmt.Errorf("unknown type %q (supported: osv, trivy)", p.Type)
+	}
+	switch strings.ToLower(p.FailMode) {
+	case "", "open", "closed":
+		// OK
+	default:
+		return fmt.Errorf("invalid fail_mode %q (must be open or closed)", p.FailMode)
+	}
+	if p.Timeout != "" {
+		if _, err := time.ParseDuration(p.Timeout); err != nil {
+			return fmt.Errorf("invalid timeout %q: %w", p.Timeout, err)
+		}
+	}
+	if p.Server != "" {
+		u, err := url.Parse(p.Server)
+		if err != nil {
+			return fmt.Errorf("invalid server %q: %w", p.Server, err)
+		}
+		if u.Scheme == "" || u.Host == "" {
+			return fmt.Errorf("server %q must be an absolute URL (scheme://host)", p.Server)
+		}
+	}
+	return nil
+}
+
+func isKnownSeverity(s string) bool {
+	switch strings.ToLower(s) {
+	case "critical", "high", "medium", "low":
+		return true
+	}
+	return false
+}
+
+func severityRank(s string) int {
+	switch strings.ToLower(s) {
+	case "low":
+		return 1
+	case "medium":
+		return 2
+	case "high":
+		return 3
+	case "critical":
+		return 4
+	}
+	return 0
 }
 
 // Validate checks the /health configuration. An unset interval is allowed

@@ -90,6 +90,9 @@ func (h *JuliaHandler) handleRegistry(w http.ResponseWriter, r *http.Request) {
 	upstreamURL := h.upstreamURL + r.URL.Path
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "julia", juliaRegistryName, hash, hash+".tar.gz", upstreamURL)
 	if err != nil {
+		if WriteArtifactError(w, err) {
+			return
+		}
 		h.proxy.Logger.Error("failed to get registry", "error", err)
 		http.Error(w, "failed to fetch registry", http.StatusBadGateway)
 		return
@@ -119,6 +122,9 @@ func (h *JuliaHandler) handlePackage(w http.ResponseWriter, r *http.Request) {
 	upstreamURL := h.upstreamURL + r.URL.Path
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "julia", name, hash, hash+".tar.gz", upstreamURL)
 	if err != nil {
+		if WriteArtifactError(w, err) {
+			return
+		}
 		h.proxy.Logger.Error("failed to get package", "error", err)
 		http.Error(w, "failed to fetch package", http.StatusBadGateway)
 		return
@@ -141,6 +147,9 @@ func (h *JuliaHandler) handleArtifact(w http.ResponseWriter, r *http.Request) {
 	upstreamURL := h.upstreamURL + r.URL.Path
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "julia", juliaArtifactName, hash, hash+".tar.gz", upstreamURL)
 	if err != nil {
+		if WriteArtifactError(w, err) {
+			return
+		}
 		h.proxy.Logger.Error("failed to get artifact", "error", err)
 		http.Error(w, "failed to fetch artifact", http.StatusBadGateway)
 		return

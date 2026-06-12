@@ -109,8 +109,10 @@ import (
 
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/enrichment"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/mirror"
+	scannerbuild "github.com/git-pkgs/proxy/internal/scanner/build"
 	"github.com/git-pkgs/proxy/internal/server"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/registries/fetch"
@@ -471,6 +473,19 @@ func runMirror() {
 	proxy.CacheMetadata = true // mirror always caches metadata
 	proxy.MetadataTTL = cfg.ParseMetadataTTL()
 	proxy.MetadataMaxSize = cfg.ParseMetadataMaxSize()
+
+	mirrorMode := cfg.Scanners.ResolvedMirrorMode()
+	if mirrorMode != "skip" {
+		enrichSvc := enrichment.New(logger)
+		scannerPipeline, err := scannerbuild.Pipeline(cfg.Scanners, enrichSvc, db, logger)
+		if err != nil {
+			_ = db.Close()
+			fmt.Fprintf(os.Stderr, "error building scanner pipeline: %v\n", err)
+			os.Exit(1) //nolint:gocritic // db closed above
+		}
+		proxy.Scanners = scannerPipeline
+		proxy.ScannerMirrorClampToWarn = mirrorMode == "warn"
+	}
 
 	m := mirror.New(proxy, db, store, logger, *concurrency)
 

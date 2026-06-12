@@ -130,6 +130,9 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, ur
 		}
 	}
 	if err != nil {
+		if WriteArtifactError(w, err) {
+			return
+		}
 		if errors.Is(err, ErrUpstreamNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return

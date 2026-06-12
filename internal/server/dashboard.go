@@ -13,6 +13,18 @@ type DashboardData struct {
 	EnrichmentStats EnrichmentStatsView
 	RecentPackages  []PackageInfo
 	PopularPackages []PackageInfo
+	BlockedPackages []BlockedPackageView
+}
+
+// BlockedPackageView is the dashboard-facing view of a quarantined version:
+// scanner findings exist but no artifact bytes remain.
+type BlockedPackageView struct {
+	Ecosystem       string
+	Name            string
+	Version         string
+	HighestSeverity string
+	FindingCount    int64
+	ScannedAt       string
 }
 
 // DashboardStats contains cache statistics for the dashboard.
@@ -62,22 +74,28 @@ type RegistryConfig struct {
 // PackageShowData contains data for rendering the package show page.
 type PackageShowData struct {
 	Layout
-	Package         *database.Package
-	Versions        []database.Version
-	Vulnerabilities []database.Vulnerability
-	LicenseCategory string
+	Package          *database.Package
+	Versions         []database.Version
+	Vulnerabilities  []database.Vulnerability
+	FindingSummaries map[string]database.VersionFindingSummary
+	LicenseCategory  string
 }
 
 // VersionShowData contains data for rendering the version show page.
 type VersionShowData struct {
 	Layout
-	Package           *database.Package
-	Version           *database.Version
-	Artifacts         []database.Artifact
-	Vulnerabilities   []database.Vulnerability
-	IsOutdated        bool
-	LicenseCategory   string
-	HasCachedArtifact bool
+	Package         *database.Package
+	Version         *database.Version
+	Artifacts       []database.Artifact
+	Vulnerabilities []database.Vulnerability
+	// Findings holds scanner findings keyed by artifact_id so the
+	// template can show per-artifact CVE/scanner output inside each
+	// artifact row.
+	Findings           map[int64][]database.ArtifactFinding
+	AggregatedFindings []database.ArtifactFinding
+	IsOutdated         bool
+	LicenseCategory    string
+	HasCachedArtifact  bool
 }
 
 // SearchPageData contains data for rendering the search results page.

@@ -78,6 +78,9 @@ func (h *GemHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.proxy.GetOrFetchArtifact(r.Context(), "gem", name, version, filename)
 	if err != nil {
+		if WriteArtifactError(w, err) {
+			return
+		}
 		h.proxy.Logger.Error("failed to get artifact", "error", err)
 		http.Error(w, "failed to fetch gem", http.StatusBadGateway)
 		return

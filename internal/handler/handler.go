@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"context"
 	"database/sql"
+	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -18,6 +19,8 @@ import (
 	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
+	"github.com/git-pkgs/proxy/internal/scanner"
+	ocigate "github.com/git-pkgs/proxy/internal/scanner/oci"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
@@ -96,6 +99,23 @@ type Proxy struct {
 	// storage at an internal one.
 	DirectServeBaseURL string
 	HTTPClient         *http.Client
+
+	// Scanners, when non-nil, runs after every successful first-time
+	// Storage.Store and may block the request when its policy decides
+	// the artifact must be quarantined. Cache hits never invoke it.
+	Scanners *scanner.Pipeline
+
+	// ScannerMirrorClampToWarn, when true, downgrades ActionBlock
+	// decisions to ActionWarn. Used by the mirror command when
+	// scanners.mirror_mode is "warn".
+	ScannerMirrorClampToWarn bool
+
+	// OCIGate, when non-nil, gates OCI manifest responses by asking
+	// Trivy to scan the upstream image directly. Per-blob scanning
+	// cannot see the assembled image; the gate runs `trivy image
+	// --server` against the upstream registry and applies the same
+	// scanner policy. Nil means manifests are proxied without scanning.
+	OCIGate *ocigate.Gate
 }
 
 // NewProxy creates a new Proxy with the given dependencies.
@@ -278,10 +298,29 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 		return nil, fmt.Errorf("storing artifact: %w", err)
 	}
 
-	// Update database
-	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, info.URL, storagePath, hash, size, artifact.ContentType); err != nil {
-		p.Logger.Warn("failed to update cache database", "error", err)
-		// Continue anyway - we have the file
+	// Update database and run scanners.
+	if err := p.afterStore(ctx, artifactIngest{
+		Ecosystem:   ecosystem,
+		Name:        name,
+		Version:     version,
+		Filename:    filename,
+		PkgPURL:     pkgPURL,
+		VersionPURL: versionPURL,
+		UpstreamURL: info.URL,
+		StoragePath: storagePath,
+		Hash:        hash,
+		Size:        size,
+		ContentType: artifact.ContentType,
+	}); err != nil {
+		if errors.Is(err, scanner.ErrArtifactQuarantined) {
+			if delErr := p.Storage.Delete(ctx, storagePath); delErr != nil {
+				p.Logger.Warn("failed to delete quarantined artifact from storage",
+					"path", storagePath, "error", delErr)
+			}
+			return nil, err
+		}
+		// Non-fatal: continue and serve the file even if DB writes fail.
+		p.Logger.Warn("post-store hook failed", "error", err)
 	}
 
 	// Open the stored file to return
@@ -301,6 +340,155 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 		Hash:        hash,
 		Cached:      false,
 	}, nil
+}
+
+// artifactIngest bundles the per-artifact metadata afterStore needs.
+// Both fetchAndCache and fetchAndCacheFromURL populate it identically so the
+// post-Store logic (DB upsert + scanner pipeline) lives in one place.
+type artifactIngest struct {
+	Ecosystem   string
+	Name        string
+	Version     string
+	Filename    string
+	PkgPURL     string
+	VersionPURL string
+	UpstreamURL string
+	StoragePath string
+	Hash        string
+	Size        int64
+	ContentType string
+}
+
+// afterStore runs the bookkeeping and scanning that follow a successful
+// Storage.Store. It always upserts the cache rows; when Scanners is configured
+// it then runs the pipeline and may delete the artifact row and return
+// scanner.ErrArtifactQuarantined to ask the caller to roll back storage.
+func (p *Proxy) afterStore(ctx context.Context, in artifactIngest) error {
+	if err := p.updateCacheDB(in.Ecosystem, in.Name, in.Filename, in.PkgPURL, in.VersionPURL,
+		in.UpstreamURL, in.StoragePath, in.Hash, in.Size, in.ContentType); err != nil {
+		return err
+	}
+
+	if p.Scanners == nil || p.Scanners.Empty() {
+		return nil
+	}
+
+	art, err := p.DB.GetArtifact(in.VersionPURL, in.Filename)
+	if err != nil {
+		return fmt.Errorf("loading artifact row for scan: %w", err)
+	}
+	if art == nil {
+		return fmt.Errorf("artifact row missing after upsert: %s/%s", in.VersionPURL, in.Filename)
+	}
+
+	req := scanner.Request{
+		Ecosystem:   in.Ecosystem,
+		Name:        in.Name,
+		Version:     in.Version,
+		PURL:        in.PkgPURL,
+		VersionPURL: in.VersionPURL,
+		Filename:    in.Filename,
+		StoragePath: in.StoragePath,
+		ContentHash: in.Hash,
+		ContentType: in.ContentType,
+		UpstreamURL: in.UpstreamURL,
+		Size:        in.Size,
+		OpenContent: func(c context.Context) (io.ReadCloser, error) {
+			return p.Storage.Open(c, in.StoragePath)
+		},
+	}
+
+	decision := p.Scanners.Scan(ctx, req)
+
+	if err := scanner.PersistDecision(p.DB, art.ID, in.VersionPURL, in.Hash, decision); err != nil {
+		p.Logger.Warn("failed to persist scanner decision", "purl", in.VersionPURL, "error", err)
+	}
+
+	switch decision.Action {
+	case scanner.ActionBlock:
+		if p.ScannerMirrorClampToWarn {
+			p.Logger.Warn("scanner would block artifact (clamped to warn for mirror)",
+				"purl", in.VersionPURL,
+				"filename", in.Filename,
+				"severity", decision.Highest.String(),
+				"findings", len(decision.Findings))
+			return nil
+		}
+		p.Logger.Warn("scanner blocked artifact",
+			"purl", in.VersionPURL,
+			"filename", in.Filename,
+			"severity", decision.Highest.String(),
+			"findings", len(decision.Findings))
+		if delErr := p.DB.DeleteArtifactByID(art.ID); delErr != nil {
+			p.Logger.Warn("failed to delete quarantined artifact row", "id", art.ID, "error", delErr)
+		}
+		return &scanner.QuarantineError{Highest: decision.Highest, Findings: decision.Findings}
+	case scanner.ActionWarn:
+		p.Logger.Warn("scanner warning on artifact",
+			"purl", in.VersionPURL,
+			"filename", in.Filename,
+			"severity", decision.Highest.String(),
+			"findings", len(decision.Findings))
+	}
+	return nil
+}
+
+// WriteArtifactError maps known artifact-pipeline errors to HTTP responses.
+// Returns true when it wrote a response; protocol handlers should then
+// return without writing anything else.
+func WriteArtifactError(w http.ResponseWriter, err error) bool {
+	var qe *scanner.QuarantineError
+	if errors.As(err, &qe) || errors.Is(err, scanner.ErrArtifactQuarantined) {
+		writeQuarantineResponse(w, qe)
+		return true
+	}
+	return false
+}
+
+func writeQuarantineResponse(w http.ResponseWriter, qe *scanner.QuarantineError) {
+	severity := ""
+	count := 0
+	var findings []scanner.Finding
+	if qe != nil {
+		severity = qe.Highest.String()
+		count = len(qe.Findings)
+		findings = qe.Findings
+	}
+
+	w.Header().Set("Content-Type", contentTypeJSON)
+	if severity != "" {
+		w.Header().Set("X-Scanner-Severity", severity)
+	}
+	w.Header().Set("X-Scanner-Findings", strconv.Itoa(count))
+	w.WriteHeader(http.StatusUnavailableForLegalReasons)
+
+	type findingDTO struct {
+		Scanner      string   `json:"scanner"`
+		ID           string   `json:"id"`
+		Severity     string   `json:"severity"`
+		Summary      string   `json:"summary,omitempty"`
+		FixedVersion string   `json:"fixed_version,omitempty"`
+		References   []string `json:"references,omitempty"`
+	}
+	body := struct {
+		Error    string       `json:"error"`
+		Severity string       `json:"severity,omitempty"`
+		Findings []findingDTO `json:"findings,omitempty"`
+	}{
+		Error:    "artifact quarantined by scanner policy",
+		Severity: severity,
+	}
+	for _, f := range findings {
+		body.Findings = append(body.Findings, findingDTO{
+			Scanner:      f.Scanner,
+			ID:           f.ID,
+			Severity:     f.Severity.String(),
+			Summary:      f.Summary,
+			FixedVersion: f.FixedVersion,
+			References:   f.References,
+		})
+	}
+	_ = json.NewEncoder(w).Encode(body)
 }
 
 func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, upstreamURL, storagePath, hash string, size int64, contentType string) error {
@@ -797,8 +985,27 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 		return nil, fmt.Errorf("storing artifact: %w", err)
 	}
 
-	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, downloadURL, storagePath, hash, size, artifact.ContentType); err != nil {
-		p.Logger.Warn("failed to update cache database", "error", err)
+	if err := p.afterStore(ctx, artifactIngest{
+		Ecosystem:   ecosystem,
+		Name:        name,
+		Version:     version,
+		Filename:    filename,
+		PkgPURL:     pkgPURL,
+		VersionPURL: versionPURL,
+		UpstreamURL: downloadURL,
+		StoragePath: storagePath,
+		Hash:        hash,
+		Size:        size,
+		ContentType: artifact.ContentType,
+	}); err != nil {
+		if errors.Is(err, scanner.ErrArtifactQuarantined) {
+			if delErr := p.Storage.Delete(ctx, storagePath); delErr != nil {
+				p.Logger.Warn("failed to delete quarantined artifact from storage",
+					"path", storagePath, "error", delErr)
+			}
+			return nil, err
+		}
+		p.Logger.Warn("post-store hook failed", "error", err)
 	}
 
 	reader, err := p.Storage.Open(ctx, storagePath)

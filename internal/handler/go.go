@@ -100,6 +100,9 @@ func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, modul
 
 	result, err := h.proxy.GetOrFetchArtifact(r.Context(), "golang", decodedModule, version, filename)
 	if err != nil {
+		if WriteArtifactError(w, err) {
+			return
+		}
 		h.proxy.Logger.Error("failed to get artifact", "error", err)
 		http.Error(w, "failed to fetch module", http.StatusBadGateway)
 		return

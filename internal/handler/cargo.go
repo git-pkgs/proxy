@@ -193,6 +193,9 @@ func (h *CargoHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.proxy.GetOrFetchArtifact(r.Context(), "cargo", name, version, filename)
 	if err != nil {
+		if WriteArtifactError(w, err) {
+			return
+		}
 		h.proxy.Logger.Error("failed to get artifact", "error", err)
 		http.Error(w, "failed to fetch crate", http.StatusBadGateway)
 		return

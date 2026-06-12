@@ -345,6 +345,9 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "composer", packageName, version, filename, downloadURL)
 	if err != nil {
+		if WriteArtifactError(w, err) {
+			return
+		}
 		h.proxy.Logger.Error("failed to get artifact", "error", err)
 		http.Error(w, "failed to fetch package", http.StatusBadGateway)
 		return

@@ -81,6 +81,9 @@ func (h *DebianHandler) handlePackageDownload(w http.ResponseWriter, r *http.Req
 	result, err := h.proxy.GetOrFetchArtifactFromURL(
 		r.Context(), "deb", name, version, filename, downloadURL)
 	if err != nil {
+		if WriteArtifactError(w, err) {
+			return
+		}
 		h.proxy.Logger.Error("failed to get debian package", "error", err)
 		http.Error(w, "failed to fetch package", http.StatusBadGateway)
 		return

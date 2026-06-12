@@ -72,6 +72,9 @@ func (h *HexHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.proxy.GetOrFetchArtifact(r.Context(), "hex", name, version, filename)
 	if err != nil {
+		if WriteArtifactError(w, err) {
+			return
+		}
 		h.proxy.Logger.Error("failed to get artifact", "error", err)
 		http.Error(w, "failed to fetch package", http.StatusBadGateway)
 		return

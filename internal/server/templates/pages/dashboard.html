@@ -53,6 +53,37 @@
 </div>
 {{end}}
 
+{{if .BlockedPackages}}
+<!-- Blocked Packages -->
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-red-200 dark:border-red-900 mb-8">
+    <div class="px-6 py-4 border-b border-red-200 dark:border-red-900 flex items-center justify-between">
+        <div class="flex items-center gap-2">
+            <svg class="w-5 h-5 text-red-600 dark:text-red-400" fill="currentColor" viewBox="0 0 20 20"><path fill-rule="evenodd" d="M8.485 2.495c.673-1.167 2.357-1.167 3.03 0l6.28 10.875c.673 1.167-.17 2.625-1.516 2.625H3.72c-1.347 0-2.189-1.458-1.515-2.625L8.485 2.495zM10 5a.75.75 0 01.75.75v3.5a.75.75 0 01-1.5 0v-3.5A.75.75 0 0110 5zm0 9a1 1 0 100-2 1 1 0 000 2z" clip-rule="evenodd"/></svg>
+            <h2 class="text-lg font-semibold text-red-700 dark:text-red-400">Blocked by Scanner</h2>
+        </div>
+        <span class="text-xs text-gray-500 dark:text-gray-400">artifact bytes quarantined; findings retained</span>
+    </div>
+    <div class="divide-y divide-gray-200 dark:divide-gray-800">
+        {{range .BlockedPackages}}
+        <div class="px-6 py-3 flex items-center justify-between">
+            <div class="min-w-0 flex-1">
+                <div class="flex items-center gap-2">
+                    {{template "ecosystem_badge" .Ecosystem}}
+                    <a href="/ui/package/{{.Ecosystem}}/{{.Name}}/{{.Version}}" class="font-medium truncate hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
+                    <span class="text-gray-500 dark:text-gray-400">@{{.Version}}</span>
+                </div>
+                <div class="flex items-center gap-2 mt-1">
+                    <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium uppercase bg-{{if eq .HighestSeverity "critical"}}red{{else if eq .HighestSeverity "high"}}orange{{else if eq .HighestSeverity "medium"}}yellow{{else if eq .HighestSeverity "low"}}blue{{else}}gray{{end}}-100 text-{{if eq .HighestSeverity "critical"}}red{{else if eq .HighestSeverity "high"}}orange{{else if eq .HighestSeverity "medium"}}yellow{{else if eq .HighestSeverity "low"}}blue{{else}}gray{{end}}-700 dark:bg-{{if eq .HighestSeverity "critical"}}red{{else if eq .HighestSeverity "high"}}orange{{else if eq .HighestSeverity "medium"}}yellow{{else if eq .HighestSeverity "low"}}blue{{else}}gray{{end}}-900 dark:text-{{if eq .HighestSeverity "critical"}}red{{else if eq .HighestSeverity "high"}}orange{{else if eq .HighestSeverity "medium"}}yellow{{else if eq .HighestSeverity "low"}}blue{{else}}gray{{end}}-300">{{.HighestSeverity}}</span>
+                    <span class="text-xs text-gray-500 dark:text-gray-400">{{.FindingCount}} finding{{if ne .FindingCount 1}}s{{end}}</span>
+                </div>
+            </div>
+            <span class="text-sm text-gray-500 dark:text-gray-400">{{.ScannedAt}}</span>
+        </div>
+        {{end}}
+    </div>
+</div>
+{{end}}
+
 <!-- Two Column Layout -->
 <div class="grid md:grid-cols-2 gap-8 mb-8">
     <!-- Popular Packages -->

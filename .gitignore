@@ -24,6 +24,7 @@ go.work.sum
 # Build and dist directories
 dist/
 build/
+!internal/scanner/build/
 
 # Cache directories
 cache/*

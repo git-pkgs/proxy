@@ -110,6 +110,40 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_metadata_eco_name ON metadata_cache(ecosystem, name);
 
+CREATE TABLE IF NOT EXISTS artifact_findings (
+	id INTEGER PRIMARY KEY,
+	artifact_id INTEGER NOT NULL,
+	version_purl TEXT NOT NULL,
+	content_hash TEXT NOT NULL,
+	scanner TEXT NOT NULL,
+	finding_id TEXT NOT NULL,
+	severity TEXT NOT NULL,
+	summary TEXT,
+	fixed_version TEXT,
+	"references" TEXT,
+	raw TEXT,
+	scanned_at DATETIME NOT NULL,
+	created_at DATETIME NOT NULL,
+	updated_at DATETIME NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_findings_unique
+	ON artifact_findings(artifact_id, scanner, finding_id);
+CREATE INDEX IF NOT EXISTS idx_artifact_findings_content_hash
+	ON artifact_findings(content_hash, scanner);
+CREATE INDEX IF NOT EXISTS idx_artifact_findings_version_purl
+	ON artifact_findings(version_purl);
+
+CREATE TABLE IF NOT EXISTS artifact_scans (
+	id INTEGER PRIMARY KEY,
+	content_hash TEXT NOT NULL,
+	scanner TEXT NOT NULL,
+	status TEXT NOT NULL,
+	error TEXT,
+	scanned_at DATETIME NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_scans_unique
+	ON artifact_scans(content_hash, scanner);
+
 CREATE TABLE IF NOT EXISTS migrations (
 	name TEXT NOT NULL PRIMARY KEY,
 	applied_at DATETIME NOT NULL
@@ -209,6 +243,40 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 	updated_at TIMESTAMP
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_metadata_eco_name ON metadata_cache(ecosystem, name);
+
+CREATE TABLE IF NOT EXISTS artifact_findings (
+	id SERIAL PRIMARY KEY,
+	artifact_id BIGINT NOT NULL,
+	version_purl TEXT NOT NULL,
+	content_hash TEXT NOT NULL,
+	scanner TEXT NOT NULL,
+	finding_id TEXT NOT NULL,
+	severity TEXT NOT NULL,
+	summary TEXT,
+	fixed_version TEXT,
+	"references" TEXT,
+	raw TEXT,
+	scanned_at TIMESTAMP NOT NULL,
+	created_at TIMESTAMP NOT NULL,
+	updated_at TIMESTAMP NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_findings_unique
+	ON artifact_findings(artifact_id, scanner, finding_id);
+CREATE INDEX IF NOT EXISTS idx_artifact_findings_content_hash
+	ON artifact_findings(content_hash, scanner);
+CREATE INDEX IF NOT EXISTS idx_artifact_findings_version_purl
+	ON artifact_findings(version_purl);
+
+CREATE TABLE IF NOT EXISTS artifact_scans (
+	id SERIAL PRIMARY KEY,
+	content_hash TEXT NOT NULL,
+	scanner TEXT NOT NULL,
+	status TEXT NOT NULL,
+	error TEXT,
+	scanned_at TIMESTAMP NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_scans_unique
+	ON artifact_scans(content_hash, scanner);
 
 CREATE TABLE IF NOT EXISTS migrations (
 	name TEXT NOT NULL PRIMARY KEY,
@@ -359,6 +427,7 @@ var migrations = []migration{
 	{"003_ensure_artifacts_table", migrateEnsureArtifactsTable},
 	{"004_ensure_vulnerabilities_table", migrateEnsureVulnerabilitiesTable},
 	{"005_ensure_metadata_cache_table", migrateEnsureMetadataCacheTable},
+	{"006_ensure_artifact_findings_tables", migrateEnsureArtifactFindingsTables},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -579,6 +648,105 @@ func migrateEnsureVulnerabilitiesTable(db *DB) error {
 
 func migrateEnsureMetadataCacheTable(db *DB) error {
 	return db.EnsureMetadataCacheTable()
+}
+
+func migrateEnsureArtifactFindingsTables(db *DB) error {
+	return db.EnsureArtifactFindingsTables()
+}
+
+// EnsureArtifactFindingsTables creates the artifact_findings and artifact_scans
+// tables if they don't already exist.
+func (db *DB) EnsureArtifactFindingsTables() error {
+	hasFindings, err := db.HasTable("artifact_findings")
+	if err != nil {
+		return fmt.Errorf("checking artifact_findings table: %w", err)
+	}
+	hasScans, err := db.HasTable("artifact_scans")
+	if err != nil {
+		return fmt.Errorf("checking artifact_scans table: %w", err)
+	}
+	if hasFindings && hasScans {
+		return nil
+	}
+
+	var schema string
+	if db.dialect == DialectPostgres {
+		schema = `
+			CREATE TABLE IF NOT EXISTS artifact_findings (
+				id SERIAL PRIMARY KEY,
+				artifact_id BIGINT NOT NULL,
+				version_purl TEXT NOT NULL,
+				content_hash TEXT NOT NULL,
+				scanner TEXT NOT NULL,
+				finding_id TEXT NOT NULL,
+				severity TEXT NOT NULL,
+				summary TEXT,
+				fixed_version TEXT,
+				"references" TEXT,
+				raw TEXT,
+				scanned_at TIMESTAMP NOT NULL,
+				created_at TIMESTAMP NOT NULL,
+				updated_at TIMESTAMP NOT NULL
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_findings_unique
+				ON artifact_findings(artifact_id, scanner, finding_id);
+			CREATE INDEX IF NOT EXISTS idx_artifact_findings_content_hash
+				ON artifact_findings(content_hash, scanner);
+			CREATE INDEX IF NOT EXISTS idx_artifact_findings_version_purl
+				ON artifact_findings(version_purl);
+
+			CREATE TABLE IF NOT EXISTS artifact_scans (
+				id SERIAL PRIMARY KEY,
+				content_hash TEXT NOT NULL,
+				scanner TEXT NOT NULL,
+				status TEXT NOT NULL,
+				error TEXT,
+				scanned_at TIMESTAMP NOT NULL
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_scans_unique
+				ON artifact_scans(content_hash, scanner);
+		`
+	} else {
+		schema = `
+			CREATE TABLE IF NOT EXISTS artifact_findings (
+				id INTEGER PRIMARY KEY,
+				artifact_id INTEGER NOT NULL,
+				version_purl TEXT NOT NULL,
+				content_hash TEXT NOT NULL,
+				scanner TEXT NOT NULL,
+				finding_id TEXT NOT NULL,
+				severity TEXT NOT NULL,
+				summary TEXT,
+				fixed_version TEXT,
+				"references" TEXT,
+				raw TEXT,
+				scanned_at DATETIME NOT NULL,
+				created_at DATETIME NOT NULL,
+				updated_at DATETIME NOT NULL
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_findings_unique
+				ON artifact_findings(artifact_id, scanner, finding_id);
+			CREATE INDEX IF NOT EXISTS idx_artifact_findings_content_hash
+				ON artifact_findings(content_hash, scanner);
+			CREATE INDEX IF NOT EXISTS idx_artifact_findings_version_purl
+				ON artifact_findings(version_purl);
+
+			CREATE TABLE IF NOT EXISTS artifact_scans (
+				id INTEGER PRIMARY KEY,
+				content_hash TEXT NOT NULL,
+				scanner TEXT NOT NULL,
+				status TEXT NOT NULL,
+				error TEXT,
+				scanned_at DATETIME NOT NULL
+			);
+			CREATE UNIQUE INDEX IF NOT EXISTS idx_artifact_scans_unique
+				ON artifact_scans(content_hash, scanner);
+		`
+	}
+	if _, err := db.Exec(schema); err != nil {
+		return fmt.Errorf("creating artifact_findings/artifact_scans tables: %w", err)
+	}
+	return nil
 }
 
 // EnsureMetadataCacheTable creates the metadata_cache table if it doesn't exist.

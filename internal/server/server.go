@@ -54,18 +54,20 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/cooldown"
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
 	"github.com/git-pkgs/proxy/internal/config"
-	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/enrichment"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/mirror"
+	scannerbuild "github.com/git-pkgs/proxy/internal/scanner/build"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
@@ -84,12 +86,12 @@ const (
 
 // Server is the main proxy server.
 type Server struct {
-	cfg       *config.Config
-	db        *database.DB
-	storage   storage.Storage
-	logger    *slog.Logger
-	http      *http.Server
-	templates *Templates
+	cfg         *config.Config
+	db          *database.DB
+	storage     storage.Storage
+	logger      *slog.Logger
+	http        *http.Server
+	templates   *Templates
 	cancel      context.CancelFunc
 	healthCache *healthCache
 }
@@ -165,6 +167,10 @@ func (s *Server) Start() error {
 		Ecosystems: s.cfg.Cooldown.Ecosystems,
 		Packages:   s.cfg.Cooldown.Packages,
 	}
+	// Enrichment service is shared between the API handlers and the
+	// scanner pipeline (so OSV lookups don't pay duplicate HTTP cost).
+	enrichSvc := enrichment.New(s.logger)
+
 	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
 	proxy.Cooldown = cd
 	proxy.CacheMetadata = s.cfg.CacheMetadata
@@ -175,6 +181,18 @@ func (s *Server) Start() error {
 	proxy.DirectServe = s.cfg.Storage.DirectServe
 	proxy.DirectServeTTL = s.cfg.ParseDirectServeTTL()
 	proxy.DirectServeBaseURL = s.cfg.Storage.DirectServeBaseURL
+
+	scannerPipeline, err := scannerbuild.Pipeline(s.cfg.Scanners, enrichSvc, s.db, s.logger)
+	if err != nil {
+		return fmt.Errorf("building scanner pipeline: %w", err)
+	}
+	proxy.Scanners = scannerPipeline
+
+	ociGate, err := scannerbuild.OCIGate(s.cfg.Scanners, s.db, s.logger)
+	if err != nil {
+		return fmt.Errorf("building OCI scanner gate: %w", err)
+	}
+	proxy.OCIGate = ociGate
 
 	// Create router with Chi
 	r := chi.NewRouter()
@@ -262,8 +280,7 @@ func (s *Server) Start() error {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 	})
 
-	// API endpoints for enrichment data
-	enrichSvc := enrichment.New(s.logger)
+	// API endpoints for enrichment data (reuse the service hoisted above).
 	apiHandler := NewAPIHandler(enrichSvc, s.db)
 
 	r.Get("/api/package/{ecosystem}/*", apiHandler.HandlePackagePath)
@@ -401,6 +418,12 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("failed to get recent packages", "error", err)
 	}
 
+	// Get recently blocked (quarantined) packages
+	blocked, err := s.db.GetRecentlyBlockedPackages(dashboardTopN)
+	if err != nil {
+		s.logger.Error("failed to get blocked packages", "error", err)
+	}
+
 	// Build dashboard data
 	data := DashboardData{
 		Layout: s.layoutFor(r),
@@ -476,6 +499,17 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		}
 
 		data.RecentPackages = append(data.RecentPackages, pkgInfo)
+	}
+
+	for _, b := range blocked {
+		data.BlockedPackages = append(data.BlockedPackages, BlockedPackageView{
+			Ecosystem:       b.Ecosystem,
+			Name:            b.Name,
+			Version:         b.Version,
+			HighestSeverity: b.HighestSeverity,
+			FindingCount:    b.FindingCount,
+			ScannedAt:       formatTimeAgo(b.LastScannedAt),
+		})
 	}
 
 	if err := s.templates.Render(w, "dashboard", data); err != nil {
@@ -741,12 +775,19 @@ func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, 
 		vulns = []database.Vulnerability{}
 	}
 
+	findingSummaries, err := s.db.GetFindingSummariesByPackagePURL(pkg.PURL)
+	if err != nil {
+		s.logger.Error("failed to get finding summaries", "error", err)
+		findingSummaries = nil
+	}
+
 	data := PackageShowData{
-		Layout:          s.layoutFor(r),
-		Package:         pkg,
-		Versions:        versions,
-		Vulnerabilities: vulns,
-		LicenseCategory: categorizeLicense(pkg.License),
+		Layout:           s.layoutFor(r),
+		Package:          pkg,
+		Versions:         versions,
+		Vulnerabilities:  vulns,
+		FindingSummaries: findingSummaries,
+		LicenseCategory:  categorizeLicense(pkg.License),
 	}
 
 	if err := s.templates.Render(w, "package_show", data); err != nil {
@@ -782,6 +823,13 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 		vulns = []database.Vulnerability{}
 	}
 
+	findings, err := s.db.GetArtifactFindingsByVersionPURL(versionPURL)
+	if err != nil {
+		s.logger.Error("failed to get artifact findings", "error", err)
+		findings = nil
+	}
+	aggregated := aggregateFindings(findings)
+
 	isOutdated := pkg.LatestVersion.Valid && pkg.LatestVersion.String != version
 
 	hasCached := false
@@ -793,14 +841,16 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 	}
 
 	data := VersionShowData{
-		Layout:            s.layoutFor(r),
-		Package:           pkg,
-		Version:           ver,
-		Artifacts:         artifacts,
-		Vulnerabilities:   vulns,
-		IsOutdated:        isOutdated,
-		LicenseCategory:   categorizeLicense(ver.License),
-		HasCachedArtifact: hasCached,
+		Layout:             s.layoutFor(r),
+		Package:            pkg,
+		Version:            ver,
+		Artifacts:          artifacts,
+		Vulnerabilities:    vulns,
+		Findings:           findings,
+		AggregatedFindings: aggregated,
+		IsOutdated:         isOutdated,
+		LicenseCategory:    categorizeLicense(ver.License),
+		HasCachedArtifact:  hasCached,
 	}
 
 	if err := s.templates.Render(w, "version_show", data); err != nil {
@@ -1001,6 +1051,57 @@ func categorizeLicense(license sql.NullString) string {
 		return licenseCategoryUnknown
 	}
 	return categorizeLicenseCSS(license.String)
+}
+
+// severityRank orders severities for cross-artifact aggregation. Higher = worse.
+func severityRank(s string) int {
+	switch strings.ToLower(s) {
+	case "critical":
+		return 4
+	case "high":
+		return 3
+	case "medium":
+		return 2
+	case "low":
+		return 1
+	default:
+		return 0
+	}
+}
+
+// aggregateFindings flattens per-artifact findings, deduplicating by
+// (scanner, finding_id) and keeping the highest-severity occurrence. The
+// returned slice is sorted critical->unknown then by finding ID.
+func aggregateFindings(byArtifact map[int64][]database.ArtifactFinding) []database.ArtifactFinding {
+	if len(byArtifact) == 0 {
+		return nil
+	}
+	type key struct{ scanner, id string }
+	best := make(map[key]database.ArtifactFinding)
+	for _, list := range byArtifact {
+		for _, f := range list {
+			k := key{f.Scanner, f.FindingID}
+			cur, ok := best[k]
+			if !ok || severityRank(f.Severity) > severityRank(cur.Severity) {
+				best[k] = f
+			}
+		}
+	}
+	out := make([]database.ArtifactFinding, 0, len(best))
+	for _, f := range best {
+		out = append(out, f)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		ri, rj := severityRank(out[i].Severity), severityRank(out[j].Severity)
+		if ri != rj {
+			return ri > rj
+		}
+		if out[i].Scanner != out[j].Scanner {
+			return out[i].Scanner < out[j].Scanner
+		}
+		return out[i].FindingID < out[j].FindingID
+	})
+	return out
 }
 
 // responseWriter wraps http.ResponseWriter to capture status code.

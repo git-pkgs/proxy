@@ -91,6 +91,39 @@ type MetadataCacheEntry struct {
 	UpdatedAt    time.Time      `db:"updated_at" json:"updated_at"`
 }
 
+// ArtifactFinding is a per-artifact scanner finding (CVE, malware signature, etc.).
+// Distinct from Vulnerability, which is an advisory cache shared across all artifacts
+// of a package; findings are produced by a specific scanner against a specific
+// artifact's content.
+type ArtifactFinding struct {
+	ID           int64          `db:"id" json:"id"`
+	ArtifactID   int64          `db:"artifact_id" json:"artifact_id"`
+	VersionPURL  string         `db:"version_purl" json:"version_purl"`
+	ContentHash  string         `db:"content_hash" json:"content_hash"`
+	Scanner      string         `db:"scanner" json:"scanner"`
+	FindingID    string         `db:"finding_id" json:"finding_id"`
+	Severity     string         `db:"severity" json:"severity"`
+	Summary      sql.NullString `db:"summary" json:"summary,omitempty"`
+	FixedVersion sql.NullString `db:"fixed_version" json:"fixed_version,omitempty"`
+	References   sql.NullString `db:"references" json:"references,omitempty"`
+	Raw          sql.NullString `db:"raw" json:"raw,omitempty"`
+	ScannedAt    time.Time      `db:"scanned_at" json:"scanned_at"`
+	CreatedAt    time.Time      `db:"created_at" json:"created_at"`
+	UpdatedAt    time.Time      `db:"updated_at" json:"updated_at"`
+}
+
+// ArtifactScan records that a scanner ran against a content_hash so we can
+// short-circuit identical bytes across multiple (version_purl, filename) rows
+// and avoid re-running scans within findings_ttl.
+type ArtifactScan struct {
+	ID          int64          `db:"id" json:"id"`
+	ContentHash string         `db:"content_hash" json:"content_hash"`
+	Scanner     string         `db:"scanner" json:"scanner"`
+	Status      string         `db:"status" json:"status"`
+	Error       sql.NullString `db:"error" json:"error,omitempty"`
+	ScannedAt   time.Time      `db:"scanned_at" json:"scanned_at"`
+}
+
 // Vulnerability represents a cached vulnerability record.
 type Vulnerability struct {
 	ID           int64           `db:"id" json:"id"`

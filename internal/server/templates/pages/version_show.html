@@ -37,6 +37,9 @@
     <div class="bg-white dark:bg-gray-900 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-800">
         <h2 class="text-lg font-semibold mb-4">Version Info</h2>
         <dl class="space-y-2">
+            <div><dt class="inline text-gray-500 dark:text-gray-400">Ecosystem:</dt> <dd class="inline font-mono text-sm">{{.Package.Ecosystem}}</dd></div>
+            <div><dt class="inline text-gray-500 dark:text-gray-400">Version:</dt> <dd class="inline font-mono text-sm">{{.Version.Version}}</dd></div>
+            <div><dt class="inline text-gray-500 dark:text-gray-400">Artifacts:</dt> <dd class="inline">{{len .Artifacts}}</dd></div>
             {{if .Version.License.Valid}}
             <div><dt class="inline text-gray-500 dark:text-gray-400">License:</dt> <dd class="inline"><span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-100 text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-700 dark:bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-900 dark:text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-300">{{.Version.License.String}}</span></dd></div>
             {{end}}
@@ -49,9 +52,9 @@
         </dl>
     </div>
 
-    {{if .Vulnerabilities}}
+    {{if or .Vulnerabilities .AggregatedFindings}}
     <div class="bg-white dark:bg-gray-900 rounded-xl p-6 shadow-sm border border-red-200 dark:border-red-900">
-        <h2 class="text-lg font-semibold mb-4 text-red-600 dark:text-red-400">Security Vulnerabilities ({{len .Vulnerabilities}})</h2>
+        <h2 class="text-lg font-semibold mb-4 text-red-600 dark:text-red-400">Security Vulnerabilities ({{add (len .Vulnerabilities) (len .AggregatedFindings)}})</h2>
         <div class="space-y-3">
             {{range .Vulnerabilities}}
             <div class="border-l-4 border-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else}}blue{{end}}-500 pl-3">
@@ -59,6 +62,17 @@
                 {{if .Summary.Valid}}<p class="text-sm text-gray-600 dark:text-gray-400">{{.Summary.String}}</p>{{end}}
                 <div class="flex gap-2 mt-1">
                     <span class="text-xs uppercase font-medium text-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else}}blue{{end}}-600 dark:text-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else}}blue{{end}}-400">{{.Severity}}</span>
+                    {{if .FixedVersion.Valid}}<span class="text-xs text-gray-500 dark:text-gray-400">Fixed in {{.FixedVersion.String}}</span>{{end}}
+                </div>
+            </div>
+            {{end}}
+            {{range .AggregatedFindings}}
+            <div class="border-l-4 border-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else if eq .Severity "low"}}blue{{else}}gray{{end}}-500 pl-3">
+                <div class="font-semibold text-sm">{{.FindingID}}</div>
+                {{if .Summary.Valid}}<p class="text-sm text-gray-600 dark:text-gray-400">{{.Summary.String}}</p>{{end}}
+                <div class="flex gap-2 mt-1">
+                    <span class="text-xs uppercase font-medium text-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else if eq .Severity "low"}}blue{{else}}gray{{end}}-600 dark:text-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else if eq .Severity "low"}}blue{{else}}gray{{end}}-400">{{.Severity}}</span>
+                    <span class="text-xs text-gray-500 dark:text-gray-400">via {{.Scanner}}</span>
                     {{if .FixedVersion.Valid}}<span class="text-xs text-gray-500 dark:text-gray-400">Fixed in {{.FixedVersion.String}}</span>{{end}}
                 </div>
             </div>
@@ -94,6 +108,25 @@
             {{else}}
             <div class="mt-2">
                 <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300">not cached</span>
+            </div>
+            {{end}}
+            {{$findings := index $.Findings .ID}}
+            {{if $findings}}
+            <div class="mt-3">
+                <div class="text-xs font-medium text-gray-700 dark:text-gray-300 mb-2">Scanner findings ({{len $findings}})</div>
+                <div class="space-y-2">
+                    {{range $findings}}
+                    <div class="border-l-4 border-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else if eq .Severity "low"}}blue{{else}}gray{{end}}-500 pl-3">
+                        <div class="flex flex-wrap items-center gap-2">
+                            <span class="font-mono text-xs font-semibold">{{.FindingID}}</span>
+                            <span class="text-xs uppercase font-medium text-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else if eq .Severity "low"}}blue{{else}}gray{{end}}-600 dark:text-{{if eq .Severity "critical"}}red{{else if eq .Severity "high"}}orange{{else if eq .Severity "medium"}}yellow{{else if eq .Severity "low"}}blue{{else}}gray{{end}}-400">{{.Severity}}</span>
+                            <span class="text-xs text-gray-500 dark:text-gray-400">via {{.Scanner}}</span>
+                            {{if .FixedVersion.Valid}}<span class="text-xs text-gray-500 dark:text-gray-400">Fixed in {{.FixedVersion.String}}</span>{{end}}
+                        </div>
+                        {{if .Summary.Valid}}<p class="text-xs text-gray-600 dark:text-gray-400 mt-1">{{.Summary.String}}</p>{{end}}
+                    </div>
+                    {{end}}
+                </div>
             </div>
             {{end}}
         </div>

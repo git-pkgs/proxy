@@ -3,6 +3,8 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"sort"
+	"strings"
 	"time"
 )
 
@@ -357,21 +359,36 @@ func (db *DB) GetCacheStats() (*CacheStats, error) {
 		EcosystemCounts: make(map[string]int64),
 	}
 
-	if err := db.Get(&stats.TotalPackages, `SELECT COUNT(*) FROM packages`); err != nil {
-		return nil, err
-	}
-
-	if err := db.Get(&stats.TotalVersions, `SELECT COUNT(*) FROM versions`); err != nil {
-		return nil, err
-	}
-
 	// Check if artifacts table exists (might not if using git-pkgs db without proxy tables)
 	hasArtifacts, err := db.HasTable("artifacts")
 	if err != nil {
 		return nil, err
 	}
 
+	// TotalPackages / TotalVersions count only entities that still have a
+	// cached artifact. Scanner blocks and aborted fetches leave package /
+	// version rows behind; counting raw rows would over-report relative
+	// to ListCachedPackages and the recent / popular lists, which all
+	// filter on storage_path IS NOT NULL.
 	if hasArtifacts {
+		if err := db.Get(&stats.TotalPackages, `
+			SELECT COUNT(DISTINCT p.purl)
+			FROM packages p
+			JOIN versions v ON v.package_purl = p.purl
+			JOIN artifacts a ON a.version_purl = v.purl
+			WHERE a.storage_path IS NOT NULL
+		`); err != nil {
+			return nil, err
+		}
+		if err := db.Get(&stats.TotalVersions, `
+			SELECT COUNT(DISTINCT v.purl)
+			FROM versions v
+			JOIN artifacts a ON a.version_purl = v.purl
+			WHERE a.storage_path IS NOT NULL
+		`); err != nil {
+			return nil, err
+		}
+
 		row := db.QueryRow(`
 			SELECT COUNT(*), COALESCE(SUM(size), 0)
 			FROM artifacts WHERE storage_path IS NOT NULL
@@ -387,9 +404,27 @@ func (db *DB) GetCacheStats() (*CacheStats, error) {
 		if totalHits.Valid {
 			stats.TotalHits = totalHits.Int64
 		}
+	} else {
+		if err := db.Get(&stats.TotalPackages, `SELECT COUNT(*) FROM packages`); err != nil {
+			return nil, err
+		}
+		if err := db.Get(&stats.TotalVersions, `SELECT COUNT(*) FROM versions`); err != nil {
+			return nil, err
+		}
 	}
 
-	rows, err := db.Query(`SELECT ecosystem, COUNT(*) FROM packages GROUP BY ecosystem`)
+	ecosystemQuery := `SELECT ecosystem, COUNT(*) FROM packages GROUP BY ecosystem`
+	if hasArtifacts {
+		ecosystemQuery = `
+			SELECT p.ecosystem, COUNT(DISTINCT p.purl)
+			FROM packages p
+			JOIN versions v ON v.package_purl = p.purl
+			JOIN artifacts a ON a.version_purl = v.purl
+			WHERE a.storage_path IS NOT NULL
+			GROUP BY p.ecosystem
+		`
+	}
+	rows, err := db.Query(ecosystemQuery)
 	if err != nil {
 		return nil, err
 	}
@@ -886,6 +921,356 @@ func (db *DB) CountCachedPackages(ecosystem string) (int64, error) {
 	var count int64
 	err = db.Get(&count, query, args...)
 	return count, err
+}
+
+// Artifact findings & scans queries
+
+// UpsertArtifactFinding inserts or updates a finding for a specific
+// (artifact_id, scanner, finding_id) combination.
+func (db *DB) UpsertArtifactFinding(f *ArtifactFinding) error {
+	now := time.Now()
+	var query string
+
+	if db.dialect == DialectPostgres {
+		query = `
+			INSERT INTO artifact_findings (artifact_id, version_purl, content_hash, scanner, finding_id,
+			                               severity, summary, fixed_version, "references", raw, scanned_at,
+			                               created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
+			ON CONFLICT(artifact_id, scanner, finding_id) DO UPDATE SET
+				version_purl = EXCLUDED.version_purl,
+				content_hash = EXCLUDED.content_hash,
+				severity = EXCLUDED.severity,
+				summary = EXCLUDED.summary,
+				fixed_version = EXCLUDED.fixed_version,
+				"references" = EXCLUDED."references",
+				raw = EXCLUDED.raw,
+				scanned_at = EXCLUDED.scanned_at,
+				updated_at = EXCLUDED.updated_at
+		`
+	} else {
+		query = `
+			INSERT INTO artifact_findings (artifact_id, version_purl, content_hash, scanner, finding_id,
+			                               severity, summary, fixed_version, "references", raw, scanned_at,
+			                               created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			ON CONFLICT(artifact_id, scanner, finding_id) DO UPDATE SET
+				version_purl = excluded.version_purl,
+				content_hash = excluded.content_hash,
+				severity = excluded.severity,
+				summary = excluded.summary,
+				fixed_version = excluded.fixed_version,
+				"references" = excluded."references",
+				raw = excluded.raw,
+				scanned_at = excluded.scanned_at,
+				updated_at = excluded.updated_at
+		`
+	}
+
+	_, err := db.Exec(query,
+		f.ArtifactID, f.VersionPURL, f.ContentHash, f.Scanner, f.FindingID,
+		f.Severity, f.Summary, f.FixedVersion, f.References, f.Raw, f.ScannedAt,
+		now, now,
+	)
+	if err != nil {
+		return fmt.Errorf("upserting artifact finding: %w", err)
+	}
+	return nil
+}
+
+// GetArtifactFindings returns findings for a specific (version_purl, filename) artifact.
+func (db *DB) GetArtifactFindings(versionPURL, filename string) ([]ArtifactFinding, error) {
+	var findings []ArtifactFinding
+	query := db.Rebind(`
+		SELECT f.id, f.artifact_id, f.version_purl, f.content_hash, f.scanner, f.finding_id,
+		       f.severity, f.summary, f.fixed_version, f."references", f.raw, f.scanned_at,
+		       f.created_at, f.updated_at
+		FROM artifact_findings f
+		JOIN artifacts a ON a.id = f.artifact_id
+		WHERE a.version_purl = ? AND a.filename = ?
+		ORDER BY f.severity DESC, f.finding_id
+	`)
+	err := db.Select(&findings, query, versionPURL, filename)
+	if err != nil {
+		return nil, err
+	}
+	return findings, nil
+}
+
+// GetArtifactFindingsByVersionPURL returns all findings for every artifact
+// belonging to a version, grouped by artifact_id. Lets the version detail
+// page load findings in a single query instead of one per artifact.
+func (db *DB) GetArtifactFindingsByVersionPURL(versionPURL string) (map[int64][]ArtifactFinding, error) {
+	var findings []ArtifactFinding
+	query := db.Rebind(`
+		SELECT id, artifact_id, version_purl, content_hash, scanner, finding_id,
+		       severity, summary, fixed_version, "references", raw, scanned_at,
+		       created_at, updated_at
+		FROM artifact_findings
+		WHERE version_purl = ?
+		ORDER BY severity DESC, finding_id
+	`)
+	if err := db.Select(&findings, query, versionPURL); err != nil {
+		return nil, err
+	}
+	out := make(map[int64][]ArtifactFinding, len(findings))
+	for _, f := range findings {
+		out[f.ArtifactID] = append(out[f.ArtifactID], f)
+	}
+	return out, nil
+}
+
+// VersionFindingSummary aggregates scanner-finding presence for a single
+// version. Used by the package detail page to badge versions with security
+// issues without N+1 queries.
+type VersionFindingSummary struct {
+	VersionPURL     string `db:"version_purl"`
+	HighestSeverity string `db:"highest_severity"`
+	Count           int64  `db:"count"`
+}
+
+// GetFindingSummariesByPackagePURL returns one row per version under the
+// given package PURL that has at least one scanner finding, with the
+// highest severity recorded and the total count. Matches versions via the
+// `<packagePURL>@%` prefix on `version_purl`.
+func (db *DB) GetFindingSummariesByPackagePURL(packagePURL string) (map[string]VersionFindingSummary, error) {
+	var rows []struct {
+		VersionPURL string `db:"version_purl"`
+		Severity    string `db:"severity"`
+	}
+	query := db.Rebind(`
+		SELECT version_purl, severity
+		FROM artifact_findings
+		WHERE version_purl LIKE ?
+	`)
+	if err := db.Select(&rows, query, packagePURL+"@%"); err != nil {
+		return nil, err
+	}
+	rank := func(s string) int {
+		switch strings.ToLower(s) {
+		case "critical":
+			return 4
+		case "high":
+			return 3
+		case "medium":
+			return 2
+		case "low":
+			return 1
+		default:
+			return 0
+		}
+	}
+	out := make(map[string]VersionFindingSummary)
+	for _, r := range rows {
+		cur, ok := out[r.VersionPURL]
+		if !ok {
+			cur = VersionFindingSummary{VersionPURL: r.VersionPURL, HighestSeverity: r.Severity, Count: 1}
+		} else {
+			cur.Count++
+			if rank(r.Severity) > rank(cur.HighestSeverity) {
+				cur.HighestSeverity = r.Severity
+			}
+		}
+		out[r.VersionPURL] = cur
+	}
+	return out, nil
+}
+
+// BlockedPackage represents a (version_purl) that has scanner findings but
+// no surviving cached artifact — i.e. the scanner quarantined every artifact
+// row for that version. Used by the dashboard to surface scanner activity.
+type BlockedPackage struct {
+	Ecosystem       string    `db:"ecosystem"`
+	Name            string    `db:"name"`
+	Version         string    `db:"version"`
+	HighestSeverity string    `db:"highest_severity"`
+	FindingCount    int64     `db:"finding_count"`
+	LastScannedAt   time.Time `db:"last_scanned_at"`
+}
+
+// GetRecentlyBlockedPackages returns version_purls that have findings but
+// whose artifact rows have all been deleted (storage_path IS NULL or no
+// artifact row at all). Ordered by most recently scanned. Used on the
+// dashboard to make scanner blocks visible even when no bytes are cached.
+func (db *DB) GetRecentlyBlockedPackages(limit int) ([]BlockedPackage, error) {
+	hasFindings, err := db.HasTable("artifact_findings")
+	if err != nil {
+		return nil, err
+	}
+	if !hasFindings {
+		return nil, nil
+	}
+
+	var rows []struct {
+		Ecosystem     string    `db:"ecosystem"`
+		Name          string    `db:"name"`
+		VersionPURL   string    `db:"version_purl"`
+		Severity      string    `db:"severity"`
+		FindingID     string    `db:"finding_id"`
+		Scanner       string    `db:"scanner"`
+		LastScannedAt time.Time `db:"last_scanned_at"`
+	}
+
+	query := db.Rebind(`
+		SELECT p.ecosystem, p.name, f.version_purl, f.severity, f.finding_id, f.scanner, f.scanned_at AS last_scanned_at
+		FROM artifact_findings f
+		JOIN versions v ON v.purl = f.version_purl
+		JOIN packages p ON p.purl = v.package_purl
+		WHERE NOT EXISTS (
+			SELECT 1 FROM artifacts a
+			WHERE a.version_purl = f.version_purl
+			  AND a.storage_path IS NOT NULL
+		)
+	`)
+	if err := db.Select(&rows, query); err != nil {
+		return nil, err
+	}
+
+	rank := func(s string) int {
+		switch strings.ToLower(s) {
+		case "critical":
+			return 4
+		case "high":
+			return 3
+		case "medium":
+			return 2
+		case "low":
+			return 1
+		default:
+			return 0
+		}
+	}
+
+	type aggKey = string
+	seenFindings := make(map[aggKey]map[string]struct{})
+	agg := make(map[aggKey]*BlockedPackage)
+	for _, r := range rows {
+		key := r.VersionPURL
+		bp, ok := agg[key]
+		if !ok {
+			version := ""
+			if idx := strings.LastIndex(r.VersionPURL, "@"); idx >= 0 {
+				version = r.VersionPURL[idx+1:]
+			}
+			bp = &BlockedPackage{
+				Ecosystem:       r.Ecosystem,
+				Name:            r.Name,
+				Version:         version,
+				HighestSeverity: r.Severity,
+				LastScannedAt:   r.LastScannedAt,
+			}
+			agg[key] = bp
+			seenFindings[key] = make(map[string]struct{})
+		}
+		fk := r.Scanner + "\x00" + r.FindingID
+		if _, dup := seenFindings[key][fk]; !dup {
+			seenFindings[key][fk] = struct{}{}
+			bp.FindingCount++
+		}
+		if rank(r.Severity) > rank(bp.HighestSeverity) {
+			bp.HighestSeverity = r.Severity
+		}
+		if r.LastScannedAt.After(bp.LastScannedAt) {
+			bp.LastScannedAt = r.LastScannedAt
+		}
+	}
+
+	out := make([]BlockedPackage, 0, len(agg))
+	for _, bp := range agg {
+		out = append(out, *bp)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		return out[i].LastScannedAt.After(out[j].LastScannedAt)
+	})
+	if limit > 0 && len(out) > limit {
+		out = out[:limit]
+	}
+	return out, nil
+}
+
+// GetFindingsByContentHash returns findings for a content_hash + scanner pair.
+// Used to copy findings forward when the same bytes appear under a new
+// (version_purl, filename) row.
+func (db *DB) GetFindingsByContentHash(hash, scanner string) ([]ArtifactFinding, error) {
+	var findings []ArtifactFinding
+	query := db.Rebind(`
+		SELECT id, artifact_id, version_purl, content_hash, scanner, finding_id,
+		       severity, summary, fixed_version, "references", raw, scanned_at,
+		       created_at, updated_at
+		FROM artifact_findings
+		WHERE content_hash = ? AND scanner = ?
+		ORDER BY severity DESC, finding_id
+	`)
+	err := db.Select(&findings, query, hash, scanner)
+	if err != nil {
+		return nil, err
+	}
+	return findings, nil
+}
+
+// ClearArtifactFindings deletes all findings for a given artifact_id.
+func (db *DB) ClearArtifactFindings(artifactID int64) error {
+	query := db.Rebind(`DELETE FROM artifact_findings WHERE artifact_id = ?`)
+	_, err := db.Exec(query, artifactID)
+	return err
+}
+
+// UpsertArtifactScan records that a scanner ran against a content_hash.
+func (db *DB) UpsertArtifactScan(s *ArtifactScan) error {
+	var query string
+
+	if db.dialect == DialectPostgres {
+		query = `
+			INSERT INTO artifact_scans (content_hash, scanner, status, error, scanned_at)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT(content_hash, scanner) DO UPDATE SET
+				status = EXCLUDED.status,
+				error = EXCLUDED.error,
+				scanned_at = EXCLUDED.scanned_at
+		`
+	} else {
+		query = `
+			INSERT INTO artifact_scans (content_hash, scanner, status, error, scanned_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(content_hash, scanner) DO UPDATE SET
+				status = excluded.status,
+				error = excluded.error,
+				scanned_at = excluded.scanned_at
+		`
+	}
+
+	_, err := db.Exec(query, s.ContentHash, s.Scanner, s.Status, s.Error, s.ScannedAt)
+	if err != nil {
+		return fmt.Errorf("upserting artifact scan: %w", err)
+	}
+	return nil
+}
+
+// GetArtifactScan returns the most recent scan record for (content_hash, scanner),
+// or nil when none exists.
+func (db *DB) GetArtifactScan(hash, scanner string) (*ArtifactScan, error) {
+	var s ArtifactScan
+	query := db.Rebind(`
+		SELECT id, content_hash, scanner, status, error, scanned_at
+		FROM artifact_scans
+		WHERE content_hash = ? AND scanner = ?
+	`)
+	err := db.Get(&s, query, hash, scanner)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &s, nil
+}
+
+// DeleteArtifactByID removes an artifact row by id. Used when a scanner
+// blocks an artifact and we need to roll back the cache entry.
+func (db *DB) DeleteArtifactByID(id int64) error {
+	query := db.Rebind(`DELETE FROM artifacts WHERE id = ?`)
+	_, err := db.Exec(query, id)
+	return err
 }
 
 // Metadata cache queries
