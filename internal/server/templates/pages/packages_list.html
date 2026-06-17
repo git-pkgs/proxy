@@ -100,7 +100,7 @@ document.getElementById('ecosystem-filter').addEventListener('change', function(
     const params = new URLSearchParams();
     if (ecosystem) params.set('ecosystem', ecosystem);
     if (sortBy) params.set('sort', sortBy);
-    window.location.href = '/packages?' + params.toString();
+    window.location.href = '/ui/packages?' + params.toString();
 });
 
 document.getElementById('sort-by').addEventListener('change', function(e) {
@@ -109,7 +109,7 @@ document.getElementById('sort-by').addEventListener('change', function(e) {
     const params = new URLSearchParams();
     if (ecosystem) params.set('ecosystem', ecosystem);
     if (sortBy) params.set('sort', sortBy);
-    window.location.href = '/packages?' + params.toString();
+    window.location.href = '/ui/packages?' + params.toString();
 });
 </script>
 {{end}}
