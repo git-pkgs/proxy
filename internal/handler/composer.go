@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -307,37 +308,28 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 	h.proxy.Logger.Info("composer download request",
 		"package", packageName, "version", version, "filename", filename)
 
-	// We need to fetch the metadata to get the actual download URL
-	// since Packagist URLs include a hash
-	metaURL := fmt.Sprintf("%s/p2/%s/%s.json", h.repoURL, vendor, pkg)
+	// We need to fetch the metadata to get the actual download URL since
+	// Packagist URLs include a hash. Packagist serves dev versions (e.g.
+	// "3.x-dev", "dev-master") from a separate "~dev" metadata file, while
+	// tagged releases live in the regular file. Try the file most likely to
+	// contain this version first, then fall back to the other so that both
+	// stable and dev versions resolve correctly.
+	metaURLs := h.metadataURLsForVersion(vendor, pkg, version)
 
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, metaURL, nil)
-	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
+	var downloadURL string
+	for _, metaURL := range metaURLs {
+		url, err := h.findDownloadURLFromMetadata(r.Context(), metaURL, packageName, version)
+		if err != nil {
+			h.proxy.Logger.Error("failed to fetch metadata", "error", err, "url", metaURL)
+			http.Error(w, "failed to fetch metadata", http.StatusBadGateway)
+			return
+		}
+		if url != "" {
+			downloadURL = url
+			break
+		}
 	}
 
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		h.proxy.Logger.Error("failed to fetch metadata", "error", err)
-		http.Error(w, "failed to fetch metadata", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		http.Error(w, "package not found", http.StatusNotFound)
-		return
-	}
-
-	var metadata map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
-		http.Error(w, "failed to parse metadata", http.StatusInternalServerError)
-		return
-	}
-
-	// Find the download URL for this version
-	downloadURL := h.findDownloadURL(metadata, packageName, version)
 	if downloadURL == "" {
 		http.Error(w, "version not found", http.StatusNotFound)
 		return
@@ -351,6 +343,56 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 	}
 
 	ServeArtifact(w, result)
+}
+
+// isDevVersion reports whether a Composer version string refers to a
+// development (unstable, branch) version rather than a tagged release.
+// Composer formats these as either "dev-<branch>" (e.g. "dev-master") or
+// "<alias>-dev" (e.g. "3.x-dev").
+func isDevVersion(version string) bool {
+	return strings.HasPrefix(version, "dev-") || strings.HasSuffix(version, "-dev")
+}
+
+// metadataURLsForVersion returns the upstream metadata URLs to consult for a
+// given version, in priority order. Dev versions are served from the "~dev"
+// file, tagged releases from the regular file; the other file is included as a
+// fallback so an unexpected classification still resolves.
+func (h *ComposerHandler) metadataURLsForVersion(vendor, pkg, version string) []string {
+	stable := fmt.Sprintf("%s/p2/%s/%s.json", h.repoURL, vendor, pkg)
+	dev := fmt.Sprintf("%s/p2/%s/%s~dev.json", h.repoURL, vendor, pkg)
+
+	if isDevVersion(version) {
+		return []string{dev, stable}
+	}
+	return []string{stable, dev}
+}
+
+// findDownloadURLFromMetadata fetches a metadata document and returns the dist
+// URL for the given version, or an empty string if the version is not present.
+// An error is returned only on transport failure; a missing document (non-200)
+// or a missing version both yield an empty string so the caller can fall back.
+func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaURL, packageName, version string) (string, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metaURL, nil)
+	if err != nil {
+		return "", err
+	}
+
+	resp, err := h.proxy.HTTPClient.Do(req)
+	if err != nil {
+		return "", err
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		return "", nil
+	}
+
+	var metadata map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+		return "", err
+	}
+
+	return h.findDownloadURL(metadata, packageName, version), nil
 }
 
 // findDownloadURL finds the dist URL for a specific version in metadata.
