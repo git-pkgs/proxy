@@ -219,6 +219,21 @@ type DatabaseConfig struct {
 	URL string `json:"url" yaml:"url"`
 }
 
+// String returns a human-readable description of the configured database
+// suitable for logging. For postgres the password in the connection URL is
+// redacted; if the URL cannot be parsed only the driver name is returned to
+// avoid leaking credentials.
+func (d DatabaseConfig) String() string {
+	if d.Driver == "postgres" {
+		u, err := url.Parse(d.URL)
+		if err != nil || u.Host == "" {
+			return "postgres"
+		}
+		return u.Redacted()
+	}
+	return d.Path
+}
+
 // LogConfig configures logging.
 type LogConfig struct {
 	// Level is the minimum log level: "debug", "info", "warn", "error".

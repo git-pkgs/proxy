@@ -676,3 +676,24 @@ func TestValidateDirectServeBaseURL(t *testing.T) {
 		t.Errorf("unexpected error for valid direct_serve_base_url: %v", err)
 	}
 }
+
+func TestDatabaseConfigString(t *testing.T) {
+	tests := []struct {
+		name string
+		cfg  DatabaseConfig
+		want string
+	}{
+		{"sqlite", DatabaseConfig{Driver: "sqlite", Path: "./cache/proxy.db"}, "./cache/proxy.db"},
+		{"default driver", DatabaseConfig{Path: "/var/lib/proxy.db"}, "/var/lib/proxy.db"},
+		{"postgres no password", DatabaseConfig{Driver: "postgres", URL: "postgres://user@localhost:5432/proxy"}, "postgres://user@localhost:5432/proxy"},
+		{"postgres redacts password", DatabaseConfig{Driver: "postgres", URL: "postgres://user:secret@localhost:5432/proxy?sslmode=disable"}, "postgres://user:xxxxx@localhost:5432/proxy?sslmode=disable"},
+		{"postgres unparseable url", DatabaseConfig{Driver: "postgres", URL: "host=localhost user=foo password=bar"}, "postgres"},
+		{"postgres ignores sqlite path", DatabaseConfig{Driver: "postgres", URL: "postgres://localhost/db", Path: "./cache/proxy.db"}, "postgres://localhost/db"},
+	}
+
+	for _, tt := range tests {
+		if got := tt.cfg.String(); got != tt.want {
+			t.Errorf("%s: String() = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+}

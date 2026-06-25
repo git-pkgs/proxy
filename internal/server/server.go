@@ -302,7 +302,7 @@ func (s *Server) Start() error {
 		"base_url", s.cfg.BaseURL,
 		"ui_url", s.cfg.UIBaseURL,
 		"storage", s.storage.URL(),
-		"database", s.cfg.Database.Path)
+		"database", s.cfg.Database.String())
 	go s.updateCacheStatsMetrics()
 	go s.startEvictionLoop(bgCtx)
 
@@ -927,7 +927,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		TotalSize:       size,
 		TotalSizeHuman:  formatSize(size),
 		StorageURL:      s.storage.URL(),
-		DatabasePath:    s.cfg.Database.Path,
+		DatabasePath:    s.cfg.Database.String(),
 	}
 
 	w.Header().Set("Content-Type", "application/json")
