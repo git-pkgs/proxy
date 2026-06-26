@@ -1,8 +1,11 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
@@ -462,6 +465,100 @@ func TestComposerExpandMinifiedSharedDistReferences(t *testing.T) {
 	// The two URLs must be different
 	if url1 == url2 {
 		t.Errorf("both versions have the same dist URL (shared reference bug): %s", url1)
+	}
+}
+
+// TestComposerDownloadDevVersionUsesDevMetadata is a regression test for the
+// bug that made it impossible to install a *-dev dependency from dist.
+//
+// Packagist serves development versions (e.g. "3.x-dev", "dev-master") from a
+// separate "{package}~dev.json" metadata file; the regular "{package}.json"
+// file contains only tagged releases. The download handler used to fetch only
+// the regular file, so it could never find the dist URL for a dev version and
+// returned 404 — causing Composer to silently fall back to a git clone.
+//
+// This test serves both files from a mock upstream and asserts that:
+//   - the OLD behavior (regular file only) cannot resolve the dev version, and
+//   - the FIXED behavior (consulting the ~dev file) does.
+func TestComposerDownloadDevVersionUsesDevMetadata(t *testing.T) {
+	const (
+		pkg     = "phpmd/phpmd"
+		vendor  = "phpmd"
+		name    = "phpmd"
+		version = "3.x-dev"
+		distURL = "https://api.github.com/repos/phpmd/phpmd/zipball/2a9217f60aaf27bf6ddad9188f254d020ab70745"
+	)
+
+	// Regular metadata: tagged releases only — no dev versions.
+	stableBody := `{
+		"packages": {
+			"phpmd/phpmd": [
+				{"version": "2.15.0", "dist": {"url": "https://example.com/2.15.0.zip", "type": "zip"}}
+			]
+		}
+	}`
+
+	// ~dev metadata: where the 3.x-dev version actually lives.
+	devBody := `{
+		"packages": {
+			"phpmd/phpmd": [
+				{"version": "3.x-dev", "dist": {"url": "` + distURL + `", "type": "zip"}}
+			]
+		}
+	}`
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/p2/phpmd/phpmd.json":
+			_, _ = w.Write([]byte(stableBody))
+		case "/p2/phpmd/phpmd~dev.json":
+			_, _ = w.Write([]byte(devBody))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer srv.Close()
+
+	h := &ComposerHandler{
+		proxy:    testProxy(),
+		repoURL:  srv.URL,
+		proxyURL: "http://localhost:8080",
+	}
+
+	ctx := context.Background()
+
+	// OLD behavior: fetching only the regular file fails to resolve the dev
+	// version, which is what produced the 404 before the fix.
+	stableURL := srv.URL + "/p2/phpmd/phpmd.json"
+	got, err := h.findDownloadURLFromMetadata(ctx, stableURL, pkg, version)
+	if err != nil {
+		t.Fatalf("unexpected error fetching regular metadata: %v", err)
+	}
+	if got != "" {
+		t.Fatalf("regular metadata unexpectedly contained dev version %q (got %q); "+
+			"the test no longer reproduces the original bug", version, got)
+	}
+
+	// FIXED behavior: the handler consults the ~dev file (it is first in the
+	// candidate list for dev versions) and resolves the dist URL.
+	urls := h.metadataURLsForVersion(vendor, name, version)
+	if len(urls) == 0 || !strings.HasSuffix(urls[0], "/p2/phpmd/phpmd~dev.json") {
+		t.Fatalf("dev version should consult the ~dev metadata file first, got %v", urls)
+	}
+
+	var resolved string
+	for _, u := range urls {
+		resolved, err = h.findDownloadURLFromMetadata(ctx, u, pkg, version)
+		if err != nil {
+			t.Fatalf("unexpected error fetching metadata %q: %v", u, err)
+		}
+		if resolved != "" {
+			break
+		}
+	}
+
+	if resolved != distURL {
+		t.Errorf("dev version dist URL = %q, want %q", resolved, distURL)
 	}
 }
 
