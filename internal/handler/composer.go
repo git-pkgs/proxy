@@ -316,6 +316,10 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 	// stable and dev versions resolve correctly.
 	metaURLs := h.metadataURLsForVersion(vendor, pkg, version)
 
+	h.proxy.Logger.Debug("resolving download URL",
+		"package", packageName, "version", version,
+		"metadata_urls", metaURLs)
+
 	var downloadURL string
 	for _, metaURL := range metaURLs {
 		url, err := h.findDownloadURLFromMetadata(r.Context(), metaURL, packageName, version)
@@ -331,9 +335,16 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 	}
 
 	if downloadURL == "" {
+		h.proxy.Logger.Debug("version not found in any metadata source",
+			"package", packageName, "version", version,
+			"tried_urls", metaURLs)
 		http.Error(w, "version not found", http.StatusNotFound)
 		return
 	}
+
+	h.proxy.Logger.Debug("resolved download URL",
+		"package", packageName, "version", version,
+		"download_url", downloadURL)
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "composer", packageName, version, filename, downloadURL)
 	if err != nil {
@@ -372,6 +383,9 @@ func (h *ComposerHandler) metadataURLsForVersion(vendor, pkg, version string) []
 // An error is returned only on transport failure; a missing document (non-200)
 // or a missing version both yield an empty string so the caller can fall back.
 func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaURL, packageName, version string) (string, error) {
+	h.proxy.Logger.Debug("fetching upstream metadata for download lookup",
+		"url", metaURL, "package", packageName, "version", version)
+
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metaURL, nil)
 	if err != nil {
 		return "", err
@@ -383,6 +397,9 @@ func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaU
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	h.proxy.Logger.Debug("upstream metadata response",
+		"url", metaURL, "status", resp.StatusCode)
+
 	if resp.StatusCode != http.StatusOK {
 		return "", nil
 	}
@@ -392,7 +409,27 @@ func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaU
 		return "", err
 	}
 
-	return h.findDownloadURL(metadata, packageName, version), nil
+	// Expand minified Composer v2 format so that inherited fields (including
+	// dist) are present on every version entry. Without this, versions that
+	// inherit dist from a previous entry will appear to have no download URL.
+	if metadata["minified"] == "composer/2.0" {
+		h.proxy.Logger.Debug("expanding minified metadata", "url", metaURL)
+		if packages, ok := metadata["packages"].(map[string]any); ok {
+			for pkgName, versions := range packages {
+				versionList, ok := versions.([]any)
+				if !ok {
+					continue
+				}
+				packages[pkgName] = expandMinifiedVersions(versionList)
+			}
+		}
+	}
+
+	url := h.findDownloadURL(metadata, packageName, version)
+	h.proxy.Logger.Debug("download URL lookup result",
+		"url", metaURL, "package", packageName, "version", version,
+		"download_url", url)
+	return url, nil
 }
 
 // findDownloadURL finds the dist URL for a specific version in metadata.
