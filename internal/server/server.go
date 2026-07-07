@@ -166,6 +166,7 @@ func (s *Server) Start() error {
 		Packages:   s.cfg.Cooldown.Packages,
 	}
 	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
+	proxy.HTTPClient.Timeout = s.cfg.ParseHTTPTimeout()
 	proxy.Cooldown = cd
 	proxy.CacheMetadata = s.cfg.CacheMetadata
 	proxy.MetadataTTL = s.cfg.ParseMetadataTTL()

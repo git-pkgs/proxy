@@ -524,6 +524,69 @@ func TestValidateHealthStorageProbeInterval(t *testing.T) {
 	}
 }
 
+func TestParseHTTPTimeout(t *testing.T) {
+	tests := []struct {
+		name    string
+		timeout string
+		want    time.Duration
+	}{
+		{"empty defaults to 30s", "", 30 * time.Second},
+		{"explicit zero disables", "0", 0},
+		{"2 minutes", "2m", 2 * time.Minute},
+		{"90 seconds", "90s", 90 * time.Second},
+		{"invalid defaults to 30s", "not-a-duration", 30 * time.Second},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.HTTPTimeout = tt.timeout
+			got := cfg.ParseHTTPTimeout()
+			if got != tt.want {
+				t.Errorf("ParseHTTPTimeout() = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateHTTPTimeout(t *testing.T) {
+	cfg := Default()
+	cfg.HTTPTimeout = "not-a-duration"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for invalid http_timeout")
+	}
+
+	cfg.HTTPTimeout = "-5s"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for negative http_timeout")
+	}
+
+	cfg.HTTPTimeout = "2m"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for valid http_timeout: %v", err)
+	}
+
+	cfg.HTTPTimeout = "0"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for zero http_timeout: %v", err)
+	}
+
+	cfg.HTTPTimeout = ""
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("unexpected error for empty http_timeout: %v", err)
+	}
+}
+
+func TestLoadHTTPTimeoutFromEnv(t *testing.T) {
+	cfg := Default()
+	t.Setenv("PROXY_HTTP_TIMEOUT", "90s")
+	cfg.LoadFromEnv()
+
+	if cfg.HTTPTimeout != "90s" {
+		t.Errorf("HTTPTimeout = %q, want %q", cfg.HTTPTimeout, "90s")
+	}
+}
+
 func TestLoadMetadataTTLFromEnv(t *testing.T) {
 	cfg := Default()
 	t.Setenv("PROXY_METADATA_TTL", "10m")
