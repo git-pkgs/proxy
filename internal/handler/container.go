@@ -97,6 +97,7 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 
 	var headers http.Header
 
+	if h.authURL != "" {
 		// Get auth token for upstream
 		token, err := h.getAuthToken(r.Context(), name, "pull")
 		if err != nil {
@@ -106,6 +107,7 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 		}
 
 		headers = http.Header{"Authorization": {"Bearer " + token}}
+	}
 
 	// Try to get from cache, or fetch from upstream with auth
 	filename := digest
@@ -236,7 +238,12 @@ func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request
 	_, _ = io.Copy(w, resp.Body)
 }
 
+// authReq adds the authentication headers to a request, if required.
 func (h *ContainerHandler) authReq(req *http.Request, name string) error {
+	if h.authURL == "" {
+		// no authentication required
+		return nil
+	}
 
 	// Get auth token
 	token, err := h.getAuthToken(req.Context(), name, "pull")
@@ -251,6 +258,10 @@ func (h *ContainerHandler) authReq(req *http.Request, name string) error {
 // getAuthToken gets a bearer token for the specified repository.
 // Docker Hub requires auth even for public images.
 func (h *ContainerHandler) getAuthToken(_ interface{ Done() <-chan struct{} }, repository, action string) (string, error) {
+	if h.authURL == "" {
+		panic("getAuthToken: should not have been called if auth is not configured")
+	}
+
 	// For Docker Hub: https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repo}:pull
 	authURL := fmt.Sprintf("%s/token?service=registry.docker.io&scope=repository:%s:%s",
 		h.authURL, repository, action)
