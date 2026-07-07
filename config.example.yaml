@@ -9,6 +9,11 @@ listen: ":8080"
 # so users know what to point their package manager at.
 base_url: "http://localhost:8080"
 
+# Timeout for individual upstream HTTP requests made by protocol handlers
+# (metadata fetches, pass-through file requests). Uses Go duration syntax.
+# Set to "0" to disable the timeout. Default: "30s".
+# http_timeout: "30s"
+
 # Public URL where the web UI is reached. Defaults to base_url when unset.
 # Set this separately when the UI is served on a different hostname than the
 # package endpoints — for example, the UI on a public domain behind auth while

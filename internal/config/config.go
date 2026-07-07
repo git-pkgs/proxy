@@ -110,6 +110,12 @@ type Config struct {
 	// size return ErrMetadataTooLarge. Default: "100MB".
 	MetadataMaxSize string `json:"metadata_max_size" yaml:"metadata_max_size"`
 
+	// HTTPTimeout is the timeout for individual upstream HTTP requests made
+	// by protocol handlers (metadata fetches, pass-through file requests).
+	// Uses Go duration syntax (e.g. "30s", "2m"). Default: "30s".
+	// Set to "0" to disable the timeout entirely.
+	HTTPTimeout string `json:"http_timeout" yaml:"http_timeout"`
+
 	// MirrorAPI enables the /api/mirror endpoints for starting mirror jobs via HTTP.
 	// Disabled by default to prevent unauthenticated users from triggering downloads.
 	MirrorAPI bool `json:"mirror_api" yaml:"mirror_api"`
@@ -460,6 +466,9 @@ func (c *Config) LoadFromEnv() {
 	if v := os.Getenv("PROXY_METADATA_MAX_SIZE"); v != "" {
 		c.MetadataMaxSize = v
 	}
+	if v := os.Getenv("PROXY_HTTP_TIMEOUT"); v != "" {
+		c.HTTPTimeout = v
+	}
 	if v := os.Getenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY"); v != "" {
 		c.Gradle.BuildCache.ReadOnly = v == "true" || v == "1"
 	}
@@ -567,6 +576,10 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	if err := validateHTTPTimeout(c.HTTPTimeout); err != nil {
+		return err
+	}
+
 	if err := c.Health.Validate(); err != nil {
 		return err
 	}
@@ -636,6 +649,7 @@ func (g *GradleBuildCacheConfig) Validate() error {
 const (
 	defaultMetadataTTL                   = 5 * time.Minute  //nolint:mnd // sensible default
 	defaultDirectServeTTL                = 15 * time.Minute //nolint:mnd // sensible default
+	defaultHTTPTimeout                   = 30 * time.Second //nolint:mnd // sensible default
 	defaultMetadataMaxSize               = 100 << 20
 	defaultGradleBuildCacheMaxUploadSize = 100 << 20
 	defaultGradleBuildCacheSweepInterval = 10 * time.Minute
@@ -654,6 +668,20 @@ func (c *Config) ParseMaxSize() int64 {
 		return 0
 	}
 	return size
+}
+
+func validateHTTPTimeout(s string) error {
+	if s == "" || s == "0" {
+		return nil
+	}
+	d, err := time.ParseDuration(s)
+	if err != nil {
+		return fmt.Errorf("invalid http_timeout %q: %w", s, err)
+	}
+	if d < 0 {
+		return fmt.Errorf("invalid http_timeout %q: must be non-negative", s)
+	}
+	return nil
 }
 
 func validateMetadataMaxSize(s string) error {
@@ -681,6 +709,22 @@ func (c *Config) ParseMetadataMaxSize() int64 {
 		return defaultMetadataMaxSize
 	}
 	return size
+}
+
+// ParseHTTPTimeout returns the upstream HTTP client timeout.
+// Returns 30s if unset, 0 (no timeout) if explicitly set to "0".
+func (c *Config) ParseHTTPTimeout() time.Duration {
+	if c.HTTPTimeout == "" {
+		return defaultHTTPTimeout
+	}
+	if c.HTTPTimeout == "0" {
+		return 0
+	}
+	d, err := time.ParseDuration(c.HTTPTimeout)
+	if err != nil || d < 0 {
+		return defaultHTTPTimeout
+	}
+	return d
 }
 
 // ParseMetadataTTL returns the metadata TTL duration.

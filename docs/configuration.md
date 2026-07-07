@@ -276,6 +276,18 @@ metadata_max_size: "100MB"   # default
 
 Or via environment variable: `PROXY_METADATA_MAX_SIZE=250MB`.
 
+## Upstream HTTP timeout
+
+Protocol handlers use a shared HTTP client for upstream requests such as metadata fetches and pass-through file downloads. `http_timeout` sets that client's per-request timeout. Raise it if slow upstreams or large metadata responses cause `context deadline exceeded` errors.
+
+```yaml
+http_timeout: "30s"   # default
+```
+
+Or via environment variable: `PROXY_HTTP_TIMEOUT=2m`.
+
+Set to `"0"` to disable the timeout entirely (requests then rely only on the server's write timeout).
+
 ## Mirror API
 
 The `/api/mirror` endpoints are disabled by default. Enable them to allow starting mirror jobs via HTTP:
