@@ -89,23 +89,26 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 
 	h.proxy.Logger.Info("container blob request", "name", name, "digest", digest)
 
-	// Get auth token for upstream
-	token, err := h.getAuthToken(r.Context(), name, "pull")
-	if err != nil {
-		h.proxy.Logger.Error("failed to get auth token", "error", err)
-		h.containerError(w, http.StatusUnauthorized, "UNAUTHORIZED", "failed to authenticate")
+	// For HEAD requests, just proxy to upstream
+	if r.Method == http.MethodHead {
+		h.proxyBlobHead(w, r, name, digest)
 		return
 	}
 
-	// For HEAD requests, just proxy to upstream
-	if r.Method == http.MethodHead {
-		h.proxyBlobHead(w, r, name, digest, token)
-		return
-	}
+	var headers http.Header
+
+		// Get auth token for upstream
+		token, err := h.getAuthToken(r.Context(), name, "pull")
+		if err != nil {
+			h.proxy.Logger.Error("failed to get auth token", "error", err)
+			h.containerError(w, http.StatusUnauthorized, "UNAUTHORIZED", "failed to authenticate")
+			return
+		}
+
+		headers = http.Header{"Authorization": {"Bearer " + token}}
 
 	// Try to get from cache, or fetch from upstream with auth
 	filename := digest
-	headers := http.Header{"Authorization": {"Bearer " + token}}
 	result, err := h.proxy.GetOrFetchArtifactFromURLWithHeaders(
 		r.Context(),
 		"oci",
@@ -144,14 +147,6 @@ func (h *ContainerHandler) handleManifest(w http.ResponseWriter, r *http.Request
 
 	h.proxy.Logger.Info("container manifest request", "name", name, "reference", reference)
 
-	// Get auth token
-	token, err := h.getAuthToken(r.Context(), name, "pull")
-	if err != nil {
-		h.proxy.Logger.Error("failed to get auth token", "error", err)
-		h.containerError(w, http.StatusUnauthorized, "UNAUTHORIZED", "failed to authenticate")
-		return
-	}
-
 	// Proxy to upstream
 	upstreamURL := fmt.Sprintf("%s/v2/%s/manifests/%s", h.registryURL, name, reference)
 
@@ -161,7 +156,11 @@ func (h *ContainerHandler) handleManifest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token)
+	if err := h.authReq(req, name); err != nil {
+		h.proxy.Logger.Error("failed to get auth token", "error", err)
+		h.containerError(w, http.StatusUnauthorized, "UNAUTHORIZED", "failed to authenticate")
+		return
+	}
 
 	// Forward Accept header for content negotiation
 	if accept := r.Header.Get("Accept"); accept != "" {
@@ -209,13 +208,6 @@ func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Get auth token
-	token, err := h.getAuthToken(r.Context(), name, "pull")
-	if err != nil {
-		h.containerError(w, http.StatusUnauthorized, "UNAUTHORIZED", "failed to authenticate")
-		return
-	}
-
 	upstreamURL := fmt.Sprintf("%s/v2/%s/tags/list", h.registryURL, name)
 	if r.URL.RawQuery != "" {
 		upstreamURL += "?" + r.URL.RawQuery
@@ -227,7 +219,10 @@ func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token)
+	if err := h.authReq(req, name); err != nil {
+		h.containerError(w, http.StatusUnauthorized, "UNAUTHORIZED", "failed to authenticate")
+		return
+	}
 
 	resp, err := h.proxy.HTTPClient.Do(req)
 	if err != nil {
@@ -239,6 +234,18 @@ func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+func (h *ContainerHandler) authReq(req *http.Request, name string) error {
+
+	// Get auth token
+	token, err := h.getAuthToken(req.Context(), name, "pull")
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	return nil
 }
 
 // getAuthToken gets a bearer token for the specified repository.
@@ -279,7 +286,7 @@ func (h *ContainerHandler) getAuthToken(_ interface{ Done() <-chan struct{} }, r
 }
 
 // proxyBlobHead handles HEAD requests for blobs.
-func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request, name, digest, token string) {
+func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request, name, digest string) {
 	upstreamURL := fmt.Sprintf("%s/v2/%s/blobs/%s", h.registryURL, name, digest)
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodHead, upstreamURL, nil)
@@ -288,7 +295,10 @@ func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	req.Header.Set("Authorization", "Bearer "+token)
+	if err := h.authReq(req, name); err != nil {
+		h.containerError(w, http.StatusUnauthorized, "UNAUTHORIZED", "failed to authenticate")
+		return
+	}
 
 	resp, err := h.proxy.HTTPClient.Do(req)
 	if err != nil {
