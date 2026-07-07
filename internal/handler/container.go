@@ -27,12 +27,20 @@ type ContainerHandler struct {
 	proxyURL    string
 }
 
-// NewContainerHandler creates a new container registry protocol handler.
-func NewContainerHandler(proxy *Proxy, proxyURL string) *ContainerHandler {
+// NewDockerHubHandler creates a new container registry protocol handler for Docker Hub.
+func NewDockerHubHandler(proxy *Proxy, proxyURL string) *ContainerHandler {
 	return &ContainerHandler{
 		proxy:       proxy,
 		registryURL: dockerHubRegistry,
 		authURL:     dockerHubAuth,
+		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
+	}
+}
+
+func NewContainerHandler(proxy *Proxy, proxyURL string, registryDomain string) *ContainerHandler {
+	return &ContainerHandler{
+		proxy:       proxy,
+		registryURL: "https://" + registryDomain,
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 	}
 }

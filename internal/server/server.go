@@ -58,9 +58,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/cooldown"
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
 	"github.com/git-pkgs/proxy/internal/config"
-	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/enrichment"
 	"github.com/git-pkgs/proxy/internal/handler"
@@ -84,12 +84,12 @@ const (
 
 // Server is the main proxy server.
 type Server struct {
-	cfg       *config.Config
-	db        *database.DB
-	storage   storage.Storage
-	logger    *slog.Logger
-	http      *http.Server
-	templates *Templates
+	cfg         *config.Config
+	db          *database.DB
+	storage     storage.Storage
+	logger      *slog.Logger
+	http        *http.Server
+	templates   *Templates
 	cancel      context.CancelFunc
 	healthCache *healthCache
 }
@@ -215,7 +215,8 @@ func (s *Server) Start() error {
 	condaHandler := handler.NewCondaHandler(proxy, s.cfg.BaseURL)
 	cranHandler := handler.NewCRANHandler(proxy, s.cfg.BaseURL)
 	juliaHandler := handler.NewJuliaHandler(proxy, s.cfg.BaseURL)
-	containerHandler := handler.NewContainerHandler(proxy, s.cfg.BaseURL)
+	dockerHandler := handler.NewDockerHubHandler(proxy, s.cfg.BaseURL)
+	registryK8sHandler := handler.NewContainerHandler(proxy, s.cfg.BaseURL, "registry.k8s.io")
 	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL)
 	rpmHandler := handler.NewRPMHandler(proxy, s.cfg.BaseURL)
 
@@ -234,7 +235,8 @@ func (s *Server) Start() error {
 	r.Mount("/conda", http.StripPrefix("/conda", condaHandler.Routes()))
 	r.Mount("/cran", http.StripPrefix("/cran", cranHandler.Routes()))
 	r.Mount("/julia", http.StripPrefix("/julia", juliaHandler.Routes()))
-	r.Mount("/v2", http.StripPrefix("/v2", containerHandler.Routes()))
+	r.Mount("/v2", http.StripPrefix("/v2", dockerHandler.Routes()))
+	r.Mount("/v2/registry.k8s.io", http.StripPrefix("/v2/registry.k8s.io", registryK8sHandler.Routes()))
 	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 

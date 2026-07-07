@@ -222,7 +222,7 @@ func (f *mockFetcherWithHeaders) Head(_ context.Context, _ string) (int64, strin
 }
 
 func TestContainerHandler_Routes_VersionCheck(t *testing.T) {
-	h := NewContainerHandler(nil, "http://localhost:8080")
+	h := NewDockerHubHandler(nil, "http://localhost:8080")
 
 	handler := h.Routes()
 	if handler == nil {
