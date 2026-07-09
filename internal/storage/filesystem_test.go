@@ -243,19 +243,70 @@ func TestFilesystemLargeFile(t *testing.T) {
 	assertLargeFileRoundTrip(t, createTestFilesystem(t))
 }
 
-func TestFilesystemRejectsTraversal(t *testing.T) {
+func TestFilesystemRejectsInvalidPaths(t *testing.T) {
 	tmp := t.TempDir()
 	fs, err := NewFilesystem(tmp)
 	if err != nil {
 		t.Fatal(err)
 	}
-	for _, p := range []string{"../etc/passwd", "../../etc/passwd", "a/../../etc/passwd"} {
-		if _, err := fs.Open(context.Background(), p); err == nil {
-			t.Errorf("Open(%q) should reject traversal", p)
+	for _, p := range []string{
+		"",
+		".",
+		"../etc/passwd",
+		"../../etc/passwd",
+		"a/../../etc/passwd",
+		"/etc/passwd",
+		"test//file.txt",
+		"test/./file.txt",
+		"test/../file.txt",
+		`test\..\file.txt`,
+	} {
+		name := p
+		if name == "" {
+			name = "empty"
 		}
-		if _, _, err := fs.Store(context.Background(), p, strings.NewReader("x")); err == nil {
-			t.Errorf("Store(%q) should reject traversal", p)
-		}
+
+		t.Run(name, func(t *testing.T) {
+			ctx := context.Background()
+
+			if _, err := fs.FullPath(p); !errors.Is(err, ErrNotFound) {
+				t.Errorf("FullPath(%q) = %v, want ErrNotFound", p, err)
+			}
+			if _, err := fs.Open(ctx, p); err == nil {
+				t.Errorf("Open(%q) should reject invalid path", p)
+			}
+			if _, _, err := fs.Store(ctx, p, strings.NewReader("x")); err == nil {
+				t.Errorf("Store(%q) should reject invalid path", p)
+			}
+			if _, err := fs.Exists(ctx, p); err == nil {
+				t.Errorf("Exists(%q) should reject invalid path", p)
+			}
+			if err := fs.Delete(ctx, p); err == nil {
+				t.Errorf("Delete(%q) should reject invalid path", p)
+			}
+			if _, err := fs.Size(ctx, p); err == nil {
+				t.Errorf("Size(%q) should reject invalid path", p)
+			}
+			if _, err := fs.ListPrefix(ctx, p); p != "" && err == nil {
+				t.Errorf("ListPrefix(%q) should reject invalid path", p)
+			}
+		})
+	}
+}
+
+func TestFilesystemListPrefixAllowsEmptyPrefix(t *testing.T) {
+	fs := createTestFilesystem(t)
+	ctx := context.Background()
+
+	_, _, _ = fs.Store(ctx, "a.txt", strings.NewReader("aaaa"))
+	_, _, _ = fs.Store(ctx, "c/d.txt", strings.NewReader("ccccc"))
+
+	objects, err := fs.ListPrefix(ctx, "")
+	if err != nil {
+		t.Fatalf("ListPrefix empty prefix failed: %v", err)
+	}
+	if len(objects) != 2 {
+		t.Fatalf("ListPrefix empty prefix returned %d objects, want 2", len(objects))
 	}
 }
 
