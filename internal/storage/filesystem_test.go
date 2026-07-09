@@ -261,7 +261,12 @@ func TestFilesystemRejectsInvalidPaths(t *testing.T) {
 		"test/../file.txt",
 		`test\..\file.txt`,
 	} {
-		t.Run(p, func(t *testing.T) {
+		name := p
+		if name == "" {
+			name = "empty"
+		}
+
+		t.Run(name, func(t *testing.T) {
 			ctx := context.Background()
 
 			if _, err := fs.FullPath(p); !errors.Is(err, ErrNotFound) {
