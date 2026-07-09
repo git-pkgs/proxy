@@ -34,11 +34,31 @@ func NewFilesystem(root string) (*Filesystem, error) {
 }
 
 func (fs *Filesystem) fullPath(path string) (string, error) {
-	full := filepath.Clean(filepath.Join(fs.root, filepath.FromSlash(path)))
-	if full != fs.root && !strings.HasPrefix(full, fs.root+string(filepath.Separator)) {
-		return "", fmt.Errorf("%w: path escapes storage root", ErrNotFound)
+	localPath, err := cleanStoragePath(path)
+	if err != nil {
+		return "", err
 	}
-	return full, nil
+	return filepath.Join(fs.root, localPath), nil
+}
+
+func (fs *Filesystem) prefixPath(prefix string) (string, error) {
+	if prefix == "" {
+		return fs.root, nil
+	}
+	return fs.fullPath(prefix)
+}
+
+func cleanStoragePath(path string) (string, error) {
+	if path == "." || strings.Contains(path, `\`) || !filepath.IsLocal(path) {
+		return "", fmt.Errorf("%w: invalid storage path", ErrNotFound)
+	}
+
+	localPath, err := filepath.Localize(path)
+	if err != nil || localPath == "." || !filepath.IsLocal(localPath) {
+		return "", fmt.Errorf("%w: invalid storage path", ErrNotFound)
+	}
+
+	return localPath, nil
 }
 
 func (fs *Filesystem) Store(ctx context.Context, path string, r io.Reader) (int64, string, error) {
@@ -190,7 +210,7 @@ func (fs *Filesystem) UsedSpace(ctx context.Context) (int64, error) {
 
 // ListPrefix returns object metadata for paths under a prefix.
 func (fs *Filesystem) ListPrefix(ctx context.Context, prefix string) ([]ObjectInfo, error) {
-	searchRoot, err := fs.fullPath(prefix)
+	searchRoot, err := fs.prefixPath(prefix)
 	if err != nil {
 		return nil, err
 	}
