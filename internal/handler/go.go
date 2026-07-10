@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
 	"strings"
+
+	"github.com/git-pkgs/registries/fetch"
 )
 
 const (
@@ -100,6 +103,10 @@ func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, modul
 
 	result, err := h.proxy.GetOrFetchArtifact(r.Context(), "golang", decodedModule, version, filename)
 	if err != nil {
+		if errors.Is(err, fetch.ErrNotFound) {
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 		h.proxy.Logger.Error("failed to get artifact", "error", err)
 		http.Error(w, "failed to fetch module", http.StatusBadGateway)
 		return
