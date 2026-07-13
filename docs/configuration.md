@@ -246,6 +246,8 @@ Note: Hex cooldown requires disabling registry signature verification since the 
 
 By default the proxy fetches metadata fresh from upstream on every request. Enable `cache_metadata` to store metadata responses in the database and storage backend for offline fallback. When upstream is unreachable, the proxy serves the last cached copy. ETag-based revalidation avoids re-downloading unchanged metadata.
 
+OCI manifests are always cached because cached image blobs cannot be pulled without their manifests. Digest-addressed manifests are immutable and served directly from cache. Tag-addressed manifests follow `metadata_ttl`, revalidate when stale, and fall back to the last cached response when the registry is unavailable.
+
 ```yaml
 cache_metadata: true
 ```

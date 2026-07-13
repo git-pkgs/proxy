@@ -127,16 +127,23 @@ type CacheResult struct {
 
 // GetOrFetchArtifact retrieves an artifact from cache or fetches from upstream.
 func (p *Proxy) GetOrFetchArtifact(ctx context.Context, ecosystem, name, version, filename string) (*CacheResult, error) {
-	pkgPURL := purl.MakePURLString(ecosystem, name, "")
-	versionPURL := purl.MakePURLString(ecosystem, name, version)
-
-	if cached, err := p.checkCache(ctx, pkgPURL, versionPURL, filename); err != nil {
+	if cached, err := p.GetCachedArtifact(ctx, ecosystem, name, version, filename); err != nil {
 		return nil, err
 	} else if cached != nil {
 		return cached, nil
 	}
 
+	pkgPURL := purl.MakePURLString(ecosystem, name, "")
+	versionPURL := purl.MakePURLString(ecosystem, name, version)
 	return p.fetchAndCache(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL)
+}
+
+// GetCachedArtifact retrieves an artifact from cache without contacting an upstream.
+// It returns nil when no usable cache entry exists.
+func (p *Proxy) GetCachedArtifact(ctx context.Context, ecosystem, name, version, filename string) (*CacheResult, error) {
+	pkgPURL := purl.MakePURLString(ecosystem, name, "")
+	versionPURL := purl.MakePURLString(ecosystem, name, version)
+	return p.checkCache(ctx, pkgPURL, versionPURL, filename)
 }
 
 // checkCache looks up an artifact in the cache. Returns nil if not cached.
@@ -766,18 +773,16 @@ func (p *Proxy) GetOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, 
 }
 
 // GetOrFetchArtifactFromURLWithHeaders retrieves an artifact from cache or fetches from a URL
-// with additional HTTP headers. This is needed for registries that require authentication
-// (e.g. Docker Hub requires a Bearer token even for public images).
+// with additional request-specific HTTP headers.
 func (p *Proxy) GetOrFetchArtifactFromURLWithHeaders(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header) (*CacheResult, error) {
-	pkgPURL := purl.MakePURLString(ecosystem, name, "")
-	versionPURL := purl.MakePURLString(ecosystem, name, version)
-
-	if cached, err := p.checkCache(ctx, pkgPURL, versionPURL, filename); err != nil {
+	if cached, err := p.GetCachedArtifact(ctx, ecosystem, name, version, filename); err != nil {
 		return nil, err
 	} else if cached != nil {
 		return cached, nil
 	}
 
+	pkgPURL := purl.MakePURLString(ecosystem, name, "")
+	versionPURL := purl.MakePURLString(ecosystem, name, version)
 	return p.fetchAndCacheFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers)
 }
 

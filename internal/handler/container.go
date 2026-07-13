@@ -11,7 +11,6 @@ import (
 
 const (
 	dockerHubRegistry  = "https://registry-1.docker.io"
-	dockerHubAuth      = "https://auth.docker.io"
 	blobMatchCount     = 3 // full match + name + digest
 	manifestMatchCount = 3 // full match + name + reference
 	tagsListMatchCount = 2 // full match + name
@@ -23,7 +22,6 @@ const (
 type ContainerHandler struct {
 	proxy       *Proxy
 	registryURL string
-	authURL     string
 	proxyURL    string
 }
 
@@ -32,7 +30,6 @@ func NewContainerHandler(proxy *Proxy, proxyURL string) *ContainerHandler {
 	return &ContainerHandler{
 		proxy:       proxy,
 		registryURL: dockerHubRegistry,
-		authURL:     dockerHubAuth,
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 	}
 }
@@ -89,31 +86,38 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 
 	h.proxy.Logger.Info("container blob request", "name", name, "digest", digest)
 
-	// Get auth token for upstream
-	token, err := h.getAuthToken(r.Context(), name, "pull")
+	filename := digest
+	cached, err := h.proxy.GetCachedArtifact(r.Context(), "oci", name, digest, filename)
 	if err != nil {
-		h.proxy.Logger.Error("failed to get auth token", "error", err)
-		h.containerError(w, http.StatusUnauthorized, "UNAUTHORIZED", "failed to authenticate")
+		h.proxy.Logger.Error("failed to check blob cache", "error", err)
+		h.containerError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to check blob cache")
+		return
+	}
+	if cached != nil {
+		w.Header().Set("Docker-Content-Digest", digest)
+		w.Header().Set("Content-Type", "application/octet-stream")
+		if r.Method == http.MethodHead {
+			serveArtifactHead(w, cached)
+			return
+		}
+		ServeArtifact(w, cached)
 		return
 	}
 
 	// For HEAD requests, just proxy to upstream
 	if r.Method == http.MethodHead {
-		h.proxyBlobHead(w, r, name, digest, token)
+		h.proxyBlobHead(w, r, name, digest)
 		return
 	}
 
-	// Try to get from cache, or fetch from upstream with auth
-	filename := digest
-	headers := http.Header{"Authorization": {"Bearer " + token}}
-	result, err := h.proxy.GetOrFetchArtifactFromURLWithHeaders(
+	// Try to get from cache, or fetch from the authentication-aware upstream client.
+	result, err := h.proxy.GetOrFetchArtifactFromURL(
 		r.Context(),
 		"oci",
 		name,
 		digest, // use digest as version
 		filename,
 		fmt.Sprintf("%s/v2/%s/blobs/%s", h.registryURL, name, digest),
-		headers,
 	)
 
 	if err != nil {
@@ -127,8 +131,23 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 	ServeArtifact(w, result)
 }
 
-// handleManifest proxies manifest requests to upstream.
-// Manifests change when tags are updated, so we proxy these directly.
+func serveArtifactHead(w http.ResponseWriter, result *CacheResult) {
+	if result.Reader != nil {
+		_ = result.Reader.Close()
+	}
+	if result.ContentType != "" {
+		w.Header().Set("Content-Type", result.ContentType)
+	}
+	if result.Size >= 0 {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", result.Size))
+	}
+	if result.Hash != "" {
+		w.Header().Set("ETag", fmt.Sprintf(`"%s"`, result.Hash))
+	}
+	w.WriteHeader(http.StatusOK)
+}
+
+// handleManifest serves immutable manifests from cache and revalidates mutable tags.
 // Path format: {name}/manifests/{reference}
 func (h *ContainerHandler) handleManifest(w http.ResponseWriter, r *http.Request, path string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
@@ -143,57 +162,7 @@ func (h *ContainerHandler) handleManifest(w http.ResponseWriter, r *http.Request
 	}
 
 	h.proxy.Logger.Info("container manifest request", "name", name, "reference", reference)
-
-	// Get auth token
-	token, err := h.getAuthToken(r.Context(), name, "pull")
-	if err != nil {
-		h.proxy.Logger.Error("failed to get auth token", "error", err)
-		h.containerError(w, http.StatusUnauthorized, "UNAUTHORIZED", "failed to authenticate")
-		return
-	}
-
-	// Proxy to upstream
-	upstreamURL := fmt.Sprintf("%s/v2/%s/manifests/%s", h.registryURL, name, reference)
-
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
-	if err != nil {
-		h.containerError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create request")
-		return
-	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	// Forward Accept header for content negotiation
-	if accept := r.Header.Get("Accept"); accept != "" {
-		req.Header.Set("Accept", accept)
-	} else {
-		// Default accept headers for manifests
-		req.Header.Set("Accept", strings.Join([]string{
-			"application/vnd.oci.image.manifest.v1+json",
-			"application/vnd.oci.image.index.v1+json",
-			"application/vnd.docker.distribution.manifest.v2+json",
-			"application/vnd.docker.distribution.manifest.list.v2+json",
-			"application/vnd.docker.distribution.manifest.v1+prettyjws",
-		}, ", "))
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		h.proxy.Logger.Error("failed to fetch manifest", "error", err)
-		h.containerError(w, http.StatusBadGateway, "INTERNAL_ERROR", "failed to fetch from upstream")
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	// Copy relevant headers
-	for _, header := range []string{"Content-Type", "Content-Length", "Docker-Content-Digest", "ETag"} {
-		if v := resp.Header.Get(header); v != "" {
-			w.Header().Set(header, v)
-		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	h.serveManifest(w, r, name, reference)
 }
 
 // handleTagsList proxies tag list requests to upstream.
@@ -209,13 +178,6 @@ func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// Get auth token
-	token, err := h.getAuthToken(r.Context(), name, "pull")
-	if err != nil {
-		h.containerError(w, http.StatusUnauthorized, "UNAUTHORIZED", "failed to authenticate")
-		return
-	}
-
 	upstreamURL := fmt.Sprintf("%s/v2/%s/tags/list", h.registryURL, name)
 	if r.URL.RawQuery != "" {
 		upstreamURL += "?" + r.URL.RawQuery
@@ -226,8 +188,6 @@ func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request
 		h.containerError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create request")
 		return
 	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := h.proxy.HTTPClient.Do(req)
 	if err != nil {
@@ -241,45 +201,8 @@ func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request
 	_, _ = io.Copy(w, resp.Body)
 }
 
-// getAuthToken gets a bearer token for the specified repository.
-// Docker Hub requires auth even for public images.
-func (h *ContainerHandler) getAuthToken(_ interface{ Done() <-chan struct{} }, repository, action string) (string, error) {
-	// For Docker Hub: https://auth.docker.io/token?service=registry.docker.io&scope=repository:{repo}:pull
-	authURL := fmt.Sprintf("%s/token?service=registry.docker.io&scope=repository:%s:%s",
-		h.authURL, repository, action)
-
-	req, err := http.NewRequest(http.MethodGet, authURL, nil)
-	if err != nil {
-		return "", err
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		return "", err
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("auth failed with status %d", resp.StatusCode)
-	}
-
-	var tokenResp struct {
-		Token       string `json:"token"`
-		AccessToken string `json:"access_token"`
-	}
-
-	if err := json.NewDecoder(resp.Body).Decode(&tokenResp); err != nil {
-		return "", err
-	}
-
-	if tokenResp.Token != "" {
-		return tokenResp.Token, nil
-	}
-	return tokenResp.AccessToken, nil
-}
-
 // proxyBlobHead handles HEAD requests for blobs.
-func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request, name, digest, token string) {
+func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request, name, digest string) {
 	upstreamURL := fmt.Sprintf("%s/v2/%s/blobs/%s", h.registryURL, name, digest)
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodHead, upstreamURL, nil)
@@ -287,8 +210,6 @@ func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request,
 		h.containerError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create request")
 		return
 	}
-
-	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := h.proxy.HTTPClient.Do(req)
 	if err != nil {
