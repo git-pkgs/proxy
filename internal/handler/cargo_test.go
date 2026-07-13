@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -10,6 +11,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/registries/fetch"
 )
 
 func cargoTestProxy() *Proxy {
@@ -68,6 +70,64 @@ func TestCargoConfigEndpoint(t *testing.T) {
 	if config.DL != expectedDL {
 		t.Errorf("DL = %q, want %q", config.DL, expectedDL)
 	}
+}
+
+func TestCargoHandlerUsesConfiguredUpstreams(t *testing.T) {
+	t.Run("index", func(t *testing.T) {
+		var requestPath string
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestPath = r.URL.Path
+			w.Header().Set("Content-Type", "text/plain")
+			_, _ = io.WriteString(w, `{"name":"serde","vers":"1.0.0"}`)
+		}))
+		defer upstream.Close()
+
+		proxy, _, _, _ := setupTestProxy(t)
+		proxy.HTTPClient = upstream.Client()
+		h := NewCargoHandler(
+			proxy,
+			"http://proxy.test",
+			upstream.URL+"/index/",
+			"https://crates.example.test/files/",
+		)
+
+		req := httptest.NewRequest(http.MethodGet, "/se/rd/serde", nil)
+		w := httptest.NewRecorder()
+		h.Routes().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+		}
+		if requestPath != "/index/se/rd/serde" {
+			t.Errorf("upstream path = %q, want %q", requestPath, "/index/se/rd/serde")
+		}
+	})
+
+	t.Run("download", func(t *testing.T) {
+		proxy, _, _, artifactFetcher := setupTestProxy(t)
+		artifactFetcher.artifact = &fetch.Artifact{
+			Body:        io.NopCloser(strings.NewReader("crate")),
+			ContentType: "application/gzip",
+		}
+		h := NewCargoHandler(
+			proxy,
+			"http://proxy.test",
+			"https://index.example.test/root/",
+			"https://crates.example.test/files/",
+		)
+
+		req := httptest.NewRequest(http.MethodGet, "/crates/serde/1.0.0/download", nil)
+		w := httptest.NewRecorder()
+		h.Routes().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+		}
+		want := "https://crates.example.test/files/serde/serde-1.0.0.crate"
+		if artifactFetcher.fetchedURL != want {
+			t.Errorf("fetched URL = %q, want %q", artifactFetcher.fetchedURL, want)
+		}
+	})
 }
 
 func TestCargoIndexProxy(t *testing.T) {

@@ -2,13 +2,16 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/registries/fetch"
 )
 
 const testVersion100 = "1.0.0"
@@ -44,6 +47,54 @@ func TestNPMExtractVersionFromFilename(t *testing.T) {
 				tt.packageName, tt.filename, got, tt.want)
 		}
 	}
+}
+
+func TestNPMHandlerUsesConfiguredUpstream(t *testing.T) {
+	t.Run("metadata", func(t *testing.T) {
+		var requestPath string
+		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			requestPath = r.URL.Path
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"versions":{}}`)
+		}))
+		defer upstream.Close()
+
+		proxy, _, _, _ := setupTestProxy(t)
+		proxy.HTTPClient = upstream.Client()
+		h := NewNPMHandler(proxy, "http://proxy.test", upstream.URL+"/root/")
+
+		req := httptest.NewRequest(http.MethodGet, "/testpkg", nil)
+		w := httptest.NewRecorder()
+		h.Routes().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+		}
+		if requestPath != "/root/testpkg" {
+			t.Errorf("upstream path = %q, want %q", requestPath, "/root/testpkg")
+		}
+	})
+
+	t.Run("download", func(t *testing.T) {
+		proxy, _, _, artifactFetcher := setupTestProxy(t)
+		artifactFetcher.artifact = &fetch.Artifact{
+			Body:        io.NopCloser(strings.NewReader("package")),
+			ContentType: "application/gzip",
+		}
+		h := NewNPMHandler(proxy, "http://proxy.test", "https://npm.example.test/root/")
+
+		req := httptest.NewRequest(http.MethodGet, "/testpkg/-/testpkg-1.0.0.tgz", nil)
+		w := httptest.NewRecorder()
+		h.Routes().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+		}
+		want := "https://npm.example.test/root/testpkg/-/testpkg-1.0.0.tgz"
+		if artifactFetcher.fetchedURL != want {
+			t.Errorf("fetched URL = %q, want %q", artifactFetcher.fetchedURL, want)
+		}
+	})
 }
 
 func TestNPMRewriteMetadata(t *testing.T) {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 	"time"
 
@@ -30,11 +31,18 @@ type CargoHandler struct {
 }
 
 // NewCargoHandler creates a new cargo protocol handler.
-func NewCargoHandler(proxy *Proxy, proxyURL string) *CargoHandler {
+func NewCargoHandler(proxy *Proxy, proxyURL, indexURL, downloadURL string) *CargoHandler {
+	if strings.TrimSpace(indexURL) == "" {
+		indexURL = cargoUpstream
+	}
+	if strings.TrimSpace(downloadURL) == "" {
+		downloadURL = cargoDownloadBase
+	}
+
 	return &CargoHandler{
 		proxy:       proxy,
-		indexURL:    cargoUpstream,
-		downloadURL: cargoDownloadBase,
+		indexURL:    strings.TrimSuffix(indexURL, "/"),
+		downloadURL: strings.TrimSuffix(downloadURL, "/"),
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 	}
 }
@@ -191,7 +199,15 @@ func (h *CargoHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	h.proxy.Logger.Info("cargo download request",
 		"crate", name, "version", version, "filename", filename)
 
-	result, err := h.proxy.GetOrFetchArtifact(r.Context(), "cargo", name, version, filename)
+	downloadURL := fmt.Sprintf(
+		"%s/%s/%s",
+		h.downloadURL,
+		url.PathEscape(name),
+		url.PathEscape(filename),
+	)
+	result, err := h.proxy.GetOrFetchArtifactFromURL(
+		r.Context(), "cargo", name, version, filename, downloadURL,
+	)
 	if err != nil {
 		h.proxy.Logger.Error("failed to get artifact", "error", err)
 		http.Error(w, "failed to fetch crate", http.StatusBadGateway)
