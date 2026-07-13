@@ -240,6 +240,8 @@ Fetches artifacts from upstream registries.
 - Exponential backoff retry on 429 (rate limit) and 5xx errors
 - Returns streaming reader (doesn't load into memory)
 - Configurable user-agent
+- Shares an authentication-aware transport with metadata requests so URL-scoped credentials apply consistently
+- Discovers and caches scoped OCI Bearer tokens from registry challenges
 
 **Resolver:**
 - Determines download URL for a package/version
