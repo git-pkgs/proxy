@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -117,23 +116,12 @@ func TestComposerDownloadUpstreamNotFoundReturns404(t *testing.T) {
 }
 
 func TestContainerBlobUpstreamNotFoundReturns404(t *testing.T) {
-	authServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`{"token": "test-token-123"}`))
-	}))
-	defer authServer.Close()
-
-	proxy, _, _, _ := setupTestProxy(t)
-	proxy.Fetcher = &mockFetcherWithHeaders{
-		fetchFn: func(_ context.Context, _ string, _ http.Header) (*fetch.Artifact, error) {
-			return nil, fetch.ErrNotFound
-		},
-	}
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.fetchErr = fetch.ErrNotFound
 
 	h := &ContainerHandler{
 		proxy:       proxy,
 		registryURL: "https://registry-1.docker.io",
-		authURL:     authServer.URL,
 		proxyURL:    "http://localhost:8080",
 	}
 
