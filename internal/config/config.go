@@ -274,15 +274,20 @@ type UpstreamConfig struct {
 	CargoDownload string `json:"cargo_download" yaml:"cargo_download"`
 
 	// Auth configures authentication for upstream registries.
-	// Keys are URL prefixes that are matched against request URLs.
+	// Keys are absolute URL scopes matched by scheme, host, effective port,
+	// and path-segment prefix.
 	// Example: "https://npm.pkg.github.com" matches all requests to that host.
 	Auth map[string]AuthConfig `json:"auth" yaml:"auth"`
 }
 
 // AuthForURL returns the auth config that matches the given URL.
-// Matches are based on URL prefix - the longest matching prefix wins.
+// The longest matching URL scope wins.
 func (u *UpstreamConfig) AuthForURL(url string) *AuthConfig {
 	if u.Auth == nil {
+		return nil
+	}
+	target, err := parseAuthURL(url)
+	if err != nil {
 		return nil
 	}
 
@@ -290,7 +295,8 @@ func (u *UpstreamConfig) AuthForURL(url string) *AuthConfig {
 	var bestLen int
 
 	for pattern, auth := range u.Auth {
-		if strings.HasPrefix(url, pattern) && len(pattern) > bestLen {
+		configured, err := parseAuthURL(pattern)
+		if err == nil && authURLMatches(configured, target) && len(pattern) > bestLen {
 			a := auth // copy to avoid loop variable capture
 			bestMatch = &a
 			bestLen = len(pattern)
@@ -298,6 +304,45 @@ func (u *UpstreamConfig) AuthForURL(url string) *AuthConfig {
 	}
 
 	return bestMatch
+}
+
+func parseAuthURL(value string) (*url.URL, error) {
+	parsed, err := url.Parse(value)
+	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" || parsed.Opaque != "" {
+		return nil, fmt.Errorf("invalid authentication URL")
+	}
+	return parsed, nil
+}
+
+func authURLMatches(configured, target *url.URL) bool {
+	if !strings.EqualFold(configured.Scheme, target.Scheme) ||
+		!strings.EqualFold(configured.Hostname(), target.Hostname()) ||
+		authURLPort(configured) != authURLPort(target) {
+		return false
+	}
+	if configured.RawQuery != "" && configured.RawQuery != target.RawQuery {
+		return false
+	}
+
+	configuredPath := strings.TrimSuffix(configured.EscapedPath(), "/")
+	if configuredPath == "" {
+		return true
+	}
+	targetPath := strings.TrimSuffix(target.EscapedPath(), "/")
+	return targetPath == configuredPath || strings.HasPrefix(targetPath, configuredPath+"/")
+}
+
+func authURLPort(value *url.URL) string {
+	if port := value.Port(); port != "" {
+		return port
+	}
+	if strings.EqualFold(value.Scheme, "https") {
+		return "443"
+	}
+	if strings.EqualFold(value.Scheme, "http") {
+		return "80"
+	}
+	return ""
 }
 
 // AuthConfig configures authentication for an upstream registry.

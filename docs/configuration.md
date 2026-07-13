@@ -123,7 +123,9 @@ upstream:
 
 ## Authentication
 
-Configure authentication for private upstream registries. Auth is matched by URL prefix, and credentials can reference environment variables using `${VAR_NAME}` syntax.
+Configure authentication for private upstream registries. The same authentication-aware client is used for metadata and artifact downloads, and credentials can reference environment variables using `${VAR_NAME}` syntax.
+
+OCI registries that return a Bearer challenge from a `/v2/{repository}/…` endpoint are handled automatically. The proxy discovers the token realm from `WWW-Authenticate`, applies any configured credentials for the token URL, and reuses the scoped token until shortly before it expires.
 
 ### Bearer Token
 
@@ -172,7 +174,7 @@ upstream:
 
 ### URL Matching
 
-Auth configs are matched by URL prefix. The longest matching prefix wins, so you can configure different credentials for different paths:
+Auth keys must be absolute URLs. Matching compares the scheme, host, effective port, and path-segment prefix, preventing credentials for `registry.example.com` from being sent to a lookalike host such as `registry.example.com.evil.test`. The longest matching scope wins, so you can configure different credentials for different paths:
 
 ```yaml
 upstream:

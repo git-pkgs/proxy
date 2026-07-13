@@ -96,7 +96,8 @@ upstream:
   cargo_download: "https://static.crates.io/crates"
 
   # Authentication for upstream registries
-  # Keys are URL prefixes matched against request URLs.
+  # Keys are absolute URL scopes. Scheme, host, effective port, and path
+  # segment boundaries must match; the longest matching scope wins.
   # Values can reference environment variables using ${VAR_NAME} syntax.
   #
   # Supported auth types:

@@ -760,3 +760,45 @@ func TestDatabaseConfigString(t *testing.T) {
 		}
 	}
 }
+
+func TestUpstreamAuthForURLMatchesURLComponents(t *testing.T) {
+	registryAuth := AuthConfig{Type: "bearer", Token: "registry-token"}
+	privateAuth := AuthConfig{Type: "bearer", Token: "private-token"}
+	config := UpstreamConfig{Auth: map[string]AuthConfig{
+		"https://registry.example.com":         registryAuth,
+		"https://registry.example.com/private": privateAuth,
+	}}
+
+	tests := []struct {
+		name      string
+		url       string
+		wantToken string
+	}{
+		{name: "registry root", url: "https://registry.example.com/package", wantToken: "registry-token"},
+		{name: "host is case insensitive", url: "https://REGISTRY.EXAMPLE.COM/package", wantToken: "registry-token"},
+		{name: "longest path match", url: "https://registry.example.com/private/package", wantToken: "private-token"},
+		{name: "exact path match", url: "https://registry.example.com/private", wantToken: "private-token"},
+		{name: "path segment boundary", url: "https://registry.example.com/private-other/package", wantToken: "registry-token"},
+		{name: "lookalike host rejected", url: "https://registry.example.com.evil.test/package"},
+		{name: "different scheme rejected", url: "http://registry.example.com/package"},
+		{name: "different port rejected", url: "https://registry.example.com:8443/package"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			auth := config.AuthForURL(tt.url)
+			if tt.wantToken == "" {
+				if auth != nil {
+					t.Fatalf("AuthForURL() = %+v, want nil", auth)
+				}
+				return
+			}
+			if auth == nil {
+				t.Fatal("AuthForURL() = nil, want authentication")
+			}
+			if auth.Token != tt.wantToken {
+				t.Errorf("token = %q, want %q", auth.Token, tt.wantToken)
+			}
+		})
+	}
+}
