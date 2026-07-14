@@ -95,6 +95,27 @@ func TestNPMHandlerUsesConfiguredUpstream(t *testing.T) {
 			t.Errorf("fetched URL = %q, want %q", artifactFetcher.fetchedURL, want)
 		}
 	})
+
+	t.Run("scoped download", func(t *testing.T) {
+		proxy, _, _, artifactFetcher := setupTestProxy(t)
+		artifactFetcher.artifact = &fetch.Artifact{
+			Body:        io.NopCloser(strings.NewReader("package")),
+			ContentType: "application/gzip",
+		}
+		h := NewNPMHandler(proxy, "http://proxy.test", "https://npm.example.test/root/")
+
+		req := httptest.NewRequest(http.MethodGet, "/@scope/name/-/name-1.0.0.tgz", nil)
+		w := httptest.NewRecorder()
+		h.Routes().ServeHTTP(w, req)
+
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+		}
+		want := "https://npm.example.test/root/@scope/name/-/name-1.0.0.tgz"
+		if artifactFetcher.fetchedURL != want {
+			t.Errorf("fetched URL = %q, want %q", artifactFetcher.fetchedURL, want)
+		}
+	})
 }
 
 func TestNPMRewriteMetadata(t *testing.T) {

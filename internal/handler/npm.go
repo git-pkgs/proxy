@@ -270,7 +270,7 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	downloadURL := fmt.Sprintf(
 		"%s/%s/-/%s",
 		h.upstreamURL,
-		url.PathEscape(packageName),
+		escapeNPMDownloadPackage(packageName),
 		url.PathEscape(filename),
 	)
 	result, err := h.proxy.GetOrFetchArtifactFromURL(
@@ -283,6 +283,14 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ServeArtifact(w, result)
+}
+
+func escapeNPMDownloadPackage(packageName string) string {
+	scope, name, scoped := strings.Cut(packageName, "/")
+	if scoped && strings.HasPrefix(scope, "@") && len(scope) > 1 && name != "" && !strings.Contains(name, "/") {
+		return url.PathEscape(scope) + "/" + url.PathEscape(name)
+	}
+	return url.PathEscape(packageName)
 }
 
 // extractPackageName extracts the package name from the request path.
