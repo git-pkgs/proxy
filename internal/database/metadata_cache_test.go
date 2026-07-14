@@ -30,8 +30,12 @@ func TestUpsertAndGetMetadataCache(t *testing.T) {
 		StoragePath: "_metadata/npm/lodash/metadata",
 		ETag:        sql.NullString{String: `"abc123"`, Valid: true},
 		ContentType: sql.NullString{String: "application/json", Valid: true},
-		Size:        sql.NullInt64{Int64: 1024, Valid: true},
-		FetchedAt:   sql.NullTime{Time: time.Now(), Valid: true},
+		ContentDigest: sql.NullString{
+			String: "sha256:0123456789abcdef",
+			Valid:  true,
+		},
+		Size:      sql.NullInt64{Int64: 1024, Valid: true},
+		FetchedAt: sql.NullTime{Time: time.Now(), Valid: true},
 	}
 
 	err := db.UpsertMetadataCache(entry)
@@ -61,6 +65,9 @@ func TestUpsertAndGetMetadataCache(t *testing.T) {
 	}
 	if !got.ContentType.Valid || got.ContentType.String != "application/json" {
 		t.Errorf("content_type = %v, want %q", got.ContentType, "application/json")
+	}
+	if !got.ContentDigest.Valid || got.ContentDigest.String != "sha256:0123456789abcdef" {
+		t.Errorf("content_digest = %v, want %q", got.ContentDigest, "sha256:0123456789abcdef")
 	}
 	if !got.Size.Valid || got.Size.Int64 != 1024 {
 		t.Errorf("size = %v, want 1024", got.Size)
@@ -176,5 +183,49 @@ func TestMetadataCacheTableCreatedByMigration(t *testing.T) {
 	}
 	if !has {
 		t.Error("metadata_cache table should exist after migration")
+	}
+}
+
+func TestMetadataCacheContentDigestMigrationPreservesExistingRows(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := Create(dbPath)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.Exec("ALTER TABLE metadata_cache DROP COLUMN content_digest"); err != nil {
+		t.Fatalf("dropping content_digest: %v", err)
+	}
+	if _, err := db.Exec("DELETE FROM migrations WHERE name = ?", "006_add_metadata_content_digest"); err != nil {
+		t.Fatalf("resetting digest migration: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO metadata_cache (ecosystem, name, storage_path, content_type, size, fetched_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+	`, "oci-manifest", "cache-key", "_metadata/oci-manifest/cache-key/metadata", "application/json", 2, time.Now(), time.Now(), time.Now()); err != nil {
+		t.Fatalf("inserting legacy cache row: %v", err)
+	}
+
+	if err := db.MigrateSchema(); err != nil {
+		t.Fatalf("MigrateSchema() error = %v", err)
+	}
+	hasDigest, err := db.HasColumn("metadata_cache", "content_digest")
+	if err != nil {
+		t.Fatalf("HasColumn() error = %v", err)
+	}
+	if !hasDigest {
+		t.Fatal("metadata_cache.content_digest was not added")
+	}
+
+	entry, err := db.GetMetadataCache("oci-manifest", "cache-key")
+	if err != nil {
+		t.Fatalf("GetMetadataCache() error = %v", err)
+	}
+	if entry == nil || entry.StoragePath != "_metadata/oci-manifest/cache-key/metadata" {
+		t.Fatalf("existing metadata cache row was not preserved: %#v", entry)
+	}
+	if entry.ContentDigest.Valid {
+		t.Errorf("legacy content digest = %q, want NULL", entry.ContentDigest.String)
 	}
 }

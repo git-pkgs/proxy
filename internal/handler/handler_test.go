@@ -5,7 +5,6 @@ import (
 	"context"
 	"database/sql"
 	"errors"
-	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -16,6 +15,7 @@ import (
 
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/storage"
+	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
 )
 
@@ -151,7 +151,7 @@ func seedPackage(t *testing.T, db *database.DB, store *mockStorage, ecosystem, n
 	t.Helper()
 
 	pkg := &database.Package{
-		PURL:      fmt.Sprintf("pkg:%s/%s", ecosystem, name),
+		PURL:      purl.MakePURLString(ecosystem, name, ""),
 		Ecosystem: ecosystem,
 		Name:      name,
 	}
@@ -159,7 +159,7 @@ func seedPackage(t *testing.T, db *database.DB, store *mockStorage, ecosystem, n
 		t.Fatalf("failed to upsert package: %v", err)
 	}
 
-	versionPURL := fmt.Sprintf("pkg:%s/%s@%s", ecosystem, name, version)
+	versionPURL := purl.MakePURLString(ecosystem, name, version)
 	ver := &database.Version{
 		PURL:        versionPURL,
 		PackagePURL: pkg.PURL,
