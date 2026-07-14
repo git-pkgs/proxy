@@ -132,6 +132,14 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 }
 
 func serveArtifactHead(w http.ResponseWriter, result *CacheResult) {
+	if result.RedirectURL != "" {
+		if result.Hash != "" {
+			w.Header().Set("ETag", fmt.Sprintf(`"%s"`, result.Hash))
+		}
+		w.Header().Set("Location", result.RedirectURL)
+		w.WriteHeader(http.StatusFound)
+		return
+	}
 	if result.Reader != nil {
 		_ = result.Reader.Close()
 	}

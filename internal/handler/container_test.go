@@ -278,6 +278,40 @@ func TestContainerHandler_BlobHead_CacheHitSkipsUpstreamAndAuth(t *testing.T) {
 	}
 }
 
+func TestContainerHandler_BlobHead_DirectServeRedirects(t *testing.T) {
+	proxy, db, store, fetcher := setupTestProxy(t)
+	digest := "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd"
+	seedPackage(t, db, store, "oci", "library/nginx", digest, digest, "cached blob")
+	store.signedURL = "https://storage.example.test/cached-blob?signature=test"
+	proxy.DirectServe = true
+
+	h := &ContainerHandler{
+		proxy:       proxy,
+		registryURL: "https://registry.example.test",
+		proxyURL:    "http://localhost:8080",
+	}
+
+	req := httptest.NewRequest(http.MethodHead, "/library/nginx/blobs/"+digest, nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusFound {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusFound)
+	}
+	if got := w.Header().Get("Location"); got != store.signedURL {
+		t.Errorf("Location = %q, want %q", got, store.signedURL)
+	}
+	if got := w.Header().Get("ETag"); got != `"abc123"` {
+		t.Errorf("ETag = %q, want %q", got, `"abc123"`)
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("HEAD response body length = %d, want 0", w.Body.Len())
+	}
+	if fetcher.fetchCalled {
+		t.Error("fetcher should not be called on cache hit")
+	}
+}
+
 func TestContainerHandler_ManifestByDigest_CacheHitSkipsUpstream(t *testing.T) {
 	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`
