@@ -306,6 +306,16 @@ func (u *UpstreamConfig) AuthForURL(url string) *AuthConfig {
 	return bestMatch
 }
 
+// Validate checks upstream authentication URL scopes.
+func (u *UpstreamConfig) Validate() error {
+	for pattern := range u.Auth {
+		if _, err := parseAuthURL(pattern); err != nil {
+			return fmt.Errorf("invalid upstream.auth URL %q: %w", pattern, err)
+		}
+	}
+	return nil
+}
+
 func parseAuthURL(value string) (*url.URL, error) {
 	parsed, err := url.Parse(value)
 	if err != nil || !parsed.IsAbs() || parsed.Hostname() == "" || parsed.Opaque != "" {
@@ -625,15 +635,19 @@ func (c *Config) Validate() error {
 		return err
 	}
 
+	return c.validateComponents()
+}
+
+func (c *Config) validateComponents() error {
+	if err := c.Upstream.Validate(); err != nil {
+		return err
+	}
+
 	if err := c.Health.Validate(); err != nil {
 		return err
 	}
 
-	if err := c.Gradle.BuildCache.Validate(); err != nil {
-		return err
-	}
-
-	return nil
+	return c.Gradle.BuildCache.Validate()
 }
 
 // Validate checks the /health configuration. An unset interval is allowed

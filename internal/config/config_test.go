@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -801,4 +802,32 @@ func TestUpstreamAuthForURLMatchesURLComponents(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestValidateUpstreamAuthURLs(t *testing.T) {
+	t.Run("valid absolute URL", func(t *testing.T) {
+		cfg := Default()
+		cfg.Upstream.Auth = map[string]AuthConfig{
+			"https://registry.example.com/private": {Type: "bearer", Token: "token"},
+		}
+
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate() error = %v", err)
+		}
+	})
+
+	t.Run("invalid URL", func(t *testing.T) {
+		cfg := Default()
+		cfg.Upstream.Auth = map[string]AuthConfig{
+			"registry.example.com": {Type: "bearer", Token: "token"},
+		}
+
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatal("Validate() error = nil, want invalid upstream.auth URL error")
+		}
+		if !strings.Contains(err.Error(), "upstream.auth") || !strings.Contains(err.Error(), "registry.example.com") {
+			t.Errorf("Validate() error = %q, want field and URL", err)
+		}
+	})
 }
