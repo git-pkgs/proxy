@@ -97,11 +97,7 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 	if cached != nil {
 		w.Header().Set("Docker-Content-Digest", digest)
 		w.Header().Set("Content-Type", "application/octet-stream")
-		if r.Method == http.MethodHead {
-			serveArtifactHead(w, cached)
-			return
-		}
-		ServeArtifact(w, cached)
+		serveArtifact(w, r.Method, cached)
 		return
 	}
 
@@ -134,22 +130,6 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 	w.Header().Set("Docker-Content-Digest", digest)
 	w.Header().Set("Content-Type", "application/octet-stream")
 	ServeArtifact(w, result)
-}
-
-func serveArtifactHead(w http.ResponseWriter, result *CacheResult) {
-	if result.Reader != nil {
-		_ = result.Reader.Close()
-	}
-	if result.ContentType != "" {
-		w.Header().Set("Content-Type", result.ContentType)
-	}
-	if result.Size >= 0 {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", result.Size))
-	}
-	if result.Hash != "" {
-		w.Header().Set("ETag", fmt.Sprintf(`"%s"`, result.Hash))
-	}
-	w.WriteHeader(http.StatusOK)
 }
 
 // handleManifest serves immutable manifests from cache and revalidates mutable tags.

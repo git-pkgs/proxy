@@ -370,6 +370,10 @@ func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, u
 
 // ServeArtifact writes a CacheResult to an HTTP response.
 func ServeArtifact(w http.ResponseWriter, result *CacheResult) {
+	serveArtifact(w, http.MethodGet, result)
+}
+
+func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
 	if result.RedirectURL != "" {
 		if result.Hash != "" {
 			w.Header().Set("ETag", fmt.Sprintf(`"%s"`, result.Hash))
@@ -379,12 +383,14 @@ func ServeArtifact(w http.ResponseWriter, result *CacheResult) {
 		return
 	}
 
-	defer func() { _ = result.Reader.Close() }()
+	if result.Reader != nil {
+		defer func() { _ = result.Reader.Close() }()
+	}
 
 	if result.ContentType != "" {
 		w.Header().Set("Content-Type", result.ContentType)
 	}
-	if result.Size > 0 {
+	if result.Size > 0 || (method == http.MethodHead && result.Size == 0) {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", result.Size))
 	}
 	if result.Hash != "" {
@@ -392,7 +398,9 @@ func ServeArtifact(w http.ResponseWriter, result *CacheResult) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, result.Reader)
+	if method != http.MethodHead && result.Reader != nil {
+		_, _ = io.Copy(w, result.Reader)
+	}
 }
 
 // ProxyUpstream forwards a request to an upstream URL without caching.
