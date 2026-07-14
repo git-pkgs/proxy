@@ -66,12 +66,16 @@ func NewTransport(base http.RoundTripper, authForURL AuthFunc) *Transport {
 
 // RoundTrip implements http.RoundTripper.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	hasExplicitAuthorization := req.Header.Get("Authorization") != ""
 	outbound := cloneRequest(req)
-	t.applyAuthentication(outbound, req.Header.Get("Authorization") != "")
+	t.applyAuthentication(outbound, hasExplicitAuthorization)
 
 	resp, err := t.base.RoundTrip(outbound)
 	if err != nil || resp.StatusCode != http.StatusUnauthorized {
 		return resp, err
+	}
+	if hasExplicitAuthorization {
+		return resp, nil
 	}
 	if registryProtectionSpace(req.URL) == "" {
 		return resp, nil
@@ -129,10 +133,21 @@ func (t *Transport) token(ctx context.Context, challenge bearerChallenge) (strin
 		return "", err
 	}
 
-	t.mu.Lock()
-	t.tokens[key] = cachedToken{value: token, expiresAt: expiresAt}
-	t.mu.Unlock()
+	t.cacheToken(key, cachedToken{value: token, expiresAt: expiresAt})
 	return token, nil
+}
+
+func (t *Transport) cacheToken(key string, token cachedToken) {
+	now := time.Now()
+	t.mu.Lock()
+	defer t.mu.Unlock()
+
+	for cachedKey, cached := range t.tokens {
+		if !now.Before(cached.expiresAt) {
+			delete(t.tokens, cachedKey)
+		}
+	}
+	t.tokens[key] = token
 }
 
 func (t *Transport) fetchToken(ctx context.Context, challenge bearerChallenge) (string, time.Time, error) {
