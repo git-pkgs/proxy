@@ -54,10 +54,12 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/purl"
 	"gopkg.in/yaml.v3"
 )
 
@@ -137,7 +139,36 @@ type CooldownConfig struct {
 	Ecosystems map[string]string `json:"ecosystems" yaml:"ecosystems"`
 
 	// Packages overrides the cooldown for specific packages (keyed by PURL).
+	// Valid PURL keys are normalized to canonical form before use.
 	Packages map[string]string `json:"packages" yaml:"packages"`
+}
+
+// NormalizedPackages returns a copy of the package overrides with valid PURL
+// keys in canonical form. An explicitly canonical key wins over an equivalent
+// noncanonical key, and invalid keys are preserved unchanged.
+func (c *CooldownConfig) NormalizedPackages() map[string]string {
+	if c == nil || c.Packages == nil {
+		return nil
+	}
+
+	keys := make([]string, 0, len(c.Packages))
+	for key := range c.Packages {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+
+	normalized := make(map[string]string, len(c.Packages))
+	for _, key := range keys {
+		canonical := key
+		if parsed, err := purl.Parse(key); err == nil {
+			canonical = parsed.String()
+		}
+		if _, exists := normalized[canonical]; exists && key != canonical {
+			continue
+		}
+		normalized[canonical] = c.Packages[key]
+	}
+	return normalized
 }
 
 // StorageConfig configures artifact storage.

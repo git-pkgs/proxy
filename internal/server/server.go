@@ -163,7 +163,7 @@ func (s *Server) Start() error {
 	cd := &cooldown.Config{
 		Default:    s.cfg.Cooldown.Default,
 		Ecosystems: s.cfg.Cooldown.Ecosystems,
-		Packages:   s.cfg.Cooldown.Packages,
+		Packages:   s.cfg.Cooldown.NormalizedPackages(),
 	}
 	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
 	proxy.HTTPClient.Timeout = s.cfg.ParseHTTPTimeout()
