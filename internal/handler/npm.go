@@ -9,8 +9,6 @@ import (
 	"sort"
 	"strings"
 	"time"
-
-	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -134,7 +132,7 @@ func (h *NPMHandler) applyCooldownFiltering(metadata map[string]any, versions ma
 		return
 	}
 
-	packagePURL := purl.MakePURLString("npm", packageName, "")
+	packagePURL := canonicalPackagePURL("npm", packageName)
 
 	for version := range versions {
 		publishedStr, ok := timeMap[version].(string)

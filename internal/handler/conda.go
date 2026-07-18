@@ -6,8 +6,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -218,7 +216,7 @@ func (h *CondaHandler) applyCooldownFiltering(body []byte) ([]byte, error) {
 				continue
 			}
 
-			packagePURL := purl.MakePURLString("conda", name, "")
+			packagePURL := canonicalPackagePURL("conda", name)
 
 			if !h.proxy.Cooldown.IsAllowed("conda", packagePURL, publishedAt) {
 				version, _ := entryMap["version"].(string)

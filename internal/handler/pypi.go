@@ -12,8 +12,6 @@ import (
 	"regexp"
 	"strings"
 	"time"
-
-	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -131,7 +129,7 @@ func (h *PyPIHandler) fetchFilteredVersions(r *http.Request, name string) map[st
 		return nil
 	}
 
-	packagePURL := purl.MakePURLString("pypi", name, "")
+	packagePURL := canonicalPackagePURL("pypi", name)
 	filtered := make(map[string]bool)
 
 	for version, files := range releases {
@@ -262,7 +260,7 @@ func (h *PyPIHandler) rewriteJSONMetadata(body []byte) ([]byte, error) {
 	packageName, _ := extractPyPIName(metadata)
 	packagePURL := ""
 	if packageName != "" {
-		packagePURL = purl.MakePURLString("pypi", packageName, "")
+		packagePURL = canonicalPackagePURL("pypi", packageName)
 	}
 
 	h.filterAndRewriteReleases(metadata, packageName, packagePURL)

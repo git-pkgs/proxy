@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -143,7 +141,7 @@ func (h *CargoHandler) applyCooldownFiltering(downstreamResponse http.ResponseWr
 			continue
 		}
 
-		cratePURL := purl.MakePURLString("cargo", crate.Name, "")
+		cratePURL := canonicalPackagePURL("cargo", crate.Name)
 
 		if !h.proxy.Cooldown.IsAllowed("cargo", cratePURL, publishedAt) {
 			h.proxy.Logger.Info("cooldown: filtering cargo version",

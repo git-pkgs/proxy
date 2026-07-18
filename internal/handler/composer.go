@@ -10,8 +10,6 @@ import (
 	"path"
 	"strings"
 	"time"
-
-	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -216,7 +214,7 @@ func deepCopyValue(v any) any {
 // filterAndRewriteVersions applies cooldown filtering and rewrites dist URLs
 // for a single package's version list.
 func (h *ComposerHandler) filterAndRewriteVersions(packageName string, versionList []any) []any {
-	packagePURL := purl.MakePURLString("composer", packageName, "")
+	packagePURL := canonicalPackagePURL("composer", packageName)
 
 	filtered := versionList[:0]
 	for _, v := range versionList {

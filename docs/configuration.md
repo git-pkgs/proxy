@@ -234,7 +234,7 @@ cooldown:
 
 Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to disable.
 
-Package PURL keys are normalized automatically. For npm scopes, both the readable form (`pkg:npm/@babel/core`) and canonical form (`pkg:npm/%40babel/core`) are accepted. If both forms configure the same package, the canonical entry wins.
+Package PURL keys are normalized to canonical form before matching, so `pkg:npm/@babel/core` and `pkg:npm/%40babel/core` are equivalent, as are `pkg:pypi/Django` and `pkg:pypi/django`. If both forms configure the same package, the canonical entry wins.
 
 Resolution order: package override, then ecosystem override, then global default. This lets you set a conservative default while exempting trusted packages.
 
