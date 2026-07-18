@@ -14,6 +14,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/registries/fetch"
@@ -1008,5 +1009,35 @@ func TestProxyCached_FreshResponse_NoWarningHeader(t *testing.T) {
 	}
 	if got := w.Header().Get("Warning"); got != "" {
 		t.Errorf("Warning should be empty for fresh response, got %q", got)
+	}
+}
+
+// TestCanonicalPackagePURLMatchesConfig ensures the runtime cooldown lookup key
+// agrees with config.CooldownConfig.NormalizedPackages for the same package,
+// so a configured override is actually found regardless of how the user wrote it.
+func TestCanonicalPackagePURLMatchesConfig(t *testing.T) {
+	tests := []struct {
+		ecosystem   string
+		requestName string
+		configKey   string
+	}{
+		{"npm", "@babel/core", "pkg:npm/@babel/core"},
+		{"npm", "@babel/core", "pkg:npm/%40babel/core"},
+		{"npm", "@typescript/typescript-darwin-arm64", "pkg:npm/@typescript/typescript-darwin-arm64"},
+		{"pypi", "Django", "pkg:pypi/Django"},
+		{"pypi", "django", "pkg:pypi/Django"},
+		{"composer", "symfony/console", "pkg:composer/Symfony/Console"},
+		{"cargo", "serde", "pkg:cargo/serde"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.ecosystem+"/"+tt.requestName+"<="+tt.configKey, func(t *testing.T) {
+			cfg := config.CooldownConfig{Packages: map[string]string{tt.configKey: "1d"}}
+			normalized := cfg.NormalizedPackages()
+
+			lookup := canonicalPackagePURL(tt.ecosystem, tt.requestName)
+			if _, ok := normalized[lookup]; !ok {
+				t.Errorf("lookup key %q not found in normalized config %v", lookup, normalized)
+			}
+		})
 	}
 }

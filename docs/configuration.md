@@ -234,6 +234,8 @@ cooldown:
 
 Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to disable.
 
+Package PURL keys are normalized to canonical form before matching, so `pkg:npm/@babel/core` and `pkg:npm/%40babel/core` are equivalent, as are `pkg:pypi/Django` and `pkg:pypi/django`. If both forms configure the same package, the canonical entry wins.
+
 Resolution order: package override, then ecosystem override, then global default. This lets you set a conservative default while exempting trusted packages.
 
 Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyGems, and Hex. These ecosystems include publish timestamps in their metadata.

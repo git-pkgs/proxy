@@ -10,7 +10,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/git-pkgs/purl"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
@@ -237,7 +236,7 @@ func (h *HexHandler) fetchFilteredVersions(r *http.Request, name string) (map[st
 		return nil, err
 	}
 
-	packagePURL := purl.MakePURLString("hex", name, "")
+	packagePURL := canonicalPackagePURL("hex", name)
 	filtered := make(map[string]bool)
 
 	for _, release := range pkg.Releases {

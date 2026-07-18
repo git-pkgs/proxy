@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -271,7 +269,7 @@ func (h *NuGetHandler) applyCooldownFiltering(body []byte) ([]byte, error) {
 				}
 			}
 
-			packagePURL := purl.MakePURLString("nuget", strings.ToLower(id), "")
+			packagePURL := canonicalPackagePURL("nuget", strings.ToLower(id))
 
 			if !h.proxy.Cooldown.IsAllowed("nuget", packagePURL, publishedAt) {
 				h.proxy.Logger.Info("cooldown: filtering nuget version",

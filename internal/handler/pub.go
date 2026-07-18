@@ -7,8 +7,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -127,7 +125,7 @@ func (h *PubHandler) rewriteMetadata(name string, body []byte) ([]byte, error) {
 		return body, nil
 	}
 
-	packagePURL := purl.MakePURLString("pub", name, "")
+	packagePURL := canonicalPackagePURL("pub", name)
 	filtered := h.filterAndRewriteVersions(name, packagePURL, versions)
 	metadata["versions"] = filtered
 

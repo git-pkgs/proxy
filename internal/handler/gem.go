@@ -8,8 +8,6 @@ import (
 	"net/http"
 	"strings"
 	"time"
-
-	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -266,7 +264,7 @@ func (h *GemHandler) fetchFilteredVersions(r *http.Request, name string) (map[st
 		return nil, err
 	}
 
-	packagePURL := purl.MakePURLString("gem", name, "")
+	packagePURL := canonicalPackagePURL("gem", name)
 	filtered := make(map[string]bool)
 
 	for _, v := range versions {

@@ -168,7 +168,8 @@ cooldown:
   #   npm: "7d"
   #   cargo: "0"
 
-  # Per-package overrides (keyed by PURL)
+  # Per-package overrides (keyed by PURL). Keys are normalized, so npm scopes
+  # may use either @scope or the canonical %40scope form.
   # packages:
   #   "pkg:npm/lodash": "0"
   #   "pkg:npm/@babel/core": "14d"

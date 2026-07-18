@@ -363,6 +363,34 @@ cooldown:
 	if cfg.Cooldown.Packages["pkg:npm/@babel/core"] != "14d" {
 		t.Errorf("Cooldown.Packages[@babel/core] = %q, want %q", cfg.Cooldown.Packages["pkg:npm/@babel/core"], "14d")
 	}
+	if got := cfg.Cooldown.NormalizedPackages()["pkg:npm/%40babel/core"]; got != "14d" {
+		t.Errorf("normalized Cooldown.Packages[@babel/core] = %q, want %q", got, "14d")
+	}
+}
+
+func TestCooldownConfigNormalizedPackages(t *testing.T) {
+	rawScoped := "pkg:npm/@typescript/typescript-darwin-arm64"
+	canonicalScoped := "pkg:npm/%40typescript/typescript-darwin-arm64"
+	cfg := CooldownConfig{Packages: map[string]string{
+		rawScoped:       "2d",
+		canonicalScoped: "3d",
+		"not-a-purl":    "4d",
+	}}
+
+	got := cfg.NormalizedPackages()
+
+	if got[canonicalScoped] != "3d" {
+		t.Errorf("canonical scoped package duration = %q, want %q", got[canonicalScoped], "3d")
+	}
+	if _, exists := got[rawScoped]; exists {
+		t.Errorf("raw scoped package key %q was not canonicalized", rawScoped)
+	}
+	if got["not-a-purl"] != "4d" {
+		t.Errorf("invalid PURL duration = %q, want preserved value %q", got["not-a-purl"], "4d")
+	}
+	if cfg.Packages[rawScoped] != "2d" {
+		t.Error("NormalizedPackages mutated the source map")
+	}
 }
 
 func TestLoadCooldownFromEnv(t *testing.T) {
