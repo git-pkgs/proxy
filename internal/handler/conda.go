@@ -72,8 +72,7 @@ func (h *CondaHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conda", packageName, version, filename, upstreamURL)
 	if err != nil {
-		h.proxy.Logger.Error("failed to get artifact", "error", err)
-		http.Error(w, "failed to fetch package", http.StatusBadGateway)
+		h.proxy.serveArtifactError(w, err, "failed to fetch package")
 		return
 	}
 

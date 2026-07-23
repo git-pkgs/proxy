@@ -72,8 +72,7 @@ func (h *CRANHandler) handleSourceDownload(w http.ResponseWriter, r *http.Reques
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "cran", name, version, filename, upstreamURL)
 	if err != nil {
-		h.proxy.Logger.Error("failed to get artifact", "error", err)
-		http.Error(w, "failed to fetch package", http.StatusBadGateway)
+		h.proxy.serveArtifactError(w, err, "failed to fetch package")
 		return
 	}
 
@@ -107,8 +106,7 @@ func (h *CRANHandler) handleBinaryDownload(w http.ResponseWriter, r *http.Reques
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "cran", name, storageVersion, filename, upstreamURL)
 	if err != nil {
-		h.proxy.Logger.Error("failed to get artifact", "error", err)
-		http.Error(w, "failed to fetch package", http.StatusBadGateway)
+		h.proxy.serveArtifactError(w, err, "failed to fetch package")
 		return
 	}
 

@@ -53,30 +53,13 @@ func (h *HexHandler) Routes() http.Handler {
 
 // handleDownload serves a package tarball, fetching and caching from upstream if needed.
 func (h *HexHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
-	filename := r.PathValue("filename")
-	if filename == "" || !strings.HasSuffix(filename, ".tar") {
-		http.Error(w, "invalid filename", http.StatusBadRequest)
-		return
-	}
-
-	// Extract name and version from filename (e.g., "phoenix-1.7.10.tar")
-	name, version := h.parseTarballFilename(filename)
-	if name == "" || version == "" {
-		http.Error(w, "could not parse tarball filename", http.StatusBadRequest)
-		return
-	}
-
-	h.proxy.Logger.Info("hex download request",
-		"name", name, "version", version, "filename", filename)
-
-	result, err := h.proxy.GetOrFetchArtifact(r.Context(), "hex", name, version, filename)
-	if err != nil {
-		h.proxy.Logger.Error("failed to get artifact", "error", err)
-		http.Error(w, "failed to fetch package", http.StatusBadGateway)
-		return
-	}
-
-	ServeArtifact(w, result)
+	h.proxy.handleFilenameDownload(w, r, filenameDownload{
+		ecosystem: "hex",
+		suffix:    ".tar",
+		parseErr:  "could not parse tarball filename",
+		fetchErr:  "failed to fetch package",
+		parse:     h.parseTarballFilename,
+	})
 }
 
 // parseTarballFilename extracts name and version from a hex tarball filename.
