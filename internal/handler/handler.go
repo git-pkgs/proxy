@@ -459,6 +459,17 @@ func JSONError(w http.ResponseWriter, status int, message string) {
 // ErrUpstreamNotFound indicates the upstream returned 404.
 var ErrUpstreamNotFound = fmt.Errorf("upstream: %w", fetch.ErrNotFound)
 
+// serveArtifactError writes response for a failed fetch:
+// 404 when upstream reports artifact missing, 502 otherwise.
+func (p *Proxy) serveArtifactError(w http.ResponseWriter, err error, clientMsg string) {
+	if errors.Is(err, ErrUpstreamNotFound) {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	p.Logger.Error("failed to get artifact", "error", err)
+	http.Error(w, clientMsg, http.StatusBadGateway)
+}
+
 // errStale304 is returned when upstream sends 304 but the cached file is missing.
 var errStale304 = fmt.Errorf("upstream returned 304 but cached file is missing")
 

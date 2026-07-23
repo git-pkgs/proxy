@@ -84,8 +84,7 @@ func (h *ConanHandler) handleRecipeFile(w http.ResponseWriter, r *http.Request) 
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", packageName, storageVersion, storageFilename, upstreamURL)
 	if err != nil {
-		h.proxy.Logger.Error("failed to get artifact", "error", err)
-		http.Error(w, "failed to fetch file", http.StatusBadGateway)
+		h.proxy.serveArtifactError(w, err, "failed to fetch file")
 		return
 	}
 
@@ -122,8 +121,7 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", packageName, storageVersion, storageFilename, upstreamURL)
 	if err != nil {
-		h.proxy.Logger.Error("failed to get artifact", "error", err)
-		http.Error(w, "failed to fetch file", http.StatusBadGateway)
+		h.proxy.serveArtifactError(w, err, "failed to fetch file")
 		return
 	}
 

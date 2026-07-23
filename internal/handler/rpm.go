@@ -83,8 +83,7 @@ func (h *RPMHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 	result, err := h.proxy.GetOrFetchArtifactFromURL(
 		r.Context(), "rpm", name, version, filename, downloadURL)
 	if err != nil {
-		h.proxy.Logger.Error("failed to get rpm package", "error", err)
-		http.Error(w, "failed to fetch package", http.StatusBadGateway)
+		h.proxy.serveArtifactError(w, err, "failed to fetch package")
 		return
 	}
 
