@@ -74,9 +74,14 @@ func TestCargoConfigEndpoint(t *testing.T) {
 
 func TestCargoHandlerUsesConfiguredUpstreams(t *testing.T) {
 	t.Run("index", func(t *testing.T) {
-		var requestPath string
+		var requestPath, authHeader string
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requestPath = r.URL.Path
+			authHeader = r.Header.Get("Authorization")
+			if authHeader != "Bearer cargo-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
 			w.Header().Set("Content-Type", "text/plain")
 			_, _ = io.WriteString(w, `{"name":"serde","vers":"1.0.0"}`)
 		}))
@@ -84,6 +89,9 @@ func TestCargoHandlerUsesConfiguredUpstreams(t *testing.T) {
 
 		proxy, _, _, _ := setupTestProxy(t)
 		proxy.HTTPClient = upstream.Client()
+		proxy.AuthForURL = func(string) (string, string) {
+			return "Authorization", "Bearer cargo-token"
+		}
 		h := NewCargoHandler(
 			proxy,
 			"http://proxy.test",
@@ -100,6 +108,9 @@ func TestCargoHandlerUsesConfiguredUpstreams(t *testing.T) {
 		}
 		if requestPath != "/index/se/rd/serde" {
 			t.Errorf("upstream path = %q, want %q", requestPath, "/index/se/rd/serde")
+		}
+		if authHeader != "Bearer cargo-token" {
+			t.Errorf("Authorization = %q, want %q", authHeader, "Bearer cargo-token")
 		}
 	})
 

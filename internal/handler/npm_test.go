@@ -51,9 +51,14 @@ func TestNPMExtractVersionFromFilename(t *testing.T) {
 
 func TestNPMHandlerUsesConfiguredUpstream(t *testing.T) {
 	t.Run("metadata", func(t *testing.T) {
-		var requestPath string
+		var requestPath, authHeader string
 		upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			requestPath = r.URL.Path
+			authHeader = r.Header.Get("Authorization")
+			if authHeader != "Bearer npm-token" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"versions":{}}`)
 		}))
@@ -61,6 +66,9 @@ func TestNPMHandlerUsesConfiguredUpstream(t *testing.T) {
 
 		proxy, _, _, _ := setupTestProxy(t)
 		proxy.HTTPClient = upstream.Client()
+		proxy.AuthForURL = func(string) (string, string) {
+			return "Authorization", "Bearer npm-token"
+		}
 		h := NewNPMHandler(proxy, "http://proxy.test", upstream.URL+"/root/")
 
 		req := httptest.NewRequest(http.MethodGet, "/testpkg", nil)
@@ -72,6 +80,9 @@ func TestNPMHandlerUsesConfiguredUpstream(t *testing.T) {
 		}
 		if requestPath != "/root/testpkg" {
 			t.Errorf("upstream path = %q, want %q", requestPath, "/root/testpkg")
+		}
+		if authHeader != "Bearer npm-token" {
+			t.Errorf("Authorization = %q, want %q", authHeader, "Bearer npm-token")
 		}
 	})
 
