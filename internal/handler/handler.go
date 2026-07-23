@@ -104,6 +104,7 @@ type Proxy struct {
 	// storage at an internal one.
 	DirectServeBaseURL string
 	HTTPClient         *http.Client
+	AuthForURL         func(string) (headerName, headerValue string)
 }
 
 // NewProxy creates a new Proxy with the given dependencies.
@@ -399,6 +400,7 @@ func (p *Proxy) ProxyUpstream(w http.ResponseWriter, r *http.Request, upstreamUR
 			req.Header.Set(header, v)
 		}
 	}
+	p.applyUpstreamAuth(req)
 
 	resp, err := p.HTTPClient.Do(req)
 	if err != nil {
@@ -425,6 +427,7 @@ func (p *Proxy) ProxyFile(w http.ResponseWriter, r *http.Request, upstreamURL st
 		http.Error(w, "failed to create request", http.StatusInternalServerError)
 		return
 	}
+	p.applyUpstreamAuth(req)
 
 	resp, err := p.HTTPClient.Do(req)
 	if err != nil {
@@ -554,6 +557,7 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		return nil, "", "", zeroTime, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Accept", accept)
+	p.applyUpstreamAuth(req)
 
 	if entry != nil && entry.ETag.Valid {
 		req.Header.Set("If-None-Match", entry.ETag.String)
@@ -743,6 +747,7 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 		accept = acceptHeaders[0]
 	}
 	req.Header.Set("Accept", accept)
+	p.applyUpstreamAuth(req)
 
 	for _, header := range []string{headerAcceptEncoding, "If-Modified-Since", "If-None-Match"} {
 		if v := r.Header.Get(header); v != "" {
@@ -765,6 +770,17 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
+}
+
+func (p *Proxy) applyUpstreamAuth(req *http.Request) {
+	if p.AuthForURL == nil {
+		return
+	}
+
+	headerName, headerValue := p.AuthForURL(req.URL.String())
+	if headerName != "" && headerValue != "" {
+		req.Header.Set(headerName, headerValue)
+	}
 }
 
 // GetOrFetchArtifactFromURL retrieves an artifact from cache or fetches from a specific URL.

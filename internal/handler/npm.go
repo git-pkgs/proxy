@@ -25,10 +25,14 @@ type NPMHandler struct {
 }
 
 // NewNPMHandler creates a new npm protocol handler.
-func NewNPMHandler(proxy *Proxy, proxyURL string) *NPMHandler {
+func NewNPMHandler(proxy *Proxy, proxyURL, upstreamURL string) *NPMHandler {
+	if strings.TrimSpace(upstreamURL) == "" {
+		upstreamURL = npmUpstream
+	}
+
 	return &NPMHandler{
 		proxy:       proxy,
-		upstreamURL: npmUpstream,
+		upstreamURL: strings.TrimSuffix(upstreamURL, "/"),
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 	}
 }
@@ -261,7 +265,15 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	h.proxy.Logger.Info("npm download request",
 		"package", packageName, "version", version, "filename", filename)
 
-	result, err := h.proxy.GetOrFetchArtifact(r.Context(), "npm", packageName, version, filename)
+	downloadURL := fmt.Sprintf(
+		"%s/%s/-/%s",
+		h.upstreamURL,
+		escapeNPMDownloadPackage(packageName),
+		url.PathEscape(filename),
+	)
+	result, err := h.proxy.GetOrFetchArtifactFromURL(
+		r.Context(), "npm", packageName, version, filename, downloadURL,
+	)
 	if err != nil {
 		h.proxy.Logger.Error("failed to get artifact", "error", err)
 		JSONError(w, http.StatusBadGateway, "failed to fetch package")
@@ -269,6 +281,14 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ServeArtifact(w, result)
+}
+
+func escapeNPMDownloadPackage(packageName string) string {
+	scope, name, scoped := strings.Cut(packageName, "/")
+	if scoped && strings.HasPrefix(scope, "@") && len(scope) > 1 && name != "" && !strings.Contains(name, "/") {
+		return url.PathEscape(scope) + "/" + url.PathEscape(name)
+	}
+	return url.PathEscape(packageName)
 }
 
 // extractPackageName extracts the package name from the request path.

@@ -167,6 +167,7 @@ func (s *Server) Start() error {
 	}
 	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
 	proxy.HTTPClient.Timeout = s.cfg.ParseHTTPTimeout()
+	proxy.AuthForURL = s.authForURL
 	proxy.Cooldown = cd
 	proxy.CacheMetadata = s.cfg.CacheMetadata
 	proxy.MetadataTTL = s.cfg.ParseMetadataTTL()
@@ -196,8 +197,13 @@ func (s *Server) Start() error {
 	})
 
 	// Mount protocol handlers
-	npmHandler := handler.NewNPMHandler(proxy, s.cfg.BaseURL)
-	cargoHandler := handler.NewCargoHandler(proxy, s.cfg.BaseURL)
+	npmHandler := handler.NewNPMHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.NPM)
+	cargoHandler := handler.NewCargoHandler(
+		proxy,
+		s.cfg.BaseURL,
+		s.cfg.Upstream.Cargo,
+		s.cfg.Upstream.CargoDownload,
+	)
 	gemHandler := handler.NewGemHandler(proxy, s.cfg.BaseURL)
 	goHandler := handler.NewGoHandler(proxy, s.cfg.BaseURL)
 	hexHandler := handler.NewHexHandler(proxy, s.cfg.BaseURL)
