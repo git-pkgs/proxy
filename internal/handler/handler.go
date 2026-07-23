@@ -251,6 +251,9 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 	// Resolve download URL
 	info, err := p.Resolver.Resolve(ctx, ecosystem, name, version)
 	if err != nil {
+		if errors.Is(err, fetch.ErrNotFound) {
+			return nil, ErrUpstreamNotFound
+		}
 		return nil, fmt.Errorf("resolving download URL: %w", err)
 	}
 
@@ -270,6 +273,9 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 	if err != nil {
 		metrics.RecordUpstreamFetch(ecosystem, fetchDuration)
 		metrics.RecordUpstreamError(ecosystem, "fetch_failed")
+		if errors.Is(err, fetch.ErrNotFound) {
+			return nil, ErrUpstreamNotFound
+		}
 		return nil, fmt.Errorf("fetching from upstream: %w", err)
 	}
 	metrics.RecordUpstreamFetch(ecosystem, fetchDuration)
@@ -451,7 +457,7 @@ func JSONError(w http.ResponseWriter, status int, message string) {
 }
 
 // ErrUpstreamNotFound indicates the upstream returned 404.
-var ErrUpstreamNotFound = fmt.Errorf("upstream: not found")
+var ErrUpstreamNotFound = fmt.Errorf("upstream: %w", fetch.ErrNotFound)
 
 // errStale304 is returned when upstream sends 304 but the cached file is missing.
 var errStale304 = fmt.Errorf("upstream returned 304 but cached file is missing")
@@ -795,6 +801,9 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 
 	artifact, err := p.Fetcher.FetchWithHeaders(ctx, downloadURL, headers)
 	if err != nil {
+		if errors.Is(err, fetch.ErrNotFound) {
+			return nil, ErrUpstreamNotFound
+		}
 		return nil, fmt.Errorf("fetching from upstream: %w", err)
 	}
 
