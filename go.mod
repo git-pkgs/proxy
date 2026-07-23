@@ -12,7 +12,7 @@ require (
 	github.com/git-pkgs/registries v0.6.2
 	github.com/git-pkgs/spdx v0.1.4
 	github.com/git-pkgs/vers v0.2.6
-	github.com/git-pkgs/vulns v0.1.6
+	github.com/git-pkgs/vulns v0.2.0
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.3
