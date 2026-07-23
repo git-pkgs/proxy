@@ -58,17 +58,19 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/cooldown"
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
 	"github.com/git-pkgs/proxy/internal/config"
-	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/enrichment"
 	"github.com/git-pkgs/proxy/internal/handler"
+	upstreamhttp "github.com/git-pkgs/proxy/internal/httpclient"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/mirror"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
+	"github.com/git-pkgs/registries/safehttp"
 	"github.com/git-pkgs/spdx"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -84,12 +86,12 @@ const (
 
 // Server is the main proxy server.
 type Server struct {
-	cfg       *config.Config
-	db        *database.DB
-	storage   storage.Storage
-	logger    *slog.Logger
-	http      *http.Server
-	templates *Templates
+	cfg         *config.Config
+	db          *database.DB
+	storage     storage.Storage
+	logger      *slog.Logger
+	http        *http.Server
+	templates   *Templates
 	cancel      context.CancelFunc
 	healthCache *healthCache
 }
@@ -156,8 +158,18 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 
 // Start starts the HTTP server.
 func (s *Server) Start() error {
-	// Create shared components with circuit breaker
-	baseFetcher := fetch.NewFetcher(fetch.WithAuthFunc(s.authForURL))
+	// Use one authentication-aware transport for metadata and artifacts so
+	// configured credentials and cached OCI challenges apply consistently.
+	safeClient := safehttp.New(nil, safehttp.Options{})
+	authTransport := upstreamhttp.NewTransport(safeClient.Transport, upstreamhttp.AuthFunc(s.authForURL))
+	metadataClient := *safeClient
+	metadataClient.Timeout = s.cfg.ParseHTTPTimeout()
+	metadataClient.Transport = authTransport
+	artifactClient := metadataClient
+	artifactClient.Timeout = serverWriteTimeout
+
+	// Create shared components with circuit breaker.
+	baseFetcher := fetch.NewFetcher(fetch.WithHTTPClient(&artifactClient))
 	fetcher := fetch.NewCircuitBreakerFetcher(baseFetcher)
 	resolver := fetch.NewResolver()
 	cd := &cooldown.Config{
@@ -166,7 +178,7 @@ func (s *Server) Start() error {
 		Packages:   s.cfg.Cooldown.NormalizedPackages(),
 	}
 	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
-	proxy.HTTPClient.Timeout = s.cfg.ParseHTTPTimeout()
+	proxy.HTTPClient = &metadataClient
 	proxy.Cooldown = cd
 	proxy.CacheMetadata = s.cfg.CacheMetadata
 	proxy.MetadataTTL = s.cfg.ParseMetadataTTL()
