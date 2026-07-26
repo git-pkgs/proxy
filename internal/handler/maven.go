@@ -130,12 +130,7 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, ur
 		}
 	}
 	if err != nil {
-		if errors.Is(err, ErrUpstreamNotFound) {
-			http.Error(w, "not found", http.StatusNotFound)
-			return
-		}
-		h.proxy.Logger.Error("failed to get artifact", "error", err)
-		http.Error(w, "failed to fetch artifact", http.StatusBadGateway)
+		h.proxy.serveArtifactError(w, err, "failed to fetch artifact")
 		return
 	}
 

@@ -263,6 +263,10 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	result, err := h.proxy.GetOrFetchArtifact(r.Context(), "npm", packageName, version, filename)
 	if err != nil {
+		if errors.Is(err, ErrUpstreamNotFound) {
+			JSONError(w, http.StatusNotFound, "package not found")
+			return
+		}
 		h.proxy.Logger.Error("failed to get artifact", "error", err)
 		JSONError(w, http.StatusBadGateway, "failed to fetch package")
 		return

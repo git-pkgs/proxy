@@ -58,30 +58,13 @@ func (h *GemHandler) Routes() http.Handler {
 
 // handleDownload serves a gem file, fetching and caching from upstream if needed.
 func (h *GemHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
-	filename := r.PathValue("filename")
-	if filename == "" || !strings.HasSuffix(filename, ".gem") {
-		http.Error(w, "invalid filename", http.StatusBadRequest)
-		return
-	}
-
-	// Extract name and version from filename (e.g., "rails-7.1.0.gem")
-	name, version := h.parseGemFilename(filename)
-	if name == "" || version == "" {
-		http.Error(w, "could not parse gem filename", http.StatusBadRequest)
-		return
-	}
-
-	h.proxy.Logger.Info("gem download request",
-		"name", name, "version", version, "filename", filename)
-
-	result, err := h.proxy.GetOrFetchArtifact(r.Context(), "gem", name, version, filename)
-	if err != nil {
-		h.proxy.Logger.Error("failed to get artifact", "error", err)
-		http.Error(w, "failed to fetch gem", http.StatusBadGateway)
-		return
-	}
-
-	ServeArtifact(w, result)
+	h.proxy.handleFilenameDownload(w, r, filenameDownload{
+		ecosystem: "gem",
+		suffix:    ".gem",
+		parseErr:  "could not parse gem filename",
+		fetchErr:  "failed to fetch gem",
+		parse:     h.parseGemFilename,
+	})
 }
 
 // parseGemFilename extracts name and version from a gem filename.

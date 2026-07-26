@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -117,8 +118,12 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 	)
 
 	if err != nil {
+		if errors.Is(err, ErrUpstreamNotFound) {
+			h.containerError(w, http.StatusNotFound, "BLOB_UNKNOWN", "blob unknown to registry")
+			return
+		}
 		h.proxy.Logger.Error("failed to fetch blob", "error", err)
-		h.containerError(w, http.StatusBadGateway, "BLOB_UNKNOWN", "failed to fetch blob")
+		h.containerError(w, http.StatusBadGateway, "INTERNAL_ERROR", "failed to fetch blob")
 		return
 	}
 
