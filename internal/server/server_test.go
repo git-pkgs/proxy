@@ -67,8 +67,13 @@ func newTestServer(t *testing.T) *testServer {
 	r := chi.NewRouter()
 
 	// Mount handlers
-	npmHandler := handler.NewNPMHandler(proxy, cfg.BaseURL)
-	cargoHandler := handler.NewCargoHandler(proxy, cfg.BaseURL)
+	npmHandler := handler.NewNPMHandler(proxy, cfg.BaseURL, cfg.Upstream.NPM)
+	cargoHandler := handler.NewCargoHandler(
+		proxy,
+		cfg.BaseURL,
+		cfg.Upstream.Cargo,
+		cfg.Upstream.CargoDownload,
+	)
 	gemHandler := handler.NewGemHandler(proxy, cfg.BaseURL)
 	goHandler := handler.NewGoHandler(proxy, cfg.BaseURL)
 	pypiHandler := handler.NewPyPIHandler(proxy, cfg.BaseURL)
