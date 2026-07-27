@@ -5,14 +5,14 @@ go 1.25.6
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/CycloneDX/cyclonedx-go v0.11.0
-	github.com/git-pkgs/archives v0.3.0
+	github.com/git-pkgs/archives v0.3.1
 	github.com/git-pkgs/cooldown v0.1.1
-	github.com/git-pkgs/enrichment v0.6.0
-	github.com/git-pkgs/purl v0.1.14
-	github.com/git-pkgs/registries v0.6.3
+	github.com/git-pkgs/enrichment v0.6.4
+	github.com/git-pkgs/purl v0.1.15
+	github.com/git-pkgs/registries v0.6.4
 	github.com/git-pkgs/spdx v0.1.4
 	github.com/git-pkgs/vers v0.3.0
-	github.com/git-pkgs/vulns v0.2.0
+	github.com/git-pkgs/vulns v0.2.1
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.3
@@ -115,7 +115,7 @@ require (
 	github.com/denis-tingaikin/go-header v0.5.0 // indirect
 	github.com/dlclark/regexp2 v1.11.5 // indirect
 	github.com/dustin/go-humanize v1.0.1 // indirect
-	github.com/ecosyste-ms/ecosystems-go v0.3.0 // indirect
+	github.com/ecosyste-ms/ecosystems-go v0.4.0 // indirect
 	github.com/ettle/strcase v0.2.0 // indirect
 	github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a // indirect
 	github.com/fatih/color v1.18.0 // indirect
@@ -217,7 +217,8 @@ require (
 	github.com/nishanths/exhaustive v0.12.0 // indirect
 	github.com/nishanths/predeclared v0.2.2 // indirect
 	github.com/nunnatsa/ginkgolinter v0.23.0 // indirect
-	github.com/oapi-codegen/runtime v1.4.2 // indirect
+	github.com/oapi-codegen/nullable v1.1.0 // indirect
+	github.com/oapi-codegen/runtime v1.6.0 // indirect
 	github.com/package-url/packageurl-go v0.1.6 // indirect
 	github.com/pandatix/go-cvss v0.6.2 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
@@ -265,7 +266,7 @@ require (
 	github.com/timonwong/loggercheck v0.11.0 // indirect
 	github.com/tomarrell/wrapcheck/v2 v2.12.0 // indirect
 	github.com/tommy-muehle/go-mnd/v2 v2.5.1 // indirect
-	github.com/ulikunitz/xz v0.5.15 // indirect
+	github.com/ulikunitz/xz v0.5.16 // indirect
 	github.com/ultraware/funlen v0.2.0 // indirect
 	github.com/ultraware/whitespace v0.2.0 // indirect
 	github.com/urfave/cli/v2 v2.3.0 // indirect
