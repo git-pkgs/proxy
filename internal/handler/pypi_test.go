@@ -28,13 +28,33 @@ func TestPyPIParseFilename(t *testing.T) {
 		{"aws-sdk-1.0.0.tar.gz", "aws-sdk", "1.0.0"},
 		{"zipp-3.17.0.zip", "zipp", "3.17.0"},
 
+		// Additional sdist archive formats
+		{"lxml-4.9.3.tar.xz", "lxml", "4.9.3"},
+		{"docutils-0.20.1.tgz", "docutils", "0.20.1"},
+		{"psycopg2-2.9.9.tar.bz2", "psycopg2", "2.9.9"},
+
 		// Wheel formats
 		{"requests-2.31.0-py3-none-any.whl", "requests", "2.31.0"},
 		{"numpy-1.26.2-cp311-cp311-manylinux_2_17_x86_64.whl", "numpy", "1.26.2"},
 		{"cryptography-41.0.5-cp37-abi3-manylinux_2_28_x86_64.whl", "cryptography", "41.0.5"},
 
+		// Wheels with a build tag must not fold the tag into the version
+		{"foo-1.0-1-py3-none-any.whl", "foo", "1.0"},
+		{"tensorflow-2.15.0-2-cp311-cp311-manylinux_2_17_x86_64.whl", "tensorflow", "2.15.0"},
+
+		// PEP 658 core-metadata sidecars resolve to the distribution they describe
+		{"backports_asyncio_runner-1.2.0-py3-none-any.whl.metadata", "backports_asyncio_runner", "1.2.0"},
+		{"requests-2.31.0-py3-none-any.whl.metadata", "requests", "2.31.0"},
+		{"requests-2.31.0.tar.gz.metadata", "requests", "2.31.0"},
+
+		// Legacy bdist formats
+		{"numpy-1.8.0-py2.7-macosx-10.9-x86_64.egg", "numpy", "1.8.0"},
+		{"pywin32-223.win32-py2.7.exe", "pywin32", "223.win32"},
+
 		// Invalid
 		{"invalid", "", ""},
+		{"invalid.metadata", "", ""},
+		{"backports.ssl_match_hostname-3.4.0.2-py2.7.whl", "", ""},
 	}
 
 	for _, tt := range tests {
@@ -94,25 +114,24 @@ func TestPyPIRewriteJSONMetadataCooldown(t *testing.T) {
 	}
 }
 
-func TestIsPythonTag(t *testing.T) {
-	tests := []struct {
-		tag  string
-		want bool
-	}{
-		{"py3", true},
-		{"py2", true},
-		{"cp311", true},
-		{"cp37", true},
-		{"pp39", true},
-		{"none", false},
-		{"any", false},
-		{"manylinux", false},
+// TestPyPIParseFilenameNoHashFallback guards the identifier used for caching:
+// a filename that parses to an empty name makes handleDownload fall back to a
+// "_hash_<digest>" package name, which surfaces as a bogus PURL in the package
+// overview.
+func TestPyPIParseFilenameNoHashFallback(t *testing.T) {
+	h := &PyPIHandler{proxy: &Proxy{Logger: slog.Default()}}
+
+	filenames := []string{
+		"backports_asyncio_runner-1.2.0-py3-none-any.whl",
+		"backports_asyncio_runner-1.2.0-py3-none-any.whl.metadata",
+		"backports_asyncio_runner-1.2.0.tar.gz",
 	}
 
-	for _, tt := range tests {
-		got := isPythonTag(tt.tag)
-		if got != tt.want {
-			t.Errorf("isPythonTag(%q) = %v, want %v", tt.tag, got, tt.want)
+	for _, filename := range filenames {
+		name, version := h.parseFilename(filename)
+		if name != "backports_asyncio_runner" || version != "1.2.0" {
+			t.Errorf("parseFilename(%q) = (%q, %q), want (%q, %q)",
+				filename, name, version, "backports_asyncio_runner", "1.2.0")
 		}
 	}
 }

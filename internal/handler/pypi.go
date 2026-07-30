@@ -19,7 +19,11 @@ const (
 	minWheelParts    = 5 // name + version + python + abi + platform
 	minSubmatchParts = 2 // full match + first capture group
 	minPyPIPathParts = 3 // hash_prefix + hash + filename
-	minPythonTagLen  = 2 // minimum length for a python tag (e.g., "py")
+	minTaggedParts   = 2 // name + version
+
+	// pypiMetadataSuffix is the PEP 658 core-metadata sidecar suffix that pip
+	// appends to a distribution URL when the index advertises core metadata.
+	pypiMetadataSuffix = ".metadata"
 )
 
 // PyPIHandler handles PyPI registry protocol requests.
@@ -433,56 +437,64 @@ func (h *PyPIHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	ServeArtifact(w, result)
 }
 
+// taggedExtensions are distribution formats whose filenames append build,
+// interpreter and platform tags after the version. Their name and version
+// fields are escaped so neither can contain a hyphen, which makes the first two
+// hyphen-separated fields authoritative. minParts is the field count a
+// well-formed filename of that format has at minimum.
+var taggedExtensions = []struct {
+	ext      string
+	minParts int
+}{
+	{".whl", minWheelParts},
+	{".egg", minTaggedParts},
+	{".exe", minTaggedParts},
+	{".msi", minTaggedParts},
+}
+
+// archiveExtensions are sdist formats of the form {name}-{version}{ext}. Unlike
+// the tagged formats these carry no trailing tags, but legacy sdist names may
+// contain hyphens.
+var archiveExtensions = []string{".tar.gz", ".tar.bz2", ".tar.xz", ".tar.Z", ".tgz", ".tar", ".zip"}
+
 // parseFilename extracts package name and version from a PyPI filename.
-// Handles both wheels and sdists:
+// Handles wheels, sdists and legacy bdist formats:
 // - requests-2.31.0-py3-none-any.whl
 // - requests-2.31.0.tar.gz
+// - numpy-1.8.0-py2.7-macosx-10.9-x86_64.egg
 func (h *PyPIHandler) parseFilename(filename string) (name, version string) {
-	// Try wheel format first: {name}-{version}(-{build})?-{python}-{abi}-{platform}.whl
-	if strings.HasSuffix(filename, ".whl") {
-		base := strings.TrimSuffix(filename, ".whl")
-		parts := strings.Split(base, "-")
-		if len(parts) >= minWheelParts {
-			// Find where version ends (version followed by python tag)
-			for i := 1; i < len(parts)-2; i++ {
-				// Check if this looks like a python tag (py2, py3, cp39, etc)
-				if isPythonTag(parts[i]) {
-					name = strings.Join(parts[:i-1], "-")
-					version = parts[i-1]
-					return
-				}
-			}
+	// PEP 658/714 core-metadata sidecars are the distribution filename plus
+	// ".metadata"; they describe the same name and version. Without this, pip's
+	// metadata-only fetches fall back to a hash-derived package identifier.
+	filename = strings.TrimSuffix(filename, pypiMetadataSuffix)
+
+	// Wheels are {name}-{version}(-{build})?-{python}-{abi}-{platform}.whl;
+	// per PEP 427 the name and version fields have any hyphen escaped to '_'.
+	for _, format := range taggedExtensions {
+		if !strings.HasSuffix(filename, format.ext) {
+			continue
 		}
+		parts := strings.Split(strings.TrimSuffix(filename, format.ext), "-")
+		if len(parts) < format.minParts {
+			return "", ""
+		}
+		return parts[0], parts[1]
 	}
 
-	// Try sdist formats: {name}-{version}.tar.gz, {name}-{version}.zip
-	for _, ext := range []string{".tar.gz", ".tar.bz2", ".zip", ".tar"} {
-		if strings.HasSuffix(filename, ext) {
-			base := strings.TrimSuffix(filename, ext)
-			// Find last hyphen followed by version
-			for i := len(base) - 1; i >= 0; i-- {
-				if base[i] == '-' && i+1 < len(base) && isVersionStart(base[i+1]) {
-					return base[:i], base[i+1:]
-				}
+	for _, ext := range archiveExtensions {
+		if !strings.HasSuffix(filename, ext) {
+			continue
+		}
+		base := strings.TrimSuffix(filename, ext)
+		// Find last hyphen followed by version
+		for i := len(base) - 1; i >= 0; i-- {
+			if base[i] == '-' && i+1 < len(base) && isVersionStart(base[i+1]) {
+				return base[:i], base[i+1:]
 			}
 		}
 	}
 
 	return "", ""
-}
-
-func isPythonTag(s string) bool {
-	if len(s) < minPythonTagLen {
-		return false
-	}
-	// Python tags start with py, cp, pp, ip, jy
-	prefixes := []string{"py", "cp", "pp", "ip", "jy"}
-	for _, p := range prefixes {
-		if strings.HasPrefix(s, p) {
-			return true
-		}
-	}
-	return false
 }
 
 func isVersionStart(c byte) bool {
