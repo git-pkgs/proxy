@@ -5,9 +5,10 @@ go 1.25.6
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/CycloneDX/cyclonedx-go v0.11.0
-	github.com/git-pkgs/archives v0.3.1
+	github.com/git-pkgs/archives v0.4.0
 	github.com/git-pkgs/cooldown v0.1.1
 	github.com/git-pkgs/enrichment v0.6.4
+	github.com/git-pkgs/magic v0.1.0
 	github.com/git-pkgs/purl v0.1.15
 	github.com/git-pkgs/registries v0.6.4
 	github.com/git-pkgs/spdx v0.1.4

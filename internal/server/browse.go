@@ -1,6 +1,7 @@
 package server
 
 import (
+	"bufio"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -10,28 +11,21 @@ import (
 
 	"github.com/git-pkgs/archives"
 	"github.com/git-pkgs/archives/diff"
+	"github.com/git-pkgs/magic"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/purl"
 	"github.com/go-chi/chi/v5"
 )
 
-const contentTypePlainText = "text/plain; charset=utf-8"
+const (
+	contentTypePlainText = "text/plain; charset=utf-8"
+	browseSniffSize      = 512
+)
 
 // maxBrowseArchiveSize caps how much data openArchive will buffer for
 // prefix detection. Artifacts larger than this are rejected to prevent
 // memory exhaustion from a single request.
 const maxBrowseArchiveSize = 512 << 20 // 512 MB
-
-// archiveFilename returns a filename suitable for archive format detection.
-// Some ecosystems (e.g. composer) store artifacts with bare hash filenames
-// that have no extension. This adds .zip when the original has no extension
-// and the content is likely a zip archive.
-func archiveFilename(filename string) string {
-	if path.Ext(filename) == "" {
-		return filename + ".zip"
-	}
-	return filename
-}
 
 // detectSingleRootDir returns the single top-level directory name if all files
 // in the archive live under one common directory (e.g. GitHub zipballs use
@@ -66,8 +60,6 @@ func detectSingleRootDir(reader archives.Reader) string {
 // and stripping a single top-level directory prefix (like GitHub zipballs).
 // For npm, the hardcoded "package/" prefix takes precedence.
 func openArchive(filename string, content io.Reader, ecosystem string) (archives.Reader, error) { //nolint:ireturn // wraps multiple archive implementations
-	fname := archiveFilename(filename)
-
 	limited := io.LimitReader(content, maxBrowseArchiveSize+1)
 	data, err := io.ReadAll(limited)
 	if err != nil {
@@ -78,17 +70,17 @@ func openArchive(filename string, content io.Reader, ecosystem string) (archives
 	}
 
 	if ecosystem == "npm" {
-		return archives.OpenBytesWithPrefix(fname, data, "package/")
+		return archives.OpenBytesWithPrefix(filename, data, "package/")
 	}
 
-	probe, err := archives.OpenBytes(fname, data)
+	probe, err := archives.OpenBytes(filename, data)
 	if err != nil {
 		return nil, err
 	}
 	prefix := detectSingleRootDir(probe)
 	_ = probe.Close()
 
-	return archives.OpenBytesWithPrefix(fname, data, prefix)
+	return archives.OpenBytesWithPrefix(filename, data, prefix)
 }
 
 // BrowseListResponse contains the file listing for a directory in an archives.
@@ -361,7 +353,14 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	}
 	defer func() { _ = fileReader.Close() }()
 
-	contentType := detectContentType(filePath)
+	contentType, knownPath := detectContentTypeFromPath(filePath)
+	var content io.Reader = fileReader
+	if !knownPath {
+		bufferedFile := bufio.NewReaderSize(fileReader, browseSniffSize)
+		prefix, _ := bufferedFile.Peek(browseSniffSize)
+		contentType = detectContentType(filePath, prefix)
+		content = bufferedFile
+	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Security-Policy", "sandbox")
 	w.Header().Set("X-Content-Type-Options", "nosniff")
@@ -370,85 +369,112 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", filename))
 
 	// Stream the file
-	_, _ = io.Copy(w, fileReader)
+	_, _ = io.Copy(w, content)
 }
 
-// detectContentType returns an appropriate content type based on file extension.
-func detectContentType(filename string) string {
+// detectContentType returns an appropriate content type. Known filenames and
+// extensions take precedence; content detection handles the remaining files.
+func detectContentType(filename string, prefix []byte) string {
+	if contentType, ok := detectContentTypeFromPath(filename); ok {
+		return contentType
+	}
+	return detectContentTypeFromPrefix(prefix)
+}
+
+func detectContentTypeFromPath(filename string) (string, bool) {
 	ext := strings.ToLower(path.Ext(filename))
 
 	switch ext {
 	// Text formats
 	case ".txt", ".md", ".markdown":
-		return contentTypePlainText
+		return contentTypePlainText, true
 	case ".html", ".htm", ".xhtml":
-		return contentTypePlainText
+		return contentTypePlainText, true
 	case ".css":
-		return "text/css; charset=utf-8"
+		return "text/css; charset=utf-8", true
 	case ".js", ".mjs":
-		return "application/javascript; charset=utf-8"
+		return "application/javascript; charset=utf-8", true
 	case ".json":
-		return "application/json; charset=utf-8"
+		return "application/json; charset=utf-8", true
 	case ".xml":
-		return "application/xml; charset=utf-8"
+		return "application/xml; charset=utf-8", true
 	case ".yaml", ".yml":
-		return "text/yaml; charset=utf-8"
+		return "text/yaml; charset=utf-8", true
 	case ".toml":
-		return "text/toml; charset=utf-8"
+		return "text/toml; charset=utf-8", true
 
 	// Programming languages
 	case ".go":
-		return "text/x-go; charset=utf-8"
+		return "text/x-go; charset=utf-8", true
 	case ".rs":
-		return "text/x-rust; charset=utf-8"
+		return "text/x-rust; charset=utf-8", true
 	case ".py":
-		return "text/x-python; charset=utf-8"
+		return "text/x-python; charset=utf-8", true
 	case ".rb":
-		return "text/x-ruby; charset=utf-8"
+		return "text/x-ruby; charset=utf-8", true
 	case ".java":
-		return "text/x-java; charset=utf-8"
+		return "text/x-java; charset=utf-8", true
 	case ".c", ".h":
-		return "text/x-c; charset=utf-8"
+		return "text/x-c; charset=utf-8", true
 	case ".cpp", ".cc", ".cxx", ".hpp":
-		return "text/x-c++; charset=utf-8"
+		return "text/x-c++; charset=utf-8", true
 	case ".ts":
-		return "text/typescript; charset=utf-8"
+		return "text/typescript; charset=utf-8", true
 	case ".tsx":
-		return "text/tsx; charset=utf-8"
+		return "text/tsx; charset=utf-8", true
 	case ".jsx":
-		return "text/jsx; charset=utf-8"
+		return "text/jsx; charset=utf-8", true
 	case ".php":
-		return "text/x-php; charset=utf-8"
+		return "text/x-php; charset=utf-8", true
 
 	// Config files
 	case ".conf", ".config", ".ini":
-		return contentTypePlainText
+		return contentTypePlainText, true
 	case ".sh", ".bash":
-		return "text/x-shellscript; charset=utf-8"
+		return "text/x-shellscript; charset=utf-8", true
 	case ".dockerfile":
-		return "text/x-dockerfile; charset=utf-8"
+		return "text/x-dockerfile; charset=utf-8", true
 
 	// Images
 	case ".png":
-		return "image/png"
+		return "image/png", true
 	case ".jpg", ".jpeg":
-		return "image/jpeg"
+		return "image/jpeg", true
 	case ".gif":
-		return "image/gif"
+		return "image/gif", true
 	case ".svg":
-		return contentTypePlainText
+		return contentTypePlainText, true
 	case ".ico":
-		return "image/x-icon"
+		return "image/x-icon", true
 
 	// Archives
 	case ".zip", ".tar", ".gz", ".bz2", ".xz":
-		return "application/octet-stream"
+		return "application/octet-stream", true
 
 	default:
-		// Try to detect if it looks like text
 		if isLikelyText(filename) {
-			return contentTypePlainText
+			return contentTypePlainText, true
 		}
+		return "", false
+	}
+}
+
+func detectContentTypeFromPrefix(prefix []byte) string {
+	result := magic.DetectPrefix(prefix)
+	if result.Kind == magic.KindText {
+		return contentTypePlainText
+	}
+
+	switch result.Format {
+	case "png":
+		return "image/png"
+	case "jpeg":
+		return "image/jpeg"
+	case "gif":
+		return "image/gif"
+	case "pdf":
+		return "application/pdf"
+	default:
 		return "application/octet-stream"
 	}
 }

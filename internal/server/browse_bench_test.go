@@ -55,3 +55,28 @@ func BenchmarkOpenArchive(b *testing.B) {
 		})
 	}
 }
+
+func BenchmarkDetectContentType(b *testing.B) {
+	cases := []struct {
+		name     string
+		filename string
+		prefix   []byte
+	}{
+		{"known-path", "README.md", nil},
+		{"text-prefix", "artifact", bytes.Repeat([]byte("a"), browseSniffSize)},
+		{"png-prefix", "artifact", append([]byte("\x89PNG\r\n\x1a\n"), make([]byte, browseSniffSize-8)...)},
+	}
+
+	for _, tc := range cases {
+		b.Run(tc.name, func(b *testing.B) {
+			b.ReportAllocs()
+			var contentType string
+			for b.Loop() {
+				contentType = detectContentType(tc.filename, tc.prefix)
+			}
+			if contentType == "" {
+				b.Fatal("empty content type")
+			}
+		})
+	}
+}
