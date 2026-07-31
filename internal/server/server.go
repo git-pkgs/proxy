@@ -157,7 +157,11 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 // Start starts the HTTP server.
 func (s *Server) Start() error {
 	// Create shared components with circuit breaker
-	baseFetcher := fetch.NewFetcher(fetch.WithAuthFunc(s.authForURL))
+	fetchOpts := []fetch.Option{fetch.WithAuthFunc(s.authForURL)}
+	if len(s.cfg.Upstream.AllowPrivateHosts) > 0 {
+		fetchOpts = append(fetchOpts, fetch.WithAllowPrivateHosts(s.cfg.Upstream.AllowPrivateHosts...))
+	}
+	baseFetcher := fetch.NewFetcher(fetchOpts...)
 	fetcher := fetch.NewCircuitBreakerFetcher(baseFetcher)
 	resolver := fetch.NewResolver()
 	cd := &cooldown.Config{

@@ -308,6 +308,11 @@ type UpstreamConfig struct {
 	// Keys are URL prefixes that are matched against request URLs.
 	// Example: "https://npm.pkg.github.com" matches all requests to that host.
 	Auth map[string]AuthConfig `json:"auth" yaml:"auth"`
+
+	// AllowPrivateHosts lists upstream hostnames exempted from the
+	// SSRF dial gate's loopback/private-address checks, for upstreams
+	// that deliberately live on a private network and need to be reached.
+	AllowPrivateHosts []string `json:"allow_private_hosts" yaml:"allow_private_hosts"`
 }
 
 // AuthForURL returns the auth config that matches the given URL.
@@ -481,6 +486,14 @@ func (c *Config) LoadFromEnv() {
 	}
 	if v := os.Getenv("PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL"); v != "" {
 		c.Upstream.GradlePluginPortal = v
+	}
+	if v := os.Getenv("PROXY_UPSTREAM_ALLOW_PRIVATE_HOSTS"); v != "" {
+		c.Upstream.AllowPrivateHosts = c.Upstream.AllowPrivateHosts[:0]
+		for _, h := range strings.Split(v, ",") {
+			if h = strings.TrimSpace(h); h != "" {
+				c.Upstream.AllowPrivateHosts = append(c.Upstream.AllowPrivateHosts, h)
+			}
+		}
 	}
 	if v := os.Getenv("PROXY_COOLDOWN_DEFAULT"); v != "" {
 		c.Cooldown.Default = v
