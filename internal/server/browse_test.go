@@ -182,7 +182,7 @@ func TestHandleBrowseFile(t *testing.T) {
 	}
 }
 
-func TestDetectContentType(t *testing.T) {
+func TestBrowseContentTypePolicy(t *testing.T) {
 	tests := []struct {
 		name       string
 		filename   string
@@ -222,9 +222,12 @@ func TestDetectContentType(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := detectContentType(tt.filename, tt.prefix)
+			got, knownPath := detectContentTypeFromPath(tt.filename)
+			if !knownPath {
+				got = detectContentTypeFromPrefix(tt.prefix)
+			}
 			if got != tt.expectedCT {
-				t.Errorf("detectContentType(%q, %q) = %q, want %q", tt.filename, tt.prefix, got, tt.expectedCT)
+				t.Errorf("content type for %q with prefix %q = %q, want %q", tt.filename, tt.prefix, got, tt.expectedCT)
 			}
 		})
 	}

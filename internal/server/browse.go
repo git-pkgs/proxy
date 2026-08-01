@@ -358,7 +358,7 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	if !knownPath {
 		bufferedFile := bufio.NewReaderSize(fileReader, browseSniffSize)
 		prefix, _ := bufferedFile.Peek(browseSniffSize)
-		contentType = detectContentType(filePath, prefix)
+		contentType = detectContentTypeFromPrefix(prefix)
 		content = bufferedFile
 	}
 	w.Header().Set("Content-Type", contentType)
@@ -370,15 +370,6 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 
 	// Stream the file
 	_, _ = io.Copy(w, content)
-}
-
-// detectContentType returns an appropriate content type. Known filenames and
-// extensions take precedence; content detection handles the remaining files.
-func detectContentType(filename string, prefix []byte) string {
-	if contentType, ok := detectContentTypeFromPath(filename); ok {
-		return contentType
-	}
-	return detectContentTypeFromPrefix(prefix)
 }
 
 func detectContentTypeFromPath(filename string) (string, bool) {
