@@ -137,29 +137,44 @@ func TestHandleBrowseFile(t *testing.T) {
 		t.Fatalf("failed to upsert artifact: %v", err)
 	}
 
-	// Test fetching a file
-	req := httptest.NewRequest("GET", "/ui/api/browse/npm/test-browse/1.0.0/file/README.md", nil)
-	w := httptest.NewRecorder()
-	ts.handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+	files := []struct {
+		path        string
+		content     string
+		contentType string
+	}{
+		{"README.md", "# Test Package\n", contentTypePlainText},
+		{"notes.data", "short text\n", contentTypePlainText},
+		{"logo", "\x89PNG\r\n\x1a\nimage data", "image/png"},
+		{"page", "<!DOCTYPE html><html></html>", contentTypePlainText},
+		{"misleading.txt", "\x89PNG\r\n\x1a\nimage data", contentTypePlainText},
 	}
+	for _, file := range files {
+		t.Run(file.path, func(t *testing.T) {
+			req := httptest.NewRequest("GET", "/ui/api/browse/npm/test-browse/1.0.0/file/"+file.path, nil)
+			w := httptest.NewRecorder()
+			ts.handler.ServeHTTP(w, req)
 
-	body := w.Body.String()
-	if body != "# Test Package\n" {
-		t.Errorf("unexpected file content: %q", body)
-	}
-
-	// Check content type
-	contentType := w.Header().Get("Content-Type")
-	if contentType != contentTypePlainText {
-		t.Errorf("expected text/plain content type, got %q", contentType)
+			if w.Code != http.StatusOK {
+				t.Fatalf("expected status 200, got %d: %s", w.Code, w.Body.String())
+			}
+			if w.Body.String() != file.content {
+				t.Errorf("unexpected file content: %q", w.Body.String())
+			}
+			if got := w.Header().Get("Content-Type"); got != file.contentType {
+				t.Errorf("Content-Type = %q, want %q", got, file.contentType)
+			}
+			if got := w.Header().Get("Content-Security-Policy"); got != "sandbox" {
+				t.Errorf("Content-Security-Policy = %q, want sandbox", got)
+			}
+			if got := w.Header().Get("X-Content-Type-Options"); got != "nosniff" {
+				t.Errorf("X-Content-Type-Options = %q, want nosniff", got)
+			}
+		})
 	}
 
 	// Test fetching non-existent file
-	req = httptest.NewRequest("GET", "/ui/api/browse/npm/test-browse/1.0.0/file/nonexistent.txt", nil)
-	w = httptest.NewRecorder()
+	req := httptest.NewRequest("GET", "/ui/api/browse/npm/test-browse/1.0.0/file/nonexistent.txt", nil)
+	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
@@ -167,36 +182,52 @@ func TestHandleBrowseFile(t *testing.T) {
 	}
 }
 
-func TestDetectContentType(t *testing.T) {
+func TestBrowseContentTypePolicy(t *testing.T) {
 	tests := []struct {
+		name       string
 		filename   string
+		prefix     []byte
 		expectedCT string
 	}{
-		{"file.txt", contentTypePlainText},
-		{"file.md", contentTypePlainText},
-		{"file.json", "application/json; charset=utf-8"},
-		{"file.js", "application/javascript; charset=utf-8"},
-		{"file.go", "text/x-go; charset=utf-8"},
-		{"file.py", "text/x-python; charset=utf-8"},
-		{"file.rs", "text/x-rust; charset=utf-8"},
-		{"file.html", contentTypePlainText},
-		{"file.htm", contentTypePlainText},
-		{"file.xhtml", contentTypePlainText},
-		{"file.svg", contentTypePlainText},
-		{"file.png", "image/png"},
-		{"file.jpg", "image/jpeg"},
-		{"README", contentTypePlainText},
-		{"LICENSE", contentTypePlainText},
-		{"Makefile", contentTypePlainText},
-		{".gitignore", contentTypePlainText},
-		{"file.bin", "application/octet-stream"},
+		{"text extension", "file.txt", nil, contentTypePlainText},
+		{"markdown extension", "file.md", nil, contentTypePlainText},
+		{"JSON extension", "file.json", nil, "application/json; charset=utf-8"},
+		{"JavaScript extension", "file.js", nil, "application/javascript; charset=utf-8"},
+		{"Go extension", "file.go", nil, "text/x-go; charset=utf-8"},
+		{"Python extension", "file.py", nil, "text/x-python; charset=utf-8"},
+		{"Rust extension", "file.rs", nil, "text/x-rust; charset=utf-8"},
+		{"HTML extension", "file.html", nil, contentTypePlainText},
+		{"HTM extension", "file.htm", nil, contentTypePlainText},
+		{"XHTML extension", "file.xhtml", nil, contentTypePlainText},
+		{"SVG extension", "file.svg", nil, contentTypePlainText},
+		{"PNG extension", "file.png", nil, "image/png"},
+		{"JPEG extension", "file.jpg", nil, "image/jpeg"},
+		{"README", "README", nil, contentTypePlainText},
+		{"LICENSE", "LICENSE", nil, contentTypePlainText},
+		{"Makefile", "Makefile", nil, contentTypePlainText},
+		{"gitignore", ".gitignore", nil, contentTypePlainText},
+		{"unknown empty", "file.bin", nil, "application/octet-stream"},
+		{"extensionless PNG", "asset", []byte("\x89PNG\r\n\x1a\n"), "image/png"},
+		{"extensionless JPEG", "asset", []byte("\xff\xd8\xff"), "image/jpeg"},
+		{"extensionless GIF", "asset", []byte("GIF89a"), "image/gif"},
+		{"extensionless PDF", "asset", []byte("%PDF-1.7"), "application/pdf"},
+		{"extensionless text", "asset", []byte("plain text\n"), contentTypePlainText},
+		{"extensionless HTML", "asset", []byte("<!DOCTYPE html><html></html>"), contentTypePlainText},
+		{"extensionless XML", "asset", []byte("<?xml version=\"1.0\"?><root/>"), contentTypePlainText},
+		{"extensionless SVG", "asset", []byte("<svg xmlns=\"http://www.w3.org/2000/svg\"></svg>"), contentTypePlainText},
+		{"extensionless ZIP", "asset", []byte("PK\x03\x04"), "application/octet-stream"},
+		{"extensionless binary", "asset", []byte{0, 1, 2}, "application/octet-stream"},
+		{"known path wins", "file.txt", []byte("\x89PNG\r\n\x1a\n"), contentTypePlainText},
 	}
 
 	for _, tt := range tests {
-		t.Run(tt.filename, func(t *testing.T) {
-			got := detectContentType(tt.filename)
+		t.Run(tt.name, func(t *testing.T) {
+			got, knownPath := detectContentTypeFromPath(tt.filename)
+			if !knownPath {
+				got = detectContentTypeFromPrefix(tt.prefix)
+			}
 			if got != tt.expectedCT {
-				t.Errorf("detectContentType(%q) = %q, want %q", tt.filename, got, tt.expectedCT)
+				t.Errorf("content type for %q with prefix %q = %q, want %q", tt.filename, tt.prefix, got, tt.expectedCT)
 			}
 		})
 	}
@@ -255,6 +286,10 @@ func createTestArchive(t *testing.T) []byte {
 		"package/lib/index.js":       "module.exports = {};",
 		"package/lib/helper.js":      "module.exports.help = () => {};",
 		"package/test/index.test.js": "// tests",
+		"package/notes.data":         "short text\n",
+		"package/logo":               "\x89PNG\r\n\x1a\nimage data",
+		"package/page":               "<!DOCTYPE html><html></html>",
+		"package/misleading.txt":     "\x89PNG\r\n\x1a\nimage data",
 	}
 
 	for path, content := range files {
@@ -609,25 +644,19 @@ func TestHandleComparePage(t *testing.T) {
 	}
 }
 
-func TestArchiveFilename(t *testing.T) {
-	tests := []struct {
-		input string
-		want  string
-	}{
-		{"package.tar.gz", "package.tar.gz"},
-		{"d2e2f014ccd6ec9fae8dbe6336a4164346a2a856", "d2e2f014ccd6ec9fae8dbe6336a4164346a2a856.zip"},
-		{"file.zip", "file.zip"},
-		{"archive.tgz", "archive.tgz"},
-		{"noext", "noext.zip"},
+func TestOpenArchiveDetectsExtensionlessTarGz(t *testing.T) {
+	reader, err := openArchive("artifact", bytes.NewReader(createTestArchive(t)), "npm")
+	if err != nil {
+		t.Fatalf("openArchive failed: %v", err)
 	}
+	defer func() { _ = reader.Close() }()
 
-	for _, tt := range tests {
-		t.Run(tt.input, func(t *testing.T) {
-			got := archiveFilename(tt.input)
-			if got != tt.want {
-				t.Errorf("archiveFilename(%q) = %q, want %q", tt.input, got, tt.want)
-			}
-		})
+	files, err := reader.List()
+	if err != nil {
+		t.Fatalf("List failed: %v", err)
+	}
+	if len(files) == 0 {
+		t.Fatal("expected files in extensionless archive")
 	}
 }
 
