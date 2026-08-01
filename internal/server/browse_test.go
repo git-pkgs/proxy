@@ -829,3 +829,70 @@ func createTarGzArchive(t *testing.T, files map[string]string) []byte {
 	}
 	return buf.Bytes()
 }
+
+// TestFirstBrowsableArtifact guards artifact selection against PEP 658
+// core-metadata sidecars. A sidecar resolves to the same version as the
+// distribution it describes, so it is cached under that version, but it is plain
+// text and openArchive cannot parse it.
+func TestFirstBrowsableArtifact(t *testing.T) {
+	cached := func(filename string) database.Artifact {
+		return database.Artifact{
+			Filename:    filename,
+			StoragePath: sql.NullString{String: "pypi/" + filename, Valid: true},
+		}
+	}
+	uncached := func(filename string) database.Artifact {
+		return database.Artifact{Filename: filename}
+	}
+
+	tests := []struct {
+		name      string
+		artifacts []database.Artifact
+		want      string
+	}{
+		{"no artifacts", nil, ""},
+		{
+			"sidecar only is not browsable",
+			[]database.Artifact{cached("foo-1.0-py3-none-any.whl.metadata")},
+			"",
+		},
+		{
+			// '-' (0x2D) sorts before '.' (0x2E), so the sidecar precedes the
+			// sdist in the filename-ordered list the query returns.
+			"sidecar sorting ahead of the sdist is skipped",
+			[]database.Artifact{cached("foo-1.0-py3-none-any.whl.metadata"), cached("foo-1.0.tar.gz")},
+			"foo-1.0.tar.gz",
+		},
+		{
+			"sidecar skipped in favour of its own wheel",
+			[]database.Artifact{cached("foo-1.0-py3-none-any.whl.metadata"), cached("foo-1.0-py3-none-any.whl")},
+			"foo-1.0-py3-none-any.whl",
+		},
+		{
+			"uncached archive is still not selected",
+			[]database.Artifact{cached("foo-1.0.tar.gz.metadata"), uncached("foo-1.0.tar.gz")},
+			"",
+		},
+		{"plain sdist", []database.Artifact{cached("foo-1.0.tar.gz")}, "foo-1.0.tar.gz"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := firstBrowsableArtifact(tt.artifacts)
+
+			if tt.want == "" {
+				if got != nil {
+					t.Fatalf("firstBrowsableArtifact() = %q, want nil", got.Filename)
+				}
+				return
+			}
+
+			if got == nil {
+				t.Fatalf("firstBrowsableArtifact() = nil, want %q", tt.want)
+			}
+			if got.Filename != tt.want {
+				t.Errorf("firstBrowsableArtifact() = %q, want %q", got.Filename, tt.want)
+			}
+		})
+	}
+}

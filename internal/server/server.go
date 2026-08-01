@@ -791,13 +791,9 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 
 	isOutdated := pkg.LatestVersion.Valid && pkg.LatestVersion.String != version
 
-	hasCached := false
-	for _, art := range artifacts {
-		if art.StoragePath.Valid {
-			hasCached = true
-			break
-		}
-	}
+	// A version whose only cached artifact is a metadata sidecar cannot be
+	// browsed, so it must not be advertised as cached.
+	hasCached := firstBrowsableArtifact(artifacts) != nil
 
 	data := VersionShowData{
 		Layout:            s.layoutFor(r),

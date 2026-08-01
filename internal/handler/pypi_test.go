@@ -47,14 +47,39 @@ func TestPyPIParseFilename(t *testing.T) {
 		{"requests-2.31.0-py3-none-any.whl.metadata", "requests", "2.31.0"},
 		{"requests-2.31.0.tar.gz.metadata", "requests", "2.31.0"},
 
-		// Legacy bdist formats
+		// Eggs: {name}-{version}-py{X.Y}(-{platform})?.egg. Unescaped hyphens in
+		// the name must not be mistaken for the field separator before the version.
 		{"numpy-1.8.0-py2.7-macosx-10.9-x86_64.egg", "numpy", "1.8.0"},
-		{"pywin32-223.win32-py2.7.exe", "pywin32", "223.win32"},
+		{"aws-sdk-1.0.0-py3.11.egg", "aws-sdk", "1.0.0"},
+		{"aws-sdk-1.0.0-py2.7-macosx-10.9-x86_64.egg", "aws-sdk", "1.0.0"},
+		{"aws-sdk-1.0.0.egg", "aws-sdk", "1.0.0"},
+		// A "py{N}" component inside the name is not the interpreter field, so
+		// the interpreter must be located from the end of the filename.
+		{"django-rest-py3-1.0-py3.6.egg", "django-rest-py3", "1.0"},
+
+		// Windows installers: {name}-{version}.{platform}(-py{X.Y})?.{exe,msi}.
+		// The platform is not part of the version, and may contain a hyphen.
+		{"foo-1.0.win32-py2.0.exe", "foo", "1.0"},
+		{"pywin32-223.win32-py2.7.exe", "pywin32", "223"},
+		{"numpy-1.8.0.win-amd64-py2.7.exe", "numpy", "1.8.0"},
+		{"aws-sdk-1.0.0.win32-py2.7.exe", "aws-sdk", "1.0.0"},
+		{"pywin32-223.win32.exe", "pywin32", "223"},
+		{"cx_Oracle-5.1.2.win32-py2.7.msi", "cx_Oracle", "5.1.2"},
+		{"numpy-1.8.0.win-amd64.msi", "numpy", "1.8.0"},
+		// A trailing build variant belongs to neither the name nor the version.
+		{"cx_Oracle-5.1.2-11g.win32-py2.7.exe", "cx_Oracle", "5.1.2"},
+		// A prerelease version has no purely numeric field to anchor on.
+		{"foo-1.0b1.win32-py2.7.exe", "foo", "1.0b1"},
 
 		// Invalid
 		{"invalid", "", ""},
 		{"invalid.metadata", "", ""},
 		{"backports.ssl_match_hostname-3.4.0.2-py2.7.whl", "", ""},
+		{"invalid.exe", "", ""},
+		{"foo-1.0.exe", "", ""},
+		// An egg with an interpreter field but no version must not promote the
+		// trailing component of a hyphenated name to the version.
+		{"aws-sdk-py2.7.egg", "", ""},
 	}
 
 	for _, tt := range tests {
