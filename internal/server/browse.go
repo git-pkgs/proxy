@@ -13,6 +13,7 @@ import (
 	"github.com/git-pkgs/archives/diff"
 	"github.com/git-pkgs/magic"
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/purl"
 	"github.com/go-chi/chi/v5"
 )
@@ -26,6 +27,31 @@ const (
 // prefix detection. Artifacts larger than this are rejected to prevent
 // memory exhaustion from a single request.
 const maxBrowseArchiveSize = 512 << 20 // 512 MB
+
+// firstBrowsableArtifact returns the first cached artifact that can be opened as
+// an archive, or nil if the version has none.
+//
+// A version's artifact list is not all archives: a PEP 658 core-metadata sidecar
+// resolves to the same name and version as the distribution it describes, so it
+// is cached under that version too. Sidecars are plain text, and because '-'
+// sorts before '.' one can even precede the real distribution in the
+// filename-ordered list, so selecting blindly would hand openArchive a file it
+// cannot parse.
+func firstBrowsableArtifact(artifacts []database.Artifact) *database.Artifact {
+	for i := range artifacts {
+		if artifacts[i].StoragePath.Valid && !isMetadataSidecar(artifacts[i].Filename) {
+			return &artifacts[i]
+		}
+	}
+
+	return nil
+}
+
+// isMetadataSidecar reports whether filename is a core-metadata sidecar rather
+// than a distribution archive.
+func isMetadataSidecar(filename string) bool {
+	return strings.HasSuffix(filename, handler.PyPIMetadataSuffix)
+}
 
 // detectSingleRootDir returns the single top-level directory name if all files
 // in the archive live under one common directory (e.g. GitHub zipballs use
@@ -214,14 +240,7 @@ func (s *Server) browseList(w http.ResponseWriter, r *http.Request, ecosystem, n
 		return
 	}
 
-	// Find the first cached artifact
-	var cachedArtifact *database.Artifact
-	for i := range artifacts {
-		if artifacts[i].StoragePath.Valid {
-			cachedArtifact = &artifacts[i]
-			break
-		}
-	}
+	cachedArtifact := firstBrowsableArtifact(artifacts)
 
 	if cachedArtifact == nil {
 		notFound(w, "artifact not cached")
@@ -308,14 +327,7 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 		return
 	}
 
-	// Find the first cached artifact
-	var cachedArtifact *database.Artifact
-	for i := range artifacts {
-		if artifacts[i].StoragePath.Valid {
-			cachedArtifact = &artifacts[i]
-			break
-		}
-	}
+	cachedArtifact := firstBrowsableArtifact(artifacts)
 
 	if cachedArtifact == nil {
 		notFound(w, "artifact not cached")
@@ -535,19 +547,8 @@ func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, 
 	}
 
 	// Find cached artifacts
-	var fromArtifact, toArtifact *database.Artifact
-	for i := range fromArtifacts {
-		if fromArtifacts[i].StoragePath.Valid {
-			fromArtifact = &fromArtifacts[i]
-			break
-		}
-	}
-	for i := range toArtifacts {
-		if toArtifacts[i].StoragePath.Valid {
-			toArtifact = &toArtifacts[i]
-			break
-		}
-	}
+	fromArtifact := firstBrowsableArtifact(fromArtifacts)
+	toArtifact := firstBrowsableArtifact(toArtifacts)
 
 	if fromArtifact == nil || toArtifact == nil {
 		notFound(w, "one or both versions not cached")
