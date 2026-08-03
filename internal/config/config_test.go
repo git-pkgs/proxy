@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"testing"
 	"time"
 )
@@ -273,6 +274,7 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("PROXY_LOG_LEVEL", testLevelDebug)
 	t.Setenv("PROXY_UPSTREAM_MAVEN", "https://maven.example.com/repository/maven-public")
 	t.Setenv("PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL", "https://plugins.example.com/m2")
+	t.Setenv("PROXY_UPSTREAM_ALLOW_PRIVATE_HOSTS", "maven-mirror.internal.svc, registry.internal ,")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY", "true")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE", "32MB")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_AGE", "12h")
@@ -301,6 +303,10 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.Upstream.GradlePluginPortal != "https://plugins.example.com/m2" {
 		t.Errorf("Upstream.GradlePluginPortal = %q, want %q", cfg.Upstream.GradlePluginPortal, "https://plugins.example.com/m2")
+	}
+	wantHosts := []string{"maven-mirror.internal.svc", "registry.internal"}
+	if !reflect.DeepEqual(cfg.Upstream.AllowPrivateHosts, wantHosts) {
+		t.Errorf("Upstream.AllowPrivateHosts = %v, want %v", cfg.Upstream.AllowPrivateHosts, wantHosts)
 	}
 	if !cfg.Gradle.BuildCache.ReadOnly {
 		t.Error("Gradle.BuildCache.ReadOnly = false, want true")

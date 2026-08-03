@@ -121,6 +121,23 @@ upstream:
   cargo_download: "https://static.crates.io/crates"
 ```
 
+### Private-Network Upstreams
+
+Upstream fetches pass through an SSRF dial gate that refuses loopback, RFC1918/ULA, CGNAT, and link-local addresses, so an upstream on a private network (for example a registry inside the same Kubernetes cluster) is unreachable by default.
+To use one, whitelist its hostname explicitly:
+
+```yaml
+upstream:
+  maven: "http://maven-mirror.internal.svc.cluster.local:8080/releases"
+  allow_private_hosts:
+    - "maven-mirror.internal.svc.cluster.local"
+```
+
+Or via environment variable (comma-separated):
+`PROXY_UPSTREAM_ALLOW_PRIVATE_HOSTS=maven-mirror.internal.svc.cluster.local`
+
+Hostnames are matched case-insensitively and exactly. Only the listed hosts are exempted.
+
 ## Authentication
 
 Configure authentication for private upstream registries. Auth is matched by URL prefix, and credentials can reference environment variables using `${VAR_NAME}` syntax.
