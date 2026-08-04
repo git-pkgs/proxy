@@ -18,6 +18,7 @@ jobs:
     permissions:
       packages: write
       contents: read
+      id-token: write
     steps:
       - name: Check out the repo
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
@@ -45,7 +46,10 @@ jobs:
         with:
           images: ghcr.io/${{ github.repository }}
 
+      - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
+
       - name: Build and push Docker image
+        id: build
         uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a
         with:
           context: .
@@ -53,3 +57,26 @@ jobs:
           push: true
           tags: ${{ steps.meta.outputs.tags }}
           labels: ${{ steps.meta.outputs.labels }}
+          provenance: mode=max
+          sbom: true
+
+      - name: Sign image by digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          cosign sign --yes "${IMAGE}@${DIGEST}"
+
+      - name: Verify remote provenance and SBOM attestations
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          reference="${IMAGE}@${DIGEST}"
+          docker buildx imagetools inspect "$reference" --format '{{ json .Provenance }}' \
+            | jq -e 'type == "object" and length > 0' >/dev/null
+          docker buildx imagetools inspect "$reference" --format '{{ json .SBOM }}' \
+            | jq -e 'type == "object" and length > 0' >/dev/null
