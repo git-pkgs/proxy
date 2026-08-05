@@ -223,7 +223,7 @@ func (s *Server) Start() error {
 	cranHandler := handler.NewCRANHandler(proxy, s.cfg.BaseURL)
 	juliaHandler := handler.NewJuliaHandler(proxy, s.cfg.BaseURL)
 	containerHandler := handler.NewContainerHandler(proxy, s.cfg.BaseURL)
-	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL)
+	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Debian)
 	rpmHandler := handler.NewRPMHandler(proxy, s.cfg.BaseURL)
 
 	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))

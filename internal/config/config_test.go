@@ -37,6 +37,9 @@ func TestDefault(t *testing.T) {
 	if cfg.Upstream.GradlePluginPortal != "https://plugins.gradle.org/m2" {
 		t.Errorf("Upstream.GradlePluginPortal = %q, want %q", cfg.Upstream.GradlePluginPortal, "https://plugins.gradle.org/m2")
 	}
+	if cfg.Upstream.Debian != "http://deb.debian.org/debian" {
+		t.Errorf("Upstream.Debian = %q, want %q", cfg.Upstream.Debian, "http://deb.debian.org/debian")
+	}
 }
 
 func TestValidate(t *testing.T) {
@@ -273,6 +276,7 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("PROXY_LOG_LEVEL", testLevelDebug)
 	t.Setenv("PROXY_UPSTREAM_MAVEN", "https://maven.example.com/repository/maven-public")
 	t.Setenv("PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL", "https://plugins.example.com/m2")
+	t.Setenv("PROXY_UPSTREAM_DEBIAN", "http://archive.ubuntu.com/ubuntu")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY", "true")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE", "32MB")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_AGE", "12h")
@@ -301,6 +305,9 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.Upstream.GradlePluginPortal != "https://plugins.example.com/m2" {
 		t.Errorf("Upstream.GradlePluginPortal = %q, want %q", cfg.Upstream.GradlePluginPortal, "https://plugins.example.com/m2")
+	}
+	if cfg.Upstream.Debian != "http://archive.ubuntu.com/ubuntu" {
+		t.Errorf("Upstream.Debian = %q, want %q", cfg.Upstream.Debian, "http://archive.ubuntu.com/ubuntu")
 	}
 	if !cfg.Gradle.BuildCache.ReadOnly {
 		t.Error("Gradle.BuildCache.ReadOnly = false, want true")

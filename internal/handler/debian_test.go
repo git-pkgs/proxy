@@ -18,6 +18,6 @@ func TestDebianHandler_parsePoolPath(t *testing.T) {
 }
 
 func TestDebianHandler_Routes(t *testing.T) {
-	h := NewDebianHandler(nil, "http://localhost:8080")
+	h := NewDebianHandler(nil, "http://localhost:8080", "")
 	assertRoutesBasics(t, h.Routes(), "/dists/stable/Release", "/pool/../../../etc/passwd")
 }

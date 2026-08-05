@@ -1165,7 +1165,7 @@ func TestDebianHandler_DownloadCacheMiss(t *testing.T) {
 		ContentType: "application/vnd.debian.binary-package",
 	}
 
-	h := NewDebianHandler(proxy, "http://localhost")
+	h := NewDebianHandler(proxy, "http://localhost", "")
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 

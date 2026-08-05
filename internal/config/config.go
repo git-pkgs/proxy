@@ -304,6 +304,11 @@ type UpstreamConfig struct {
 	// Default: https://static.crates.io/crates
 	CargoDownload string `json:"cargo_download" yaml:"cargo_download"`
 
+	// Debian is the upstream APT repository base URL.
+	// Example: http://archive.ubuntu.com/ubuntu would get Ubuntu.
+	// Default: http://deb.debian.org/debian
+	Debian string `json:"debian" yaml:"debian"`
+
 	// Auth configures authentication for upstream registries.
 	// Keys are URL prefixes that are matched against request URLs.
 	// Example: "https://npm.pkg.github.com" matches all requests to that host.
@@ -378,6 +383,7 @@ func Default() *Config {
 			GradlePluginPortal: "https://plugins.gradle.org/m2",
 			Cargo:              "https://index.crates.io",
 			CargoDownload:      "https://static.crates.io/crates",
+			Debian:             "http://deb.debian.org/debian",
 		},
 		Gradle: GradleConfig{
 			BuildCache: GradleBuildCacheConfig{
@@ -422,6 +428,21 @@ func Load(path string) (*Config, error) {
 	return cfg, nil
 }
 
+// setEnvString sets *dst from the named environment variable, leaving it
+// untouched if the variable is unset or empty.
+func setEnvString(dst *string, key string) {
+	if v := os.Getenv(key); v != "" {
+		*dst = v
+	}
+}
+
+// setEnvBool is setEnvString for boolean fields, parsed via envBool.
+func setEnvBool(dst *bool, key string) {
+	if v := os.Getenv(key); v != "" {
+		*dst = envBool(v)
+	}
+}
+
 // LoadFromEnv applies environment variable overrides to a Config.
 // Environment variables use the PROXY_ prefix:
 //   - PROXY_LISTEN
@@ -434,90 +455,35 @@ func Load(path string) (*Config, error) {
 //   - PROXY_LOG_FORMAT
 //   - PROXY_HEALTH_STORAGE_PROBE_INTERVAL
 func (c *Config) LoadFromEnv() {
-	if v := os.Getenv("PROXY_LISTEN"); v != "" {
-		c.Listen = v
-	}
-	if v := os.Getenv("PROXY_BASE_URL"); v != "" {
-		c.BaseURL = v
-	}
-	if v := os.Getenv("PROXY_UI_URL"); v != "" {
-		c.UIBaseURL = v
-	}
-	if v := os.Getenv("PROXY_STORAGE_URL"); v != "" {
-		c.Storage.URL = v
-	}
-	if v := os.Getenv("PROXY_STORAGE_PATH"); v != "" {
-		c.Storage.Path = v
-	}
-	if v := os.Getenv("PROXY_STORAGE_MAX_SIZE"); v != "" {
-		c.Storage.MaxSize = v
-	}
-	if v := os.Getenv("PROXY_STORAGE_DIRECT_SERVE"); v != "" {
-		c.Storage.DirectServe = envBool(v)
-	}
-	if v := os.Getenv("PROXY_STORAGE_DIRECT_SERVE_TTL"); v != "" {
-		c.Storage.DirectServeTTL = v
-	}
-	if v := os.Getenv("PROXY_STORAGE_DIRECT_SERVE_BASE_URL"); v != "" {
-		c.Storage.DirectServeBaseURL = v
-	}
-	if v := os.Getenv("PROXY_DATABASE_DRIVER"); v != "" {
-		c.Database.Driver = v
-	}
-	if v := os.Getenv("PROXY_DATABASE_PATH"); v != "" {
-		c.Database.Path = v
-	}
-	if v := os.Getenv("PROXY_DATABASE_URL"); v != "" {
-		c.Database.URL = v
-	}
-	if v := os.Getenv("PROXY_LOG_LEVEL"); v != "" {
-		c.Log.Level = v
-	}
-	if v := os.Getenv("PROXY_LOG_FORMAT"); v != "" {
-		c.Log.Format = v
-	}
-	if v := os.Getenv("PROXY_UPSTREAM_MAVEN"); v != "" {
-		c.Upstream.Maven = v
-	}
-	if v := os.Getenv("PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL"); v != "" {
-		c.Upstream.GradlePluginPortal = v
-	}
-	if v := os.Getenv("PROXY_COOLDOWN_DEFAULT"); v != "" {
-		c.Cooldown.Default = v
-	}
-	if v := os.Getenv("PROXY_CACHE_METADATA"); v != "" {
-		c.CacheMetadata = envBool(v)
-	}
-	if v := os.Getenv("PROXY_MIRROR_API"); v != "" {
-		c.MirrorAPI = envBool(v)
-	}
-	if v := os.Getenv("PROXY_METADATA_TTL"); v != "" {
-		c.MetadataTTL = v
-	}
-	if v := os.Getenv("PROXY_METADATA_MAX_SIZE"); v != "" {
-		c.MetadataMaxSize = v
-	}
-	if v := os.Getenv("PROXY_HTTP_TIMEOUT"); v != "" {
-		c.HTTPTimeout = v
-	}
-	if v := os.Getenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY"); v != "" {
-		c.Gradle.BuildCache.ReadOnly = v == "true" || v == "1"
-	}
-	if v := os.Getenv("PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE"); v != "" {
-		c.Gradle.BuildCache.MaxUploadSize = v
-	}
-	if v := os.Getenv("PROXY_GRADLE_BUILD_CACHE_MAX_AGE"); v != "" {
-		c.Gradle.BuildCache.MaxAge = v
-	}
-	if v := os.Getenv("PROXY_GRADLE_BUILD_CACHE_MAX_SIZE"); v != "" {
-		c.Gradle.BuildCache.MaxSize = v
-	}
-	if v := os.Getenv("PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL"); v != "" {
-		c.Gradle.BuildCache.SweepInterval = v
-	}
-	if v := os.Getenv("PROXY_HEALTH_STORAGE_PROBE_INTERVAL"); v != "" {
-		c.Health.StorageProbeInterval = v
-	}
+	setEnvString(&c.Listen, "PROXY_LISTEN")
+	setEnvString(&c.BaseURL, "PROXY_BASE_URL")
+	setEnvString(&c.UIBaseURL, "PROXY_UI_URL")
+	setEnvString(&c.Storage.URL, "PROXY_STORAGE_URL")
+	setEnvString(&c.Storage.Path, "PROXY_STORAGE_PATH")
+	setEnvString(&c.Storage.MaxSize, "PROXY_STORAGE_MAX_SIZE")
+	setEnvBool(&c.Storage.DirectServe, "PROXY_STORAGE_DIRECT_SERVE")
+	setEnvString(&c.Storage.DirectServeTTL, "PROXY_STORAGE_DIRECT_SERVE_TTL")
+	setEnvString(&c.Storage.DirectServeBaseURL, "PROXY_STORAGE_DIRECT_SERVE_BASE_URL")
+	setEnvString(&c.Database.Driver, "PROXY_DATABASE_DRIVER")
+	setEnvString(&c.Database.Path, "PROXY_DATABASE_PATH")
+	setEnvString(&c.Database.URL, "PROXY_DATABASE_URL")
+	setEnvString(&c.Log.Level, "PROXY_LOG_LEVEL")
+	setEnvString(&c.Log.Format, "PROXY_LOG_FORMAT")
+	setEnvString(&c.Upstream.Maven, "PROXY_UPSTREAM_MAVEN")
+	setEnvString(&c.Upstream.GradlePluginPortal, "PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL")
+	setEnvString(&c.Upstream.Debian, "PROXY_UPSTREAM_DEBIAN")
+	setEnvString(&c.Cooldown.Default, "PROXY_COOLDOWN_DEFAULT")
+	setEnvBool(&c.CacheMetadata, "PROXY_CACHE_METADATA")
+	setEnvBool(&c.MirrorAPI, "PROXY_MIRROR_API")
+	setEnvString(&c.MetadataTTL, "PROXY_METADATA_TTL")
+	setEnvString(&c.MetadataMaxSize, "PROXY_METADATA_MAX_SIZE")
+	setEnvString(&c.HTTPTimeout, "PROXY_HTTP_TIMEOUT")
+	setEnvBool(&c.Gradle.BuildCache.ReadOnly, "PROXY_GRADLE_BUILD_CACHE_READ_ONLY")
+	setEnvString(&c.Gradle.BuildCache.MaxUploadSize, "PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE")
+	setEnvString(&c.Gradle.BuildCache.MaxAge, "PROXY_GRADLE_BUILD_CACHE_MAX_AGE")
+	setEnvString(&c.Gradle.BuildCache.MaxSize, "PROXY_GRADLE_BUILD_CACHE_MAX_SIZE")
+	setEnvString(&c.Gradle.BuildCache.SweepInterval, "PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL")
+	setEnvString(&c.Health.StorageProbeInterval, "PROXY_HEALTH_STORAGE_PROBE_INTERVAL")
 }
 
 // validateAbsoluteURL returns an error if value is not a parseable URL with

@@ -17,7 +17,7 @@ func TestArtifactDownloadUpstreamNotFoundReturns404(t *testing.T) {
 		handler func(p *Proxy) http.Handler
 	}{
 		{"debian", "/pool/main/n/nginx/nginx_1.18.0-6_amd64.deb",
-			func(p *Proxy) http.Handler { return NewDebianHandler(p, "http://localhost").Routes() }},
+			func(p *Proxy) http.Handler { return NewDebianHandler(p, "http://localhost", "").Routes() }},
 		{"rpm", "/releases/39/Everything/x86_64/os/Packages/n/nginx-1.24.0-1.fc39.x86_64.rpm",
 			func(p *Proxy) http.Handler { return NewRPMHandler(p, "http://localhost").Routes() }},
 		{"nuget", "/v3-flatcontainer/newtonsoft.json/13.0.3/newtonsoft.json.13.0.3.nupkg",
