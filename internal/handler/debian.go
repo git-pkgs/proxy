@@ -21,10 +21,13 @@ type DebianHandler struct {
 }
 
 // NewDebianHandler creates a new Debian/APT protocol handler.
-func NewDebianHandler(proxy *Proxy, proxyURL string) *DebianHandler {
+func NewDebianHandler(proxy *Proxy, proxyURL string, upstreamURL string) *DebianHandler {
+	if upstreamURL == "" {
+		upstreamURL = debianUpstream
+	}
 	return &DebianHandler{
 		proxy:       proxy,
-		upstreamURL: debianUpstream,
+		upstreamURL: strings.TrimSuffix(upstreamURL, "/"),
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 	}
 }

@@ -304,6 +304,11 @@ type UpstreamConfig struct {
 	// Default: https://static.crates.io/crates
 	CargoDownload string `json:"cargo_download" yaml:"cargo_download"`
 
+	// Debian is the upstream APT repository base URL.
+	// Example: http://archive.ubuntu.com/ubuntu would get Ubuntu.
+	// Default: http://deb.debian.org/debian
+	Debian string `json:"debian" yaml:"debian"`
+
 	// Auth configures authentication for upstream registries.
 	// Keys are URL prefixes that are matched against request URLs.
 	// Example: "https://npm.pkg.github.com" matches all requests to that host.
@@ -378,6 +383,7 @@ func Default() *Config {
 			GradlePluginPortal: "https://plugins.gradle.org/m2",
 			Cargo:              "https://index.crates.io",
 			CargoDownload:      "https://static.crates.io/crates",
+			Debian:             "http://deb.debian.org/debian",
 		},
 		Gradle: GradleConfig{
 			BuildCache: GradleBuildCacheConfig{
@@ -465,6 +471,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Log.Format, "PROXY_LOG_FORMAT")
 	setEnvString(&c.Upstream.Maven, "PROXY_UPSTREAM_MAVEN")
 	setEnvString(&c.Upstream.GradlePluginPortal, "PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL")
+	setEnvString(&c.Upstream.Debian, "PROXY_UPSTREAM_DEBIAN")
 	setEnvString(&c.Cooldown.Default, "PROXY_COOLDOWN_DEFAULT")
 	setEnvBool(&c.CacheMetadata, "PROXY_CACHE_METADATA")
 	setEnvBool(&c.MirrorAPI, "PROXY_MIRROR_API")
