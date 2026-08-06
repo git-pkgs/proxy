@@ -95,6 +95,9 @@ upstream:
   # Cargo crate download URL
   cargo_download: "https://static.crates.io/crates"
 
+  # Debian/APT repository URL (used by /debian endpoint)
+  debian: "http://deb.debian.org/debian"
+
   # Authentication for upstream registries
   # Keys are URL prefixes matched against request URLs.
   # Values can reference environment variables using ${VAR_NAME} syntax.
