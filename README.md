@@ -376,6 +376,13 @@ Replace your existing sources.list entries, then:
 sudo apt update
 ```
 
+The upstream defaults to `http://deb.debian.org/debian`. To proxy a different APT repository (e.g. Ubuntu), set `upstream.debian` in the config file or `PROXY_UPSTREAM_DEBIAN` in the environment:
+
+```yaml
+upstream:
+  debian: "http://archive.ubuntu.com/ubuntu"
+```
+
 ### RPM / Yum / DNF
 
 Configure yum/dnf to use the proxy in `/etc/yum.repos.d/proxy.repo`:
