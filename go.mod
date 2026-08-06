@@ -11,7 +11,7 @@ require (
 	github.com/git-pkgs/magic v0.1.0
 	github.com/git-pkgs/purl v0.1.15
 	github.com/git-pkgs/registries v0.6.4
-	github.com/git-pkgs/spdx v0.1.4
+	github.com/git-pkgs/spdx v0.2.0
 	github.com/git-pkgs/vers v0.3.0
 	github.com/git-pkgs/vulns v0.2.1
 	github.com/go-chi/chi/v5 v5.3.1
