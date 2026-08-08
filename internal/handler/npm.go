@@ -265,6 +265,13 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	h.proxy.Logger.Info("npm download request",
 		"package", packageName, "version", version, "filename", filename)
 
+	if h.versionInCooldown(r, packageName, version) {
+		h.proxy.Logger.Info("cooldown: withholding npm tarball",
+			"package", packageName, "version", version)
+		JSONError(w, http.StatusNotFound, "version not found")
+		return
+	}
+
 	downloadURL := fmt.Sprintf(
 		"%s/%s/-/%s",
 		h.upstreamURL,
@@ -285,6 +292,50 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ServeArtifact(w, result)
+}
+
+// versionInCooldown reports whether a version is still inside the cooldown
+// window. Filtering the packument is not enough on its own: tarball URLs are
+// predictable and lockfiles record them directly, so `npm ci` reaches the
+// download path without ever requesting metadata.
+//
+// The packument is served from the metadata cache, so this normally costs no
+// extra upstream request. A version with no usable publish time is allowed
+// through, matching how applyCooldownFiltering treats it.
+func (h *NPMHandler) versionInCooldown(r *http.Request, packageName, version string) bool {
+	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
+		return false
+	}
+
+	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, url.PathEscape(packageName))
+
+	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "npm", packageName, upstreamURL, contentTypeJSON)
+	if err != nil {
+		h.proxy.Logger.Warn("cooldown: could not fetch npm metadata for download check",
+			"package", packageName, "version", version, "error", err)
+		return false
+	}
+
+	var metadata struct {
+		Time map[string]string `json:"time"`
+	}
+	if err := json.Unmarshal(body, &metadata); err != nil {
+		h.proxy.Logger.Warn("cooldown: could not parse npm metadata for download check",
+			"package", packageName, "version", version, "error", err)
+		return false
+	}
+
+	published, ok := metadata.Time[version]
+	if !ok {
+		return false
+	}
+
+	publishedAt, err := time.Parse(time.RFC3339, published)
+	if err != nil {
+		return false
+	}
+
+	return !h.proxy.Cooldown.IsAllowed("npm", canonicalPackagePURL("npm", packageName), publishedAt)
 }
 
 func escapeNPMDownloadPackage(packageName string) string {

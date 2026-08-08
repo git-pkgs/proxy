@@ -236,3 +236,59 @@ func TestPyPIHandler_DownloadCacheMiss(t *testing.T) {
 		t.Error("expected fetcher to be called on cache miss")
 	}
 }
+
+func TestPyPIDownloadCooldown(t *testing.T) {
+	now := time.Now()
+	releases := `{"releases": {
+		"1.0.0": [{"upload_time_iso_8601": "` + now.Add(-30*24*time.Hour).Format(time.RFC3339) + `"}],
+		"2.0.0": [{"upload_time_iso_8601": "` + now.Add(-1*time.Hour).Format(time.RFC3339) + `"}]
+	}}`
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentTypeJSON)
+		_, _ = io.WriteString(w, releases)
+	}))
+	defer upstream.Close()
+
+	tests := []struct {
+		name       string
+		filename   string
+		wantStatus int
+	}{
+		{"published before the window serves the file", "newpkg-1.0.0.tar.gz", http.StatusOK},
+		{"published inside the window is withheld", "newpkg-2.0.0.tar.gz", http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxy, _, _, fetcher := setupTestProxy(t)
+			proxy.HTTPClient = upstream.Client()
+			proxy.Cooldown = &cooldown.Config{Default: "7d"}
+			fetcher.artifact = &fetch.Artifact{
+				Body:        io.NopCloser(strings.NewReader("sdist data")),
+				ContentType: "application/octet-stream",
+			}
+
+			h := &PyPIHandler{
+				proxy:       proxy,
+				upstreamURL: upstream.URL,
+				proxyURL:    "http://localhost",
+			}
+			srv := httptest.NewServer(h.Routes())
+			defer srv.Close()
+
+			resp, err := http.Get(srv.URL + "/packages/packages/ab/cd/ef0123456789/" + tt.filename)
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != tt.wantStatus {
+				t.Errorf("status = %d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+			if tt.wantStatus == http.StatusNotFound && fetcher.fetchCalled {
+				t.Error("fetched a version that is still inside the cooldown window")
+			}
+		})
+	}
+}
