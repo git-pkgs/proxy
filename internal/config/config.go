@@ -141,6 +141,10 @@ type CooldownConfig struct {
 	// Packages overrides the cooldown for specific packages (keyed by PURL).
 	// Valid PURL keys are normalized to canonical form before use.
 	Packages map[string]string `json:"packages" yaml:"packages"`
+
+	// PackagePatterns overrides the cooldown for packages whose PURLs match a glob.
+	// Exact package overrides take precedence over matching patterns.
+	PackagePatterns map[string]string `json:"package_patterns" yaml:"package_patterns"`
 }
 
 // NormalizedPackages returns a copy of the package overrides with valid PURL

@@ -345,6 +345,8 @@ cooldown:
   packages:
     "pkg:npm/lodash": "0"
     "pkg:npm/@babel/core": "14d"
+  package_patterns:
+    "pkg:npm/@example/*": "0"
 `
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("writing config file: %v", err)
@@ -372,6 +374,9 @@ cooldown:
 	}
 	if got := cfg.Cooldown.NormalizedPackages()["pkg:npm/%40babel/core"]; got != "14d" {
 		t.Errorf("normalized Cooldown.Packages[@babel/core] = %q, want %q", got, "14d")
+	}
+	if cfg.Cooldown.PackagePatterns["pkg:npm/@example/*"] != "0" {
+		t.Errorf("Cooldown.PackagePatterns[example] = %q, want %q", cfg.Cooldown.PackagePatterns["pkg:npm/@example/*"], "0")
 	}
 }
 

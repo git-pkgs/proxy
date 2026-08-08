@@ -15,7 +15,6 @@ import (
 	"strings"
 	"time"
 
-	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
@@ -91,7 +90,7 @@ type Proxy struct {
 	Fetcher             fetch.FetcherInterface
 	Resolver            *fetch.Resolver
 	Logger              *slog.Logger
-	Cooldown            *cooldown.Config
+	Cooldown            CooldownPolicy
 	CacheMetadata       bool
 	MetadataTTL         time.Duration
 	MetadataMaxSize     int64
@@ -105,6 +104,13 @@ type Proxy struct {
 	DirectServeBaseURL string
 	HTTPClient         *http.Client
 	AuthForURL         func(string) (headerName, headerValue string)
+}
+
+// CooldownPolicy decides whether a published package version has completed its
+// configured cooldown.
+type CooldownPolicy interface {
+	IsAllowed(ecosystem, packagePURL string, publishedAt time.Time) bool
+	Enabled() bool
 }
 
 // NewProxy creates a new Proxy with the given dependencies.
