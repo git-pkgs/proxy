@@ -380,6 +380,13 @@ func (h *NPMHandler) validateUpstreamTarballURL(tarball string) (string, error) 
 		return "", errors.New("npm tarball URL does not match upstream registry")
 	}
 
+	basePath := strings.TrimSuffix(upstreamURL.Path, "/")
+	if basePath != "" && basePath != "/" {
+		if tarballURL.Path != basePath && !strings.HasPrefix(tarballURL.Path, basePath+"/") {
+			return "", errors.New("npm tarball URL is outside upstream base path")
+		}
+	}
+
 	return tarballURL.String(), nil
 }
 
