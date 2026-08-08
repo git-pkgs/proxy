@@ -210,6 +210,144 @@ func TestNPMRewriteMetadataScopedPackage(t *testing.T) {
 	}
 }
 
+func TestNPMRewriteMetadataGitHubPackagesTarball(t *testing.T) {
+	h := &NPMHandler{
+		proxy:    testProxy(),
+		proxyURL: "http://localhost:8080",
+	}
+
+	input := `{
+		"name": "@example/private-package",
+		"versions": {
+			"1.0.0": {
+				"dist": {
+					"shasum": "e053d091c6ae91793f6333f5fe0a55633cf3c584",
+					"tarball": "https://npm.pkg.github.com/download/@example/private-package/1.0.0/e053d091c6ae91793f6333f5fe0a55633cf3c584"
+				}
+			}
+		}
+	}`
+
+	output, err := h.rewriteMetadata("@example/private-package", []byte(input))
+	if err != nil {
+		t.Fatalf("rewriteMetadata failed: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	versions := result["versions"].(map[string]any)
+	v := versions[testVersion100].(map[string]any)
+	dist := v["dist"].(map[string]any)
+	tarball := dist["tarball"].(string)
+
+	expected := "http://localhost:8080/npm/@example%2Fprivate-package/-/private-package-1.0.0.tgz?git-pkgs-shasum=e053d091c6ae91793f6333f5fe0a55633cf3c584"
+	if tarball != expected {
+		t.Errorf("tarball = %q, want %q", tarball, expected)
+	}
+}
+
+func TestNPMHandlerDownloadsGitHubPackagesTarball(t *testing.T) {
+	const shasum = "e053d091c6ae91793f6333f5fe0a55633cf3c584"
+	const tarballPath = "/download/@example/private-package/1.0.0/" + shasum
+
+	var upstream *httptest.Server
+	upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/@example/private-package" {
+			t.Errorf("metadata path = %q, want scoped package path", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", contentTypeJSON)
+		_, _ = io.WriteString(w, `{"versions":{"1.0.0":{"dist":{"shasum":"`+shasum+`","tarball":"`+upstream.URL+tarballPath+`"}}}}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, artifactFetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	artifactFetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("package")),
+		ContentType: "application/gzip",
+	}
+	h := NewNPMHandler(proxy, "http://proxy.test", upstream.URL)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/@example/private-package/-/private-package-1.0.0.tgz?git-pkgs-shasum="+shasum,
+		nil,
+	)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if artifactFetcher.fetchedURL != upstream.URL+tarballPath {
+		t.Errorf("fetched URL = %q, want %q", artifactFetcher.fetchedURL, upstream.URL+tarballPath)
+	}
+}
+
+func TestNPMHandlerRejectsMismatchedGitHubPackagesChecksum(t *testing.T) {
+	const actualShasum = "e053d091c6ae91793f6333f5fe0a55633cf3c584"
+
+	var upstream *httptest.Server
+	upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", contentTypeJSON)
+		_, _ = io.WriteString(w, `{"versions":{"1.0.0":{"dist":{"shasum":"`+actualShasum+`","tarball":"`+upstream.URL+`/download/pkg/1.0.0/`+actualShasum+`"}}}}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, artifactFetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := NewNPMHandler(proxy, "http://proxy.test", upstream.URL)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/pkg/-/pkg-1.0.0.tgz?git-pkgs-shasum=incorrect",
+		nil,
+	)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if artifactFetcher.fetchedURL != "" {
+		t.Errorf("artifact fetcher should not be called, fetched URL = %q", artifactFetcher.fetchedURL)
+	}
+}
+
+func TestNPMHandlerRejectsTarballFromDifferentHost(t *testing.T) {
+	const shasum = "e053d091c6ae91793f6333f5fe0a55633cf3c584"
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", contentTypeJSON)
+		_, _ = io.WriteString(w, `{"versions":{"1.0.0":{"dist":{"shasum":"`+shasum+`","tarball":"https://example.invalid/package.tgz"}}}}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, artifactFetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := NewNPMHandler(proxy, "http://proxy.test", upstream.URL)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/pkg/-/pkg-1.0.0.tgz?git-pkgs-shasum="+shasum,
+		nil,
+	)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if artifactFetcher.fetchedURL != "" {
+		t.Errorf("artifact fetcher should not be called, fetched URL = %q", artifactFetcher.fetchedURL)
+	}
+}
+
 func TestNPMHandlerMetadataProxy(t *testing.T) {
 	// Create a mock upstream server
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
