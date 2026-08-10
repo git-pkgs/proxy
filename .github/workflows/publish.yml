@@ -69,14 +69,30 @@ jobs:
           [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
           cosign sign --yes "${IMAGE}@${DIGEST}"
 
-      - name: Verify remote provenance and SBOM attestations
+      - name: Verify BuildKit attestations and extract SPDX predicates
         env:
           DIGEST: ${{ steps.build.outputs.digest }}
           IMAGE: ghcr.io/${{ github.repository }}
         run: |
           set -euo pipefail
           reference="${IMAGE}@${DIGEST}"
-          docker buildx imagetools inspect "$reference" --format '{{ json .Provenance }}' \
-            | jq -e 'type == "object" and length > 0' >/dev/null
-          docker buildx imagetools inspect "$reference" --format '{{ json .SBOM }}' \
-            | jq -e 'type == "object" and length > 0' >/dev/null
+          docker buildx imagetools inspect "$reference" --format '{{ json .Provenance }}' > provenance.json
+          docker buildx imagetools inspect "$reference" --format '{{ json .SBOM }}' > sbom.json
+
+          for platform in linux/amd64 linux/arm64; do
+            jq -e --arg p "$platform" '.[$p].SLSA | type == "object" and length > 0' \
+              provenance.json >/dev/null
+            jq -e --arg p "$platform" '.[$p].SPDX' sbom.json > "sbom-${platform//\//-}.spdx.json"
+          done
+
+      - name: Attest platform SBOMs by digest
+        env:
+          DIGEST: ${{ steps.build.outputs.digest }}
+          IMAGE: ghcr.io/${{ github.repository }}
+        run: |
+          set -euo pipefail
+          [[ "$DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          reference="${IMAGE}@${DIGEST}"
+          for predicate in sbom-linux-amd64.spdx.json sbom-linux-arm64.spdx.json; do
+            cosign attest --yes --type spdxjson --predicate "$predicate" "$reference"
+          done
