@@ -454,3 +454,81 @@ func TestNPMHandlerMetadataNotFound(t *testing.T) {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}
 }
+
+func TestNPMDownloadCooldown(t *testing.T) {
+	now := time.Now()
+	packument := `{
+		"name": "leftpad",
+		"dist-tags": {"latest": "2.0.0"},
+		"time": {
+			"1.0.0": "` + now.Add(-30*24*time.Hour).Format(time.RFC3339) + `",
+			"2.0.0": "` + now.Add(-1*time.Hour).Format(time.RFC3339) + `"
+		},
+		"versions": {"1.0.0": {}, "2.0.0": {}}
+	}`
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", contentTypeJSON)
+		_, _ = io.WriteString(w, packument)
+	}))
+	defer upstream.Close()
+
+	tests := []struct {
+		name       string
+		version    string
+		wantStatus int
+	}{
+		{"published before the window serves the tarball", testVersion100, http.StatusOK},
+		{"published inside the window is withheld", "2.0.0", http.StatusNotFound},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxy, _, _, fetcher := setupTestProxy(t)
+			proxy.HTTPClient = upstream.Client()
+			proxy.Cooldown = &cooldown.Config{Default: "7d"}
+			fetcher.artifact = &fetch.Artifact{
+				Body:        io.NopCloser(strings.NewReader("tarball data")),
+				ContentType: "application/octet-stream",
+			}
+
+			h := NewNPMHandler(proxy, "http://proxy.test", upstream.URL)
+			srv := httptest.NewServer(h.Routes())
+			defer srv.Close()
+
+			resp, err := http.Get(srv.URL + "/leftpad/-/leftpad-" + tt.version + ".tgz")
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != tt.wantStatus {
+				t.Errorf("status = %d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+			if tt.wantStatus == http.StatusNotFound && fetcher.fetchCalled {
+				t.Error("fetched a version that is still inside the cooldown window")
+			}
+		})
+	}
+}
+
+func TestNPMDownloadCooldownDisabled(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		t.Error("metadata must not be fetched when cooldown is disabled")
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, fetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("tarball data")),
+		ContentType: "application/octet-stream",
+	}
+
+	h := NewNPMHandler(proxy, "http://proxy.test", upstream.URL)
+
+	if h.versionInCooldown(httptest.NewRequest(http.MethodGet, "/", nil), "leftpad", testVersion100) {
+		t.Error("versionInCooldown = true, want false when cooldown is not configured")
+	}
+}

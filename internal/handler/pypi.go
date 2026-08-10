@@ -311,6 +311,21 @@ func (h *PyPIHandler) shouldFilterRelease(packagePURL string, files any) bool {
 	return !publishedAt.IsZero() && !h.proxy.Cooldown.IsAllowed("pypi", packagePURL, publishedAt)
 }
 
+// versionInCooldown reports whether a version is still inside the cooldown
+// window. Filtering the simple index is not enough on its own: file URLs are
+// recorded in lockfiles and requirements pins, so pip can reach the download
+// path without ever reading the index.
+//
+// A release whose upload time cannot be determined is allowed through, matching
+// how fetchFilteredVersions treats it.
+func (h *PyPIHandler) versionInCooldown(r *http.Request, name, version string) bool {
+	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
+		return false
+	}
+
+	return h.fetchFilteredVersions(r, name)[version]
+}
+
 // rewriteFileEntries rewrites URLs in a list of file entries.
 func (h *PyPIHandler) rewriteFileEntries(files any) {
 	filesArr, ok := files.([]any)
@@ -416,6 +431,13 @@ func (h *PyPIHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	filename := parts[len(parts)-1]
 	name, version := h.parseFilename(filename)
+
+	if name != "" && h.versionInCooldown(r, name, version) {
+		h.proxy.Logger.Info("cooldown: withholding pypi file",
+			"name", name, "version", version, "filename", filename)
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 
 	if name == "" {
 		// Can't determine name/version, use hash as identifier
