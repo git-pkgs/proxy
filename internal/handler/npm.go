@@ -13,7 +13,7 @@ import (
 
 const (
 	npmUpstream      = "https://registry.npmjs.org"
-	npmAbbreviatedCT = "application/vnd.npm.install-v1+json"
+	npmAcceptDefault = "application/vnd.npm.install-v1+json;q=1.0, application/json;q=0.8"
 	scopedParts      = 2 // scope + name in scoped packages
 )
 
@@ -71,9 +71,12 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 
 	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, url.PathEscape(packageName))
 
-	// Use abbreviated metadata when cooldown is disabled — it's much smaller
-	// (e.g. drizzle-orm: 4MB vs 92MB) but lacks the time map needed for cooldown.
-	accept := npmAbbreviatedCT
+	// Prefer the smaller abbreviated packument format but include application/json
+	// as a fallback so upstreams that reject the abbreviated type (e.g. JFrog
+	// Artifactory, which returns 406) can still respond with full metadata.
+	// When cooldown is enabled we must use full metadata exclusively because the
+	// abbreviated format omits the "time" map required for version age filtering.
+	accept := npmAcceptDefault
 	if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
 		accept = contentTypeJSON
 	}
