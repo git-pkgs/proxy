@@ -176,3 +176,8 @@ cooldown:
   # packages:
   #   "pkg:npm/lodash": "0"
   #   "pkg:npm/@babel/core": "14d"
+
+  # Per-package glob overrides (matched against canonical PURLs). Exact
+  # package entries take precedence over matching patterns.
+  # package_patterns:
+  #   "pkg:npm/@example/*": "0"

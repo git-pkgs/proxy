@@ -224,6 +224,8 @@ cooldown:
   packages:
     "pkg:npm/lodash": "0"
     "pkg:npm/@babel/core": "14d"
+  package_patterns:
+    "pkg:npm/@example/*": "0"
 ```
 
 | Config | Environment | Description |
@@ -231,12 +233,15 @@ cooldown:
 | `cooldown.default` | `PROXY_COOLDOWN_DEFAULT` | Global default cooldown |
 | `cooldown.ecosystems` | - | Per-ecosystem overrides |
 | `cooldown.packages` | - | Per-package overrides (keyed by PURL) |
+| `cooldown.package_patterns` | - | Per-package glob overrides (keyed by PURL glob) |
 
 Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to disable.
 
 Package PURL keys are normalized to canonical form before matching, so `pkg:npm/@babel/core` and `pkg:npm/%40babel/core` are equivalent, as are `pkg:pypi/Django` and `pkg:pypi/django`. If both forms configure the same package, the canonical entry wins.
 
-Resolution order: package override, then ecosystem override, then global default. This lets you set a conservative default while exempting trusted packages.
+`package_patterns` uses Go path globs against versionless PURLs. For example, `"pkg:npm/@example/*"` matches every package under the `@example` npm scope. Scoped npm patterns accept `@` and normalize it internally. Exact `packages` entries take precedence over patterns. When multiple patterns match, the most specific pattern wins; ties use lexical order.
+
+Resolution order: exact package override, then package pattern, then ecosystem override, then global default. This lets you set a conservative default while exempting trusted package families.
 
 Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyGems, and Hex. These ecosystems include publish timestamps in their metadata.
 

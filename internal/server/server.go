@@ -58,9 +58,10 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/cooldown"
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
 	"github.com/git-pkgs/proxy/internal/config"
-	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/proxy/internal/cooldownpolicy"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/enrichment"
 	"github.com/git-pkgs/proxy/internal/handler"
@@ -84,12 +85,12 @@ const (
 
 // Server is the main proxy server.
 type Server struct {
-	cfg       *config.Config
-	db        *database.DB
-	storage   storage.Storage
-	logger    *slog.Logger
-	http      *http.Server
-	templates *Templates
+	cfg         *config.Config
+	db          *database.DB
+	storage     storage.Storage
+	logger      *slog.Logger
+	http        *http.Server
+	templates   *Templates
 	cancel      context.CancelFunc
 	healthCache *healthCache
 }
@@ -168,7 +169,11 @@ func (s *Server) Start() error {
 	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
 	proxy.HTTPClient.Timeout = s.cfg.ParseHTTPTimeout()
 	proxy.AuthForURL = s.authForURL
-	proxy.Cooldown = cd
+	cooldownPolicy, err := cooldownpolicy.New(cd, s.cfg.Cooldown.PackagePatterns)
+	if err != nil {
+		return fmt.Errorf("configuring cooldown policy: %w", err)
+	}
+	proxy.Cooldown = cooldownPolicy
 	proxy.CacheMetadata = s.cfg.CacheMetadata
 	proxy.MetadataTTL = s.cfg.ParseMetadataTTL()
 	proxy.MetadataMaxSize = s.cfg.ParseMetadataMaxSize()
