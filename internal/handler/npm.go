@@ -371,29 +371,36 @@ func (h *NPMHandler) downloadURL(r *http.Request, packageName, version, filename
 		return h.constructDownloadURL(packageName, filename), nil
 	}
 
-	var metadata map[string]any
+	tarball, err := npmVersionTarball(body, version)
+	if err != nil {
+		return "", err
+	}
+
+	return h.validateUpstreamTarballURL(tarball)
+}
+
+func npmVersionTarball(body []byte, version string) (string, error) {
+	var metadata struct {
+		Versions map[string]struct {
+			Dist struct {
+				Tarball string `json:"tarball"`
+			} `json:"dist"`
+		} `json:"versions"`
+	}
+
 	if err := json.Unmarshal(body, &metadata); err != nil {
 		return "", fmt.Errorf("parsing npm metadata: %w", err)
 	}
 
-	versions, ok := metadata["versions"].(map[string]any)
-	if !ok {
-		return "", errors.New("npm metadata has no versions")
-	}
-	vdata, ok := versions[version].(map[string]any)
+	versionData, ok := metadata.Versions[version]
 	if !ok {
 		return "", fmt.Errorf("npm metadata has no version %q", version)
 	}
-	dist, ok := vdata["dist"].(map[string]any)
-	if !ok {
-		return "", fmt.Errorf("npm metadata version %q has no dist", version)
-	}
-	tarball, ok := dist["tarball"].(string)
-	if !ok {
+	if versionData.Dist.Tarball == "" {
 		return "", fmt.Errorf("npm metadata version %q has no tarball", version)
 	}
 
-	return h.validateUpstreamTarballURL(tarball)
+	return versionData.Dist.Tarball, nil
 }
 
 func (h *NPMHandler) constructDownloadURL(packageName, filename string) string {
