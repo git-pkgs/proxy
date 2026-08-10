@@ -202,10 +202,7 @@ func (h *NPMHandler) rewriteTarballURLs(versions map[string]any, packageName str
 			continue
 		}
 
-		filename := tarball
-		if idx := strings.LastIndex(tarball, "/"); idx >= 0 {
-			filename = tarball[idx+1:]
-		}
+		filename := h.proxyTarballFilename(packageName, version, tarball)
 
 		escapedName := url.PathEscape(packageName)
 		newTarball := fmt.Sprintf("%s/npm/%s/-/%s", h.proxyURL, escapedName, filename)
@@ -215,6 +212,30 @@ func (h *NPMHandler) rewriteTarballURLs(versions map[string]any, packageName str
 			"package", packageName, "version", version,
 			"old", tarball, "new", newTarball)
 	}
+}
+
+func (h *NPMHandler) proxyTarballFilename(packageName, version, tarball string) string {
+	filename := tarball
+	if idx := strings.LastIndex(tarball, "/"); idx >= 0 {
+		filename = tarball[idx+1:]
+	}
+	if h.extractVersionFromFilename(packageName, filename) != "" {
+		return filename
+	}
+
+	return npmTarballFilename(packageName, version)
+}
+
+func npmTarballFilename(packageName, version string) string {
+	return npmPackageShortName(packageName) + "-" + version + ".tgz"
+}
+
+func npmPackageShortName(packageName string) string {
+	parts := strings.SplitN(packageName, "/", scopedParts)
+	if len(parts) == scopedParts {
+		return parts[1]
+	}
+	return packageName
 }
 
 // findNewestVersion returns the version string with the most recent timestamp
@@ -275,12 +296,12 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	downloadURL := fmt.Sprintf(
-		"%s/%s/-/%s",
-		h.upstreamURL,
-		escapeNPMDownloadPackage(packageName),
-		url.PathEscape(filename),
-	)
+	downloadURL, err := h.downloadURL(r, packageName, version, filename)
+	if err != nil {
+		h.proxy.Logger.Error("failed to resolve npm tarball URL", "error", err)
+		JSONError(w, http.StatusBadRequest, "invalid tarball request")
+		return
+	}
 	result, err := h.proxy.GetOrFetchArtifactFromURL(
 		r.Context(), "npm", packageName, version, filename, downloadURL,
 	)
@@ -341,6 +362,73 @@ func (h *NPMHandler) versionInCooldown(r *http.Request, packageName, version str
 	return !h.proxy.Cooldown.IsAllowed("npm", canonicalPackagePURL("npm", packageName), publishedAt)
 }
 
+func (h *NPMHandler) downloadURL(r *http.Request, packageName, version, filename string) (string, error) {
+	metadataURL := fmt.Sprintf("%s/%s", h.upstreamURL, url.PathEscape(packageName))
+	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "npm", packageName, metadataURL, contentTypeJSON)
+	if err != nil {
+		h.proxy.Logger.Warn("could not fetch npm metadata for tarball resolution; using constructed URL",
+			"package", packageName, "version", version, "error", err)
+		return h.constructDownloadURL(packageName, filename), nil
+	}
+
+	var metadata map[string]any
+	if err := json.Unmarshal(body, &metadata); err != nil {
+		return "", fmt.Errorf("parsing npm metadata: %w", err)
+	}
+
+	versions, ok := metadata["versions"].(map[string]any)
+	if !ok {
+		return "", errors.New("npm metadata has no versions")
+	}
+	vdata, ok := versions[version].(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("npm metadata has no version %q", version)
+	}
+	dist, ok := vdata["dist"].(map[string]any)
+	if !ok {
+		return "", fmt.Errorf("npm metadata version %q has no dist", version)
+	}
+	tarball, ok := dist["tarball"].(string)
+	if !ok {
+		return "", fmt.Errorf("npm metadata version %q has no tarball", version)
+	}
+
+	return h.validateUpstreamTarballURL(tarball)
+}
+
+func (h *NPMHandler) constructDownloadURL(packageName, filename string) string {
+	return fmt.Sprintf(
+		"%s/%s/-/%s",
+		h.upstreamURL,
+		escapeNPMDownloadPackage(packageName),
+		url.PathEscape(filename),
+	)
+}
+
+func (h *NPMHandler) validateUpstreamTarballURL(tarball string) (string, error) {
+	tarballURL, err := url.Parse(tarball)
+	if err != nil {
+		return "", fmt.Errorf("parsing tarball URL: %w", err)
+	}
+	upstreamURL, err := url.Parse(h.upstreamURL)
+	if err != nil {
+		return "", fmt.Errorf("parsing upstream URL: %w", err)
+	}
+	if tarballURL.User != nil || tarballURL.Scheme != upstreamURL.Scheme ||
+		!strings.EqualFold(tarballURL.Host, upstreamURL.Host) {
+		return "", errors.New("npm tarball URL does not match upstream registry")
+	}
+
+	basePath := strings.TrimSuffix(upstreamURL.Path, "/")
+	if basePath != "" && basePath != "/" {
+		if tarballURL.Path != basePath && !strings.HasPrefix(tarballURL.Path, basePath+"/") {
+			return "", errors.New("npm tarball URL is outside upstream base path")
+		}
+	}
+
+	return tarballURL.String(), nil
+}
+
 func escapeNPMDownloadPackage(packageName string) string {
 	scope, name, scoped := strings.Cut(packageName, "/")
 	if scoped && strings.HasPrefix(scope, "@") && len(scope) > 1 && name != "" && !strings.Contains(name, "/") {
@@ -399,12 +487,8 @@ func (h *NPMHandler) extractVersionFromFilename(packageName, filename string) st
 	}
 	base := strings.TrimSuffix(filename, ".tgz")
 
-	// For scoped packages, the filename uses the short name
-	shortName := packageName
-	if strings.Contains(packageName, "/") {
-		parts := strings.SplitN(packageName, "/", scopedParts)
-		shortName = parts[1]
-	}
+	// For scoped packages, the filename uses the short name.
+	shortName := npmPackageShortName(packageName)
 
 	// Expected format: {shortName}-{version}
 	prefix := shortName + "-"

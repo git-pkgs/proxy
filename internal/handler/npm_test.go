@@ -210,6 +210,195 @@ func TestNPMRewriteMetadataScopedPackage(t *testing.T) {
 	}
 }
 
+func TestNPMRewriteMetadataGitHubPackagesTarball(t *testing.T) {
+	h := &NPMHandler{
+		proxy:    testProxy(),
+		proxyURL: "http://localhost:8080",
+	}
+
+	input := `{
+		"name": "@example/private-package",
+		"versions": {
+			"1.0.0": {
+				"dist": {
+					"shasum": "e053d091c6ae91793f6333f5fe0a55633cf3c584",
+					"tarball": "https://npm.pkg.github.com/download/@example/private-package/1.0.0/e053d091c6ae91793f6333f5fe0a55633cf3c584"
+				}
+			}
+		}
+	}`
+
+	output, err := h.rewriteMetadata("@example/private-package", []byte(input))
+	if err != nil {
+		t.Fatalf("rewriteMetadata failed: %v", err)
+	}
+
+	var result map[string]any
+	if err := json.Unmarshal(output, &result); err != nil {
+		t.Fatalf("failed to parse output: %v", err)
+	}
+
+	versions := result["versions"].(map[string]any)
+	v := versions[testVersion100].(map[string]any)
+	dist := v["dist"].(map[string]any)
+	tarball := dist["tarball"].(string)
+
+	expected := "http://localhost:8080/npm/@example%2Fprivate-package/-/private-package-1.0.0.tgz"
+	if tarball != expected {
+		t.Errorf("tarball = %q, want %q", tarball, expected)
+	}
+}
+
+func TestNPMHandlerDownloadsGitHubPackagesTarball(t *testing.T) {
+	const shasum = "e053d091c6ae91793f6333f5fe0a55633cf3c584"
+	const tarballPath = "/download/@example/private-package/1.0.0/" + shasum
+
+	var upstream *httptest.Server
+	upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/@example/private-package" {
+			t.Errorf("metadata path = %q, want scoped package path", r.URL.Path)
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", contentTypeJSON)
+		_, _ = io.WriteString(w, `{"versions":{"1.0.0":{"dist":{"tarball":"`+upstream.URL+tarballPath+`"}}}}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, artifactFetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	artifactFetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("package")),
+		ContentType: "application/gzip",
+	}
+	h := NewNPMHandler(proxy, "http://proxy.test", upstream.URL)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/@example/private-package/-/private-package-1.0.0.tgz",
+		nil,
+	)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if artifactFetcher.fetchedURL != upstream.URL+tarballPath {
+		t.Errorf("fetched URL = %q, want %q", artifactFetcher.fetchedURL, upstream.URL+tarballPath)
+	}
+}
+
+func TestNPMHandlerRejectsMissingMetadataVersion(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", contentTypeJSON)
+		_, _ = io.WriteString(w, `{"versions":{"2.0.0":{}}}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, artifactFetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := NewNPMHandler(proxy, "http://proxy.test", upstream.URL)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/pkg/-/pkg-1.0.0.tgz",
+		nil,
+	)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if artifactFetcher.fetchedURL != "" {
+		t.Errorf("artifact fetcher should not be called, fetched URL = %q", artifactFetcher.fetchedURL)
+	}
+}
+
+func TestNPMHandlerRejectsTarballFromDifferentHost(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", contentTypeJSON)
+		_, _ = io.WriteString(w, `{"versions":{"1.0.0":{"dist":{"tarball":"https://example.invalid/package.tgz"}}}}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, artifactFetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := NewNPMHandler(proxy, "http://proxy.test", upstream.URL)
+
+	req := httptest.NewRequest(
+		http.MethodGet,
+		"/pkg/-/pkg-1.0.0.tgz",
+		nil,
+	)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if artifactFetcher.fetchedURL != "" {
+		t.Errorf("artifact fetcher should not be called, fetched URL = %q", artifactFetcher.fetchedURL)
+	}
+}
+
+func TestNPMHandlerRejectsTarballOutsideUpstreamBasePath(t *testing.T) {
+	var upstream *httptest.Server
+	upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/root/pkg" {
+			t.Errorf("metadata path = %q, want %q", r.URL.Path, "/root/pkg")
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", contentTypeJSON)
+		_, _ = io.WriteString(w, `{"versions":{"1.0.0":{"dist":{"tarball":"`+upstream.URL+`/outside/pkg-1.0.0.tgz"}}}}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, artifactFetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := NewNPMHandler(proxy, "http://proxy.test", upstream.URL+"/root/")
+
+	req := httptest.NewRequest(http.MethodGet, "/pkg/-/pkg-1.0.0.tgz", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadRequest, w.Body.String())
+	}
+	if artifactFetcher.fetchedURL != "" {
+		t.Errorf("artifact fetcher should not be called, fetched URL = %q", artifactFetcher.fetchedURL)
+	}
+}
+
+func TestNPMHandlerFallsBackWhenMetadataIsUnavailable(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, artifactFetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	artifactFetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("package")),
+		ContentType: "application/gzip",
+	}
+	h := NewNPMHandler(proxy, "http://proxy.test", upstream.URL)
+
+	req := httptest.NewRequest(http.MethodGet, "/pkg/-/pkg-1.0.0.tgz", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	want := upstream.URL + "/pkg/-/pkg-1.0.0.tgz"
+	if artifactFetcher.fetchedURL != want {
+		t.Errorf("fetched URL = %q, want %q", artifactFetcher.fetchedURL, want)
+	}
+}
+
 func TestNPMHandlerMetadataProxy(t *testing.T) {
 	// Create a mock upstream server
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -457,19 +646,21 @@ func TestNPMHandlerMetadataNotFound(t *testing.T) {
 
 func TestNPMDownloadCooldown(t *testing.T) {
 	now := time.Now()
-	packument := `{
-		"name": "leftpad",
-		"dist-tags": {"latest": "2.0.0"},
-		"time": {
-			"1.0.0": "` + now.Add(-30*24*time.Hour).Format(time.RFC3339) + `",
-			"2.0.0": "` + now.Add(-1*time.Hour).Format(time.RFC3339) + `"
-		},
-		"versions": {"1.0.0": {}, "2.0.0": {}}
-	}`
-
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var upstream *httptest.Server
+	upstream = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.Header().Set("Content-Type", contentTypeJSON)
-		_, _ = io.WriteString(w, packument)
+		_, _ = io.WriteString(w, `{
+			"name": "leftpad",
+			"dist-tags": {"latest": "2.0.0"},
+			"time": {
+				"1.0.0": "`+now.Add(-30*24*time.Hour).Format(time.RFC3339)+`",
+				"2.0.0": "`+now.Add(-1*time.Hour).Format(time.RFC3339)+`"
+			},
+			"versions": {
+				"1.0.0": {"dist": {"tarball": "`+upstream.URL+`/leftpad/-/leftpad-1.0.0.tgz"}},
+				"2.0.0": {"dist": {"tarball": "`+upstream.URL+`/leftpad/-/leftpad-2.0.0.tgz"}}
+			}
+		}`)
 	}))
 	defer upstream.Close()
 
