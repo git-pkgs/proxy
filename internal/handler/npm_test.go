@@ -396,7 +396,7 @@ func TestNPMHandlerUsesAbbreviatedMetadata(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	t.Run("no cooldown uses abbreviated metadata", func(t *testing.T) {
+	t.Run("no cooldown uses combined accept header", func(t *testing.T) {
 		h := &NPMHandler{
 			proxy:       testProxy(),
 			upstreamURL: upstream.URL,
@@ -407,12 +407,12 @@ func TestNPMHandlerUsesAbbreviatedMetadata(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.handlePackageMetadata(w, req)
 
-		if gotAccept != npmAbbreviatedCT {
-			t.Errorf("Accept = %q, want abbreviated metadata header", gotAccept)
+		if gotAccept != npmAcceptDefault {
+			t.Errorf("Accept = %q, want %q", gotAccept, npmAcceptDefault)
 		}
 	})
 
-	t.Run("cooldown enabled uses full metadata", func(t *testing.T) {
+	t.Run("cooldown enabled uses full metadata only", func(t *testing.T) {
 		proxy := testProxy()
 		proxy.Cooldown = &cooldown.Config{Default: "3d"}
 
@@ -426,8 +426,8 @@ func TestNPMHandlerUsesAbbreviatedMetadata(t *testing.T) {
 		w := httptest.NewRecorder()
 		h.handlePackageMetadata(w, req)
 
-		if gotAccept == npmAbbreviatedCT {
-			t.Error("cooldown enabled should use full metadata, not abbreviated")
+		if gotAccept != contentTypeJSON {
+			t.Errorf("Accept = %q, want %q (cooldown requires full metadata)", gotAccept, contentTypeJSON)
 		}
 	})
 }
