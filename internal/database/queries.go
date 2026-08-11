@@ -443,11 +443,14 @@ func (db *DB) GetMostPopularPackages(limit int) ([]PopularPackage, error) {
 }
 
 type RecentPackage struct {
-	Ecosystem string    `db:"ecosystem"`
-	Name      string    `db:"name"`
-	Version   string    `db:"version"`
-	CachedAt  time.Time `db:"fetched_at"`
-	Size      int64     `db:"size"`
+	Ecosystem   string    `db:"ecosystem"`
+	Name        string    `db:"name"`
+	VersionPURL string    `db:"version_purl"`
+	CachedAt    time.Time `db:"fetched_at"`
+	Size        int64     `db:"size"`
+	// Version is derived from VersionPURL rather than selected, so that the
+	// PURL percent-encoding is decoded (e.g. "%2B" back to "+").
+	Version string `db:"-"`
 }
 
 func (db *DB) GetRecentlyCachedPackages(limit int) ([]RecentPackage, error) {
@@ -461,10 +464,10 @@ func (db *DB) GetRecentlyCachedPackages(limit int) ([]RecentPackage, error) {
 	}
 
 	var packages []RecentPackage
-	// We need to extract version from the purl since there's no separate version column
+	// There is no separate version column, so the full version PURL is selected
+	// and the version is decoded from it in Go.
 	query := db.Rebind(`
-		SELECT p.ecosystem, p.name,
-		       SUBSTR(v.purl, INSTR(v.purl, '@') + 1) as version,
+		SELECT p.ecosystem, p.name, v.purl as version_purl,
 		       a.fetched_at, COALESCE(a.size, 0) as size
 		FROM artifacts a
 		JOIN versions v ON v.purl = a.version_purl
@@ -474,24 +477,12 @@ func (db *DB) GetRecentlyCachedPackages(limit int) ([]RecentPackage, error) {
 		LIMIT ?
 	`)
 
-	// For postgres, use different string function
-	if db.dialect == DialectPostgres {
-		query = db.Rebind(`
-			SELECT p.ecosystem, p.name,
-			       SUBSTRING(v.purl FROM POSITION('@' IN v.purl) + 1) as version,
-			       a.fetched_at, COALESCE(a.size, 0) as size
-			FROM artifacts a
-			JOIN versions v ON v.purl = a.version_purl
-			JOIN packages p ON p.purl = v.package_purl
-			WHERE a.storage_path IS NOT NULL AND a.fetched_at IS NOT NULL
-			ORDER BY a.fetched_at DESC
-			LIMIT ?
-		`)
-	}
-
 	err = db.Select(&packages, query, limit)
 	if err != nil {
 		return nil, err
+	}
+	for i := range packages {
+		packages[i].Version = VersionFromPURL(packages[i].VersionPURL)
 	}
 	return packages, nil
 }

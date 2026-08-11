@@ -12,6 +12,11 @@ func TestDebianHandler_parsePoolPath(t *testing.T) {
 		{"pool/main/libn/libncurses/libncurses6_6.2-1_amd64.deb", "libncurses6", "6.2-1", "amd64"},
 		{"pool/contrib/v/virtualbox/virtualbox_6.1.38-1_amd64.deb", "virtualbox", "6.1.38-1", "amd64"},
 		{"pool/main/g/git/git_2.39.2-1_arm64.deb", "git", "2.39.2-1", "arm64"},
+		{
+			"pool/universe/n/nmap/nmap_7.91+dfsg1+really7.80+dfsg1-2ubuntu0.1_amd64.deb",
+			"nmap", "7.91+dfsg1+really7.80+dfsg1-2ubuntu0.1", "amd64",
+		},
+		{"pool/main/o/openssl/openssl_3.0.2-0ubuntu1.15~build1_amd64.deb", "openssl", "3.0.2-0ubuntu1.15~build1", "amd64"},
 		{"invalid/path", "", "", ""},
 		{"pool/main/n/nginx/nginx.deb", "", "", ""},
 	})

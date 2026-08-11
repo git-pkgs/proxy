@@ -64,7 +64,7 @@
         <div class="px-6 py-3 flex items-center justify-between version-row">
             <div class="flex items-center gap-3">
                 <input type="checkbox" class="version-checkbox hidden" data-version="{{.Version}}" />
-                <a href="/ui/package/{{$.Package.Ecosystem}}/{{$.Package.Name}}/{{.Version}}" class="font-mono text-sm hover:text-blue-600 dark:hover:text-blue-400">{{.PURL}}</a>
+                <a href="/ui/package/{{$.Package.Ecosystem}}/{{$.Package.Name}}/{{.Version}}" class="font-mono text-sm hover:text-blue-600 dark:hover:text-blue-400">{{.DisplayPURL}}</a>
                 {{if .Yanked}}<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">yanked</span>{{end}}
             </div>
             {{if .PublishedAt.Valid}}<span class="text-sm text-gray-500 dark:text-gray-400">{{.PublishedAt.Time.Format "2006-01-02"}}</span>{{end}}

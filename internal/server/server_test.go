@@ -764,6 +764,57 @@ func TestVersionShowPage_NotFoundServer(t *testing.T) {
 	}
 }
 
+// TestVersionShowPage_PlusInVersion covers Debian/Ubuntu style versions such as
+// nmap's "7.91+dfsg1+really7.80+dfsg1-2ubuntu0.1". PURL percent-encodes "+" as
+// "%2B", so the UI must show the decoded version and resolve both the decoded
+// and the still-encoded form of the URL back to the same version.
+func TestVersionShowPage_PlusInVersion(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	const version = "7.91+dfsg1+really7.80+dfsg1-2ubuntu0.1"
+	const versionPURL = "pkg:deb/nmap@7.91%2Bdfsg1%2Breally7.80%2Bdfsg1-2ubuntu0.1"
+
+	pkg := &database.Package{PURL: "pkg:deb/nmap", Ecosystem: "deb", Name: "nmap"}
+	if err := ts.db.UpsertPackage(pkg); err != nil {
+		t.Fatalf("failed to upsert package: %v", err)
+	}
+	if err := ts.db.UpsertVersion(&database.Version{
+		PURL: versionPURL, PackagePURL: pkg.PURL,
+	}); err != nil {
+		t.Fatalf("failed to upsert version: %v", err)
+	}
+
+	// The package page must link to and display the decoded version.
+	req := httptest.NewRequest("GET", "/ui/package/deb/nmap", nil)
+	w := httptest.NewRecorder()
+	ts.handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("package page: expected status 200, got %d", w.Code)
+	}
+	body := w.Body.String()
+	if strings.Contains(body, "%2B") {
+		t.Error("package page leaks PURL percent-encoding into the UI")
+	}
+	// html/template renders "+" as the "&#43;" entity inside attributes and text.
+	if !strings.Contains(body, "7.91&#43;dfsg1&#43;really7.80&#43;dfsg1-2ubuntu0.1") {
+		t.Error("expected package page to show the decoded version")
+	}
+
+	// Both the decoded and the encoded URL must reach the version page.
+	for _, path := range []string{
+		"/ui/package/deb/nmap/" + version,
+		"/ui/package/deb/nmap/7.91%2Bdfsg1%2Breally7.80%2Bdfsg1-2ubuntu0.1",
+	} {
+		req := httptest.NewRequest("GET", path, nil)
+		w := httptest.NewRecorder()
+		ts.handler.ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Errorf("GET %s: expected status 200, got %d", path, w.Code)
+		}
+	}
+}
+
 func TestPackageShowPage_WithLicense(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()

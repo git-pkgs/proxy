@@ -104,6 +104,14 @@ func TestSplitWildcardPath(t *testing.T) {
 		{"symfony/console/6.0.0/browse", []string{"symfony", "console", "6.0.0", "browse"}},
 		{"", nil},
 		{"/", nil},
+		// chi routes on the raw path when the URL contains an escape, so
+		// segments arrive percent-encoded and must be decoded.
+		{"nmap/7.91%2Bdfsg1%2Breally7.80%2Bdfsg1-2ubuntu0.1", []string{"nmap", "7.91+dfsg1+really7.80+dfsg1-2ubuntu0.1"}},
+		{"%40babel/core/7.0.0", []string{"@babel", "core", "7.0.0"}},
+		// An encoded separator stays inside its segment rather than splitting.
+		{"vendor%2Fname/1.0.0", []string{"vendor/name", "1.0.0"}},
+		// Invalid escapes are passed through untouched.
+		{"lodash/1.0%zz", []string{"lodash", "1.0%zz"}},
 	}
 
 	for _, tt := range tests {
@@ -132,8 +140,19 @@ func TestValidatePackagePath(t *testing.T) {
 		{"composer namespaced", "symfony/console/6.0.0", false},
 		{"maven coordinates", "org.apache.commons/commons-lang3/3.12.0", false},
 		{"unicode", "café/1.0.0", false},
+		{"encoded plus in version", "nmap/7.91%2Bdfsg1-2ubuntu0.1", false},
 		{"empty", "", true},
 		{"null byte", "lodash\x00/4.17.21", true},
+		{"encoded null byte", "lodash/%00", true},
+		{"encoded newline", "lodash/1.0%0A", true},
+		{"parent segment", "lodash/../4.17.21", true},
+		{"encoded parent segment", "lodash/%2E%2E/4.17.21", true},
+		// A decoded segment can contain slashes, so traversal can hide inside
+		// one segment. Registries interpolate the resolved name straight into
+		// an upstream URL, and Go sends dot-segments verbatim.
+		{"traversal inside one segment", "pkg%2F..%2F..%2Fadmin", true},
+		{"traversal via encoded dots and slash", "pkg%2f%2e%2e%2fadmin", true},
+		{"encoded slash alone is allowed", "vendor%2Fname/1.0.0", false},
 		{"null byte suffix", "lodash\x00", true},
 		{"newline", "lodash\n4.17.21", true},
 		{"carriage return", "lodash\r", true},
