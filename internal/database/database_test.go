@@ -239,6 +239,86 @@ func TestArtifactCRUD(t *testing.T) {
 	})
 }
 
+func TestGetCachedArtifact(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		const (
+			packagePURL = "pkg:npm/lodash"
+			versionPURL = "pkg:npm/lodash@4.17.21"
+			filename    = "lodash-4.17.21.tgz"
+		)
+		seedCachedArtifactTestData(t, db, packagePURL, versionPURL, filename)
+
+		cached, err := db.GetCachedArtifact(packagePURL, versionPURL, filename)
+		if err != nil {
+			t.Fatalf("GetCachedArtifact before cache failed: %v", err)
+		}
+		if cached != nil {
+			t.Fatalf("expected no cached artifact, got %+v", cached)
+		}
+
+		if err := db.MarkArtifactCached(versionPURL, filename, "/cache/npm/"+filename,
+			"sha256-abc", 12345, "application/gzip"); err != nil {
+			t.Fatalf("MarkArtifactCached failed: %v", err)
+		}
+
+		cached, err = db.GetCachedArtifact(packagePURL, versionPURL, filename)
+		if err != nil {
+			t.Fatalf("GetCachedArtifact failed: %v", err)
+		}
+		if cached == nil {
+			t.Fatal("expected cached artifact, got nil")
+		}
+		if cached.Ecosystem != "npm" {
+			t.Errorf("expected npm ecosystem, got %q", cached.Ecosystem)
+		}
+		if cached.StoragePath != "/cache/npm/"+filename {
+			t.Errorf("expected cached storage path, got %q", cached.StoragePath)
+		}
+		if cached.ContentHash.String != "sha256-abc" {
+			t.Errorf("expected cached content hash, got %q", cached.ContentHash.String)
+		}
+		if cached.Size.Int64 != 12345 {
+			t.Errorf("expected cached size 12345, got %d", cached.Size.Int64)
+		}
+		if cached.ContentType.String != "application/gzip" {
+			t.Errorf("expected cached content type, got %q", cached.ContentType.String)
+		}
+		if cached.Integrity.String != "sha512-abc123" {
+			t.Errorf("expected cached integrity, got %q", cached.Integrity.String)
+		}
+
+		cached, err = db.GetCachedArtifact("pkg:npm/other", versionPURL, filename)
+		if err != nil {
+			t.Fatalf("GetCachedArtifact with wrong package failed: %v", err)
+		}
+		if cached != nil {
+			t.Fatalf("expected package mismatch to miss cache, got %+v", cached)
+		}
+	})
+}
+
+func seedCachedArtifactTestData(t *testing.T, db *DB, packagePURL, versionPURL, filename string) {
+	t.Helper()
+
+	if err := db.UpsertPackage(&Package{PURL: packagePURL, Ecosystem: "npm", Name: "lodash"}); err != nil {
+		t.Fatalf("UpsertPackage failed: %v", err)
+	}
+	if err := db.UpsertVersion(&Version{
+		PURL:        versionPURL,
+		PackagePURL: packagePURL,
+		Integrity:   sql.NullString{String: "sha512-abc123", Valid: true},
+	}); err != nil {
+		t.Fatalf("UpsertVersion failed: %v", err)
+	}
+	if err := db.UpsertArtifact(&Artifact{
+		VersionPURL: versionPURL,
+		Filename:    filename,
+		UpstreamURL: "https://registry.npmjs.org/lodash/-/" + filename,
+	}); err != nil {
+		t.Fatalf("UpsertArtifact failed: %v", err)
+	}
+}
+
 func TestCacheManagement(t *testing.T) {
 	runWithBothDatabases(t, func(t *testing.T, db *DB) {
 		pkg := &Package{
