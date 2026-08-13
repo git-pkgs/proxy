@@ -1,0 +1,12 @@
+{{- if not .Values.config.existingConfigMap }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: {{ include "proxy.fullname" . }}
+  namespace: {{ .Release.Namespace }}
+  labels:
+    {{- include "proxy.labels" . | nindent 4 }}
+data:
+  {{ required "config.existingConfigMapKey is required" .Values.config.existingConfigMapKey }}: |
+    {{- toYaml .Values.config.data | nindent 4 }}
+{{- end }}
