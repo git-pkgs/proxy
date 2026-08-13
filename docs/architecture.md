@@ -353,6 +353,7 @@ Eviction can be implemented as:
 - Fresh data - new versions visible immediately
 - Metadata is small, upstream fetch is fast
 - Set `cache_metadata: true` or use the mirror command to enable metadata caching for offline use via the `metadata_cache` table
+- OCI manifests are the exception: they are cached automatically so previously fetched images remain pullable when the registry or token service is unavailable
 
 **Why stream artifacts?**
 - Memory efficient - don't load large files into RAM

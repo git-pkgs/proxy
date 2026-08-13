@@ -136,16 +136,23 @@ type CacheResult struct {
 
 // GetOrFetchArtifact retrieves an artifact from cache or fetches from upstream.
 func (p *Proxy) GetOrFetchArtifact(ctx context.Context, ecosystem, name, version, filename string) (*CacheResult, error) {
-	pkgPURL := purl.MakePURLString(ecosystem, name, "")
-	versionPURL := purl.MakePURLString(ecosystem, name, version)
-
-	if cached, err := p.checkCache(ctx, pkgPURL, versionPURL, filename); err != nil {
+	if cached, err := p.GetCachedArtifact(ctx, ecosystem, name, version, filename); err != nil {
 		return nil, err
 	} else if cached != nil {
 		return cached, nil
 	}
 
+	pkgPURL := purl.MakePURLString(ecosystem, name, "")
+	versionPURL := purl.MakePURLString(ecosystem, name, version)
 	return p.fetchAndCache(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL)
+}
+
+// GetCachedArtifact retrieves an artifact from cache without contacting an upstream.
+// It returns nil when no usable cache entry exists.
+func (p *Proxy) GetCachedArtifact(ctx context.Context, ecosystem, name, version, filename string) (*CacheResult, error) {
+	pkgPURL := purl.MakePURLString(ecosystem, name, "")
+	versionPURL := purl.MakePURLString(ecosystem, name, version)
+	return p.checkCache(ctx, pkgPURL, versionPURL, filename)
 }
 
 // checkCache looks up an artifact in the cache. Returns nil if not cached.
@@ -363,6 +370,10 @@ func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, u
 
 // ServeArtifact writes a CacheResult to an HTTP response.
 func ServeArtifact(w http.ResponseWriter, result *CacheResult) {
+	serveArtifact(w, http.MethodGet, result)
+}
+
+func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
 	if result.RedirectURL != "" {
 		if result.Hash != "" {
 			w.Header().Set("ETag", fmt.Sprintf(`"%s"`, result.Hash))
@@ -372,12 +383,14 @@ func ServeArtifact(w http.ResponseWriter, result *CacheResult) {
 		return
 	}
 
-	defer func() { _ = result.Reader.Close() }()
+	if result.Reader != nil {
+		defer func() { _ = result.Reader.Close() }()
+	}
 
 	if result.ContentType != "" {
 		w.Header().Set("Content-Type", result.ContentType)
 	}
-	if result.Size > 0 {
+	if result.Size > 0 || (method == http.MethodHead && result.Size == 0) {
 		w.Header().Set("Content-Length", fmt.Sprintf("%d", result.Size))
 	}
 	if result.Hash != "" {
@@ -385,7 +398,9 @@ func ServeArtifact(w http.ResponseWriter, result *CacheResult) {
 	}
 
 	w.WriteHeader(http.StatusOK)
-	_, _ = io.Copy(w, result.Reader)
+	if method != http.MethodHead && result.Reader != nil {
+		_, _ = io.Copy(w, result.Reader)
+	}
 }
 
 // ProxyUpstream forwards a request to an upstream URL without caching.
@@ -807,18 +822,16 @@ func (p *Proxy) GetOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, 
 }
 
 // GetOrFetchArtifactFromURLWithHeaders retrieves an artifact from cache or fetches from a URL
-// with additional HTTP headers. This is needed for registries that require authentication
-// (e.g. Docker Hub requires a Bearer token even for public images).
+// with additional request-specific HTTP headers.
 func (p *Proxy) GetOrFetchArtifactFromURLWithHeaders(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header) (*CacheResult, error) {
-	pkgPURL := purl.MakePURLString(ecosystem, name, "")
-	versionPURL := purl.MakePURLString(ecosystem, name, version)
-
-	if cached, err := p.checkCache(ctx, pkgPURL, versionPURL, filename); err != nil {
+	if cached, err := p.GetCachedArtifact(ctx, ecosystem, name, version, filename); err != nil {
 		return nil, err
 	} else if cached != nil {
 		return cached, nil
 	}
 
+	pkgPURL := purl.MakePURLString(ecosystem, name, "")
+	versionPURL := purl.MakePURLString(ecosystem, name, version)
 	return p.fetchAndCacheFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers)
 }
 
