@@ -74,12 +74,14 @@
 <script>
 const ecosystem = '{{.Ecosystem}}';
 const packageName = '{{.PackageName}}';
-const fromVersion = '{{.FromVersion}}';
-const toVersion = '{{.ToVersion}}';
+// Each version is one path segment of the compare API URL, so the escaped form
+// is used rather than the decoded text shown in the heading above.
+const fromVersionPath = '{{.EscapedFromVersion}}';
+const toVersionPath = '{{.EscapedToVersion}}';
 
 async function loadDiff() {
     try {
-        const url = `/ui/api/compare/${ecosystem}/${packageName}/${fromVersion}/${toVersion}`;
+        const url = `/ui/api/compare/${ecosystem}/${packageName}/${fromVersionPath}/${toVersionPath}`;
         const response = await fetch(url);
 
         if (!response.ok) {

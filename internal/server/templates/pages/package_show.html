@@ -63,8 +63,8 @@
         {{range .Versions}}
         <div class="px-6 py-3 flex items-center justify-between version-row">
             <div class="flex items-center gap-3">
-                <input type="checkbox" class="version-checkbox hidden" data-version="{{.Version}}" />
-                <a href="/ui/package/{{$.Package.Ecosystem}}/{{$.Package.Name}}/{{.Version}}" class="font-mono text-sm hover:text-blue-600 dark:hover:text-blue-400">{{.DisplayPURL}}</a>
+                <input type="checkbox" class="version-checkbox hidden" data-version-path="{{.EscapedVersion}}" />
+                <a href="/ui/package/{{$.Package.Ecosystem}}/{{$.Package.Name}}/{{.EscapedVersion}}" class="font-mono text-sm hover:text-blue-600 dark:hover:text-blue-400">{{.DisplayPURL}}</a>
                 {{if .Yanked}}<span class="ml-2 inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">yanked</span>{{end}}
             </div>
             {{if .PublishedAt.Valid}}<span class="text-sm text-gray-500 dark:text-gray-400">{{.PublishedAt.Time.Format "2006-01-02"}}</span>{{end}}
@@ -120,9 +120,11 @@ document.addEventListener('change', function(e) {
         const checked = document.querySelectorAll('.version-checkbox:checked');
 
         if (checked.length === 2) {
-            // Navigate to compare page
-            const v1 = checked[0].dataset.version;
-            const v2 = checked[1].dataset.version;
+            // Navigate to compare page. The checkboxes carry the version
+            // already escaped as a path segment, so a version containing "/",
+            // "?" or a literal "%" does not break out of the segment.
+            const v1 = checked[0].dataset.versionPath;
+            const v2 = checked[1].dataset.versionPath;
             window.location.href = `/ui/package/${ecosystem}/${packageName}/compare/${v1}...${v2}`;
         } else if (checked.length > 2) {
             // Uncheck the oldest selection

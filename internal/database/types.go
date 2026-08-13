@@ -51,6 +51,19 @@ func (v *Version) Version() string {
 	return VersionFromPURL(v.PURL)
 }
 
+// EscapedVersion returns the version escaped for use as a single URL path
+// segment.
+//
+// Version returns decoded text, which is what should be shown to a user but is
+// not safe to drop into a link: html/template preserves reserved characters and
+// existing escapes in a URL, so "release/1" would split into two path segments,
+// "v1?build" would start a query string, and a literal "%2B" would be read back
+// as "+". Escaping here and decoding in splitWildcardPath round-trips the value,
+// so the link resolves to the version that was stored.
+func (v *Version) EscapedVersion() string {
+	return url.PathEscape(v.Version())
+}
+
 // DisplayPURL returns the PURL with its path components percent-decoded, for
 // showing in the UI. The stored PURL keeps the canonical encoding (which is
 // what the API and all lookups use); this is only a readable rendering, so that

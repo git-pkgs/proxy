@@ -4,12 +4,16 @@ import (
 	"database/sql"
 	"encoding/json"
 	"fmt"
+	"html"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -18,6 +22,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/storage"
+	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
 	"github.com/go-chi/chi/v5"
 )
@@ -813,6 +818,185 @@ func TestVersionShowPage_PlusInVersion(t *testing.T) {
 			t.Errorf("GET %s: expected status 200, got %d", path, w.Code)
 		}
 	}
+}
+
+// TestVersionURLEscaping covers versions whose characters are significant in a
+// URL path: "/" splits off another path segment, "?" starts a query string, and
+// a literal "%xx" is read back as the character it encodes. The pages show the
+// decoded version but must build every link from a separately escaped value,
+// and those links have to resolve back to the same version.
+func TestVersionURLEscaping(t *testing.T) {
+	// A second version is needed for the compare controls to be rendered.
+	const otherVersion = "1.0.0"
+
+	tests := []struct {
+		name    string
+		version string
+	}{
+		{"slash", "release/1"},
+		{"question mark", "v1?build"},
+		{"literal percent escape", "1.0%2B"},
+		{"plus", "7.91+dfsg1-2ubuntu0.1"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ts := newTestServer(t)
+			defer ts.close()
+			seedEscapingVersions(t, ts.db, tt.version, otherVersion)
+
+			// The package page links to the escaped version.
+			escaped := url.PathEscape(tt.version)
+			versionPath := "/ui/package/deb/nmap/" + escaped
+			packagePage := ts.getOK(t, "/ui/package/deb/nmap")
+			if !containsValue(attrValues(packagePage, "href"), versionPath) {
+				t.Fatalf("package page has no link to %q; hrefs: %v",
+					versionPath, attrValues(packagePage, "href"))
+			}
+
+			ts.checkVersionAndBrowsePages(t, versionPath, tt.version, escaped)
+			ts.checkComparePage(t, packagePage, tt.version, escaped, otherVersion)
+		})
+	}
+}
+
+// seedEscapingVersions stores a Debian package with the given versions, each
+// with a cached artifact so that the version page offers its browse link.
+func seedEscapingVersions(t *testing.T, db *database.DB, versions ...string) {
+	t.Helper()
+
+	pkg := &database.Package{PURL: "pkg:deb/nmap", Ecosystem: "deb", Name: "nmap"}
+	if err := db.UpsertPackage(pkg); err != nil {
+		t.Fatalf("failed to upsert package: %v", err)
+	}
+	for _, v := range versions {
+		versionPURL := purl.MakePURLString("deb", "nmap", v)
+		if err := db.UpsertVersion(&database.Version{
+			PURL: versionPURL, PackagePURL: pkg.PURL,
+		}); err != nil {
+			t.Fatalf("failed to upsert version %q: %v", v, err)
+		}
+		if err := db.UpsertArtifact(&database.Artifact{
+			VersionPURL: versionPURL,
+			Filename:    "nmap.deb",
+			UpstreamURL: "http://archive.ubuntu.com/ubuntu/pool/universe/n/nmap/nmap.deb",
+			StoragePath: sql.NullString{String: "/cache/nmap.deb", Valid: true},
+			FetchedAt:   sql.NullTime{Time: time.Now(), Valid: true},
+		}); err != nil {
+			t.Fatalf("failed to upsert artifact for %q: %v", v, err)
+		}
+	}
+}
+
+// checkVersionAndBrowsePages follows a version link from the package page and
+// then the browse link from the version page, checking that both resolve to the
+// stored version and display it decoded.
+func (ts *testServer) checkVersionAndBrowsePages(t *testing.T, versionPath, version, escaped string) {
+	t.Helper()
+
+	versionPage := ts.getOK(t, versionPath)
+	wantPURL := "pkg:deb/nmap@" + version
+	if !strings.Contains(html.UnescapeString(versionPage), wantPURL) {
+		t.Errorf("version page does not show %q", wantPURL)
+	}
+
+	browsePath := versionPath + "/browse"
+	if !containsValue(attrValues(versionPage, "href"), browsePath) {
+		t.Fatalf("version page has no browse link to %q; hrefs: %v",
+			browsePath, attrValues(versionPage, "href"))
+	}
+
+	browsePage := ts.getOK(t, browsePath)
+	if !strings.Contains(html.UnescapeString(browsePage), "nmap@"+version) {
+		t.Errorf("browse page does not show the decoded version %q", version)
+	}
+	// The browse API is called with the escaped version, not with the text shown
+	// in the heading.
+	if got := jsConstant(t, browsePage, "versionPath"); got != escaped {
+		t.Errorf("browse page passes %q to the browse API, want %q", got, escaped)
+	}
+}
+
+// checkComparePage builds the compare URL the way the package page's script
+// does, from the values its checkboxes carry, and checks the page it reaches.
+func (ts *testServer) checkComparePage(t *testing.T, packagePage, version, escaped, otherVersion string) {
+	t.Helper()
+
+	selectable := attrValues(packagePage, "data-version-path")
+	if !containsValue(selectable, escaped) {
+		t.Fatalf("package page compare data holds %v, want %q", selectable, escaped)
+	}
+
+	comparePage := ts.getOK(t, "/ui/package/deb/nmap/compare/"+escaped+"..."+otherVersion)
+	decoded := html.UnescapeString(comparePage)
+	for _, want := range []string{version, otherVersion} {
+		if !strings.Contains(decoded, want) {
+			t.Errorf("compare page does not show version %q", want)
+		}
+	}
+	if got := jsConstant(t, comparePage, "fromVersionPath"); got != escaped {
+		t.Errorf("compare page passes %q to the compare API, want %q", got, escaped)
+	}
+}
+
+// getOK performs a GET against the server and fails the test unless it returns
+// 200, returning the response body.
+func (ts *testServer) getOK(t *testing.T, path string) string {
+	t.Helper()
+
+	req := httptest.NewRequest("GET", path, nil)
+	w := httptest.NewRecorder()
+	ts.handler.ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET %s: expected status 200, got %d", path, w.Code)
+	}
+
+	return w.Body.String()
+}
+
+// attrValues returns the value of every occurrence of an HTML attribute in a
+// rendered page, with HTML entities resolved so that values can be compared
+// against the raw strings they were built from.
+func attrValues(body, attr string) []string {
+	re := regexp.MustCompile(regexp.QuoteMeta(attr) + `="([^"]*)"`)
+
+	var values []string
+	for _, match := range re.FindAllStringSubmatch(body, -1) {
+		values = append(values, html.UnescapeString(match[1]))
+	}
+
+	return values
+}
+
+// jsConstant returns the value of a single-quoted JavaScript string constant in
+// a rendered page. html/template escapes characters that are significant in
+// JavaScript, rendering "+" as "\\u002b" for instance, so the escapes are
+// resolved to recover the value the page actually uses.
+func jsConstant(t *testing.T, body, name string) string {
+	t.Helper()
+
+	re := regexp.MustCompile(`const ` + regexp.QuoteMeta(name) + ` = '([^']*)'`)
+	match := re.FindStringSubmatch(body)
+	if match == nil {
+		t.Fatalf("page does not declare the constant %q", name)
+	}
+
+	unescaped, err := strconv.Unquote(`"` + match[1] + `"`)
+	if err != nil {
+		t.Fatalf("cannot unescape %q: %v", match[1], err)
+	}
+
+	return unescaped
+}
+
+func containsValue(values []string, want string) bool {
+	for _, v := range values {
+		if v == want {
+			return true
+		}
+	}
+
+	return false
 }
 
 func TestPackageShowPage_WithLicense(t *testing.T) {

@@ -129,12 +129,11 @@ type BrowseFileInfo struct {
 //	{name}/{version}/file/{path}  -> browse file
 func (s *Server) handleBrowsePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
-	wildcard := chi.URLParam(r, "*")
-	if err := validatePackagePath(wildcard); err != nil {
+	segments, err := packagePathSegments(r)
+	if err != nil {
 		badRequest(w, err.Error())
 		return
 	}
-	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) < 2 {
 		badRequest(w, "ecosystem, name, and version required")
@@ -185,12 +184,11 @@ func (s *Server) handleBrowsePath(w http.ResponseWriter, r *http.Request) {
 // Supported paths: {name}/{fromVersion}/{toVersion}
 func (s *Server) handleComparePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
-	wildcard := chi.URLParam(r, "*")
-	if err := validatePackagePath(wildcard); err != nil {
+	segments, err := packagePathSegments(r)
+	if err != nil {
 		badRequest(w, err.Error())
 		return
 	}
-	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) < 3 {
 		badRequest(w, "ecosystem, name, fromVersion, and toVersion required")
@@ -477,11 +475,16 @@ func isLikelyText(filename string) bool {
 }
 
 // BrowseSourceData contains data for the browse source page.
+//
+// Version is the decoded version, for display. EscapedVersion is the same value
+// escaped as a single URL path segment and is what the links and the browse API
+// calls must use; see database.Version.EscapedVersion.
 type BrowseSourceData struct {
 	Layout
-	Ecosystem   string
-	PackageName string
-	Version     string
+	Ecosystem      string
+	PackageName    string
+	Version        string
+	EscapedVersion string
 }
 
 // handleBrowseSource is now showBrowseSource in server.go, dispatched via handlePackagePath.
@@ -583,12 +586,17 @@ func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, 
 }
 
 // ComparePageData contains data for the version comparison page.
+//
+// FromVersion and ToVersion are decoded, for display; the Escaped variants are
+// the path-segment form used to build the compare API URL.
 type ComparePageData struct {
 	Layout
-	Ecosystem   string
-	PackageName string
-	FromVersion string
-	ToVersion   string
+	Ecosystem          string
+	PackageName        string
+	FromVersion        string
+	ToVersion          string
+	EscapedFromVersion string
+	EscapedToVersion   string
 }
 
 // handleComparePage is now showComparePage in server.go, dispatched via handlePackagePath.
