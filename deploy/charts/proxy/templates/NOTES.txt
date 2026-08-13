@@ -1,0 +1,15 @@
+git-pkgs proxy has been installed.
+
+The default base URL is intended for local port forwarding. Before exposing the
+proxy, set config.data.base_url to the URL used by package-manager clients.
+
+To access the proxy locally:
+
+  kubectl -n {{ .Release.Namespace }} port-forward service/{{ include "proxy.fullname" . }} {{ .Values.service.port }}:{{ .Values.service.port }}
+
+Then visit http://localhost:{{ .Values.service.port }}/.
+
+{{- if not .Values.persistence.enabled }}
+WARNING: persistence is disabled. Cached artifacts and the default SQLite
+database will be lost when the pod is replaced.
+{{- end }}

@@ -96,3 +96,66 @@ jobs:
           for predicate in sbom-linux-amd64.spdx.json sbom-linux-arm64.spdx.json; do
             cosign attest --yes --type spdxjson --predicate "$predicate" "$reference"
           done
+
+  publish_chart:
+    name: Push Helm chart to GHCR
+    if: github.ref_type == 'tag'
+    needs: push_to_registry
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - name: Check out the repo
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+          ref: ${{ github.sha }}
+
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.18.6
+
+      - name: Validate and normalize release version
+        id: version
+        env:
+          TAG: ${{ github.ref_name }}
+        run: |
+          set -euo pipefail
+          semver='^v(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)\.(0|[1-9][0-9]*)(-((0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*)(\.(0|[1-9][0-9]*|[0-9]*[A-Za-z-][0-9A-Za-z-]*))*))?$'
+          [[ "$TAG" =~ $semver ]] || {
+            echo "Tag must be strict SemVer of the form vMAJOR.MINOR.PATCH[-PRERELEASE]: $TAG" >&2
+            exit 1
+          }
+          version="${TAG#v}"
+          [[ "$version" != "0.0.0" ]] || {
+            echo "0.0.0 is a development placeholder and must not be published" >&2
+            exit 1
+          }
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - name: Log in to GHCR
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: printf '%s' "$GH_TOKEN" | helm registry login ghcr.io --username "$GITHUB_ACTOR" --password-stdin
+
+      - name: Lint and package chart
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: |
+          set -euo pipefail
+          helm lint deploy/charts/proxy
+          mkdir -p build
+          helm package \
+            --destination build \
+            --version "$VERSION" \
+            --app-version "$VERSION" \
+            deploy/charts/proxy
+          metadata="$(helm show chart "build/proxy-${VERSION}.tgz")"
+          [[ "$(awk '$1 == "version:" {print $2}' <<<"$metadata")" == "$VERSION" ]]
+          [[ "$(awk '$1 == "appVersion:" {gsub(/\"/, "", $2); print $2}' <<<"$metadata")" == "$VERSION" ]]
+
+      - name: Push chart
+        env:
+          VERSION: ${{ steps.version.outputs.version }}
+        run: helm push "build/proxy-${VERSION}.tgz" oci://ghcr.io/git-pkgs/charts
