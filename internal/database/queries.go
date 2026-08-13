@@ -191,6 +191,28 @@ func (db *DB) GetArtifact(versionPURL, filename string) (*Artifact, error) {
 	return &a, nil
 }
 
+// GetCachedArtifact returns the fields needed to serve a cached artifact.
+func (db *DB) GetCachedArtifact(packagePURL, versionPURL, filename string) (*CachedArtifact, error) {
+	var artifact CachedArtifact
+	query := db.Rebind(`
+		SELECT packages.ecosystem, artifacts.storage_path, artifacts.content_hash, artifacts.size,
+		       artifacts.content_type, versions.integrity
+		FROM artifacts
+		JOIN versions ON versions.purl = artifacts.version_purl
+		JOIN packages ON packages.purl = versions.package_purl
+		WHERE packages.purl = ? AND artifacts.version_purl = ? AND artifacts.filename = ?
+		  AND artifacts.storage_path IS NOT NULL AND artifacts.fetched_at IS NOT NULL
+	`)
+	err := db.Get(&artifact, query, packagePURL, versionPURL, filename)
+	if err == sql.ErrNoRows {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return &artifact, nil
+}
+
 func (db *DB) GetArtifactByPath(storagePath string) (*Artifact, error) {
 	var a Artifact
 	query := db.Rebind(`

@@ -13,6 +13,7 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/git-pkgs/cooldown"
@@ -47,6 +48,15 @@ func hasDotDotSegment(path string) bool {
 }
 
 const defaultHTTPTimeout = 30 * time.Second
+
+const artifactCopyBufferSize = 32 << 10
+
+var artifactCopyBufferPool = sync.Pool{ //nolint:gochecknoglobals // shared across artifact responses
+	New: func() any {
+		buffer := make([]byte, artifactCopyBufferSize)
+		return &buffer
+	},
+}
 
 // canonicalPackagePURL returns a versionless PURL in canonical form so cooldown
 // lookups match keys produced by config.CooldownConfig.NormalizedPackages.
@@ -157,27 +167,11 @@ func (p *Proxy) GetCachedArtifact(ctx context.Context, ecosystem, name, version,
 
 // checkCache looks up an artifact in the cache. Returns nil if not cached.
 func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename string) (*CacheResult, error) {
-	pkg, err := p.DB.GetPackageByPURL(pkgPURL)
-	if err != nil {
-		return nil, fmt.Errorf("checking package cache: %w", err)
-	}
-	if pkg == nil {
-		return nil, nil
-	}
-
-	ver, err := p.DB.GetVersionByPURL(versionPURL)
-	if err != nil {
-		return nil, fmt.Errorf("checking version cache: %w", err)
-	}
-	if ver == nil {
-		return nil, nil
-	}
-
-	artifact, err := p.DB.GetArtifact(versionPURL, filename)
+	artifact, err := p.DB.GetCachedArtifact(pkgPURL, versionPURL, filename)
 	if err != nil {
 		return nil, fmt.Errorf("checking artifact cache: %w", err)
 	}
-	if artifact == nil || !artifact.IsCached() {
+	if artifact == nil {
 		return nil, nil
 	}
 
@@ -189,39 +183,39 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 	}
 
 	if p.DirectServe {
-		signed, err := p.Storage.SignedURL(ctx, artifact.StoragePath.String, p.DirectServeTTL)
+		signed, err := p.Storage.SignedURL(ctx, artifact.StoragePath, p.DirectServeTTL)
 		if err == nil {
 			result.RedirectURL = rewriteSignedURLHost(signed, p.DirectServeBaseURL)
-			p.recordCacheHit(pkgPURL, versionPURL, filename)
+			p.recordCacheHit(artifact.Ecosystem, versionPURL, filename)
 			return result, nil
 		}
 		if !errors.Is(err, storage.ErrSignedURLUnsupported) {
 			p.Logger.Warn("failed to sign storage URL, falling back to streaming",
-				"path", artifact.StoragePath.String, "error", err)
+				"path", artifact.StoragePath, "error", err)
 		}
 	}
 
 	start := time.Now()
-	reader, err := p.Storage.Open(ctx, artifact.StoragePath.String)
+	reader, err := p.Storage.Open(ctx, artifact.StoragePath)
 	metrics.RecordStorageOperation("read", time.Since(start))
 	if err != nil {
 		metrics.RecordStorageError("read")
 		p.Logger.Warn("cached artifact missing from storage, will refetch",
-			"path", artifact.StoragePath.String, "error", err)
+			"path", artifact.StoragePath, "error", err)
 		return nil, nil
 	}
 
-	result.Reader = newVerifyingReader(reader, artifact.ContentHash.String, ver.Integrity.String,
+	result.Reader = newVerifyingReader(reader, artifact.ContentHash.String, artifact.Integrity.String,
 		func(reason string) {
 			p.Logger.Error("cached artifact failed integrity check",
 				"purl", versionPURL, "filename", filename,
-				"path", artifact.StoragePath.String, "reason", reason)
-			metrics.RecordIntegrityFailure(pkg.Ecosystem)
+				"path", artifact.StoragePath, "reason", reason)
+			metrics.RecordIntegrityFailure(artifact.Ecosystem)
 			if err := p.DB.ClearArtifactCache(versionPURL, filename); err != nil {
 				p.Logger.Warn("failed to clear corrupt artifact from cache", "error", err)
 			}
 		})
-	p.recordCacheHit(pkgPURL, versionPURL, filename)
+	p.recordCacheHit(artifact.Ecosystem, versionPURL, filename)
 	return result, nil
 }
 
@@ -245,11 +239,9 @@ func rewriteSignedURLHost(signed, baseURL string) string {
 	return s.String()
 }
 
-func (p *Proxy) recordCacheHit(pkgPURL, versionPURL, filename string) {
+func (p *Proxy) recordCacheHit(ecosystem, versionPURL, filename string) {
 	_ = p.DB.RecordArtifactHit(versionPURL, filename)
-	if parsed, err := purl.Parse(pkgPURL); err == nil {
-		metrics.RecordCacheHit(purl.PURLTypeToEcosystem(parsed.Type))
-	}
+	metrics.RecordCacheHit(purl.NormalizeEcosystem(ecosystem))
 }
 
 func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL string) (*CacheResult, error) {
@@ -376,7 +368,7 @@ func ServeArtifact(w http.ResponseWriter, result *CacheResult) {
 func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
 	if result.RedirectURL != "" {
 		if result.Hash != "" {
-			w.Header().Set("ETag", fmt.Sprintf(`"%s"`, result.Hash))
+			w.Header().Set("ETag", `"`+result.Hash+`"`)
 		}
 		w.Header().Set("Location", result.RedirectURL)
 		w.WriteHeader(http.StatusFound)
@@ -391,15 +383,18 @@ func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
 		w.Header().Set("Content-Type", result.ContentType)
 	}
 	if result.Size > 0 || (method == http.MethodHead && result.Size == 0) {
-		w.Header().Set("Content-Length", fmt.Sprintf("%d", result.Size))
+		w.Header().Set("Content-Length", strconv.FormatInt(result.Size, 10))
 	}
 	if result.Hash != "" {
-		w.Header().Set("ETag", fmt.Sprintf(`"%s"`, result.Hash))
+		w.Header().Set("ETag", `"`+result.Hash+`"`)
 	}
 
 	w.WriteHeader(http.StatusOK)
 	if method != http.MethodHead && result.Reader != nil {
-		_, _ = io.Copy(w, result.Reader)
+		buffer := artifactCopyBufferPool.Get().(*[]byte)
+		defer artifactCopyBufferPool.Put(buffer)
+		// Hide optional ReaderFrom methods so io.CopyBuffer uses the pooled buffer.
+		_, _ = io.CopyBuffer(struct{ io.Writer }{w}, result.Reader, *buffer)
 	}
 }
 

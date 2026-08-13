@@ -128,7 +128,7 @@ func (f *mockFetcher) Head(_ context.Context, _ string) (int64, string, error) {
 }
 
 // setupTestProxy creates a Proxy with a real DB (SQLite in temp dir) and mock storage/fetcher.
-func setupTestProxy(t *testing.T) (*Proxy, *database.DB, *mockStorage, *mockFetcher) {
+func setupTestProxy(t testing.TB) (*Proxy, *database.DB, *mockStorage, *mockFetcher) {
 	t.Helper()
 
 	dir := t.TempDir()
@@ -148,7 +148,7 @@ func setupTestProxy(t *testing.T) (*Proxy, *database.DB, *mockStorage, *mockFetc
 }
 
 // seedPackage creates a package, version, and cached artifact in the test DB and storage.
-func seedPackage(t *testing.T, db *database.DB, store *mockStorage, ecosystem, name, version, filename, content string) {
+func seedPackage(t testing.TB, db *database.DB, store *mockStorage, ecosystem, name, version, filename, content string) {
 	t.Helper()
 
 	pkg := &database.Package{

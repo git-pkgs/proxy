@@ -76,6 +76,16 @@ func (a *Artifact) IsCached() bool {
 	return a.StoragePath.Valid && a.FetchedAt.Valid
 }
 
+// CachedArtifact contains the fields needed to serve a cached artifact.
+type CachedArtifact struct {
+	Ecosystem   string         `db:"ecosystem"`
+	StoragePath string         `db:"storage_path"`
+	ContentHash sql.NullString `db:"content_hash"`
+	Size        sql.NullInt64  `db:"size"`
+	ContentType sql.NullString `db:"content_type"`
+	Integrity   sql.NullString `db:"integrity"`
+}
+
 // MetadataCacheEntry represents a cached metadata blob for offline serving.
 type MetadataCacheEntry struct {
 	ID            int64          `db:"id" json:"id"`
