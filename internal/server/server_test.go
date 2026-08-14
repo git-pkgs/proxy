@@ -100,10 +100,14 @@ func newTestServer(t *testing.T) *testServer {
 
 	// Create a minimal server struct for the handlers
 	s := &Server{
-		cfg:         cfg,
-		db:          db,
-		storage:     store,
-		logger:      logger,
+		cfg:     cfg,
+		db:      db,
+		storage: store,
+		logger:  logger,
+		buildInfo: BuildInfo{
+			Version: "test-version",
+			Commit:  "test-commit",
+		},
 		templates:   &Templates{},
 		healthCache: hc,
 	}
@@ -312,6 +316,9 @@ func TestDashboard(t *testing.T) {
 	}
 	if !strings.Contains(body, "Cached Artifacts") {
 		t.Error("dashboard should contain stats")
+	}
+	if !strings.Contains(body, "proxy test-version (test-commit)") {
+		t.Error("dashboard footer should contain build information")
 	}
 	if !strings.Contains(body, "Popular Packages") {
 		t.Error("dashboard should contain popular packages section")
@@ -1327,9 +1334,13 @@ func TestNewServer_StorageConnectivityCheck(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	srv, err := New(cfg, logger)
+	buildInfo := BuildInfo{Version: "test-version", Commit: "test-commit"}
+	srv, err := New(cfg, logger, buildInfo)
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
+	}
+	if srv.buildInfo != buildInfo {
+		t.Errorf("build info = %#v, want %#v", srv.buildInfo, buildInfo)
 	}
 
 	// On Windows, OpenBucket normalises to file:///C:/path; on Unix the

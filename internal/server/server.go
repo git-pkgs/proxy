@@ -91,6 +91,7 @@ type Server struct {
 	db          *database.DB
 	storage     storage.Storage
 	logger      *slog.Logger
+	buildInfo   BuildInfo
 	http        *http.Server
 	templates   *Templates
 	cancel      context.CancelFunc
@@ -98,7 +99,7 @@ type Server struct {
 }
 
 // New creates a new Server with the given configuration.
-func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
+func New(cfg *config.Config, logger *slog.Logger, buildInfo BuildInfo) (*Server, error) {
 	// Initialize database
 	var db *database.DB
 	var err error
@@ -152,6 +153,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		db:          db,
 		storage:     store,
 		logger:      logger,
+		buildInfo:   buildInfo,
 		templates:   &Templates{},
 		healthCache: hc,
 	}, nil
