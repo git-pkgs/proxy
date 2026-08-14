@@ -23,7 +23,7 @@ require (
 	github.com/swaggo/swag v1.16.6
 	gocloud.dev v0.46.0
 	golang.org/x/sync v0.22.0
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
 	modernc.org/sqlite v1.56.0
 )
