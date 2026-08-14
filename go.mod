@@ -5,15 +5,15 @@ go 1.25.6
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/CycloneDX/cyclonedx-go v0.11.0
-	github.com/git-pkgs/archives v0.5.0
+	github.com/git-pkgs/archives v0.5.1
 	github.com/git-pkgs/cooldown v0.1.1
-	github.com/git-pkgs/enrichment v0.6.4
+	github.com/git-pkgs/enrichment v0.6.5
 	github.com/git-pkgs/magic v0.2.0
-	github.com/git-pkgs/purl v0.1.15
-	github.com/git-pkgs/registries v0.6.4
-	github.com/git-pkgs/spdx v0.3.0
-	github.com/git-pkgs/vers v0.3.0
-	github.com/git-pkgs/vulns v0.2.1
+	github.com/git-pkgs/purl v0.1.16
+	github.com/git-pkgs/registries v0.7.0
+	github.com/git-pkgs/spdx v0.3.1
+	github.com/git-pkgs/vers v0.3.1
+	github.com/git-pkgs/vulns v0.2.2
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.3
@@ -218,7 +218,7 @@ require (
 	github.com/nishanths/exhaustive v0.12.0 // indirect
 	github.com/nishanths/predeclared v0.2.2 // indirect
 	github.com/nunnatsa/ginkgolinter v0.23.0 // indirect
-	github.com/oapi-codegen/nullable v1.1.0 // indirect
+	github.com/oapi-codegen/nullable v1.2.0 // indirect
 	github.com/oapi-codegen/runtime v1.6.0 // indirect
 	github.com/package-url/packageurl-go v0.1.6 // indirect
 	github.com/pandatix/go-cvss v0.6.2 // indirect
