@@ -37,6 +37,15 @@ func NewComposerHandler(proxy *Proxy, proxyURL string) *ComposerHandler {
 	}
 }
 
+// NewComposerHandlerWithUpstreams creates a Composer handler with custom API
+// and repository upstreams.
+func NewComposerHandlerWithUpstreams(proxy *Proxy, proxyURL, upstreamURL, repoURL string) *ComposerHandler {
+	h := NewComposerHandler(proxy, proxyURL)
+	h.upstreamURL = configuredUpstreamURL(upstreamURL, composerUpstream)
+	h.repoURL = configuredUpstreamURL(repoURL, composerRepo)
+	return h
+}
+
 // Routes returns the HTTP handler for Composer requests.
 func (h *ComposerHandler) Routes() http.Handler {
 	mux := http.NewServeMux()

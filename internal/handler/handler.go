@@ -47,6 +47,13 @@ func hasDotDotSegment(path string) bool {
 	return false
 }
 
+func configuredUpstreamURL(value, defaultValue string) string {
+	if value == "" {
+		value = defaultValue
+	}
+	return strings.TrimSuffix(value, "/")
+}
+
 const defaultHTTPTimeout = 30 * time.Second
 
 const artifactCopyBufferSize = 32 << 10

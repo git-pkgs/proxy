@@ -241,11 +241,21 @@ func (s *Server) Start() error {
 		s.cfg.Upstream.Cargo,
 		s.cfg.Upstream.CargoDownload,
 	)
-	gemHandler := handler.NewGemHandler(proxy, s.cfg.BaseURL)
-	goHandler := handler.NewGoHandler(proxy, s.cfg.BaseURL)
-	hexHandler := handler.NewHexHandler(proxy, s.cfg.BaseURL)
-	pubHandler := handler.NewPubHandler(proxy, s.cfg.BaseURL)
-	pypiHandler := handler.NewPyPIHandler(proxy, s.cfg.BaseURL)
+	gemHandler := handler.NewGemHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Gem)
+	goHandler := handler.NewGoHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Go)
+	hexHandler := handler.NewHexHandlerWithUpstreams(
+		proxy,
+		s.cfg.BaseURL,
+		s.cfg.Upstream.Hex,
+		s.cfg.Upstream.HexAPI,
+	)
+	pubHandler := handler.NewPubHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Pub)
+	pypiHandler := handler.NewPyPIHandlerWithUpstreams(
+		proxy,
+		s.cfg.BaseURL,
+		s.cfg.Upstream.PyPI,
+		s.cfg.Upstream.PyPIDownload,
+	)
 	mavenHandler := handler.NewMavenHandler(
 		proxy,
 		s.cfg.BaseURL,
@@ -253,16 +263,26 @@ func (s *Server) Start() error {
 		s.cfg.Upstream.GradlePluginPortal,
 	)
 	gradleHandler := handler.NewGradleBuildCacheHandler(proxy)
-	nugetHandler := handler.NewNuGetHandler(proxy, s.cfg.BaseURL)
-	composerHandler := handler.NewComposerHandler(proxy, s.cfg.BaseURL)
-	conanHandler := handler.NewConanHandler(proxy, s.cfg.BaseURL)
-	condaHandler := handler.NewCondaHandler(proxy, s.cfg.BaseURL)
-	cranHandler := handler.NewCRANHandler(proxy, s.cfg.BaseURL)
-	juliaHandler := handler.NewJuliaHandler(proxy, s.cfg.BaseURL)
+	nugetHandler := handler.NewNuGetHandlerWithUpstreams(
+		proxy,
+		s.cfg.BaseURL,
+		s.cfg.Upstream.NuGet,
+		s.cfg.Upstream.NuGetSearch,
+	)
+	composerHandler := handler.NewComposerHandlerWithUpstreams(
+		proxy,
+		s.cfg.BaseURL,
+		s.cfg.Upstream.Composer,
+		s.cfg.Upstream.ComposerRepository,
+	)
+	conanHandler := handler.NewConanHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Conan)
+	condaHandler := handler.NewCondaHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Conda)
+	cranHandler := handler.NewCRANHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.CRAN)
+	juliaHandler := handler.NewJuliaHandlerWithUpstream(proxy, s.cfg.Upstream.Julia)
 	containerHandler := handler.NewContainerHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.OCI)
 	helmHandler := handler.NewHelmHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm)
 	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Debian)
-	rpmHandler := handler.NewRPMHandler(proxy, s.cfg.BaseURL)
+	rpmHandler := handler.NewRPMHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.RPM)
 
 	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))
 	r.Mount("/cargo", http.StripPrefix("/cargo", cargoHandler.Routes()))

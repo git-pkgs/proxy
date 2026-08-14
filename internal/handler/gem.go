@@ -30,6 +30,13 @@ func NewGemHandler(proxy *Proxy, proxyURL string) *GemHandler {
 	}
 }
 
+// NewGemHandlerWithUpstream creates a RubyGems handler with a custom upstream.
+func NewGemHandlerWithUpstream(proxy *Proxy, proxyURL, upstreamURL string) *GemHandler {
+	h := NewGemHandler(proxy, proxyURL)
+	h.upstreamURL = configuredUpstreamURL(upstreamURL, gemUpstream)
+	return h
+}
+
 // Routes returns the HTTP handler for RubyGems requests.
 func (h *GemHandler) Routes() http.Handler {
 	mux := http.NewServeMux()

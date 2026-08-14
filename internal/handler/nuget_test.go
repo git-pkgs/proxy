@@ -131,35 +131,41 @@ func TestNuGetRewriteURL(t *testing.T) {
 	}
 
 	tests := []struct {
-		input string
-		want  string
+		input       string
+		serviceType string
+		want        string
 	}{
 		{
 			"https://api.nuget.org/v3-flatcontainer/",
+			"PackageBaseAddress/3.0.0",
 			"http://localhost:8080/nuget/v3-flatcontainer/",
 		},
 		{
 			"https://api.nuget.org/v3/registration5-gz-semver2/",
+			"RegistrationsBaseUrl/3.6.0",
 			"http://localhost:8080/nuget/v3/registration5-gz-semver2/",
 		},
 		{
 			"https://azuresearch-usnc.nuget.org/query",
+			"SearchQueryService",
 			"http://localhost:8080/nuget/query",
 		},
 		{
 			"https://azuresearch-usnc.nuget.org/autocomplete",
+			"SearchAutocompleteService",
 			"http://localhost:8080/nuget/autocomplete",
 		},
 		{
 			"https://example.com/unknown",
+			"SomeOtherService/1.0.0",
 			"https://example.com/unknown",
 		},
 	}
 
 	for _, tt := range tests {
-		got := h.rewriteNuGetURL(tt.input)
+		got := h.rewriteNuGetURL(tt.input, tt.serviceType)
 		if got != tt.want {
-			t.Errorf("rewriteNuGetURL(%q) = %q, want %q", tt.input, got, tt.want)
+			t.Errorf("rewriteNuGetURL(%q, %q) = %q, want %q", tt.input, tt.serviceType, got, tt.want)
 		}
 	}
 }

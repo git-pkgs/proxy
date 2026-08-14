@@ -14,6 +14,97 @@ const (
 	testLevelDebug     = "debug"
 )
 
+func upstreamConfigValues(upstream UpstreamConfig) map[string]string {
+	return map[string]string{
+		"npm":                  upstream.NPM,
+		"cargo":                upstream.Cargo,
+		"cargo_download":       upstream.CargoDownload,
+		"gem":                  upstream.Gem,
+		"go":                   upstream.Go,
+		"hex":                  upstream.Hex,
+		"hex_api":              upstream.HexAPI,
+		"pub":                  upstream.Pub,
+		"pypi":                 upstream.PyPI,
+		"pypi_download":        upstream.PyPIDownload,
+		"maven":                upstream.Maven,
+		"gradle_plugin_portal": upstream.GradlePluginPortal,
+		"nuget":                upstream.NuGet,
+		"nuget_search":         upstream.NuGetSearch,
+		"composer":             upstream.Composer,
+		"composer_repository":  upstream.ComposerRepository,
+		"conan":                upstream.Conan,
+		"conda":                upstream.Conda,
+		"cran":                 upstream.CRAN,
+		"julia":                upstream.Julia,
+		"debian":               upstream.Debian,
+		"rpm":                  upstream.RPM,
+	}
+}
+
+func defaultUpstreamValues() map[string]string {
+	return map[string]string{
+		"npm":                  "https://registry.npmjs.org",
+		"cargo":                "https://index.crates.io",
+		"cargo_download":       "https://static.crates.io/crates",
+		"gem":                  "https://rubygems.org",
+		"go":                   "https://proxy.golang.org",
+		"hex":                  "https://repo.hex.pm",
+		"hex_api":              "https://hex.pm",
+		"pub":                  "https://pub.dev",
+		"pypi":                 "https://pypi.org",
+		"pypi_download":        "https://files.pythonhosted.org",
+		"maven":                "https://repo1.maven.org/maven2",
+		"gradle_plugin_portal": "https://plugins.gradle.org/m2",
+		"nuget":                "https://api.nuget.org",
+		"nuget_search":         "https://azuresearch-usnc.nuget.org",
+		"composer":             "https://packagist.org",
+		"composer_repository":  "https://repo.packagist.org",
+		"conan":                "https://center.conan.io",
+		"conda":                "https://conda.anaconda.org",
+		"cran":                 "https://cloud.r-project.org",
+		"julia":                "https://pkg.julialang.org",
+		"debian":               "http://deb.debian.org/debian",
+		"rpm":                  "https://dl.fedoraproject.org/pub/fedora/linux",
+	}
+}
+
+func upstreamEnvironmentVariables() map[string]string {
+	return map[string]string{
+		"npm":                  "PROXY_UPSTREAM_NPM",
+		"cargo":                "PROXY_UPSTREAM_CARGO",
+		"cargo_download":       "PROXY_UPSTREAM_CARGO_DOWNLOAD",
+		"gem":                  "PROXY_UPSTREAM_GEM",
+		"go":                   "PROXY_UPSTREAM_GO",
+		"hex":                  "PROXY_UPSTREAM_HEX",
+		"hex_api":              "PROXY_UPSTREAM_HEX_API",
+		"pub":                  "PROXY_UPSTREAM_PUB",
+		"pypi":                 "PROXY_UPSTREAM_PYPI",
+		"pypi_download":        "PROXY_UPSTREAM_PYPI_DOWNLOAD",
+		"maven":                "PROXY_UPSTREAM_MAVEN",
+		"gradle_plugin_portal": "PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL",
+		"nuget":                "PROXY_UPSTREAM_NUGET",
+		"nuget_search":         "PROXY_UPSTREAM_NUGET_SEARCH",
+		"composer":             "PROXY_UPSTREAM_COMPOSER",
+		"composer_repository":  "PROXY_UPSTREAM_COMPOSER_REPOSITORY",
+		"conan":                "PROXY_UPSTREAM_CONAN",
+		"conda":                "PROXY_UPSTREAM_CONDA",
+		"cran":                 "PROXY_UPSTREAM_CRAN",
+		"julia":                "PROXY_UPSTREAM_JULIA",
+		"debian":               "PROXY_UPSTREAM_DEBIAN",
+		"rpm":                  "PROXY_UPSTREAM_RPM",
+	}
+}
+
+func assertUpstreamValues(t *testing.T, cfg *Config, want map[string]string) {
+	t.Helper()
+	got := upstreamConfigValues(cfg.Upstream)
+	for name, wantValue := range want {
+		if gotValue := got[name]; gotValue != wantValue {
+			t.Errorf("Upstream %s = %q, want %q", name, gotValue, wantValue)
+		}
+	}
+}
+
 func TestDefault(t *testing.T) {
 	cfg := Default()
 
@@ -35,15 +126,7 @@ func TestDefault(t *testing.T) {
 	if cfg.Gradle.BuildCache.MaxAge != "168h" {
 		t.Errorf("Gradle.BuildCache.MaxAge = %q, want %q", cfg.Gradle.BuildCache.MaxAge, "168h")
 	}
-	if cfg.Upstream.Maven != "https://repo1.maven.org/maven2" {
-		t.Errorf("Upstream.Maven = %q, want %q", cfg.Upstream.Maven, "https://repo1.maven.org/maven2")
-	}
-	if cfg.Upstream.GradlePluginPortal != "https://plugins.gradle.org/m2" {
-		t.Errorf("Upstream.GradlePluginPortal = %q, want %q", cfg.Upstream.GradlePluginPortal, "https://plugins.gradle.org/m2")
-	}
-	if cfg.Upstream.Debian != "http://deb.debian.org/debian" {
-		t.Errorf("Upstream.Debian = %q, want %q", cfg.Upstream.Debian, "http://deb.debian.org/debian")
-	}
+	assertUpstreamValues(t, cfg, defaultUpstreamValues())
 }
 
 func TestValidate(t *testing.T) {
@@ -250,13 +333,60 @@ access_log:
 	}
 }
 
+func TestLoadYAMLUpstreams(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := `
+upstream:
+  npm: "https://upstream.example.com/npm"
+  cargo: "https://upstream.example.com/cargo"
+  cargo_download: "https://upstream.example.com/cargo_download"
+  gem: "https://upstream.example.com/gem"
+  go: "https://upstream.example.com/go"
+  hex: "https://upstream.example.com/hex"
+  hex_api: "https://upstream.example.com/hex_api"
+  pub: "https://upstream.example.com/pub"
+  pypi: "https://upstream.example.com/pypi"
+  pypi_download: "https://upstream.example.com/pypi_download"
+  maven: "https://upstream.example.com/maven"
+  gradle_plugin_portal: "https://upstream.example.com/gradle_plugin_portal"
+  nuget: "https://upstream.example.com/nuget"
+  nuget_search: "https://upstream.example.com/nuget_search"
+  composer: "https://upstream.example.com/composer"
+  composer_repository: "https://upstream.example.com/composer_repository"
+  conan: "https://upstream.example.com/conan"
+  conda: "https://upstream.example.com/conda"
+  cran: "https://upstream.example.com/cran"
+  julia: "https://upstream.example.com/julia"
+  debian: "https://upstream.example.com/debian"
+  rpm: "https://upstream.example.com/rpm"
+`
+	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
+		t.Fatalf("writing config file: %v", err)
+	}
+
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load failed: %v", err)
+	}
+
+	want := make(map[string]string)
+	for name := range defaultUpstreamValues() {
+		want[name] = "https://upstream.example.com/" + name
+	}
+	assertUpstreamValues(t, cfg, want)
+}
+
 func TestLoadJSON(t *testing.T) {
 	dir := t.TempDir()
 	path := filepath.Join(dir, "config.json")
 
 	content := `{
 		"listen": ":4000",
-		"base_url": "https://json.example.com"
+		"base_url": "https://json.example.com",
+		"upstream": {
+			"gem": "https://json.example.com/gem",
+			"rpm": "https://json.example.com/rpm"
+		}
 	}`
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("writing config file: %v", err)
@@ -273,6 +403,12 @@ func TestLoadJSON(t *testing.T) {
 	if cfg.BaseURL != "https://json.example.com" {
 		t.Errorf("BaseURL = %q, want %q", cfg.BaseURL, "https://json.example.com")
 	}
+	if cfg.Upstream.Gem != "https://json.example.com/gem" {
+		t.Errorf("Upstream.Gem = %q, want %q", cfg.Upstream.Gem, "https://json.example.com/gem")
+	}
+	if cfg.Upstream.RPM != "https://json.example.com/rpm" {
+		t.Errorf("Upstream.RPM = %q, want %q", cfg.Upstream.RPM, "https://json.example.com/rpm")
+	}
 }
 
 func TestLoadFromEnv(t *testing.T) {
@@ -284,9 +420,6 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("PROXY_STORAGE_PATH", "/env/cache")
 	t.Setenv("PROXY_LOG_LEVEL", testLevelDebug)
 	t.Setenv("PROXY_ACCESS_LOG_PATH", "/tmp/proxy-access.jsonl")
-	t.Setenv("PROXY_UPSTREAM_MAVEN", "https://maven.example.com/repository/maven-public")
-	t.Setenv("PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL", "https://plugins.example.com/m2")
-	t.Setenv("PROXY_UPSTREAM_DEBIAN", "http://archive.ubuntu.com/ubuntu")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY", "true")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE", "32MB")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_AGE", "12h")
@@ -313,15 +446,6 @@ func TestLoadFromEnv(t *testing.T) {
 	if cfg.AccessLog.Path != "/tmp/proxy-access.jsonl" {
 		t.Errorf("AccessLog.Path = %q, want %q", cfg.AccessLog.Path, "/tmp/proxy-access.jsonl")
 	}
-	if cfg.Upstream.Maven != "https://maven.example.com/repository/maven-public" {
-		t.Errorf("Upstream.Maven = %q, want %q", cfg.Upstream.Maven, "https://maven.example.com/repository/maven-public")
-	}
-	if cfg.Upstream.GradlePluginPortal != "https://plugins.example.com/m2" {
-		t.Errorf("Upstream.GradlePluginPortal = %q, want %q", cfg.Upstream.GradlePluginPortal, "https://plugins.example.com/m2")
-	}
-	if cfg.Upstream.Debian != "http://archive.ubuntu.com/ubuntu" {
-		t.Errorf("Upstream.Debian = %q, want %q", cfg.Upstream.Debian, "http://archive.ubuntu.com/ubuntu")
-	}
 	if !cfg.Gradle.BuildCache.ReadOnly {
 		t.Error("Gradle.BuildCache.ReadOnly = false, want true")
 	}
@@ -337,6 +461,19 @@ func TestLoadFromEnv(t *testing.T) {
 	if cfg.Gradle.BuildCache.SweepInterval != "15m" {
 		t.Errorf("Gradle.BuildCache.SweepInterval = %q, want %q", cfg.Gradle.BuildCache.SweepInterval, "15m")
 	}
+}
+
+func TestLoadFromEnvUpstreams(t *testing.T) {
+	cfg := Default()
+	want := make(map[string]string)
+	for name, envName := range upstreamEnvironmentVariables() {
+		value := "https://env.example.com/" + name
+		t.Setenv(envName, value)
+		want[name] = value
+	}
+
+	cfg.LoadFromEnv()
+	assertUpstreamValues(t, cfg, want)
 }
 
 func TestLoadCooldownConfig(t *testing.T) {
