@@ -54,6 +54,7 @@ import (
 	"fmt"
 	"log/slog"
 	"net/http"
+	"net/url"
 	"strconv"
 	"strings"
 	"time"
@@ -680,12 +681,11 @@ func (s *Server) handlePackagesList(w http.ResponseWriter, r *http.Request) {
 //	{name}/compare/{v1}...{v2}   -> compare versions
 func (s *Server) handlePackagePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
-	wildcard := chi.URLParam(r, "*")
-	if err := validatePackagePath(wildcard); err != nil {
+	segments, err := packagePathSegments(r)
+	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
-	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) == 0 {
 		http.Error(w, "ecosystem and package name required", http.StatusBadRequest)
@@ -825,10 +825,11 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 
 func (s *Server) showBrowseSource(w http.ResponseWriter, r *http.Request, ecosystem, name, version string) {
 	data := BrowseSourceData{
-		Layout:      s.layoutFor(r),
-		Ecosystem:   ecosystem,
-		PackageName: name,
-		Version:     version,
+		Layout:         s.layoutFor(r),
+		Ecosystem:      ecosystem,
+		PackageName:    name,
+		Version:        version,
+		EscapedVersion: url.PathEscape(version),
 	}
 
 	if err := s.templates.Render(w, "browse_source", data); err != nil {
@@ -846,11 +847,13 @@ func (s *Server) showComparePage(w http.ResponseWriter, r *http.Request, ecosyst
 	}
 
 	data := ComparePageData{
-		Layout:      s.layoutFor(r),
-		Ecosystem:   ecosystem,
-		PackageName: name,
-		FromVersion: parts[0],
-		ToVersion:   parts[1],
+		Layout:             s.layoutFor(r),
+		Ecosystem:          ecosystem,
+		PackageName:        name,
+		FromVersion:        parts[0],
+		ToVersion:          parts[1],
+		EscapedFromVersion: url.PathEscape(parts[0]),
+		EscapedToVersion:   url.PathEscape(parts[1]),
 	}
 
 	if err := s.templates.Render(w, "compare_versions", data); err != nil {

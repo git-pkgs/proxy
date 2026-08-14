@@ -7,7 +7,7 @@
         <span class="mx-2">/</span>
         <a href="/ui/package/{{.Ecosystem}}/{{.PackageName}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.PackageName}}</a>
         <span class="mx-2">/</span>
-        <a href="/ui/package/{{.Ecosystem}}/{{.PackageName}}/{{.Version}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.Version}}</a>
+        <a href="/ui/package/{{.Ecosystem}}/{{.PackageName}}/{{.EscapedVersion}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.Version}}</a>
         <span class="mx-2">/</span>
         <span>Browse Source</span>
     </nav>
@@ -51,7 +51,10 @@
 <script>
 const ecosystem = '{{.Ecosystem}}';
 const packageName = '{{.PackageName}}';
-const version = '{{.Version}}';
+// The browse API takes the version as one path segment, so the escaped form is
+// used here: a version such as "release/1" or "v1?build" would otherwise change
+// the request path rather than travel inside it.
+const versionPath = '{{.EscapedVersion}}';
 let currentPath = '';
 
 // Escape a string for safe interpolation into HTML attributes and content.
@@ -65,7 +68,7 @@ function escapeHTML(str) {
 // Load file tree for a directory
 async function loadFileTree(path = '') {
     try {
-        const url = `/ui/api/browse/${ecosystem}/${packageName}/${version}?path=${encodeURIComponent(path)}`;
+        const url = `/ui/api/browse/${ecosystem}/${packageName}/${versionPath}?path=${encodeURIComponent(path)}`;
         const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to load directory');
 
@@ -137,7 +140,7 @@ function renderFileTree(files, basePath) {
 // Load and display file content
 async function loadFile(path) {
     try {
-        const url = `/ui/api/browse/${ecosystem}/${packageName}/${version}/file/${path}`;
+        const url = `/ui/api/browse/${ecosystem}/${packageName}/${versionPath}/file/${path}`;
         const response = await fetch(url);
         if (!response.ok) throw new Error('Failed to load file');
 

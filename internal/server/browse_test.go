@@ -450,8 +450,10 @@ func TestHandleBrowseSourcePage(t *testing.T) {
 	if !strings.Contains(body, "const packageName = 'test-browse'") {
 		t.Error("browse source page missing packageName variable")
 	}
-	if !strings.Contains(body, "const version = '1.0.0'") {
-		t.Error("browse source page missing version variable")
+	// The version reaches the browse API as one path segment, so the page holds
+	// its escaped form.
+	if !strings.Contains(body, "const versionPath = '1.0.0'") {
+		t.Error("browse source page missing versionPath variable")
 	}
 
 	// Verify content type
@@ -617,12 +619,13 @@ func TestHandleComparePage(t *testing.T) {
 
 	body := w.Body.String()
 
-	// Check that versions are set correctly in JavaScript
-	if !strings.Contains(body, "const fromVersion = '1.0.0'") {
-		t.Error("page should set fromVersion")
+	// Check that versions are set correctly in JavaScript. The compare API takes
+	// each version as a path segment, so the page holds their escaped forms.
+	if !strings.Contains(body, "const fromVersionPath = '1.0.0'") {
+		t.Error("page should set fromVersionPath")
 	}
-	if !strings.Contains(body, "const toVersion = '2.0.0'") {
-		t.Error("page should set toVersion")
+	if !strings.Contains(body, "const toVersionPath = '2.0.0'") {
+		t.Error("page should set toVersionPath")
 	}
 
 	// Test invalid format (missing separator)

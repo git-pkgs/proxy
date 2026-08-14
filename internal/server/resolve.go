@@ -2,10 +2,13 @@ package server
 
 import (
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
 	"unicode"
 
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/go-chi/chi/v5"
 )
 
 // maxPackagePathLen bounds the wildcard portion of package routes (name plus
@@ -13,22 +16,69 @@ import (
 // longer, so 512 leaves room without admitting pathological inputs.
 const maxPackagePathLen = 512
 
+// packagePathSegments validates the wildcard portion of a package route and
+// splits it into decoded path segments.
+func packagePathSegments(r *http.Request) ([]string, error) {
+	wildcard := chi.URLParam(r, "*")
+	encoded := wildcardIsEncoded(r)
+	if err := validatePackagePath(wildcard, encoded); err != nil {
+		return nil, err
+	}
+
+	return splitWildcardPath(wildcard, encoded), nil
+}
+
+// wildcardIsEncoded reports whether the chi wildcard for this request is still
+// percent-encoded.
+//
+// chi routes on r.URL.RawPath when it is set and on r.URL.Path otherwise, and
+// net/url only sets RawPath when the request's escaping differs from the
+// canonical encoding of the decoded path. A version such as "release%2F1" is
+// therefore routed raw, while "1.0%252B" (a version whose text contains a
+// literal "%2B") encodes canonically and arrives already decoded once. The
+// distinction decides whether the segments still need decoding: decoding the
+// second case again would turn it into "1.0+" and resolve a different version.
+func wildcardIsEncoded(r *http.Request) bool {
+	return r.URL.RawPath != ""
+}
+
 // validatePackagePath rejects wildcard package paths that cannot be valid in
 // any supported ecosystem. It is a coarse filter applied before database or
 // enrichment lookups; ecosystem-specific name rules are layered on top.
-func validatePackagePath(path string) error {
+//
+// encoded has the meaning described on wildcardIsEncoded.
+func validatePackagePath(path string, encoded bool) error {
 	if path == "" {
 		return fmt.Errorf("package name required")
 	}
 	if len(path) > maxPackagePathLen {
 		return fmt.Errorf("package path exceeds %d bytes", maxPackagePathLen)
 	}
-	for _, r := range path {
-		if r == 0 {
-			return fmt.Errorf("package path contains null byte")
-		}
-		if unicode.IsControl(r) {
-			return fmt.Errorf("package path contains control character %#U", r)
+	// Validate the decoded segments: the handlers work with decoded values, so
+	// an escape such as "%00" or "%2E%2E" must not slip past these checks.
+	for _, seg := range splitWildcardPath(path, encoded) {
+		// Each segment is checked both as the handlers see it and decoded once
+		// more: a segment can reach a handler with escapes intact, and the
+		// upstream registry is then the one that decodes them.
+		for _, value := range []string{seg, decodePathSegment(seg)} {
+			// A decoded segment can itself contain slashes (from "%2F"), and
+			// the segments are later rejoined into a package name that
+			// registries interpolate straight into an upstream URL. Check every
+			// path element, not just the segment as a whole, or
+			// "a%2F..%2F..%2Fb" traverses.
+			for _, elem := range strings.Split(value, "/") {
+				if elem == ".." {
+					return fmt.Errorf("package path contains parent directory segment")
+				}
+			}
+			for _, r := range value {
+				if r == 0 {
+					return fmt.Errorf("package path contains null byte")
+				}
+				if unicode.IsControl(r) {
+					return fmt.Errorf("package path contains control character %#U", r)
+				}
+			}
 		}
 	}
 	return nil
@@ -60,10 +110,37 @@ func resolvePackageName(db *database.DB, ecosystem string, segments []string) (n
 
 // splitWildcardPath splits a chi wildcard path value into segments,
 // trimming any leading/trailing slashes.
-func splitWildcardPath(path string) []string {
+//
+// When encoded is set the value is still percent-encoded (see
+// wildcardIsEncoded), so each segment is decoded after splitting. Splitting
+// first keeps an encoded "%2F" inside a name from being mistaken for a
+// separator. Decoding matters for versions such as "1.0%2Bbuild1", which must
+// reach the handlers as "1.0+build1" so that rebuilding the PURL yields the
+// value that was stored rather than a double-encoded one.
+func splitWildcardPath(path string, encoded bool) []string {
 	path = strings.Trim(path, "/")
 	if path == "" {
 		return nil
 	}
-	return strings.Split(path, "/")
+	segments := strings.Split(path, "/")
+	if !encoded {
+		return segments
+	}
+	for i, seg := range segments {
+		segments[i] = decodePathSegment(seg)
+	}
+	return segments
+}
+
+// decodePathSegment percent-decodes a single URL path segment, returning it
+// unchanged if it is not valid percent-encoding.
+func decodePathSegment(seg string) string {
+	if !strings.Contains(seg, "%") {
+		return seg
+	}
+	decoded, err := url.PathUnescape(seg)
+	if err != nil {
+		return seg
+	}
+	return decoded
 }

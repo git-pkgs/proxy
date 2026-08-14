@@ -139,12 +139,11 @@ type BulkResponse struct {
 // Resolves namespaced package names (Composer vendor/name, npm @scope/name) from the path.
 func (h *APIHandler) HandlePackagePath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
-	wildcard := chi.URLParam(r, "*")
-	if err := validatePackagePath(wildcard); err != nil {
+	segments, err := packagePathSegments(r)
+	if err != nil {
 		badRequest(w, err.Error())
 		return
 	}
-	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) == 0 {
 		badRequest(w, "ecosystem and name are required")
@@ -277,12 +276,11 @@ func (h *APIHandler) getVersion(w http.ResponseWriter, r *http.Request, ecosyste
 // Supports both {name} and {name}/{version} paths with namespaced package names.
 func (h *APIHandler) HandleVulnsPath(w http.ResponseWriter, r *http.Request) {
 	ecosystem := chi.URLParam(r, "ecosystem")
-	wildcard := chi.URLParam(r, "*")
-	if err := validatePackagePath(wildcard); err != nil {
+	segments, err := packagePathSegments(r)
+	if err != nil {
 		badRequest(w, err.Error())
 		return
 	}
-	segments := splitWildcardPath(wildcard)
 
 	if ecosystem == "" || len(segments) == 0 {
 		badRequest(w, "ecosystem and name are required")

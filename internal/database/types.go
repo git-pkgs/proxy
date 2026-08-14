@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"net/url"
 	"strings"
 	"time"
 )
@@ -47,10 +48,79 @@ type Version struct {
 // Version extracts the version string from the PURL.
 // e.g., "pkg:npm/lodash@4.17.21" -> "4.17.21"
 func (v *Version) Version() string {
-	if idx := strings.LastIndex(v.PURL, "@"); idx >= 0 {
-		return v.PURL[idx+1:]
+	return VersionFromPURL(v.PURL)
+}
+
+// EscapedVersion returns the version escaped for use as a single URL path
+// segment.
+//
+// Version returns decoded text, which is what should be shown to a user but is
+// not safe to drop into a link: html/template preserves reserved characters and
+// existing escapes in a URL, so "release/1" would split into two path segments,
+// "v1?build" would start a query string, and a literal "%2B" would be read back
+// as "+". Escaping here and decoding in splitWildcardPath round-trips the value,
+// so the link resolves to the version that was stored.
+func (v *Version) EscapedVersion() string {
+	return url.PathEscape(v.Version())
+}
+
+// DisplayPURL returns the PURL with its path components percent-decoded, for
+// showing in the UI. The stored PURL keeps the canonical encoding (which is
+// what the API and all lookups use); this is only a readable rendering, so that
+// a version like "7.91+dfsg1-2ubuntu0.1" is not shown as "7.91%2Bdfsg1-2ubuntu0.1"
+// and an npm scope is shown as "@babel" rather than "%40babel". Qualifiers and
+// subpath keep their encoding, since decoding those would be ambiguous.
+func (v *Version) DisplayPURL() string {
+	base, suffix := v.PURL, ""
+	if i := strings.IndexAny(base, "?#"); i >= 0 {
+		base, suffix = base[:i], base[i:]
 	}
-	return ""
+
+	name, version := base, ""
+	if idx := strings.LastIndex(base, "@"); idx >= 0 {
+		name, version = base[:idx], "@"+decodePURLComponent(base[idx+1:])
+	}
+
+	parts := strings.Split(name, "/")
+	for i, part := range parts {
+		parts[i] = decodePURLComponent(part)
+	}
+	return strings.Join(parts, "/") + version + suffix
+}
+
+// VersionFromPURL extracts the decoded version string from a PURL.
+//
+// PURL percent-encodes characters that are not safe in a path component, so a
+// Debian version like "7.91+dfsg1-2ubuntu0.1" is stored as
+// "pkg:deb/nmap@7.91%2Bdfsg1-2ubuntu0.1". The raw substring after "@" is
+// therefore not the version: it must be percent-decoded before being displayed
+// or used to build a URL, otherwise "%2B" leaks into the UI and round-tripping
+// the value back into a PURL double-encodes it.
+//
+// e.g., "pkg:npm/lodash@4.17.21" -> "4.17.21"
+func VersionFromPURL(p string) string {
+	// Qualifiers ("?key=value") and subpath ("#path") follow the version.
+	if i := strings.IndexAny(p, "?#"); i >= 0 {
+		p = p[:i]
+	}
+	idx := strings.LastIndex(p, "@")
+	if idx < 0 {
+		return ""
+	}
+	return decodePURLComponent(p[idx+1:])
+}
+
+// decodePURLComponent percent-decodes a single PURL path component, returning
+// the input unchanged if it is not valid percent-encoding.
+func decodePURLComponent(s string) string {
+	if !strings.Contains(s, "%") {
+		return s
+	}
+	decoded, err := url.PathUnescape(s)
+	if err != nil {
+		return s
+	}
+	return decoded
 }
 
 // Artifact represents a cached artifact in the database.
