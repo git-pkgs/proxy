@@ -26,6 +26,7 @@ func TestSwiftPackageReleasesRewritesRegistryURLs(t *testing.T) {
 		gotAccept = r.Header.Get("Accept")
 		w.Header().Set("Content-Type", "application/json; charset=utf-8")
 		w.Header().Set("Content-Version", "1")
+		w.Header().Add("Link", `</registry/apple/swift-argument-parser?page=2>; rel="next"`)
 		_, _ = io.WriteString(w, `{"releases":{"1.2.0":{"url":"/registry/apple/swift-argument-parser/1.2.0"},"1.1.0":{}}}`)
 	}))
 	defer upstream.Close()
@@ -45,6 +46,9 @@ func TestSwiftPackageReleasesRewritesRegistryURLs(t *testing.T) {
 	}
 	if got := w.Header().Get("Content-Version"); got != "1" {
 		t.Errorf("Content-Version = %q, want 1", got)
+	}
+	if got := w.Header().Get("Link"); got != `<https://proxy.example/swift/apple/swift-argument-parser?page=2>; rel="next"` {
+		t.Errorf("Link = %q", got)
 	}
 
 	var body struct {
@@ -330,19 +334,28 @@ func TestSwiftSourceArchiveRequiresReleaseMetadata(t *testing.T) {
 	}
 }
 
-func TestSwiftSourceArchiveColdHeadSendsArchiveAccept(t *testing.T) {
+func TestSwiftSourceArchiveColdHeadUsesRangeGetAcrossRedirect(t *testing.T) {
 	checksum := strings.Repeat("a", sha256.Size*2)
 	var archiveAccept string
 	var archiveMethod string
+	var archiveRange string
+	download := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		archiveMethod = r.Method
+		archiveRange = r.Header.Get("Range")
+		w.Header().Set("Content-Range", "bytes 0-0/123")
+		w.WriteHeader(http.StatusPartialContent)
+		_, _ = w.Write([]byte("x"))
+	}))
+	defer download.Close()
+
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/apple/example/1.2.3":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = fmt.Fprintf(w, `{"id":"apple.example","version":"1.2.3","resources":[{"name":"source-archive","type":"application/zip","checksum":%q}]}`, checksum)
 		case "/apple/example/1.2.3.zip":
-			archiveMethod = r.Method
 			archiveAccept = r.Header.Get("Accept")
-			w.Header().Set("Content-Length", "123")
+			http.Redirect(w, r, download.URL, http.StatusSeeOther)
 		default:
 			http.NotFound(w, r)
 		}
@@ -359,8 +372,11 @@ func TestSwiftSourceArchiveColdHeadSendsArchiveAccept(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
 	}
-	if archiveMethod != http.MethodHead {
-		t.Errorf("upstream method = %q, want HEAD", archiveMethod)
+	if archiveMethod != http.MethodGet {
+		t.Errorf("download method = %q, want GET", archiveMethod)
+	}
+	if archiveRange != "bytes=0-0" {
+		t.Errorf("download Range = %q, want bytes=0-0", archiveRange)
 	}
 	if archiveAccept != swiftAcceptArchive {
 		t.Errorf("upstream Accept = %q, want %q", archiveAccept, swiftAcceptArchive)

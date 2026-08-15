@@ -65,9 +65,8 @@ func (h *SwiftHandler) handlePackageReleases(w http.ResponseWriter, r *http.Requ
 	}
 
 	upstreamURL := h.buildUpstreamURL(scope, name, "", "", r.URL.RawQuery)
-	cacheKey := swiftMetadataCacheKey(scope, name, "releases", r.URL.RawQuery)
-	body, contentType, err := h.proxy.FetchOrCacheMetadata(
-		r.Context(), "swift", cacheKey, upstreamURL, requestAccept(r, swiftAcceptJSON),
+	body, contentType, responseHeaders, err := h.fetchMetadataWithHeaders(
+		r.Context(), upstreamURL, requestAccept(r, swiftAcceptJSON),
 	)
 	if err != nil {
 		h.writeMetadataError(w, err)
@@ -78,6 +77,9 @@ func (h *SwiftHandler) handlePackageReleases(w http.ResponseWriter, r *http.Requ
 	if err != nil {
 		h.proxy.Logger.Warn("failed to rewrite Swift release URLs", "error", err)
 		rewritten = body
+	}
+	for _, link := range responseHeaders.Values("Link") {
+		w.Header().Add("Link", h.rewriteLinkHeader(link, upstreamURL))
 	}
 	writeSwiftMetadata(w, r, rewritten, contentType)
 }
@@ -200,7 +202,7 @@ func (h *SwiftHandler) handleSourceArchiveHead(
 		return
 	}
 
-	size, err := h.headSourceArchive(r.Context(), upstreamURL, requestAccept(r, swiftAcceptArchive))
+	size, err := h.probeSourceArchive(r.Context(), upstreamURL, requestAccept(r, swiftAcceptArchive))
 	if err != nil {
 		h.writeArtifactError(w, err)
 		return
@@ -214,12 +216,13 @@ func (h *SwiftHandler) handleSourceArchiveHead(
 	w.WriteHeader(http.StatusOK)
 }
 
-func (h *SwiftHandler) headSourceArchive(ctx context.Context, upstreamURL, accept string) (int64, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodHead, upstreamURL, nil)
+func (h *SwiftHandler) probeSourceArchive(ctx context.Context, upstreamURL, accept string) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL, nil)
 	if err != nil {
 		return 0, fmt.Errorf("creating upstream archive request: %w", err)
 	}
 	req.Header.Set("Accept", accept)
+	req.Header.Set("Range", "bytes=0-0")
 	h.proxy.applyUpstreamAuth(req)
 
 	resp, err := h.proxy.HTTPClient.Do(req)
@@ -231,8 +234,19 @@ func (h *SwiftHandler) headSourceArchive(ctx context.Context, upstreamURL, accep
 	if resp.StatusCode == http.StatusNotFound {
 		return 0, ErrUpstreamNotFound
 	}
-	if resp.StatusCode != http.StatusOK {
+	if resp.StatusCode != http.StatusOK && resp.StatusCode != http.StatusPartialContent {
 		return 0, fmt.Errorf("upstream archive returned %d", resp.StatusCode)
+	}
+
+	if resp.StatusCode == http.StatusPartialContent {
+		_, total, found := strings.Cut(resp.Header.Get("Content-Range"), "/")
+		if !found || total == "*" {
+			return -1, nil
+		}
+		if parsed, parseErr := strconv.ParseInt(total, 10, 64); parseErr == nil {
+			return parsed, nil
+		}
+		return -1, nil
 	}
 
 	size := int64(-1)
@@ -242,6 +256,41 @@ func (h *SwiftHandler) headSourceArchive(ctx context.Context, upstreamURL, accep
 		}
 	}
 	return size, nil
+}
+
+func (h *SwiftHandler) fetchMetadataWithHeaders(
+	ctx context.Context,
+	upstreamURL, accept string,
+) ([]byte, string, http.Header, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL, nil)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("creating upstream metadata request: %w", err)
+	}
+	req.Header.Set("Accept", accept)
+	h.proxy.applyUpstreamAuth(req)
+
+	resp, err := h.proxy.HTTPClient.Do(req)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("requesting upstream metadata: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return nil, "", nil, ErrUpstreamNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return nil, "", nil, fmt.Errorf("upstream metadata returned %d", resp.StatusCode)
+	}
+
+	body, err := h.proxy.ReadMetadata(resp.Body)
+	if err != nil {
+		return nil, "", nil, fmt.Errorf("reading upstream metadata: %w", err)
+	}
+	contentType := resp.Header.Get("Content-Type")
+	if contentType == "" {
+		contentType = contentTypeJSON
+	}
+	return body, contentType, resp.Header.Clone(), nil
 }
 
 type swiftReleaseMetadata struct {
