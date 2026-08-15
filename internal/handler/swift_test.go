@@ -33,7 +33,7 @@ func TestSwiftPackageReleasesRewritesRegistryURLs(t *testing.T) {
 
 	proxy, _, _, _ := setupTestProxy(t)
 	handler := NewSwiftHandler(proxy, "https://proxy.example", upstream.URL+"/registry").Routes()
-	req := httptest.NewRequest(http.MethodGet, "/apple/swift-argument-parser", nil)
+	req := httptest.NewRequest(http.MethodGet, "/APPLE/SWIFT-ARGUMENT-PARSER", nil)
 	req.Header.Set("Accept", swiftAcceptJSON)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -83,7 +83,7 @@ func TestSwiftReleaseMetadataSupportsJSONExtensionAndHead(t *testing.T) {
 	handler := NewSwiftHandler(proxy, "https://proxy.example", upstream.URL+"/registry").Routes()
 
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
-		req := httptest.NewRequest(method, "/apple/example/1.2.3.json", nil)
+		req := httptest.NewRequest(method, "/APPLE/EXAMPLE/1.2.3.json", nil)
 		w := httptest.NewRecorder()
 		handler.ServeHTTP(w, req)
 		if w.Code != http.StatusOK {
@@ -121,7 +121,7 @@ func TestSwiftManifestProxiesQueryAndRewritesLinks(t *testing.T) {
 
 	proxy, _, _, _ := setupTestProxy(t)
 	handler := NewSwiftHandler(proxy, "https://proxy.example", upstream.URL+"/registry").Routes()
-	req := httptest.NewRequest(http.MethodGet, "/apple/example/1.2.3/Package.swift?swift-version=5.9", nil)
+	req := httptest.NewRequest(http.MethodGet, "/APPLE/EXAMPLE/1.2.3/Package.swift?swift-version=5.9", nil)
 	req.Header.Set("Accept", swiftAcceptManifest)
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, req)
@@ -268,6 +268,65 @@ func TestSwiftSourceArchiveRejectsChecksumMismatch(t *testing.T) {
 	}
 	if cached != nil {
 		t.Error("mismatched archive gained a cache record")
+	}
+}
+
+func TestSwiftSourceArchiveCanonicalizesPackageIdentity(t *testing.T) {
+	archive := []byte("swift source archive")
+	checksumBytes := sha256.Sum256(archive)
+	checksum := hex.EncodeToString(checksumBytes[:])
+	var metadataPaths []string
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		metadataPaths = append(metadataPaths, r.URL.Path)
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"id":"apple.example","version":"1.2.3","resources":[{"name":"source-archive","type":"application/zip","checksum":%q}]}`, checksum)
+	}))
+	defer upstream.Close()
+
+	proxy, db, store, fetcher := setupTestProxy(t)
+	handler := NewSwiftHandler(proxy, "https://proxy.example", upstream.URL).Routes()
+	requestArchive := func(path string) {
+		fetcher.artifact = &fetch.Artifact{
+			Body:        io.NopCloser(strings.NewReader(string(archive))),
+			Size:        int64(len(archive)),
+			ContentType: "application/zip",
+		}
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("GET %s status = %d, want 200; body: %s", path, w.Code, w.Body.String())
+		}
+	}
+
+	requestArchive("/apple/example/1.2.3.zip")
+	requestArchive("/APPLE/EXAMPLE/1.2.3.zip")
+
+	if len(store.files) != 1 {
+		t.Errorf("cached files = %d, want 1", len(store.files))
+	}
+	for _, path := range metadataPaths {
+		if path != "/apple/example/1.2.3" {
+			t.Errorf("metadata path = %q, want canonical lowercase path", path)
+		}
+	}
+
+	canonicalPURL := packageurl.MakeString("swift", "apple/example", "")
+	canonical, err := db.GetPackageByPURL(canonicalPURL)
+	if err != nil {
+		t.Fatalf("getting canonical package: %v", err)
+	}
+	if canonical == nil {
+		t.Fatalf("canonical package %q not found", canonicalPURL)
+	}
+
+	nonCanonicalPURL := packageurl.MakeString("swift", "APPLE/EXAMPLE", "")
+	nonCanonical, err := db.GetPackageByPURL(nonCanonicalPURL)
+	if err != nil {
+		t.Fatalf("getting non-canonical package: %v", err)
+	}
+	if nonCanonical != nil {
+		t.Errorf("non-canonical package %q was cached", nonCanonicalPURL)
 	}
 }
 
