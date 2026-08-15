@@ -461,6 +461,20 @@ func TestEcosystemBadgeLabel(t *testing.T) {
 	}
 }
 
+func TestSwiftRegistryInstructionsAllowLocalHTTP(t *testing.T) {
+	registries := getRegistryConfigs("http://localhost:8080")
+	for _, registry := range registries {
+		if registry.ID != "swift" {
+			continue
+		}
+		if !strings.Contains(string(registry.Instructions), "--allow-insecure-http") {
+			t.Error("Swift HTTP instructions do not allow the insecure local registry")
+		}
+		return
+	}
+	t.Fatal("Swift registry instructions not found")
+}
+
 func TestEcosystemBadgeClasses(t *testing.T) {
 	// Every supported ecosystem should return a non-empty class string
 	ecosystems := supportedEcosystems()

@@ -16,6 +16,7 @@
 //   - /conda/*    - Conda/Anaconda protocol
 //   - /cran/*     - CRAN (R) protocol
 //   - /julia/*    - Julia Pkg server protocol
+//   - /swift/*    - Swift Package Registry protocol
 //   - /v2/*       - OCI/Docker container registry protocol
 //   - /debian/*   - Debian/APT repository protocol
 //   - /rpm/*      - RPM/Yum repository protocol
@@ -69,8 +70,8 @@ import (
 	upstreamhttp "github.com/git-pkgs/proxy/internal/httpclient"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/mirror"
+	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/proxy/internal/storage"
-	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
 	"github.com/git-pkgs/registries/safehttp"
 	"github.com/git-pkgs/spdx"
@@ -259,6 +260,7 @@ func (s *Server) Start() error {
 	condaHandler := handler.NewCondaHandler(proxy, s.cfg.BaseURL)
 	cranHandler := handler.NewCRANHandler(proxy, s.cfg.BaseURL)
 	juliaHandler := handler.NewJuliaHandler(proxy, s.cfg.BaseURL)
+	swiftHandler := handler.NewSwiftHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Swift)
 	containerHandler := handler.NewContainerHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.OCI)
 	helmHandler := handler.NewHelmHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm)
 	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Debian)
@@ -279,6 +281,7 @@ func (s *Server) Start() error {
 	r.Mount("/conda", http.StripPrefix("/conda", condaHandler.Routes()))
 	r.Mount("/cran", http.StripPrefix("/cran", cranHandler.Routes()))
 	r.Mount("/julia", http.StripPrefix("/julia", juliaHandler.Routes()))
+	r.Mount("/swift", http.StripPrefix("/swift", swiftHandler.Routes()))
 	r.Mount("/v2", http.StripPrefix("/v2", containerHandler.Routes()))
 	r.Mount("/helm", http.StripPrefix("/helm", helmHandler.Routes()))
 	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
@@ -813,7 +816,7 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 		return
 	}
 
-	versionPURL := purl.MakePURLString(ecosystem, name, version)
+	versionPURL := packageurl.MakeString(ecosystem, name, version)
 	ver, err := s.db.GetVersionByPURL(versionPURL)
 	if err != nil || ver == nil {
 		s.logger.Error("failed to get version", "error", err)

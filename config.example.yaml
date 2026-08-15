@@ -99,6 +99,9 @@ upstream:
   # Cargo crate download URL
   cargo_download: "https://static.crates.io/crates"
 
+  # Swift Package Registry URL (used by /swift endpoint)
+  swift: "https://tuist.dev/api/registry/swift"
+
   # Debian/APT repository URL (used by /debian endpoint)
   debian: "http://deb.debian.org/debian"
 

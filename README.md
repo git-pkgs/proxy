@@ -39,6 +39,7 @@ Resolution order: package override, then ecosystem override, then global default
 | Conda | Python/R | Yes | ✓ |
 | CRAN | R | | ✓ |
 | Julia | Julia | | ✓ |
+| Swift | Swift | | ✓ |
 | Container | Docker/OCI | | ✓ |
 | Debian | Debian/Ubuntu | | ✓ |
 | RPM | RHEL/Fedora | | ✓ |
@@ -47,7 +48,6 @@ Resolution order: package override, then ecosystem override, then global default
 | Chef | Chef | | ✗ |
 | Generic | Any | | ✗ |
 | Helm | Kubernetes | | ✗ |
-| Swift | Swift | | ✗ |
 | Vagrant | Vagrant | | ✗ |
 
 Cooldown requires publish timestamps in metadata. Registries without a "Yes" in the cooldown column either don't expose timestamps or haven't been wired up yet.
@@ -340,6 +340,25 @@ ENV["JULIA_PKG_SERVER"] = "http://localhost:8080/julia"
 using Pkg; Pkg.update()
 ```
 
+### Swift
+
+Configure the proxy as the default registry for the current Swift package:
+
+```bash
+swift package-registry set --allow-insecure-http http://localhost:8080/swift
+```
+
+Registry dependencies use their scoped package identifier in `Package.swift`:
+
+```swift
+dependencies: [
+    .package(id: "apple.swift-argument-parser", from: "1.2.0")
+]
+```
+
+The proxy supports dependency resolution and source downloads. Publishing with
+`swift package-registry publish` is not supported.
+
 ### Docker / Container Registry
 
 Configure Docker to use the proxy as a registry mirror in `/etc/docker/daemon.json`:
@@ -473,6 +492,7 @@ PROXY_DATABASE_URL=postgres://user:pass@localhost/proxy?sslmode=disable
 PROXY_LOG_LEVEL=info
 PROXY_LOG_FORMAT=text
 PROXY_ACCESS_LOG_PATH=/var/log/proxy/access.jsonl
+PROXY_UPSTREAM_SWIFT=https://tuist.dev/api/registry/swift
 ```
 
 ### Configuration File
@@ -500,6 +520,7 @@ access_log:
 upstream:
   npm: "https://registry.npmjs.org"
   cargo: "https://index.crates.io"
+  swift: "https://tuist.dev/api/registry/swift"
 
 # Optional: version cooldown (see above)
 cooldown:
@@ -669,6 +690,7 @@ Recently cached:
 | `GET /conda/*` | Conda/Anaconda protocol |
 | `GET /cran/*` | CRAN (R) protocol |
 | `GET /julia/*` | Julia Pkg server protocol |
+| `GET /swift/*` | Swift Package Registry v1 protocol |
 | `GET /helm/{repository}/*` | HTTP Helm chart repository protocol |
 | `GET /v2/*` | OCI/Docker registry protocol |
 | `GET /debian/*` | Debian/APT repository protocol |

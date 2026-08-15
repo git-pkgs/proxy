@@ -313,6 +313,10 @@ type UpstreamConfig struct {
 	// Default: https://static.crates.io/crates
 	CargoDownload string `json:"cargo_download" yaml:"cargo_download"`
 
+	// Swift is the upstream Swift Package Registry URL.
+	// Default: https://tuist.dev/api/registry/swift
+	Swift string `json:"swift" yaml:"swift"`
+
 	// Debian is the upstream APT repository base URL.
 	// Example: http://archive.ubuntu.com/ubuntu would get Ubuntu.
 	// Default: http://deb.debian.org/debian
@@ -475,6 +479,7 @@ func Default() *Config {
 			GradlePluginPortal: "https://plugins.gradle.org/m2",
 			Cargo:              "https://index.crates.io",
 			CargoDownload:      "https://static.crates.io/crates",
+			Swift:              "https://tuist.dev/api/registry/swift",
 			Debian:             "http://deb.debian.org/debian",
 		},
 		Gradle: GradleConfig{
@@ -546,6 +551,7 @@ func setEnvBool(dst *bool, key string) {
 //   - PROXY_LOG_LEVEL
 //   - PROXY_LOG_FORMAT
 //   - PROXY_ACCESS_LOG_PATH
+//   - PROXY_UPSTREAM_SWIFT
 //   - PROXY_HEALTH_STORAGE_PROBE_INTERVAL
 func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Listen, "PROXY_LISTEN")
@@ -565,6 +571,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.AccessLog.Path, "PROXY_ACCESS_LOG_PATH")
 	setEnvString(&c.Upstream.Maven, "PROXY_UPSTREAM_MAVEN")
 	setEnvString(&c.Upstream.GradlePluginPortal, "PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL")
+	setEnvString(&c.Upstream.Swift, "PROXY_UPSTREAM_SWIFT")
 	setEnvString(&c.Upstream.Debian, "PROXY_UPSTREAM_DEBIAN")
 	setEnvString(&c.Cooldown.Default, "PROXY_COOLDOWN_DEFAULT")
 	setEnvBool(&c.CacheMetadata, "PROXY_CACHE_METADATA")
