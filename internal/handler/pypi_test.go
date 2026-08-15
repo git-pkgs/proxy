@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -290,5 +291,62 @@ func TestPyPIDownloadCooldown(t *testing.T) {
 				t.Error("fetched a version that is still inside the cooldown window")
 			}
 		})
+	}
+}
+
+// TestPyPIDownloadCooldownMetadataCache ensures that repeated downloads that
+// trigger cooldown filtering reuse the cached PyPI JSON metadata instead of
+// fetching it from upstream once per download.
+func TestPyPIDownloadCooldownMetadataCache(t *testing.T) {
+	now := time.Now()
+	releases := `{"releases": {
+		"1.0.0": [{"upload_time_iso_8601": "` + now.Add(-30*24*time.Hour).Format(time.RFC3339) + `"}],
+		"2.0.0": [{"upload_time_iso_8601": "` + now.Add(-1*time.Hour).Format(time.RFC3339) + `"}]
+	}}`
+
+	var metadataRequests atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/pypi/newpkg/json" {
+			metadataRequests.Add(1)
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, releases)
+			return
+		}
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = io.WriteString(w, "package data")
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, fetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("package data")),
+		ContentType: "application/octet-stream",
+	}
+
+	h := &PyPIHandler{
+		proxy:       proxy,
+		upstreamURL: upstream.URL,
+		proxyURL:    "http://localhost",
+	}
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	// Two downloads of the same package: one outside the cooldown window
+	// (served) and one inside (withheld). Both go through the download path
+	// that resolves filtered versions.
+	for _, filename := range []string{"newpkg-1.0.0.tar.gz", "newpkg-2.0.0.tar.gz"} {
+		resp, err := http.Get(srv.URL + "/packages/packages/ab/cd/ef0123456789/" + filename)
+		if err != nil {
+			t.Fatalf("request failed: %v", err)
+		}
+		_ = resp.Body.Close()
+	}
+
+	if got := metadataRequests.Load(); got != 1 {
+		t.Errorf("upstream metadata JSON requests = %d, want 1 (repeated downloads should reuse the cached metadata)", got)
 	}
 }

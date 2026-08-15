@@ -110,24 +110,14 @@ func (h *PyPIHandler) handleSimplePackage(w http.ResponseWriter, r *http.Request
 // that should be filtered out due to cooldown.
 func (h *PyPIHandler) fetchFilteredVersions(r *http.Request, name string) map[string]bool {
 	jsonURL := fmt.Sprintf("%s/pypi/%s/json", h.upstreamURL, name)
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, jsonURL, nil)
-	if err != nil {
-		return nil
-	}
-	req.Header.Set("Accept", "application/json")
 
-	resp, err := h.proxy.HTTPClient.Do(req)
+	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "pypi", name+"/json", jsonURL)
 	if err != nil {
-		return nil
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
 		return nil
 	}
 
 	var metadata map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+	if err := json.Unmarshal(body, &metadata); err != nil {
 		return nil
 	}
 
