@@ -194,6 +194,11 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 	if artifact == nil {
 		return nil, nil
 	}
+	checks, err := newIntegrityChecks(artifact.ContentHash.String, artifact.Integrity.String)
+	if err != nil {
+		p.rejectUnusableCacheRecord(artifact, versionPURL, filename, err)
+		return nil, nil
+	}
 
 	result := &CacheResult{
 		Size:        artifact.Size.Int64,
@@ -225,7 +230,7 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 		return nil, nil
 	}
 
-	result.Reader = newVerifyingReader(reader, artifact.ContentHash.String, artifact.Integrity.String,
+	result.Reader, err = checks.wrap(reader,
 		func(reason string) {
 			p.Logger.Error("cached artifact failed integrity check",
 				"purl", versionPURL, "filename", filename,
@@ -235,6 +240,11 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 				p.Logger.Warn("failed to clear corrupt artifact from cache", "error", err)
 			}
 		})
+	if err != nil {
+		_ = reader.Close()
+		p.rejectUnusableCacheRecord(artifact, versionPURL, filename, err)
+		return nil, nil
+	}
 	p.recordCacheHit(artifact.Ecosystem, versionPURL, filename)
 	return result, nil
 }
@@ -262,6 +272,16 @@ func rewriteSignedURLHost(signed, baseURL string) string {
 func (p *Proxy) recordCacheHit(ecosystem, versionPURL, filename string) {
 	_ = p.DB.RecordArtifactHit(versionPURL, filename)
 	metrics.RecordCacheHit(ecosystem)
+}
+
+func (p *Proxy) rejectUnusableCacheRecord(artifact *database.CachedArtifact, versionPURL, filename string, cause error) {
+	p.Logger.Warn("cached artifact has unusable integrity metadata",
+		"purl", versionPURL, "filename", filename,
+		"path", artifact.StoragePath, "error", cause)
+	metrics.RecordIntegrityFailure(artifact.Ecosystem)
+	if err := p.DB.ClearArtifactCache(versionPURL, filename); err != nil {
+		p.Logger.Warn("failed to clear unusable artifact from cache", "error", err)
+	}
 }
 
 func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL string) (*CacheResult, error) {

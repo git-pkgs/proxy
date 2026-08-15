@@ -10,6 +10,7 @@ require (
 	github.com/git-pkgs/archives v0.5.1
 	github.com/git-pkgs/cooldown v0.1.1
 	github.com/git-pkgs/enrichment v0.6.5
+	github.com/git-pkgs/integrity v0.1.0
 	github.com/git-pkgs/magic v0.2.0
 	github.com/git-pkgs/purl v0.1.17
 	github.com/git-pkgs/registries v0.7.0

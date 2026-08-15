@@ -8,6 +8,11 @@ import (
 	"time"
 )
 
+const (
+	testContentHash = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+	testIntegrity   = "sha512-z4PhNX7vuL3xVChQ1m2AB9Yg5AULVxXcg/SpIdNs6c5H0NE8XYXysP+DGNKHfuwvY7kxvUdBeoGlODJ6+SfaPg=="
+)
+
 func TestCreateAndOpen(t *testing.T) {
 	dir := t.TempDir()
 	dbPath := filepath.Join(dir, "test.db")
@@ -132,7 +137,7 @@ func TestVersionCRUD(t *testing.T) {
 		v := &Version{
 			PURL:        "pkg:npm/lodash@4.17.21",
 			PackagePURL: "pkg:npm/lodash",
-			Integrity:   sql.NullString{String: "sha512-abc123", Valid: true},
+			Integrity:   sql.NullString{String: testIntegrity, Valid: true},
 		}
 
 		err = db.UpsertVersion(v)
@@ -200,7 +205,7 @@ func TestArtifactCRUD(t *testing.T) {
 			t.Error("expected artifact to not be cached yet")
 		}
 
-		err = db.MarkArtifactCached(versionPURL, "lodash-4.17.21.tgz", "/cache/npm/lodash-4.17.21.tgz", "sha256-abc", 12345, "application/gzip")
+		err = db.MarkArtifactCached(versionPURL, "lodash-4.17.21.tgz", "/cache/npm/lodash-4.17.21.tgz", testContentHash, 12345, "application/gzip")
 		if err != nil {
 			t.Fatalf("MarkArtifactCached failed: %v", err)
 		}
@@ -257,7 +262,7 @@ func TestGetCachedArtifact(t *testing.T) {
 		}
 
 		if err := db.MarkArtifactCached(versionPURL, filename, "/cache/npm/"+filename,
-			"sha256-abc", 12345, "application/gzip"); err != nil {
+			testContentHash, 12345, "application/gzip"); err != nil {
 			t.Fatalf("MarkArtifactCached failed: %v", err)
 		}
 
@@ -274,7 +279,7 @@ func TestGetCachedArtifact(t *testing.T) {
 		if cached.StoragePath != "/cache/npm/"+filename {
 			t.Errorf("expected cached storage path, got %q", cached.StoragePath)
 		}
-		if cached.ContentHash.String != "sha256-abc" {
+		if cached.ContentHash.String != testContentHash {
 			t.Errorf("expected cached content hash, got %q", cached.ContentHash.String)
 		}
 		if cached.Size.Int64 != 12345 {
@@ -283,7 +288,7 @@ func TestGetCachedArtifact(t *testing.T) {
 		if cached.ContentType.String != "application/gzip" {
 			t.Errorf("expected cached content type, got %q", cached.ContentType.String)
 		}
-		if cached.Integrity.String != "sha512-abc123" {
+		if cached.Integrity.String != testIntegrity {
 			t.Errorf("expected cached integrity, got %q", cached.Integrity.String)
 		}
 
@@ -306,7 +311,7 @@ func seedCachedArtifactTestData(t *testing.T, db *DB, packagePURL, versionPURL, 
 	if err := db.UpsertVersion(&Version{
 		PURL:        versionPURL,
 		PackagePURL: packagePURL,
-		Integrity:   sql.NullString{String: "sha512-abc123", Valid: true},
+		Integrity:   sql.NullString{String: testIntegrity, Valid: true},
 	}); err != nil {
 		t.Fatalf("UpsertVersion failed: %v", err)
 	}
