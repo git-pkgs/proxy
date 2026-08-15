@@ -227,10 +227,10 @@ type cachedArtifactRow struct {
 
 func (row cachedArtifactRow) artifact(versionPURL, filename string) (*CachedArtifact, error) {
 	if !row.ContentHash.Valid || row.ContentHash.String == "" {
-		return nil, fmt.Errorf("cached artifact content hash is missing")
+		return nil, fmt.Errorf("cached artifact for %q, filename %q: content hash is missing", versionPURL, filename)
 	}
 	if !row.Size.Valid {
-		return nil, fmt.Errorf("cached artifact size is missing")
+		return nil, fmt.Errorf("cached artifact for %q, filename %q: size is missing", versionPURL, filename)
 	}
 
 	mediaType := ""
@@ -245,7 +245,7 @@ func (row cachedArtifactRow) artifact(versionPURL, filename string) (*CachedArti
 		mediaType,
 	)
 	if err != nil {
-		return nil, fmt.Errorf("invalid cached artifact: %w", err)
+		return nil, fmt.Errorf("invalid cached artifact for %q, filename %q: %w", versionPURL, filename, err)
 	}
 
 	return &CachedArtifact{

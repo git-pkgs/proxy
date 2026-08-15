@@ -365,6 +365,12 @@ func TestCachedArtifactRowArtifact(t *testing.T) {
 				if !strings.Contains(err.Error(), test.wantErr) {
 					t.Errorf("error = %q, want %q", err, test.wantErr)
 				}
+				if !strings.Contains(err.Error(), test.versionPURL) {
+					t.Errorf("error = %q, want version PURL %q", err, test.versionPURL)
+				}
+				if !strings.Contains(err.Error(), "example.tgz") {
+					t.Errorf("error = %q, want filename", err)
+				}
 				return
 			}
 			if err != nil {
