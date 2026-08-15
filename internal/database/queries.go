@@ -4,6 +4,9 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/git-pkgs/artifacts"
+	"github.com/opencontainers/go-digest"
 )
 
 // Package queries
@@ -193,7 +196,7 @@ func (db *DB) GetArtifact(versionPURL, filename string) (*Artifact, error) {
 
 // GetCachedArtifact returns the fields needed to serve a cached artifact.
 func (db *DB) GetCachedArtifact(packagePURL, versionPURL, filename string) (*CachedArtifact, error) {
-	var artifact CachedArtifact
+	var row cachedArtifactRow
 	query := db.Rebind(`
 		SELECT packages.ecosystem, artifacts.storage_path, artifacts.content_hash, artifacts.size,
 		       artifacts.content_type, versions.integrity
@@ -203,14 +206,54 @@ func (db *DB) GetCachedArtifact(packagePURL, versionPURL, filename string) (*Cac
 		WHERE packages.purl = ? AND artifacts.version_purl = ? AND artifacts.filename = ?
 		  AND artifacts.storage_path IS NOT NULL AND artifacts.fetched_at IS NOT NULL
 	`)
-	err := db.Get(&artifact, query, packagePURL, versionPURL, filename)
+	err := db.Get(&row, query, packagePURL, versionPURL, filename)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &artifact, nil
+	return row.artifact(versionPURL, filename)
+}
+
+type cachedArtifactRow struct {
+	Ecosystem   string         `db:"ecosystem"`
+	StoragePath string         `db:"storage_path"`
+	ContentHash sql.NullString `db:"content_hash"`
+	Size        sql.NullInt64  `db:"size"`
+	ContentType sql.NullString `db:"content_type"`
+	Integrity   sql.NullString `db:"integrity"`
+}
+
+func (row cachedArtifactRow) artifact(versionPURL, filename string) (*CachedArtifact, error) {
+	if !row.ContentHash.Valid || row.ContentHash.String == "" {
+		return nil, fmt.Errorf("cached artifact content hash is missing")
+	}
+	if !row.Size.Valid {
+		return nil, fmt.Errorf("cached artifact size is missing")
+	}
+
+	mediaType := ""
+	if row.ContentType.Valid {
+		mediaType = row.ContentType.String
+	}
+	sharedArtifact, err := artifacts.New(
+		versionPURL,
+		digest.Digest("sha256:"+row.ContentHash.String),
+		row.Size.Int64,
+		filename,
+		mediaType,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("invalid cached artifact: %w", err)
+	}
+
+	return &CachedArtifact{
+		Ecosystem:   row.Ecosystem,
+		StoragePath: row.StoragePath,
+		Artifact:    sharedArtifact,
+		Integrity:   row.Integrity,
+	}, nil
 }
 
 func (db *DB) GetArtifactByPath(storagePath string) (*Artifact, error) {

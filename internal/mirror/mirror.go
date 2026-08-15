@@ -220,9 +220,9 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 			"ecosystem", pv.Ecosystem, "name", pv.Name, "version", pv.Version)
 	} else {
 		tracker.completed.Add(1)
-		tracker.bytes.Add(result.Size)
+		tracker.bytes.Add(result.Artifact.Size)
 		m.logger.Info("mirrored",
 			"ecosystem", pv.Ecosystem, "name", pv.Name, "version", pv.Version,
-			"size", result.Size)
+			"size", result.Artifact.Size)
 	}
 }

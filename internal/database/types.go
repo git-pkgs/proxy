@@ -5,6 +5,8 @@ import (
 	"net/url"
 	"strings"
 	"time"
+
+	"github.com/git-pkgs/artifacts"
 )
 
 // Package represents a package in the database.
@@ -148,12 +150,10 @@ func (a *Artifact) IsCached() bool {
 
 // CachedArtifact contains the fields needed to serve a cached artifact.
 type CachedArtifact struct {
-	Ecosystem   string         `db:"ecosystem"`
-	StoragePath string         `db:"storage_path"`
-	ContentHash sql.NullString `db:"content_hash"`
-	Size        sql.NullInt64  `db:"size"`
-	ContentType sql.NullString `db:"content_type"`
-	Integrity   sql.NullString `db:"integrity"`
+	Ecosystem   string
+	StoragePath string
+	Artifact    artifacts.Artifact
+	Integrity   sql.NullString
 }
 
 // MetadataCacheEntry represents a cached metadata blob for offline serving.

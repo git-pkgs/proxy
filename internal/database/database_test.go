@@ -4,9 +4,12 @@ import (
 	"database/sql"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
+
+const testContentHash = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 
 func TestCreateAndOpen(t *testing.T) {
 	dir := t.TempDir()
@@ -200,7 +203,7 @@ func TestArtifactCRUD(t *testing.T) {
 			t.Error("expected artifact to not be cached yet")
 		}
 
-		err = db.MarkArtifactCached(versionPURL, "lodash-4.17.21.tgz", "/cache/npm/lodash-4.17.21.tgz", "sha256-abc", 12345, "application/gzip")
+		err = db.MarkArtifactCached(versionPURL, "lodash-4.17.21.tgz", "/cache/npm/lodash-4.17.21.tgz", testContentHash, 12345, "application/gzip")
 		if err != nil {
 			t.Fatalf("MarkArtifactCached failed: %v", err)
 		}
@@ -257,7 +260,7 @@ func TestGetCachedArtifact(t *testing.T) {
 		}
 
 		if err := db.MarkArtifactCached(versionPURL, filename, "/cache/npm/"+filename,
-			"sha256-abc", 12345, "application/gzip"); err != nil {
+			testContentHash, 12345, "application/gzip"); err != nil {
 			t.Fatalf("MarkArtifactCached failed: %v", err)
 		}
 
@@ -274,14 +277,20 @@ func TestGetCachedArtifact(t *testing.T) {
 		if cached.StoragePath != "/cache/npm/"+filename {
 			t.Errorf("expected cached storage path, got %q", cached.StoragePath)
 		}
-		if cached.ContentHash.String != "sha256-abc" {
-			t.Errorf("expected cached content hash, got %q", cached.ContentHash.String)
+		if cached.Artifact.PURL != versionPURL {
+			t.Errorf("expected cached PURL %q, got %q", versionPURL, cached.Artifact.PURL)
 		}
-		if cached.Size.Int64 != 12345 {
-			t.Errorf("expected cached size 12345, got %d", cached.Size.Int64)
+		if cached.Artifact.Digest.String() != "sha256:"+testContentHash {
+			t.Errorf("expected cached digest, got %q", cached.Artifact.Digest)
 		}
-		if cached.ContentType.String != "application/gzip" {
-			t.Errorf("expected cached content type, got %q", cached.ContentType.String)
+		if cached.Artifact.Size != 12345 {
+			t.Errorf("expected cached size 12345, got %d", cached.Artifact.Size)
+		}
+		if cached.Artifact.Filename != filename {
+			t.Errorf("expected cached filename %q, got %q", filename, cached.Artifact.Filename)
+		}
+		if cached.Artifact.MediaType != "application/gzip" {
+			t.Errorf("expected cached content type, got %q", cached.Artifact.MediaType)
 		}
 		if cached.Integrity.String != "sha512-abc123" {
 			t.Errorf("expected cached integrity, got %q", cached.Integrity.String)
@@ -295,6 +304,77 @@ func TestGetCachedArtifact(t *testing.T) {
 			t.Fatalf("expected package mismatch to miss cache, got %+v", cached)
 		}
 	})
+}
+
+func TestCachedArtifactRowArtifact(t *testing.T) {
+	validRow := cachedArtifactRow{
+		Ecosystem:   "npm",
+		StoragePath: "npm/example/1.0.0/example.tgz",
+		ContentHash: sql.NullString{String: testContentHash, Valid: true},
+		Size:        sql.NullInt64{Int64: 0, Valid: true},
+	}
+	tests := []struct {
+		name        string
+		row         cachedArtifactRow
+		versionPURL string
+		wantErr     string
+	}{
+		{name: "zero byte", row: validRow, versionPURL: "pkg:npm/example@1.0.0"},
+		{
+			name:        "missing hash",
+			row:         cachedArtifactRow{Size: sql.NullInt64{Int64: 1, Valid: true}},
+			versionPURL: "pkg:npm/example@1.0.0",
+			wantErr:     "content hash is missing",
+		},
+		{
+			name: "malformed hash",
+			row: cachedArtifactRow{
+				ContentHash: sql.NullString{String: "not-a-hash", Valid: true},
+				Size:        sql.NullInt64{Int64: 1, Valid: true},
+			},
+			versionPURL: "pkg:npm/example@1.0.0",
+			wantErr:     "digest",
+		},
+		{
+			name: "missing size",
+			row: cachedArtifactRow{
+				ContentHash: sql.NullString{String: testContentHash, Valid: true},
+			},
+			versionPURL: "pkg:npm/example@1.0.0",
+			wantErr:     "size is missing",
+		},
+		{
+			name: "negative size",
+			row: cachedArtifactRow{
+				ContentHash: sql.NullString{String: testContentHash, Valid: true},
+				Size:        sql.NullInt64{Int64: -1, Valid: true},
+			},
+			versionPURL: "pkg:npm/example@1.0.0",
+			wantErr:     "size",
+		},
+		{name: "malformed PURL", row: validRow, versionPURL: "not-a-purl", wantErr: "PURL"},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			cached, err := test.row.artifact(test.versionPURL, "example.tgz")
+			if test.wantErr != "" {
+				if err == nil {
+					t.Fatal("artifact() error = nil")
+				}
+				if !strings.Contains(err.Error(), test.wantErr) {
+					t.Errorf("error = %q, want %q", err, test.wantErr)
+				}
+				return
+			}
+			if err != nil {
+				t.Fatalf("artifact() error = %v", err)
+			}
+			if err := cached.Artifact.Validate(); err != nil {
+				t.Errorf("Artifact.Validate() error = %v", err)
+			}
+		})
+	}
 }
 
 func seedCachedArtifactTestData(t *testing.T, db *DB, packagePURL, versionPURL, filename string) {
