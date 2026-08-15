@@ -165,6 +165,9 @@ upstream:
   # Julia package server URL
   julia: "https://pkg.julialang.org"
 
+  # Swift Package Registry URL (used by /swift endpoint)
+  swift: "https://tuist.dev/api/registry/swift"
+
   # Default OCI registry URL for unprefixed /v2 requests
   oci_default: "https://registry-1.docker.io"
 

@@ -19,6 +19,7 @@ import (
 	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
+	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
@@ -68,7 +69,7 @@ var artifactCopyBufferPool = sync.Pool{ //nolint:gochecknoglobals // shared acro
 // canonicalPackagePURL returns a versionless PURL in canonical form so cooldown
 // lookups match keys produced by config.CooldownConfig.NormalizedPackages.
 func canonicalPackagePURL(ecosystem, name string) string {
-	return purl.MakePURLString(ecosystem, name, "")
+	return packageurl.MakeString(ecosystem, name, "")
 }
 
 // canonicalVersionPURL returns a versioned PURL in canonical form, matching
@@ -167,16 +168,16 @@ func (p *Proxy) GetOrFetchArtifact(ctx context.Context, ecosystem, name, version
 	}
 	metrics.RecordCacheMiss(ecosystem)
 
-	pkgPURL := purl.MakePURLString(ecosystem, name, "")
-	versionPURL := purl.MakePURLString(ecosystem, name, version)
+	pkgPURL := packageurl.MakeString(ecosystem, name, "")
+	versionPURL := packageurl.MakeString(ecosystem, name, version)
 	return p.fetchAndCache(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL)
 }
 
 // GetCachedArtifact retrieves an artifact from cache without contacting an upstream.
 // It returns nil when no usable cache entry exists.
 func (p *Proxy) GetCachedArtifact(ctx context.Context, ecosystem, name, version, filename string) (*CacheResult, error) {
-	pkgPURL := purl.MakePURLString(ecosystem, name, "")
-	versionPURL := purl.MakePURLString(ecosystem, name, version)
+	pkgPURL := packageurl.MakeString(ecosystem, name, "")
+	versionPURL := packageurl.MakeString(ecosystem, name, version)
 	return p.checkCache(ctx, pkgPURL, versionPURL, filename)
 }
 
@@ -887,8 +888,8 @@ func (p *Proxy) GetOrFetchArtifactFromURLWithHeaders(ctx context.Context, ecosys
 	}
 	metrics.RecordCacheMiss(ecosystem)
 
-	pkgPURL := purl.MakePURLString(ecosystem, name, "")
-	versionPURL := purl.MakePURLString(ecosystem, name, version)
+	pkgPURL := packageurl.MakeString(ecosystem, name, "")
+	versionPURL := packageurl.MakeString(ecosystem, name, version)
 	return p.fetchAndCacheFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers)
 }
 

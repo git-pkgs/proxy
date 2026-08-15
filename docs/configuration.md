@@ -161,6 +161,7 @@ Each upstream used by a built-in package route can be set in YAML or JSON under 
 | `upstream.conda` | `PROXY_UPSTREAM_CONDA` | `https://conda.anaconda.org` |
 | `upstream.cran` | `PROXY_UPSTREAM_CRAN` | `https://cloud.r-project.org` |
 | `upstream.julia` | `PROXY_UPSTREAM_JULIA` | `https://pkg.julialang.org` |
+| `upstream.swift` | `PROXY_UPSTREAM_SWIFT` | `https://tuist.dev/api/registry/swift` |
 | `upstream.oci_default` | `PROXY_UPSTREAM_OCI_DEFAULT` | `https://registry-1.docker.io` |
 | `upstream.debian` | `PROXY_UPSTREAM_DEBIAN` | `http://deb.debian.org/debian` |
 | `upstream.rpm` | `PROXY_UPSTREAM_RPM` | `https://dl.fedoraproject.org/pub/fedora/linux` |

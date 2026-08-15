@@ -89,6 +89,7 @@ func newTestServer(t *testing.T) *testServer {
 	goHandler := handler.NewGoHandler(proxy, cfg.BaseURL)
 	pypiHandler := handler.NewPyPIHandler(proxy, cfg.BaseURL)
 	gradleHandler := handler.NewGradleBuildCacheHandler(proxy)
+	swiftHandler := handler.NewSwiftHandler(proxy, cfg.BaseURL, cfg.Upstream.Swift)
 
 	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))
 	r.Mount("/cargo", http.StripPrefix("/cargo", cargoHandler.Routes()))
@@ -96,6 +97,7 @@ func newTestServer(t *testing.T) *testServer {
 	r.Mount("/go", http.StripPrefix("/go", goHandler.Routes()))
 	r.Mount("/pypi", http.StripPrefix("/pypi", pypiHandler.Routes()))
 	r.Mount("/gradle", http.StripPrefix("/gradle", gradleHandler.Routes()))
+	r.Mount("/swift", http.StripPrefix("/swift", swiftHandler.Routes()))
 
 	hc, err := newHealthCache(store, "30s", logger)
 	if err != nil {
@@ -475,8 +477,24 @@ func TestDashboard(t *testing.T) {
 	if !strings.Contains(body, ">debian<") {
 		t.Error("dashboard should show debian in supported ecosystems")
 	}
+	if !strings.Contains(body, ">swift<") {
+		t.Error("dashboard should show swift in supported ecosystems")
+	}
 	if !strings.Contains(body, "/openapi.json") {
 		t.Error("page should link to the OpenAPI JSON spec")
+	}
+}
+
+func TestSwiftHandlerMounted(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	req := httptest.NewRequest(http.MethodPut, "/swift/apple/example/1.2.3", strings.NewReader("ignored"))
+	w := httptest.NewRecorder()
+	ts.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusMethodNotAllowed {
+		t.Fatalf("status = %d, want 405; body: %s", w.Code, w.Body.String())
 	}
 }
 

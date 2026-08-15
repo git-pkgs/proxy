@@ -107,15 +107,17 @@ type mockFetcher struct {
 	fetchErrByURL map[string]error
 	fetchCalled   bool
 	fetchedURL    string
+	fetchedHeader http.Header
 }
 
 func (f *mockFetcher) Fetch(ctx context.Context, url string) (*fetch.Artifact, error) {
 	return f.FetchWithHeaders(ctx, url, nil)
 }
 
-func (f *mockFetcher) FetchWithHeaders(_ context.Context, url string, _ http.Header) (*fetch.Artifact, error) {
+func (f *mockFetcher) FetchWithHeaders(_ context.Context, url string, headers http.Header) (*fetch.Artifact, error) {
 	f.fetchCalled = true
 	f.fetchedURL = url
+	f.fetchedHeader = headers.Clone()
 	if f.fetchErrByURL != nil {
 		if err, ok := f.fetchErrByURL[url]; ok {
 			return nil, err
