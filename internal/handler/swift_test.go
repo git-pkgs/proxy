@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/base64"
 	"encoding/hex"
@@ -226,6 +227,146 @@ func TestSwiftSourceArchiveCachesAndPreservesSecurityMetadata(t *testing.T) {
 	}
 	if fetcher.fetchCalled {
 		t.Error("cached archive contacted artifact upstream")
+	}
+}
+
+func TestSwiftSourceArchiveRejectsChecksumMismatch(t *testing.T) {
+	archive := []byte("unexpected archive")
+	expectedChecksum := sha256.Sum256([]byte("expected archive"))
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"id":"apple.example","version":"1.2.3","resources":[{"name":"source-archive","type":"application/zip","checksum":%q}]}`, hex.EncodeToString(expectedChecksum[:]))
+	}))
+	defer upstream.Close()
+
+	proxy, db, store, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader(string(archive))),
+		Size:        int64(len(archive)),
+		ContentType: "application/zip",
+	}
+	handler := NewSwiftHandler(proxy, "https://proxy.example", upstream.URL).Routes()
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/apple/example/1.2.3.zip", nil))
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body: %s", w.Code, w.Body.String())
+	}
+	if len(store.files) != 0 {
+		t.Errorf("mismatched archive remained in storage: %v", store.files)
+	}
+	versionPURL := packageurl.MakeString("swift", "apple/example", "1.2.3")
+	cached, err := db.GetCachedArtifact(packageurl.MakeString("swift", "apple/example", ""), versionPURL, "example-1.2.3.zip")
+	if err != nil {
+		t.Fatalf("checking cache: %v", err)
+	}
+	if cached != nil {
+		t.Error("mismatched archive gained a cache record")
+	}
+}
+
+func TestSwiftSourceArchiveHeadRejectsCachedChecksumMismatch(t *testing.T) {
+	archive := []byte("cached archive")
+	expectedChecksum := sha256.Sum256([]byte("expected archive"))
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = fmt.Fprintf(w, `{"id":"apple.example","version":"1.2.3","resources":[{"name":"source-archive","type":"application/zip","checksum":%q}]}`, hex.EncodeToString(expectedChecksum[:]))
+	}))
+	defer upstream.Close()
+
+	proxy, _, store, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader(string(archive))),
+		Size:        int64(len(archive)),
+		ContentType: "application/zip",
+	}
+	cached, err := proxy.GetOrFetchArtifactFromURL(
+		context.Background(), "swift", "apple/example", "1.2.3", "example-1.2.3.zip", upstream.URL+"/apple/example/1.2.3.zip",
+	)
+	if err != nil {
+		t.Fatalf("seeding cache: %v", err)
+	}
+	_ = cached.Reader.Close()
+
+	handler := NewSwiftHandler(proxy, "https://proxy.example", upstream.URL).Routes()
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodHead, "/apple/example/1.2.3.zip", nil))
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body: %s", w.Code, w.Body.String())
+	}
+	if len(store.files) != 0 {
+		t.Errorf("cached mismatched archive remained in storage: %v", store.files)
+	}
+}
+
+func TestSwiftSourceArchiveRequiresReleaseMetadata(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, "unavailable", http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+
+	proxy, _, store, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("signed archive")),
+		ContentType: "application/zip",
+	}
+	handler := NewSwiftHandler(proxy, "https://proxy.example", upstream.URL).Routes()
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/apple/example/1.2.3.zip", nil))
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want 502; body: %s", w.Code, w.Body.String())
+	}
+	if fetcher.fetchCalled {
+		t.Error("archive was fetched without release security metadata")
+	}
+	if len(store.files) != 0 {
+		t.Errorf("archive was cached without release security metadata: %v", store.files)
+	}
+}
+
+func TestSwiftSourceArchiveColdHeadSendsArchiveAccept(t *testing.T) {
+	checksum := strings.Repeat("a", sha256.Size*2)
+	var archiveAccept string
+	var archiveMethod string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/apple/example/1.2.3":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"id":"apple.example","version":"1.2.3","resources":[{"name":"source-archive","type":"application/zip","checksum":%q}]}`, checksum)
+		case "/apple/example/1.2.3.zip":
+			archiveMethod = r.Method
+			archiveAccept = r.Header.Get("Accept")
+			w.Header().Set("Content-Length", "123")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	handler := NewSwiftHandler(proxy, "https://proxy.example", upstream.URL).Routes()
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodHead, "/apple/example/1.2.3.zip", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	if archiveMethod != http.MethodHead {
+		t.Errorf("upstream method = %q, want HEAD", archiveMethod)
+	}
+	if archiveAccept != swiftAcceptArchive {
+		t.Errorf("upstream Accept = %q, want %q", archiveAccept, swiftAcceptArchive)
+	}
+	if got := w.Header().Get("Content-Length"); got != "123" {
+		t.Errorf("Content-Length = %q, want 123", got)
 	}
 }
 
