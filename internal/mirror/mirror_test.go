@@ -2,8 +2,11 @@ package mirror
 
 import (
 	"context"
+	"crypto/sha256"
+	"database/sql"
 	"log/slog"
 	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -42,6 +45,14 @@ func setupTestMirror(t *testing.T, workers int) *Mirror {
 }
 
 const testPackageLodash = "lodash"
+
+type signedURLStorage struct {
+	storage.Storage
+}
+
+func (signedURLStorage) SignedURL(context.Context, string, time.Duration) (string, error) {
+	return "https://storage.example/artifact", nil
+}
 
 func TestMirrorRunEmptySource(t *testing.T) {
 	m := setupTestMirror(t, 2)
@@ -108,6 +119,54 @@ func TestMirrorRunCanceled(t *testing.T) {
 	// With a canceled context, the fetch should fail
 	if progress.Failed != 1 {
 		t.Errorf("failed = %d, want 1", progress.Failed)
+	}
+}
+
+func TestMirrorOneDirectServeCacheHit(t *testing.T) {
+	m := setupTestMirror(t, 1)
+	m.proxy.DirectServe = true
+	m.proxy.Storage = signedURLStorage{Storage: m.storage}
+
+	packagePURL := "pkg:npm/example"
+	versionPURL := packagePURL + "@1.0.0"
+	if err := m.db.UpsertPackage(&database.Package{
+		PURL:      packagePURL,
+		Ecosystem: "npm",
+		Name:      "example",
+	}); err != nil {
+		t.Fatalf("UpsertPackage() error = %v", err)
+	}
+	if err := m.db.UpsertVersion(&database.Version{
+		PURL:        versionPURL,
+		PackagePURL: packagePURL,
+	}); err != nil {
+		t.Fatalf("UpsertVersion() error = %v", err)
+	}
+	if err := m.db.UpsertArtifact(&database.Artifact{
+		VersionPURL: versionPURL,
+		Filename:    "",
+		UpstreamURL: "https://registry.example/artifact",
+		StoragePath: sql.NullString{String: "npm/example/1.0.0/artifact", Valid: true},
+		ContentHash: sql.NullString{String: strings.Repeat("a", sha256.Size*2), Valid: true},
+		Size:        sql.NullInt64{Int64: 1, Valid: true},
+		FetchedAt:   sql.NullTime{Time: time.Now(), Valid: true},
+	}); err != nil {
+		t.Fatalf("UpsertArtifact() error = %v", err)
+	}
+
+	tracker := newProgressTracker()
+	m.mirrorOne(context.Background(), PackageVersion{
+		Ecosystem: "npm",
+		Name:      "example",
+		Version:   "1.0.0",
+	}, tracker)
+
+	progress := tracker.snapshot()
+	if progress.Skipped != 1 {
+		t.Errorf("skipped = %d, want 1", progress.Skipped)
+	}
+	if progress.Failed != 0 {
+		t.Errorf("failed = %d, want 0", progress.Failed)
 	}
 }
 

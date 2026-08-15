@@ -16,12 +16,14 @@ import (
 	"sync"
 	"time"
 
+	"github.com/git-pkgs/artifacts"
 	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
+	"github.com/opencontainers/go-digest"
 )
 
 // containsPathTraversal returns true if the path contains ".." segments
@@ -138,9 +140,7 @@ func NewProxy(db *database.DB, store storage.Storage, fetcher fetch.FetcherInter
 type CacheResult struct {
 	Reader      io.ReadCloser
 	RedirectURL string
-	Size        int64
-	ContentType string
-	Hash        string
+	Artifact    artifacts.Artifact
 	Cached      bool
 }
 
@@ -176,10 +176,8 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 	}
 
 	result := &CacheResult{
-		Size:        artifact.Size.Int64,
-		ContentType: artifact.ContentType.String,
-		Hash:        artifact.ContentHash.String,
-		Cached:      true,
+		Artifact: artifact.Artifact,
+		Cached:   true,
 	}
 
 	if p.DirectServe {
@@ -205,7 +203,7 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 		return nil, nil
 	}
 
-	result.Reader = newVerifyingReader(reader, artifact.ContentHash.String, artifact.Integrity.String,
+	result.Reader = newVerifyingReader(reader, artifact.Artifact.Digest.Encoded(), artifact.Integrity.String,
 		func(reason string) {
 			p.Logger.Error("cached artifact failed integrity check",
 				"purl", versionPURL, "filename", filename,
@@ -291,9 +289,19 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 		metrics.RecordStorageError("write")
 		return nil, fmt.Errorf("storing artifact: %w", err)
 	}
+	sharedArtifact, err := artifacts.New(
+		versionPURL,
+		digest.Digest("sha256:"+hash),
+		size,
+		filename,
+		artifact.ContentType,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("describing stored artifact: %w", err)
+	}
 
 	// Update database
-	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, info.URL, storagePath, hash, size, artifact.ContentType); err != nil {
+	if err := p.updateCacheDB(ecosystem, name, pkgPURL, info.URL, storagePath, sharedArtifact); err != nil {
 		p.Logger.Warn("failed to update cache database", "error", err)
 		// Continue anyway - we have the file
 	}
@@ -309,15 +317,13 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 	}
 
 	return &CacheResult{
-		Reader:      reader,
-		Size:        size,
-		ContentType: artifact.ContentType,
-		Hash:        hash,
-		Cached:      false,
+		Reader:   reader,
+		Artifact: sharedArtifact,
+		Cached:   false,
 	}, nil
 }
 
-func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, upstreamURL, storagePath, hash string, size int64, contentType string) error {
+func (p *Proxy) updateCacheDB(ecosystem, name, pkgPURL, upstreamURL, storagePath string, artifact artifacts.Artifact) error {
 	now := time.Now()
 
 	// Upsert package
@@ -334,7 +340,7 @@ func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, u
 
 	// Upsert version
 	ver := &database.Version{
-		PURL:        versionPURL,
+		PURL:        artifact.PURL,
 		PackagePURL: pkgPURL,
 		EnrichedAt:  sql.NullTime{Time: now, Valid: true},
 	}
@@ -344,13 +350,13 @@ func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, u
 
 	// Upsert artifact
 	art := &database.Artifact{
-		VersionPURL: versionPURL,
-		Filename:    filename,
+		VersionPURL: artifact.PURL,
+		Filename:    artifact.Filename,
 		UpstreamURL: upstreamURL,
 		StoragePath: sql.NullString{String: storagePath, Valid: true},
-		ContentHash: sql.NullString{String: hash, Valid: true},
-		Size:        sql.NullInt64{Int64: size, Valid: true},
-		ContentType: sql.NullString{String: contentType, Valid: true},
+		ContentHash: sql.NullString{String: artifact.Digest.Encoded(), Valid: true},
+		Size:        sql.NullInt64{Int64: artifact.Size, Valid: true},
+		ContentType: sql.NullString{String: artifact.MediaType, Valid: true},
 		FetchedAt:   sql.NullTime{Time: now, Valid: true},
 	}
 	if err := p.DB.UpsertArtifact(art); err != nil {
@@ -366,9 +372,13 @@ func ServeArtifact(w http.ResponseWriter, result *CacheResult) {
 }
 
 func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
+	contentHash := ""
+	if result.Artifact.Digest != "" {
+		contentHash = result.Artifact.Digest.Encoded()
+	}
 	if result.RedirectURL != "" {
-		if result.Hash != "" {
-			w.Header().Set("ETag", `"`+result.Hash+`"`)
+		if contentHash != "" {
+			w.Header().Set("ETag", `"`+contentHash+`"`)
 		}
 		w.Header().Set("Location", result.RedirectURL)
 		w.WriteHeader(http.StatusFound)
@@ -379,14 +389,14 @@ func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
 		defer func() { _ = result.Reader.Close() }()
 	}
 
-	if result.ContentType != "" {
-		w.Header().Set("Content-Type", result.ContentType)
+	if result.Artifact.MediaType != "" {
+		w.Header().Set("Content-Type", result.Artifact.MediaType)
 	}
-	if result.Size > 0 || (method == http.MethodHead && result.Size == 0) {
-		w.Header().Set("Content-Length", strconv.FormatInt(result.Size, 10))
+	if result.Artifact.Size > 0 || (method == http.MethodHead && result.Artifact.Size == 0) {
+		w.Header().Set("Content-Length", strconv.FormatInt(result.Artifact.Size, 10))
 	}
-	if result.Hash != "" {
-		w.Header().Set("ETag", `"`+result.Hash+`"`)
+	if contentHash != "" {
+		w.Header().Set("ETag", `"`+contentHash+`"`)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -848,8 +858,18 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 	if err != nil {
 		return nil, fmt.Errorf("storing artifact: %w", err)
 	}
+	sharedArtifact, err := artifacts.New(
+		versionPURL,
+		digest.Digest("sha256:"+hash),
+		size,
+		filename,
+		artifact.ContentType,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("describing stored artifact: %w", err)
+	}
 
-	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, downloadURL, storagePath, hash, size, artifact.ContentType); err != nil {
+	if err := p.updateCacheDB(ecosystem, name, pkgPURL, downloadURL, storagePath, sharedArtifact); err != nil {
 		p.Logger.Warn("failed to update cache database", "error", err)
 	}
 
@@ -859,10 +879,8 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 	}
 
 	return &CacheResult{
-		Reader:      reader,
-		Size:        size,
-		ContentType: artifact.ContentType,
-		Hash:        hash,
-		Cached:      false,
+		Reader:   reader,
+		Artifact: sharedArtifact,
+		Cached:   false,
 	}, nil
 }

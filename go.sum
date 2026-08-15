@@ -246,6 +246,8 @@ github.com/ghostiam/protogetter v0.3.20 h1:oW7OPFit2FxZOpmMRPP9FffU4uUpfeE/rEdE1
 github.com/ghostiam/protogetter v0.3.20/go.mod h1:FjIu5Yfs6FT391m+Fjp3fbAYJ6rkL/J6ySpZBfnODuI=
 github.com/git-pkgs/archives v0.5.1 h1:qwu/vsoerQZF1iysRtfcxpy1KIUSJJSpXJ5JNxzNoQw=
 github.com/git-pkgs/archives v0.5.1/go.mod h1:AKpkxnts49R9uAt1mL2ULYcHrmYujCDVu24IsFvW9so=
+github.com/git-pkgs/artifacts v0.1.0 h1:es73XxrsJefxO/DqtergTt+IaL+xPhzE0gSVrb6AFwk=
+github.com/git-pkgs/artifacts v0.1.0/go.mod h1:zWZ0mrFi2M6ajGwpbo1nBGQTSb7qptP+zNG/EwAemBE=
 github.com/git-pkgs/cooldown v0.1.1 h1:9OqqzCB8gANz/y44SmqGD0Jp8Qtu81D1sCbKl6Ehg7w=
 github.com/git-pkgs/cooldown v0.1.1/go.mod h1:v7APuK/UouTiu8mWQZbdDmj7DfxxkGUeuhjaRB5gv9E=
 github.com/git-pkgs/enrichment v0.6.5 h1:U0SPzWVGoK4R8TwojCTASBRTEV+QSs0IitdLmzI/g/k=
@@ -520,6 +522,8 @@ github.com/onsi/ginkgo/v2 v2.28.1 h1:S4hj+HbZp40fNKuLUQOYLDgZLwNUVn19N3Atb98NCyI
 github.com/onsi/ginkgo/v2 v2.28.1/go.mod h1:CLtbVInNckU3/+gC8LzkGUb9oF+e8W8TdUsxPwvdOgE=
 github.com/onsi/gomega v1.39.1 h1:1IJLAad4zjPn2PsnhH70V4DKRFlrCzGBNrNaru+Vf28=
 github.com/onsi/gomega v1.39.1/go.mod h1:hL6yVALoTOxeWudERyfppUcZXjMwIMLnuSfruD2lcfg=
+github.com/opencontainers/go-digest v1.0.0 h1:apOUWs51W5PlhuyGyz9FCeeBIOUDA/6nW8Oi/yOhh5U=
+github.com/opencontainers/go-digest v1.0.0/go.mod h1:0JzlMkj0TRzQZfJkVvzbP0HBR3IKzErnv2BNG4W4MAM=
 github.com/otiai10/copy v1.2.0/go.mod h1:rrF5dJ5F0t/EWSYODDu4j9/vEeYHMkc8jt0zJChqQWw=
 github.com/otiai10/copy v1.14.0 h1:dCI/t1iTdYGtkvCuBG2BgR6KZa83PTclw4U5n2wAllU=
 github.com/otiai10/copy v1.14.0/go.mod h1:ECfuL02W+/FkTWZWgQqXPWZgW9oeKCSQ5qVfSc4qc4w=

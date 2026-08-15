@@ -6,6 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/CycloneDX/cyclonedx-go v0.11.0
 	github.com/git-pkgs/archives v0.5.1
+	github.com/git-pkgs/artifacts v0.1.0
 	github.com/git-pkgs/cooldown v0.1.1
 	github.com/git-pkgs/enrichment v0.6.5
 	github.com/git-pkgs/magic v0.2.0
@@ -17,6 +18,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.1
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.3
+	github.com/opencontainers/go-digest v1.0.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
 	github.com/spdx/tools-golang v0.5.7
