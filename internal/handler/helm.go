@@ -124,7 +124,7 @@ func (h *HelmHandler) handleChart(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HelmHandler) serveChart(w http.ResponseWriter, r *http.Request, repository, digest, filename string, result *CacheResult) {
-	if !strings.EqualFold(result.Hash, digest) {
+	if !strings.EqualFold(result.Artifact.Digest.Encoded(), digest) {
 		if result.Reader != nil {
 			_ = result.Reader.Close()
 		}
@@ -135,7 +135,7 @@ func (h *HelmHandler) serveChart(w http.ResponseWriter, r *http.Request, reposit
 		return
 	}
 
-	if result.ContentType == "" {
+	if result.Artifact.MediaType == "" {
 		w.Header().Set(headerContentType, "application/gzip")
 	}
 	ServeArtifact(w, result)
