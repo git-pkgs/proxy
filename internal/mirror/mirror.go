@@ -212,7 +212,9 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 		return
 	}
 
-	_ = result.Reader.Close()
+	if result.Reader != nil {
+		_ = result.Reader.Close()
+	}
 
 	if result.Cached {
 		tracker.skipped.Add(1)
