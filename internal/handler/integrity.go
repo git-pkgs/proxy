@@ -1,39 +1,28 @@
 package handler
 
 import (
-	"encoding/base64"
 	"fmt"
 	"io"
-	"strings"
 
 	"github.com/git-pkgs/integrity"
 )
 
 type integrityChecks struct {
-	contentHash     *integrity.Digest
-	native          integrity.SRI
-	nativeAlgorithm integrity.Algorithm
-	algorithms      []integrity.Algorithm
+	contentHash integrity.SRI
+	native      integrity.SRI
+	algorithms  []integrity.Algorithm
 }
 
 func newIntegrityChecks(contentHash, native string) (integrityChecks, error) {
 	checks := integrityChecks{}
-	seen := make(map[integrity.Algorithm]bool)
-	addAlgorithm := func(algorithm integrity.Algorithm) {
-		if seen[algorithm] {
-			return
-		}
-		seen[algorithm] = true
-		checks.algorithms = append(checks.algorithms, algorithm)
-	}
 
 	if contentHash != "" {
 		digest, err := integrity.ParseHex(integrity.SHA256, contentHash)
 		if err != nil {
 			return integrityChecks{}, fmt.Errorf("parse content_hash: %w", err)
 		}
-		checks.contentHash = &digest
-		addAlgorithm(integrity.SHA256)
+		checks.contentHash = integrity.SRI{digest}
+		checks.algorithms = append(checks.algorithms, integrity.SHA256)
 	}
 
 	if native != "" {
@@ -42,13 +31,8 @@ func newIntegrityChecks(contentHash, native string) (integrityChecks, error) {
 			return integrityChecks{}, fmt.Errorf("parse integrity: %w", err)
 		}
 		checks.native = digests
-		checks.nativeAlgorithm = digests[0].Algorithm()
 		for _, digest := range digests {
-			algorithm := digest.Algorithm()
-			addAlgorithm(algorithm)
-			if algorithm > checks.nativeAlgorithm {
-				checks.nativeAlgorithm = algorithm
-			}
+			checks.algorithms = append(checks.algorithms, digest.Algorithm())
 		}
 	}
 
@@ -103,39 +87,14 @@ func (r *verifyingReader) verify() {
 		return
 	}
 
-	if r.checks.contentHash != nil {
-		expected := integrity.SRI{*r.checks.contentHash}
-		if err := result.Verify(expected); err != nil {
-			calculated := calculatedDigest(result, integrity.SHA256)
-			r.onMismatch(fmt.Sprintf("content_hash mismatch: stored=%s computed=%s", r.checks.contentHash.Hex(), calculated.Hex()))
+	if len(r.checks.contentHash) > 0 {
+		if err := result.Verify(r.checks.contentHash); err != nil {
+			r.onMismatch("content_hash: " + err.Error())
 		}
 	}
 	if len(r.checks.native) > 0 {
 		if err := result.Verify(r.checks.native); err != nil {
-			calculated := calculatedDigest(result, r.checks.nativeAlgorithm)
-			r.onMismatch(nativeMismatchReason(r.checks.native, calculated, r.checks.nativeAlgorithm))
+			r.onMismatch("integrity: " + err.Error())
 		}
 	}
-}
-
-func calculatedDigest(result integrity.Result, algorithm integrity.Algorithm) integrity.Digest {
-	for _, digest := range result.Digests {
-		if digest.Algorithm() == algorithm {
-			return digest
-		}
-	}
-	return integrity.Digest{}
-}
-
-func nativeMismatchReason(expected integrity.SRI, calculated integrity.Digest, algorithm integrity.Algorithm) string {
-	encoded := make([]string, 0, len(expected))
-	for _, digest := range expected {
-		if digest.Algorithm() == algorithm {
-			encoded = append(encoded, base64.StdEncoding.EncodeToString(digest.Bytes()))
-		}
-	}
-	return fmt.Sprintf("integrity mismatch: %s expected=%s computed=%s",
-		algorithm,
-		strings.Join(encoded, ","),
-		base64.StdEncoding.EncodeToString(calculated.Bytes()))
 }

@@ -235,7 +235,7 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 			p.Logger.Error("cached artifact failed integrity check",
 				"purl", versionPURL, "filename", filename,
 				"path", artifact.StoragePath, "reason", reason)
-			metrics.RecordIntegrityFailure(artifact.Ecosystem)
+			metrics.RecordIntegrityFailure(purl.NormalizeEcosystem(artifact.Ecosystem))
 			if err := p.DB.ClearArtifactCache(versionPURL, filename); err != nil {
 				p.Logger.Warn("failed to clear corrupt artifact from cache", "error", err)
 			}
@@ -278,7 +278,7 @@ func (p *Proxy) rejectUnusableCacheRecord(artifact *database.CachedArtifact, ver
 	p.Logger.Warn("cached artifact has unusable integrity metadata",
 		"purl", versionPURL, "filename", filename,
 		"path", artifact.StoragePath, "error", cause)
-	metrics.RecordIntegrityFailure(artifact.Ecosystem)
+	metrics.RecordIntegrityFailure(purl.NormalizeEcosystem(artifact.Ecosystem))
 	if err := p.DB.ClearArtifactCache(versionPURL, filename); err != nil {
 		p.Logger.Warn("failed to clear unusable artifact from cache", "error", err)
 	}

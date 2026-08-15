@@ -44,7 +44,7 @@ func wrapIntegrityReader(t *testing.T, source io.ReadCloser, contentHash, native
 	return reader
 }
 
-func TestNewIntegrityChecksCalculatesAlgorithmUnion(t *testing.T) {
+func TestNewIntegrityChecksCollectsAlgorithms(t *testing.T) {
 	checks, err := newIntegrityChecks(
 		sha256Hex("hello"),
 		strings.Join([]string{sha256SRI("first"), sha512SRI("second"), sha384SRI("third"), sha512SRI("alternative")}, " "),
@@ -52,14 +52,11 @@ func TestNewIntegrityChecksCalculatesAlgorithmUnion(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(checks.algorithms) != 3 {
-		t.Fatalf("algorithms = %v, want 3 unique algorithms", checks.algorithms)
+	if len(checks.algorithms) != 5 {
+		t.Fatalf("algorithms = %v, want 5 entries", checks.algorithms)
 	}
 	if len(checks.native) != 4 {
 		t.Errorf("native digests = %d, want 4", len(checks.native))
-	}
-	if checks.nativeAlgorithm.String() != "sha512" {
-		t.Errorf("native algorithm = %s, want sha512", checks.nativeAlgorithm)
 	}
 }
 
@@ -70,7 +67,7 @@ func TestNewIntegrityChecksRejectsMalformedMetadata(t *testing.T) {
 		native      string
 	}{
 		{name: "short content hash", contentHash: "abc123"},
-		{name: "non-hex content hash", contentHash: strings.Repeat("z", sha256.Size)},
+		{name: "non-hex content hash", contentHash: strings.Repeat("z", sha256.Size*2)},
 		{name: "missing SRI separator", native: "sha512"},
 		{name: "malformed SRI base64", native: "sha512-not!base64"},
 		{name: "wrong SRI length", native: "sha512-" + base64.StdEncoding.EncodeToString([]byte("short"))},
@@ -177,11 +174,11 @@ func TestVerifyingReaderMismatchMessages(t *testing.T) {
 	if len(reasons) != 2 {
 		t.Fatalf("reasons = %v, want two", reasons)
 	}
-	wantContentReason := "content_hash mismatch: stored=" + wantHash + " computed=" + sha256Hex(data)
+	wantContentReason := "content_hash: integrity mismatch: expected " + sha256SRI("expected") + ", calculated " + sha256SRI(data)
 	if reasons[0] != wantContentReason {
 		t.Errorf("content reason = %q, want %q", reasons[0], wantContentReason)
 	}
-	wantNativeReason := "integrity mismatch: sha512 expected=" + strings.TrimPrefix(wantSRI, "sha512-") + " computed=" + strings.TrimPrefix(sha512SRI(data), "sha512-")
+	wantNativeReason := "integrity: integrity mismatch: expected " + wantSRI + ", calculated " + sha512SRI(data)
 	if reasons[1] != wantNativeReason {
 		t.Errorf("native reason = %q, want %q", reasons[1], wantNativeReason)
 	}
