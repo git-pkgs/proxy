@@ -155,7 +155,8 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 	upstreamURL := h.buildUpstreamURL(scope, name, version+".zip", "", r.URL.RawQuery)
 	archiveInfo, infoErr := h.fetchArchiveInfo(r.Context(), scope, name, version)
 	if infoErr != nil {
-		h.proxy.Logger.Debug("failed to fetch Swift archive metadata", "error", infoErr)
+		h.writeArtifactError(w, fmt.Errorf("fetching release metadata: %w", infoErr))
+		return
 	}
 
 	if r.Method == http.MethodHead {
@@ -165,8 +166,8 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 
 	headers := make(http.Header)
 	headers.Set("Accept", requestAccept(r, swiftAcceptArchive))
-	result, err := h.proxy.GetOrFetchArtifactFromURLWithHeaders(
-		r.Context(), "swift", packageName, version, filename, upstreamURL, headers,
+	result, err := h.proxy.getOrFetchArtifactFromURL(
+		r.Context(), "swift", packageName, version, filename, upstreamURL, headers, archiveInfo.checksum,
 	)
 	if err != nil {
 		h.writeArtifactError(w, err)
@@ -184,7 +185,9 @@ func (h *SwiftHandler) handleSourceArchiveHead(
 	packageName, version, filename, upstreamURL string,
 	archiveInfo swiftArchiveInfo,
 ) {
-	result, err := h.proxy.GetCachedArtifact(r.Context(), "swift", packageName, version, filename)
+	result, err := h.proxy.getCachedArtifactWithExpectedHash(
+		r.Context(), "swift", packageName, version, filename, archiveInfo.checksum,
+	)
 	if err != nil {
 		h.writeArtifactError(w, err)
 		return
@@ -197,7 +200,7 @@ func (h *SwiftHandler) handleSourceArchiveHead(
 		return
 	}
 
-	size, _, err := h.proxy.Fetcher.Head(r.Context(), upstreamURL)
+	size, err := h.headSourceArchive(r.Context(), upstreamURL, requestAccept(r, swiftAcceptArchive))
 	if err != nil {
 		h.writeArtifactError(w, err)
 		return
@@ -209,6 +212,36 @@ func (h *SwiftHandler) handleSourceArchiveHead(
 		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
 	}
 	w.WriteHeader(http.StatusOK)
+}
+
+func (h *SwiftHandler) headSourceArchive(ctx context.Context, upstreamURL, accept string) (int64, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodHead, upstreamURL, nil)
+	if err != nil {
+		return 0, fmt.Errorf("creating upstream archive request: %w", err)
+	}
+	req.Header.Set("Accept", accept)
+	h.proxy.applyUpstreamAuth(req)
+
+	resp, err := h.proxy.HTTPClient.Do(req)
+	if err != nil {
+		return 0, fmt.Errorf("requesting upstream archive: %w", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode == http.StatusNotFound {
+		return 0, ErrUpstreamNotFound
+	}
+	if resp.StatusCode != http.StatusOK {
+		return 0, fmt.Errorf("upstream archive returned %d", resp.StatusCode)
+	}
+
+	size := int64(-1)
+	if contentLength := resp.Header.Get("Content-Length"); contentLength != "" {
+		if parsed, parseErr := strconv.ParseInt(contentLength, 10, 64); parseErr == nil {
+			size = parsed
+		}
+	}
+	return size, nil
 }
 
 type swiftReleaseMetadata struct {
@@ -246,15 +279,30 @@ func (h *SwiftHandler) fetchArchiveInfo(ctx context.Context, scope, name, versio
 		if resource.Name != "source-archive" || resource.Type != "application/zip" {
 			continue
 		}
-		info := swiftArchiveInfo{checksum: resource.Checksum}
+		checksum, err := normalizeSwiftChecksum(resource.Checksum)
+		if err != nil {
+			return swiftArchiveInfo{}, err
+		}
+		info := swiftArchiveInfo{checksum: checksum}
 		if resource.Signing != nil {
+			if resource.Signing.Signature == "" || resource.Signing.Format == "" {
+				return swiftArchiveInfo{}, errors.New("source archive signing metadata is incomplete")
+			}
 			info.signature = resource.Signing.Signature
 			info.signatureFormat = resource.Signing.Format
 		}
 		return info, nil
 	}
 
-	return swiftArchiveInfo{}, nil
+	return swiftArchiveInfo{}, errors.New("source archive is missing from release metadata")
+}
+
+func normalizeSwiftChecksum(checksum string) (string, error) {
+	digest, err := hex.DecodeString(checksum)
+	if err != nil || len(digest) != sha256.Size {
+		return "", errors.New("source archive checksum is not a SHA-256 digest")
+	}
+	return hex.EncodeToString(digest), nil
 }
 
 func setSwiftArchiveHeaders(header http.Header, name, version, contentHash string, info swiftArchiveInfo) {
