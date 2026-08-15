@@ -63,6 +63,7 @@ func (h *SwiftHandler) handlePackageReleases(w http.ResponseWriter, r *http.Requ
 		writeSwiftProblem(w, http.StatusBadRequest, "invalid package identifier")
 		return
 	}
+	scope, name = canonicalSwiftPackage(scope, name)
 
 	upstreamURL := h.buildUpstreamURL(scope, name, "", "", r.URL.RawQuery)
 	body, contentType, responseHeaders, err := h.fetchMetadataWithHeaders(
@@ -98,6 +99,7 @@ func (h *SwiftHandler) handleRelease(w http.ResponseWriter, r *http.Request) {
 		writeSwiftProblem(w, http.StatusBadRequest, "invalid package release")
 		return
 	}
+	scope, name = canonicalSwiftPackage(scope, name)
 
 	upstreamURL := h.buildUpstreamURL(scope, name, version, "", r.URL.RawQuery)
 	body, contentType, err := h.proxy.FetchOrCacheMetadata(
@@ -118,6 +120,7 @@ func (h *SwiftHandler) handleManifest(w http.ResponseWriter, r *http.Request) {
 		writeSwiftProblem(w, http.StatusBadRequest, "invalid package release")
 		return
 	}
+	scope, name = canonicalSwiftPackage(scope, name)
 
 	upstreamURL := h.buildUpstreamURL(scope, name, version, "Package.swift", r.URL.RawQuery)
 	h.proxySwiftResource(w, r, upstreamURL, swiftAcceptManifest)
@@ -151,6 +154,7 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 		writeSwiftProblem(w, http.StatusBadRequest, "invalid package release")
 		return
 	}
+	scope, name = canonicalSwiftPackage(scope, name)
 
 	packageName := scope + "/" + name
 	filename := fmt.Sprintf("%s-%s.zip", name, version)
@@ -595,6 +599,10 @@ func writeSwiftProblem(w http.ResponseWriter, status int, detail string) {
 
 func validSwiftPackageReference(scope, name, version string) bool {
 	return validSwiftScope(scope) && validSwiftPackageName(name) && version != "" && version != "." && version != ".." && !strings.ContainsAny(version, "/\\")
+}
+
+func canonicalSwiftPackage(scope, name string) (string, string) {
+	return strings.ToLower(scope), strings.ToLower(name)
 }
 
 func validSwiftScope(scope string) bool {
