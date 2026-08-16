@@ -423,6 +423,7 @@ The proxy can be configured via:
 -database-url string     PostgreSQL connection URL
 -log-level string        Log level: debug, info, warn, error (default "info")
 -log-format string       Log format: text, json (default "text")
+-access-log string       Path to the JSONL access log
 -version                 Print version and exit
 ```
 
@@ -438,6 +439,7 @@ PROXY_DATABASE_PATH=./cache/proxy.db
 PROXY_DATABASE_URL=postgres://user:pass@localhost/proxy?sslmode=disable
 PROXY_LOG_LEVEL=info
 PROXY_LOG_FORMAT=text
+PROXY_ACCESS_LOG_PATH=/var/log/proxy/access.jsonl
 ```
 
 ### Configuration File
@@ -457,6 +459,9 @@ database:
 log:
   level: "info"
   format: "text"
+
+access_log:
+  path: "/var/log/proxy/access.jsonl"  # Optional JSONL activity log
 
 # Optional: override upstream URLs
 upstream:
