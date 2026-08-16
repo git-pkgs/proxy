@@ -86,6 +86,17 @@ func (h *HelmHandler) handleChart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	cached, err := h.proxy.GetCachedArtifact(r.Context(), helmMetadataEcosystem, repository, digest, filename)
+	if err != nil {
+		h.proxy.Logger.Error("failed to check Helm chart cache", "error", err)
+		http.Error(w, "failed to check chart cache", http.StatusInternalServerError)
+		return
+	}
+	if cached != nil {
+		h.serveChart(w, r, repository, digest, filename, cached)
+		return
+	}
+
 	body, _, err := h.fetchIndex(r, repository, upstreamURL)
 	if err != nil {
 		h.serveIndexError(w, err)
@@ -109,6 +120,10 @@ func (h *HelmHandler) handleChart(w http.ResponseWriter, r *http.Request) {
 		h.proxy.serveArtifactError(w, err, "failed to fetch chart")
 		return
 	}
+	h.serveChart(w, r, repository, digest, filename, result)
+}
+
+func (h *HelmHandler) serveChart(w http.ResponseWriter, r *http.Request, repository, digest, filename string, result *CacheResult) {
 	if !strings.EqualFold(result.Hash, digest) {
 		if result.Reader != nil {
 			_ = result.Reader.Close()
@@ -299,14 +314,28 @@ func parseHelmIndex(body []byte) (*yaml.Node, *yaml.Node, error) {
 	if err := yaml.Unmarshal(body, &document); err != nil {
 		return nil, nil, fmt.Errorf("parsing Helm index: %w", err)
 	}
+	entries, err := helmIndexEntries(&document)
+	if err != nil {
+		return nil, nil, err
+	}
+	return &document, entries, nil
+}
+
+func helmIndexEntries(document *yaml.Node) (*yaml.Node, error) {
+	if document == nil {
+		return nil, errors.New("helm index is empty")
+	}
 	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
-		return nil, nil, errors.New("helm index must be a mapping")
+		return nil, errors.New("helm index must be a mapping")
 	}
 	entries := helmMappingValue(document.Content[0], "entries")
 	if entries == nil || entries.Kind != yaml.MappingNode {
-		return nil, nil, errors.New("helm index has no entries mapping")
+		return nil, errors.New("helm index has no entries mapping")
 	}
-	return &document, entries, nil
+	if len(entries.Content)%2 != 0 {
+		return nil, errors.New("helm index entries mapping has an incomplete key-value pair")
+	}
+	return entries, nil
 }
 
 func helmMappingValue(mapping *yaml.Node, key string) *yaml.Node {

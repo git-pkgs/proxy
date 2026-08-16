@@ -109,6 +109,9 @@ generated: 2020-01-02T03:04:05Z
 		t.Errorf("chart Content-Type = %q, want application/gzip", got)
 	}
 
+	// Artifact cache availability must not depend on metadata caching or a
+	// reachable index upstream.
+	proxy.CacheMetadata = false
 	available.Store(false)
 	cachedChart := serveHelmRequest(h, "/stable/charts/"+digest+"/demo-1.0.0.tgz")
 	if cachedChart.Code != http.StatusOK {
@@ -296,6 +299,29 @@ func TestNormalizeHelmDigest(t *testing.T) {
 	}
 	if _, ok := normalizeHelmDigest("bad"); ok {
 		t.Error("normalizeHelmDigest accepted an invalid digest")
+	}
+}
+
+func TestHelmIndexEntriesRejectsIncompleteMapping(t *testing.T) {
+	entries := &yaml.Node{
+		Kind: yaml.MappingNode,
+		Content: []*yaml.Node{
+			{Kind: yaml.ScalarNode, Value: "demo"},
+		},
+	}
+	document := &yaml.Node{
+		Kind: yaml.DocumentNode,
+		Content: []*yaml.Node{{
+			Kind: yaml.MappingNode,
+			Content: []*yaml.Node{
+				{Kind: yaml.ScalarNode, Value: "entries"},
+				entries,
+			},
+		}},
+	}
+
+	if _, err := helmIndexEntries(document); err == nil {
+		t.Fatal("helmIndexEntries() error = nil, want incomplete mapping error")
 	}
 }
 
