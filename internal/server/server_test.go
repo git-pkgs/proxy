@@ -351,13 +351,29 @@ func TestSwiftHandlerMounted(t *testing.T) {
 	}
 }
 
-func TestSwiftCachePURLString(t *testing.T) {
-	s := &Server{}
+func TestSwiftCachedVersionPURLUsesStoredPackagePURL(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
 
-	got := s.cachePURLString("swift", "apple/example", "1.2.3")
-	want := "pkg:generic/swift-registry/apple.example@1.2.3?repository_url=https:%2F%2Ftuist.dev%2Fapi%2Fregistry%2Fswift"
+	packagePURL := "pkg:generic/swift-registry/apple.example?repository_url=https:%2F%2Fold.example%2Fswift"
+	if err := ts.db.UpsertPackage(&database.Package{
+		PURL:      packagePURL,
+		Ecosystem: "swift",
+		Name:      "apple/example",
+	}); err != nil {
+		t.Fatalf("failed to upsert package: %v", err)
+	}
+
+	s := &Server{
+		cfg: &config.Config{
+			Upstream: config.UpstreamConfig{Swift: "https://new.example/swift"},
+		},
+		db: ts.db,
+	}
+	got := s.cachedVersionPURL("swift", "apple/example", "1.2.3")
+	want := "pkg:generic/swift-registry/apple.example@1.2.3?repository_url=https:%2F%2Fold.example%2Fswift"
 	if got != want {
-		t.Errorf("cachePURLString() = %q, want %q", got, want)
+		t.Errorf("cachedVersionPURL() = %q, want %q", got, want)
 	}
 }
 

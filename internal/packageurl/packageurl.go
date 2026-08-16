@@ -18,6 +18,16 @@ func MakeString(ecosystem, name, version string) string {
 	return purl.MakePURLString(ecosystem, name, version)
 }
 
+// WithVersionString returns a package PURL with its version replaced. It
+// returns an empty string when packagePURL is invalid.
+func WithVersionString(packagePURL, version string) string {
+	pkg, err := purl.Parse(packagePURL)
+	if err != nil {
+		return ""
+	}
+	return pkg.WithVersion(version).String()
+}
+
 // MakeCacheStrings returns package and version PURLs suitable for artifact
 // cache records. Swift registry identities use an explicit generic PURL until
 // their source repository has been resolved.
