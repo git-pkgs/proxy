@@ -117,7 +117,7 @@ func (h *NuGetHandler) rewriteServiceIndex(body []byte) ([]byte, error) {
 
 		// Rewrite URLs for services we proxy. The service type determines the
 		// local route because an upstream index may advertise a different host.
-		if id != "" && h.shouldRewriteService(rtype) {
+		if id != "" {
 			rmap["@id"] = h.rewriteNuGetURL(id, rtype)
 		}
 	}
@@ -125,29 +125,8 @@ func (h *NuGetHandler) rewriteServiceIndex(body []byte) ([]byte, error) {
 	return json.Marshal(index)
 }
 
-// shouldRewriteService returns true if the service type should be rewritten.
-func (h *NuGetHandler) shouldRewriteService(serviceType string) bool {
-	// Rewrite package content and registration services
-	rewriteTypes := []string{
-		"PackageBaseAddress/3.0.0",
-		"RegistrationsBaseUrl/3.6.0",
-		"RegistrationsBaseUrl/Versioned",
-		"SearchQueryService",
-		"SearchQueryService/3.0.0-rc",
-		"SearchQueryService/3.5.0",
-		"SearchAutocompleteService",
-		"SearchAutocompleteService/3.5.0",
-	}
-
-	for _, t := range rewriteTypes {
-		if serviceType == t {
-			return true
-		}
-	}
-	return false
-}
-
 // rewriteNuGetURL rewrites a NuGet service URL based on its advertised type.
+// Service types the proxy does not handle are returned unchanged.
 func (h *NuGetHandler) rewriteNuGetURL(origURL, serviceType string) string {
 	switch serviceType {
 	case "PackageBaseAddress/3.0.0":

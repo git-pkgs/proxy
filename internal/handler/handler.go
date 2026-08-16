@@ -51,7 +51,7 @@ func configuredUpstreamURL(value, defaultValue string) string {
 	if value == "" {
 		value = defaultValue
 	}
-	return strings.TrimSuffix(value, "/")
+	return strings.TrimRight(value, "/")
 }
 
 const defaultHTTPTimeout = 30 * time.Second

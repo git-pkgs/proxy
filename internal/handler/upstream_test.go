@@ -71,6 +71,9 @@ func TestConfiguredUpstreamURL(t *testing.T) {
 	if got := configuredUpstreamURL("https://custom.example.com/", "https://default.example.com"); got != "https://custom.example.com" {
 		t.Errorf("configured URL = %q, want trimmed custom URL", got)
 	}
+	if got := configuredUpstreamURL("https://custom.example.com///", "https://default.example.com"); got != "https://custom.example.com" {
+		t.Errorf("configured URL with trailing slashes = %q, want trimmed custom URL", got)
+	}
 }
 
 func TestHexHandlerUsesConfiguredAPIUpstream(t *testing.T) {

@@ -91,40 +91,6 @@ func TestNuGetRewriteServiceIndex(t *testing.T) {
 	}
 }
 
-func TestNuGetShouldRewriteService(t *testing.T) {
-	h := &NuGetHandler{}
-
-	rewriteTypes := []string{
-		"PackageBaseAddress/3.0.0",
-		"RegistrationsBaseUrl/3.6.0",
-		"RegistrationsBaseUrl/Versioned",
-		"SearchQueryService",
-		"SearchQueryService/3.0.0-rc",
-		"SearchQueryService/3.5.0",
-		"SearchAutocompleteService",
-		"SearchAutocompleteService/3.5.0",
-	}
-
-	for _, stype := range rewriteTypes {
-		if !h.shouldRewriteService(stype) {
-			t.Errorf("shouldRewriteService(%q) = false, want true", stype)
-		}
-	}
-
-	noRewriteTypes := []string{
-		"SomeOtherService/1.0.0",
-		"PackagePublish/2.0.0",
-		"",
-		"SearchQueryService/99.0.0",
-	}
-
-	for _, stype := range noRewriteTypes {
-		if h.shouldRewriteService(stype) {
-			t.Errorf("shouldRewriteService(%q) = true, want false", stype)
-		}
-	}
-}
-
 func TestNuGetRewriteURL(t *testing.T) {
 	h := &NuGetHandler{
 		proxyURL: "http://localhost:8080",
@@ -146,8 +112,23 @@ func TestNuGetRewriteURL(t *testing.T) {
 			"http://localhost:8080/nuget/v3/registration5-gz-semver2/",
 		},
 		{
+			"https://api.nuget.org/v3/registration5-gz-semver2/",
+			"RegistrationsBaseUrl/Versioned",
+			"http://localhost:8080/nuget/v3/registration5-gz-semver2/",
+		},
+		{
 			"https://azuresearch-usnc.nuget.org/query",
 			"SearchQueryService",
+			"http://localhost:8080/nuget/query",
+		},
+		{
+			"https://azuresearch-usnc.nuget.org/query",
+			"SearchQueryService/3.0.0-rc",
+			"http://localhost:8080/nuget/query",
+		},
+		{
+			"https://azuresearch-usnc.nuget.org/query",
+			"SearchQueryService/3.5.0",
 			"http://localhost:8080/nuget/query",
 		},
 		{
@@ -156,9 +137,29 @@ func TestNuGetRewriteURL(t *testing.T) {
 			"http://localhost:8080/nuget/autocomplete",
 		},
 		{
+			"https://azuresearch-usnc.nuget.org/autocomplete",
+			"SearchAutocompleteService/3.5.0",
+			"http://localhost:8080/nuget/autocomplete",
+		},
+		{
 			"https://example.com/unknown",
 			"SomeOtherService/1.0.0",
 			"https://example.com/unknown",
+		},
+		{
+			"https://api.nuget.org/v2/package",
+			"PackagePublish/2.0.0",
+			"https://api.nuget.org/v2/package",
+		},
+		{
+			"https://azuresearch-usnc.nuget.org/query",
+			"SearchQueryService/99.0.0",
+			"https://azuresearch-usnc.nuget.org/query",
+		},
+		{
+			"https://example.com/resource",
+			"",
+			"https://example.com/resource",
 		},
 	}
 
