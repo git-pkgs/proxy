@@ -849,6 +849,8 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
+| `proxy_requests_total` | counter | `ecosystem`, `status` | Proxy responses by package ecosystem and HTTP status |
+| `proxy_request_duration_seconds` | histogram | `ecosystem`, `status` | Proxy request duration |
 | `proxy_cache_hits_total` | counter | `ecosystem` | Cache hits |
 | `proxy_cache_misses_total` | counter | `ecosystem` | Cache misses |
 | `proxy_cache_size_bytes` | gauge | | Total size of cached artifacts |
