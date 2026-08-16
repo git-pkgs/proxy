@@ -61,9 +61,7 @@ var artifactCopyBufferPool = sync.Pool{ //nolint:gochecknoglobals // shared acro
 // canonicalPackagePURL returns a versionless PURL in canonical form so cooldown
 // lookups match keys produced by config.CooldownConfig.NormalizedPackages.
 func canonicalPackagePURL(ecosystem, name string) string {
-	p := purl.MakePURL(ecosystem, name, "")
-	_ = p.Normalize()
-	return p.String()
+	return purl.MakePURLString(ecosystem, name, "")
 }
 
 const contentTypeJSON = "application/json"
