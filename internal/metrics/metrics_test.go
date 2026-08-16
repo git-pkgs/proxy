@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/prometheus/client_golang/prometheus"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
 )
 
@@ -191,19 +192,42 @@ func TestMetricsEndpointOutput(t *testing.T) {
 
 func TestMetricsLabeling(t *testing.T) {
 	// Test that different ecosystems are properly labeled
-	ecosystems := []string{"npm", "pypi", "cargo", "gem"}
+	ecosystems := []struct {
+		input string
+		label string
+	}{
+		{input: "npm", label: "npm"},
+		{input: "pypi", label: "pypi"},
+		{input: "cargo", label: "cargo"},
+		{input: "gem", label: "rubygems"},
+	}
 
 	for _, eco := range ecosystems {
-		RecordRequest(eco, 200, 10*time.Millisecond)
-		RecordCacheHit(eco)
+		RecordRequest(eco.input, 200, 10*time.Millisecond)
+		RecordCacheHit(eco.input)
 	}
 
 	// Verify each ecosystem has metrics
 	for _, eco := range ecosystems {
-		val := getMetricValue(t, CacheHits, eco)
+		val := getMetricValue(t, CacheHits, eco.label)
 		if val == 0 {
-			t.Errorf("no cache hits recorded for %s", eco)
+			t.Errorf("no cache hits recorded for %s", eco.label)
 		}
+	}
+}
+
+func TestCacheMetricLabelsAreNormalized(t *testing.T) {
+	rubyHitsBefore := testutil.ToFloat64(CacheHits.WithLabelValues("rubygems"))
+	composerMissesBefore := testutil.ToFloat64(CacheMisses.WithLabelValues("packagist"))
+
+	RecordCacheHit("gem")
+	RecordCacheMiss("composer")
+
+	if diff := testutil.ToFloat64(CacheHits.WithLabelValues("rubygems")) - rubyHitsBefore; diff != 1 {
+		t.Errorf("rubygems cache hits delta = %.0f, want 1", diff)
+	}
+	if diff := testutil.ToFloat64(CacheMisses.WithLabelValues("packagist")) - composerMissesBefore; diff != 1 {
+		t.Errorf("packagist cache misses delta = %.0f, want 1", diff)
 	}
 }
 

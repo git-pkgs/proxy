@@ -6,6 +6,7 @@ import (
 	"strconv"
 	"time"
 
+	"github.com/git-pkgs/purl"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/promhttp"
 )
@@ -173,12 +174,12 @@ func RecordRequest(ecosystem string, status int, duration time.Duration) {
 
 // RecordCacheHit increments cache hit counter.
 func RecordCacheHit(ecosystem string) {
-	CacheHits.WithLabelValues(ecosystem).Inc()
+	CacheHits.WithLabelValues(purl.NormalizeEcosystem(ecosystem)).Inc()
 }
 
 // RecordCacheMiss increments cache miss counter.
 func RecordCacheMiss(ecosystem string) {
-	CacheMisses.WithLabelValues(ecosystem).Inc()
+	CacheMisses.WithLabelValues(purl.NormalizeEcosystem(ecosystem)).Inc()
 }
 
 // RecordUpstreamFetch tracks upstream fetch duration.
