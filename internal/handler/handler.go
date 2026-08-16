@@ -21,7 +21,6 @@ import (
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/proxy/internal/storage"
-	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
 )
 
@@ -75,7 +74,18 @@ func canonicalPackagePURL(ecosystem, name string) string {
 // canonicalVersionPURL returns a versioned PURL in canonical form, matching
 // the keys the artifact cache writes to the versions table.
 func canonicalVersionPURL(ecosystem, name, version string) string {
-	return purl.MakePURLString(ecosystem, name, version)
+	return packageurl.MakeString(ecosystem, name, version)
+}
+
+var errUnsupportedPackageIdentity = errors.New("package identity cannot be represented as a PURL")
+
+func packagePURLStrings(ecosystem, name, version string) (string, string, error) {
+	packagePURL := packageurl.MakeString(ecosystem, name, "")
+	versionPURL := packageurl.MakeString(ecosystem, name, version)
+	if packagePURL == "" || versionPURL == "" {
+		return "", "", fmt.Errorf("%w: %s %q", errUnsupportedPackageIdentity, ecosystem, name)
+	}
+	return packagePURL, versionPURL, nil
 }
 
 const contentTypeJSON = "application/json"
@@ -162,23 +172,27 @@ type CacheResult struct {
 
 // GetOrFetchArtifact retrieves an artifact from cache or fetches from upstream.
 func (p *Proxy) GetOrFetchArtifact(ctx context.Context, ecosystem, name, version, filename string) (*CacheResult, error) {
-	if cached, err := p.GetCachedArtifact(ctx, ecosystem, name, version, filename); err != nil {
+	pkgPURL, versionPURL, err := packagePURLStrings(ecosystem, name, version)
+	if err != nil {
+		return nil, err
+	}
+	if cached, err := p.checkCache(ctx, pkgPURL, versionPURL, filename); err != nil {
 		return nil, err
 	} else if cached != nil {
 		return cached, nil
 	}
 	metrics.RecordCacheMiss(ecosystem)
 
-	pkgPURL := packageurl.MakeString(ecosystem, name, "")
-	versionPURL := packageurl.MakeString(ecosystem, name, version)
 	return p.fetchAndCache(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL)
 }
 
 // GetCachedArtifact retrieves an artifact from cache without contacting an upstream.
 // It returns nil when no usable cache entry exists.
 func (p *Proxy) GetCachedArtifact(ctx context.Context, ecosystem, name, version, filename string) (*CacheResult, error) {
-	pkgPURL := packageurl.MakeString(ecosystem, name, "")
-	versionPURL := packageurl.MakeString(ecosystem, name, version)
+	pkgPURL, versionPURL, err := packagePURLStrings(ecosystem, name, version)
+	if err != nil {
+		return nil, err
+	}
 	return p.checkCache(ctx, pkgPURL, versionPURL, filename)
 }
 
@@ -188,8 +202,10 @@ func (p *Proxy) ClearCachedArtifact(ctx context.Context, ecosystem, name, versio
 	if p.DB == nil || p.Storage == nil {
 		return nil
 	}
-	pkgPURL := purl.MakePURLString(ecosystem, name, "")
-	versionPURL := purl.MakePURLString(ecosystem, name, version)
+	pkgPURL, versionPURL, err := packagePURLStrings(ecosystem, name, version)
+	if err != nil {
+		return err
+	}
 	cached, err := p.DB.GetCachedArtifact(pkgPURL, versionPURL, filename)
 	if err != nil {
 		return fmt.Errorf("looking up cached artifact: %w", err)
@@ -887,10 +903,17 @@ func (p *Proxy) GetOrFetchArtifactFromURLWithHeaders(ctx context.Context, ecosys
 }
 
 func (p *Proxy) getOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header, expectedHash string) (*CacheResult, error) {
-	pkgPURL := packageurl.MakeString(ecosystem, name, "")
-	versionPURL := packageurl.MakeString(ecosystem, name, version)
+	pkgPURL, versionPURL, err := packagePURLStrings(ecosystem, name, version)
+	if err != nil {
+		return nil, err
+	}
+	return p.getOrFetchArtifactFromURLWithCachePURLs(
+		ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, expectedHash,
+	)
+}
 
-	if cached, err := p.getCachedArtifactWithExpectedHash(ctx, ecosystem, name, version, filename, expectedHash); err != nil {
+func (p *Proxy) getOrFetchArtifactFromURLWithCachePURLs(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, expectedHash string) (*CacheResult, error) {
+	if cached, err := p.getCachedArtifactWithExpectedHash(ctx, pkgPURL, versionPURL, filename, expectedHash); err != nil {
 		return nil, err
 	} else if cached != nil {
 		return cached, nil
@@ -900,8 +923,8 @@ func (p *Proxy) getOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, 
 	return p.fetchAndCacheFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, expectedHash)
 }
 
-func (p *Proxy) getCachedArtifactWithExpectedHash(ctx context.Context, ecosystem, name, version, filename, expectedHash string) (*CacheResult, error) {
-	cached, err := p.GetCachedArtifact(ctx, ecosystem, name, version, filename)
+func (p *Proxy) getCachedArtifactWithExpectedHash(ctx context.Context, pkgPURL, versionPURL, filename, expectedHash string) (*CacheResult, error) {
+	cached, err := p.checkCache(ctx, pkgPURL, versionPURL, filename)
 	if err != nil || cached == nil {
 		return cached, err
 	}
@@ -912,7 +935,6 @@ func (p *Proxy) getCachedArtifactWithExpectedHash(ctx context.Context, ecosystem
 	if cached.Reader != nil {
 		_ = cached.Reader.Close()
 	}
-	versionPURL := packageurl.MakeString(ecosystem, name, version)
 	p.discardCachedArtifact(ctx, versionPURL, filename, cached.storagePath)
 	return nil, artifactHashMismatchError(expectedHash, cached.Hash)
 }

@@ -885,7 +885,7 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 		return
 	}
 
-	versionPURL := packageurl.MakeString(ecosystem, name, version)
+	versionPURL := s.cachePURLString(ecosystem, name, version)
 	ver, err := s.db.GetVersionByPURL(versionPURL)
 	if err != nil || ver == nil {
 		s.logger.Error("failed to get version", "error", err)
@@ -925,6 +925,21 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 	if err := s.templates.Render(w, "version_show", data); err != nil {
 		s.logger.Error("failed to render version show", "error", err)
 	}
+}
+
+func (s *Server) cachePURLString(ecosystem, name, version string) string {
+	registryURL := ""
+	if s.cfg != nil {
+		registryURL = s.cfg.Upstream.Swift
+	}
+	if registryURL == "" {
+		registryURL = config.DefaultSwiftUpstream
+	}
+	packagePURL, versionPURL := packageurl.MakeCacheStrings(ecosystem, name, version, registryURL)
+	if version == "" {
+		return packagePURL
+	}
+	return versionPURL
 }
 
 func (s *Server) showBrowseSource(w http.ResponseWriter, r *http.Request, ecosystem, name, version string) {

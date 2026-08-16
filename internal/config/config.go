@@ -75,6 +75,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DefaultSwiftUpstream is the Swift Package Registry used when none is configured.
+const DefaultSwiftUpstream = "https://tuist.dev/api/registry/swift"
+
 // Config holds all configuration for the proxy server.
 type Config struct {
 	// Listen is the address to listen on (e.g., ":8080", "127.0.0.1:8080").
@@ -603,7 +606,7 @@ func Default() *Config {
 			Conda:              "https://conda.anaconda.org",
 			CRAN:               "https://cloud.r-project.org",
 			Julia:              "https://pkg.julialang.org",
-			Swift:              "https://tuist.dev/api/registry/swift",
+			Swift:              DefaultSwiftUpstream,
 			OCIDefault:         "https://registry-1.docker.io",
 			Debian:             "http://deb.debian.org/debian",
 			RPM:                "https://dl.fedoraproject.org/pub/fedora/linux",

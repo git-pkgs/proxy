@@ -204,13 +204,21 @@ func TestSwiftSourceArchiveCachesAndPreservesSecurityMetadata(t *testing.T) {
 		t.Errorf("Content-Disposition = %q", got)
 	}
 
-	versionPURL := packageurl.MakeString("swift", "apple/example", "1.2.3")
+	packagePURL, versionPURL := packageurl.MakeCacheStrings(
+		"swift", "apple/example", "1.2.3", upstream.URL+"/registry",
+	)
+	if strings.HasPrefix(packagePURL, "pkg:swift/") {
+		t.Fatalf("registry identity produced source PURL %q", packagePURL)
+	}
 	versionRecord, err := db.GetVersionByPURL(versionPURL)
 	if err != nil {
 		t.Fatalf("cached Swift version %q not found: %v", versionPURL, err)
 	}
 	if versionRecord == nil {
 		t.Fatalf("cached Swift version %q not found", versionPURL)
+	}
+	if versionRecord.PackagePURL != packagePURL {
+		t.Errorf("cached package PURL = %q, want %q", versionRecord.PackagePURL, packagePURL)
 	}
 
 	fetcher.fetchCalled = false
@@ -261,8 +269,8 @@ func TestSwiftSourceArchiveRejectsChecksumMismatch(t *testing.T) {
 	if len(store.files) != 0 {
 		t.Errorf("mismatched archive remained in storage: %v", store.files)
 	}
-	versionPURL := packageurl.MakeString("swift", "apple/example", "1.2.3")
-	cached, err := db.GetCachedArtifact(packageurl.MakeString("swift", "apple/example", ""), versionPURL, "example-1.2.3.zip")
+	packagePURL, versionPURL := packageurl.MakeCacheStrings("swift", "apple/example", "1.2.3", upstream.URL)
+	cached, err := db.GetCachedArtifact(packagePURL, versionPURL, "example-1.2.3.zip")
 	if err != nil {
 		t.Fatalf("checking cache: %v", err)
 	}
@@ -311,7 +319,7 @@ func TestSwiftSourceArchiveCanonicalizesPackageIdentity(t *testing.T) {
 		}
 	}
 
-	canonicalPURL := packageurl.MakeString("swift", "apple/example", "")
+	canonicalPURL, _ := packageurl.MakeCacheStrings("swift", "apple/example", "1.2.3", upstream.URL)
 	canonical, err := db.GetPackageByPURL(canonicalPURL)
 	if err != nil {
 		t.Fatalf("getting canonical package: %v", err)
@@ -320,13 +328,9 @@ func TestSwiftSourceArchiveCanonicalizesPackageIdentity(t *testing.T) {
 		t.Fatalf("canonical package %q not found", canonicalPURL)
 	}
 
-	nonCanonicalPURL := packageurl.MakeString("swift", "APPLE/EXAMPLE", "")
-	nonCanonical, err := db.GetPackageByPURL(nonCanonicalPURL)
-	if err != nil {
-		t.Fatalf("getting non-canonical package: %v", err)
-	}
-	if nonCanonical != nil {
-		t.Errorf("non-canonical package %q was cached", nonCanonicalPURL)
+	nonCanonicalPURL, _ := packageurl.MakeCacheStrings("swift", "APPLE/EXAMPLE", "1.2.3", upstream.URL)
+	if nonCanonicalPURL != canonicalPURL {
+		t.Errorf("uppercase cache PURL = %q, want %q", nonCanonicalPURL, canonicalPURL)
 	}
 }
 
@@ -346,8 +350,10 @@ func TestSwiftSourceArchiveHeadRejectsCachedChecksumMismatch(t *testing.T) {
 		Size:        int64(len(archive)),
 		ContentType: "application/zip",
 	}
-	cached, err := proxy.GetOrFetchArtifactFromURL(
-		context.Background(), "swift", "apple/example", "1.2.3", "example-1.2.3.zip", upstream.URL+"/apple/example/1.2.3.zip",
+	packagePURL, versionPURL := packageurl.MakeCacheStrings("swift", "apple/example", "1.2.3", upstream.URL)
+	cached, err := proxy.getOrFetchArtifactFromURLWithCachePURLs(
+		context.Background(), "swift", "apple/example", "1.2.3", "example-1.2.3.zip",
+		packagePURL, versionPURL, upstream.URL+"/apple/example/1.2.3.zip", nil, "",
 	)
 	if err != nil {
 		t.Fatalf("seeding cache: %v", err)

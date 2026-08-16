@@ -2,19 +2,60 @@ package packageurl
 
 import "testing"
 
-func TestMakeStringSwiftNamespace(t *testing.T) {
-	got := MakeString("swift", "apple/swift-argument-parser", "1.8.2")
-	want := "pkg:swift/apple/swift-argument-parser@1.8.2"
+func TestMakeSwiftRegistryIdentityUnsupported(t *testing.T) {
+	identities := []string{"apple.swift-argument-parser", "apple/swift-argument-parser"}
+	for _, identity := range identities {
+		t.Run(identity, func(t *testing.T) {
+			if got := Make("swift", identity, "1.8.2"); got != nil {
+				t.Errorf("Make() = %q, want nil", got.String())
+			}
+			if got := MakeString("swift", identity, "1.8.2"); got != "" {
+				t.Errorf("MakeString() = %q, want empty string", got)
+			}
+		})
+	}
+}
+
+func TestMakeStringSwiftSourceCoordinate(t *testing.T) {
+	got := MakeString("swift", "github.com/apple/swift-package-manager", "1.7.0")
+	want := "pkg:swift/github.com/apple/swift-package-manager@1.7.0"
 	if got != want {
 		t.Errorf("MakeString() = %q, want %q", got, want)
 	}
 }
 
-func TestMakeStringSwiftNestedNamespace(t *testing.T) {
-	got := MakeString("swift", "github.com/apple/swift-package-manager", "1.7.0")
-	want := "pkg:swift/github.com/apple/swift-package-manager@1.7.0"
-	if got != want {
-		t.Errorf("MakeString() = %q, want %q", got, want)
+func TestMakeCacheStringsSwiftRegistryIdentity(t *testing.T) {
+	packagePURL, versionPURL := MakeCacheStrings(
+		"swift", "APPLE/EXAMPLE", "1.2.3", "https://tuist.dev/api/registry/swift/",
+	)
+
+	wantPackage := "pkg:generic/swift-registry/apple.example?repository_url=https:%2F%2Ftuist.dev%2Fapi%2Fregistry%2Fswift"
+	if packagePURL != wantPackage {
+		t.Errorf("package PURL = %q, want %q", packagePURL, wantPackage)
+	}
+	wantVersion := "pkg:generic/swift-registry/apple.example@1.2.3?repository_url=https:%2F%2Ftuist.dev%2Fapi%2Fregistry%2Fswift"
+	if versionPURL != wantVersion {
+		t.Errorf("version PURL = %q, want %q", versionPURL, wantVersion)
+	}
+
+	dottedPackage, dottedVersion := MakeCacheStrings(
+		"swift", "apple.example", "1.2.3", "https://tuist.dev/api/registry/swift",
+	)
+	if dottedPackage != packagePURL || dottedVersion != versionPURL {
+		t.Errorf("dotted identity cache PURLs = %q, %q; want %q, %q", dottedPackage, dottedVersion, packagePURL, versionPURL)
+	}
+}
+
+func TestMakeCacheStringsUsesSourcePURLWhenAvailable(t *testing.T) {
+	packagePURL, versionPURL := MakeCacheStrings(
+		"swift", "github.com/apple/swift-package-manager", "1.7.0", "https://tuist.dev/api/registry/swift",
+	)
+
+	if packagePURL != "pkg:swift/github.com/apple/swift-package-manager" {
+		t.Errorf("package PURL = %q", packagePURL)
+	}
+	if versionPURL != "pkg:swift/github.com/apple/swift-package-manager@1.7.0" {
+		t.Errorf("version PURL = %q", versionPURL)
 	}
 }
 

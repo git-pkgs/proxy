@@ -13,16 +13,18 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+
+	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/packageurl"
 )
 
 const (
-	swiftDefaultUpstream = "https://tuist.dev/api/registry/swift"
-	swiftAcceptJSON      = "application/vnd.swift.registry.v1+json"
-	swiftAcceptManifest  = "application/vnd.swift.registry.v1+swift"
-	swiftAcceptArchive   = "application/vnd.swift.registry.v1+zip"
-	swiftContentVersion  = "1"
-	swiftMaxScopeLength  = 39
-	swiftMaxNameLength   = 100
+	swiftAcceptJSON     = "application/vnd.swift.registry.v1+json"
+	swiftAcceptManifest = "application/vnd.swift.registry.v1+swift"
+	swiftAcceptArchive  = "application/vnd.swift.registry.v1+zip"
+	swiftContentVersion = "1"
+	swiftMaxScopeLength = 39
+	swiftMaxNameLength  = 100
 )
 
 // SwiftHandler handles the read-only Swift Package Registry v1 protocol.
@@ -35,7 +37,7 @@ type SwiftHandler struct {
 // NewSwiftHandler creates a Swift Package Registry protocol handler.
 func NewSwiftHandler(proxy *Proxy, proxyURL, upstreamURL string) *SwiftHandler {
 	if strings.TrimSpace(upstreamURL) == "" {
-		upstreamURL = swiftDefaultUpstream
+		upstreamURL = config.DefaultSwiftUpstream
 	}
 
 	return &SwiftHandler{
@@ -159,6 +161,11 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 	packageName := scope + "/" + name
 	filename := fmt.Sprintf("%s-%s.zip", name, version)
 	upstreamURL := h.buildUpstreamURL(scope, name, version+".zip", "", r.URL.RawQuery)
+	packagePURL, versionPURL := packageurl.MakeCacheStrings("swift", packageName, version, h.upstreamURL)
+	if packagePURL == "" || versionPURL == "" {
+		h.writeArtifactError(w, fmt.Errorf("%w: swift %q", errUnsupportedPackageIdentity, packageName))
+		return
+	}
 	archiveInfo, infoErr := h.fetchArchiveInfo(r.Context(), scope, name, version)
 	if infoErr != nil {
 		h.writeArtifactError(w, fmt.Errorf("fetching release metadata: %w", infoErr))
@@ -166,14 +173,15 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 	}
 
 	if r.Method == http.MethodHead {
-		h.handleSourceArchiveHead(w, r, packageName, version, filename, upstreamURL, archiveInfo)
+		h.handleSourceArchiveHead(w, r, packageName, version, filename, packagePURL, versionPURL, upstreamURL, archiveInfo)
 		return
 	}
 
 	headers := make(http.Header)
 	headers.Set("Accept", requestAccept(r, swiftAcceptArchive))
-	result, err := h.proxy.getOrFetchArtifactFromURL(
-		r.Context(), "swift", packageName, version, filename, upstreamURL, headers, archiveInfo.checksum,
+	result, err := h.proxy.getOrFetchArtifactFromURLWithCachePURLs(
+		r.Context(), "swift", packageName, version, filename, packagePURL, versionPURL,
+		upstreamURL, headers, archiveInfo.checksum,
 	)
 	if err != nil {
 		h.writeArtifactError(w, err)
@@ -188,11 +196,11 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 func (h *SwiftHandler) handleSourceArchiveHead(
 	w http.ResponseWriter,
 	r *http.Request,
-	packageName, version, filename, upstreamURL string,
+	packageName, version, filename, packagePURL, versionPURL, upstreamURL string,
 	archiveInfo swiftArchiveInfo,
 ) {
 	result, err := h.proxy.getCachedArtifactWithExpectedHash(
-		r.Context(), "swift", packageName, version, filename, archiveInfo.checksum,
+		r.Context(), packagePURL, versionPURL, filename, archiveInfo.checksum,
 	)
 	if err != nil {
 		h.writeArtifactError(w, err)
