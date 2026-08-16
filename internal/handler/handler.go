@@ -151,6 +151,7 @@ func (p *Proxy) GetOrFetchArtifact(ctx context.Context, ecosystem, name, version
 	} else if cached != nil {
 		return cached, nil
 	}
+	metrics.RecordCacheMiss(ecosystem)
 
 	pkgPURL := purl.MakePURLString(ecosystem, name, "")
 	versionPURL := purl.MakePURLString(ecosystem, name, version)
@@ -241,13 +242,10 @@ func rewriteSignedURLHost(signed, baseURL string) string {
 
 func (p *Proxy) recordCacheHit(ecosystem, versionPURL, filename string) {
 	_ = p.DB.RecordArtifactHit(versionPURL, filename)
-	metrics.RecordCacheHit(purl.NormalizeEcosystem(ecosystem))
+	metrics.RecordCacheHit(ecosystem)
 }
 
 func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL string) (*CacheResult, error) {
-	// Record cache miss
-	metrics.RecordCacheMiss(ecosystem)
-
 	// Resolve download URL
 	info, err := p.Resolver.Resolve(ctx, ecosystem, name, version)
 	if err != nil {
@@ -521,12 +519,14 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 					if entry.ContentType.Valid {
 						ct = entry.ContentType.String
 					}
+					metrics.RecordCacheHit(ecosystem)
 					return data, ct, nil
 				}
 			}
 			// Cache file missing/unreadable, fall through to upstream
 		}
 	}
+	p.recordMetadataCacheMiss(ecosystem)
 
 	accept := contentTypeJSON
 	if len(acceptHeaders) > 0 && acceptHeaders[0] != "" {
@@ -572,6 +572,12 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 	p.Logger.Info("serving metadata from cache",
 		"ecosystem", ecosystem, "key", cacheKey)
 	return data, ct, nil
+}
+
+func (p *Proxy) recordMetadataCacheMiss(ecosystem string) {
+	if p.CacheMetadata {
+		metrics.RecordCacheMiss(ecosystem)
+	}
 }
 
 // fetchUpstreamMetadata fetches metadata from upstream, using ETag for conditional revalidation.
@@ -824,6 +830,7 @@ func (p *Proxy) GetOrFetchArtifactFromURLWithHeaders(ctx context.Context, ecosys
 	} else if cached != nil {
 		return cached, nil
 	}
+	metrics.RecordCacheMiss(ecosystem)
 
 	pkgPURL := purl.MakePURLString(ecosystem, name, "")
 	versionPURL := purl.MakePURLString(ecosystem, name, version)

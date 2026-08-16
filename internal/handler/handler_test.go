@@ -15,9 +15,11 @@ import (
 
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // mockStorage implements storage.Storage for testing.
@@ -273,6 +275,7 @@ func TestGetOrFetchArtifact_CacheHit(t *testing.T) {
 
 func TestGetOrFetchArtifact_CacheMiss_NoPackage(t *testing.T) {
 	proxy, _, _, fetcher := setupTestProxy(t)
+	missesBefore := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("npm"))
 
 	// The resolver will fail because "nonexistent" isn't a real package,
 	// but we're testing that it tries to fetch (doesn't return from cache).
@@ -281,6 +284,10 @@ func TestGetOrFetchArtifact_CacheMiss_NoPackage(t *testing.T) {
 	_, err := proxy.GetOrFetchArtifact(context.Background(), "npm", "nonexistent", "1.0.0", "nonexistent-1.0.0.tgz")
 	if err == nil {
 		t.Fatal("expected error for uncached package")
+	}
+	missesAfter := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("npm"))
+	if diff := missesAfter - missesBefore; diff != 1 {
+		t.Errorf("cache misses delta = %.0f, want 1", diff)
 	}
 }
 
@@ -540,6 +547,7 @@ func TestServeArtifact_Stream(t *testing.T) {
 func TestGetOrFetchArtifactFromURL_CacheHit(t *testing.T) {
 	proxy, db, store, fetcher := setupTestProxy(t)
 	seedPackage(t, db, store, "pypi", "requests", "2.28.0", "requests-2.28.0.tar.gz", "pypi content")
+	missesBefore := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("pypi"))
 
 	result, err := proxy.GetOrFetchArtifactFromURL(context.Background(), "pypi", "requests", "2.28.0", "requests-2.28.0.tar.gz", "https://pypi.org/files/requests-2.28.0.tar.gz")
 	if err != nil {
@@ -553,10 +561,15 @@ func TestGetOrFetchArtifactFromURL_CacheHit(t *testing.T) {
 	if fetcher.fetchCalled {
 		t.Error("fetcher should not be called on cache hit")
 	}
+	missesAfter := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("pypi"))
+	if diff := missesAfter - missesBefore; diff != 0 {
+		t.Errorf("cache misses delta = %.0f, want 0", diff)
+	}
 }
 
 func TestGetOrFetchArtifactFromURL_CacheMiss(t *testing.T) {
 	proxy, _, store, fetcher := setupTestProxy(t)
+	missesBefore := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("pypi"))
 
 	fetcher.artifact = &fetch.Artifact{
 		Body:        io.NopCloser(strings.NewReader("fetched content")),
@@ -588,6 +601,10 @@ func TestGetOrFetchArtifactFromURL_CacheMiss(t *testing.T) {
 	storagePath := storage.ArtifactPath("pypi", "", "newpkg", "1.0.0", "newpkg-1.0.0.tar.gz")
 	if _, ok := store.files[storagePath]; !ok {
 		t.Error("artifact was not stored in storage")
+	}
+	missesAfter := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("pypi"))
+	if diff := missesAfter - missesBefore; diff != 1 {
+		t.Errorf("cache misses delta = %.0f, want 1", diff)
 	}
 }
 
@@ -878,6 +895,8 @@ func TestProxyCached_NoValidators_OmitsHeaders(t *testing.T) {
 }
 
 func TestFetchOrCacheMetadata_TTL_ServesFreshFromCache(t *testing.T) {
+	hitsBefore := testutil.ToFloat64(metrics.CacheHits.WithLabelValues("test"))
+	missesBefore := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("test"))
 	upstreamHits := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamHits++
@@ -904,6 +923,12 @@ func TestFetchOrCacheMetadata_TTL_ServesFreshFromCache(t *testing.T) {
 	if upstreamHits != 1 {
 		t.Fatalf("expected 1 upstream hit, got %d", upstreamHits)
 	}
+	if diff := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("test")) - missesBefore; diff != 1 {
+		t.Errorf("cache misses delta after first request = %.0f, want 1", diff)
+	}
+	if diff := testutil.ToFloat64(metrics.CacheHits.WithLabelValues("test")) - hitsBefore; diff != 0 {
+		t.Errorf("cache hits delta after first request = %.0f, want 0", diff)
+	}
 
 	// Second request within TTL should serve from cache without hitting upstream
 	body, _, err = proxy.FetchOrCacheMetadata(ctx, "test", "ttl-pkg", upstream.URL+"/pkg")
@@ -916,9 +941,16 @@ func TestFetchOrCacheMetadata_TTL_ServesFreshFromCache(t *testing.T) {
 	if upstreamHits != 1 {
 		t.Errorf("expected upstream to still be hit only once, got %d", upstreamHits)
 	}
+	if diff := testutil.ToFloat64(metrics.CacheHits.WithLabelValues("test")) - hitsBefore; diff != 1 {
+		t.Errorf("cache hits delta after second request = %.0f, want 1", diff)
+	}
+	if diff := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("test")) - missesBefore; diff != 1 {
+		t.Errorf("cache misses delta after second request = %.0f, want 1", diff)
+	}
 }
 
 func TestFetchOrCacheMetadata_TTL_Zero_AlwaysRevalidates(t *testing.T) {
+	missesBefore := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("test"))
 	upstreamHits := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamHits++
@@ -946,6 +978,40 @@ func TestFetchOrCacheMetadata_TTL_Zero_AlwaysRevalidates(t *testing.T) {
 
 	if upstreamHits != 2 {
 		t.Errorf("expected 2 upstream hits with TTL=0, got %d", upstreamHits)
+	}
+	missesAfter := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("test"))
+	if diff := missesAfter - missesBefore; diff != 2 {
+		t.Errorf("cache misses delta = %.0f, want 2", diff)
+	}
+}
+
+func TestFetchOrCacheMetadata_CacheDisabledDoesNotRecordMetrics(t *testing.T) {
+	const ecosystem = "metadata-disabled"
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"v":1}`))
+	}))
+	t.Cleanup(upstream.Close)
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+
+	hitsBefore := testutil.ToFloat64(metrics.CacheHits.WithLabelValues(ecosystem))
+	missesBefore := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues(ecosystem))
+
+	_, _, err := proxy.FetchOrCacheMetadata(context.Background(), ecosystem, "pkg", upstream.URL+"/pkg")
+	if err != nil {
+		t.Fatalf("fetch metadata: %v", err)
+	}
+
+	hitsAfter := testutil.ToFloat64(metrics.CacheHits.WithLabelValues(ecosystem))
+	missesAfter := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues(ecosystem))
+	if diff := hitsAfter - hitsBefore; diff != 0 {
+		t.Errorf("cache hits delta = %.0f, want 0", diff)
+	}
+	if diff := missesAfter - missesBefore; diff != 0 {
+		t.Errorf("cache misses delta = %.0f, want 0", diff)
 	}
 }
 
