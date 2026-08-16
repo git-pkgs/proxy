@@ -1065,7 +1065,7 @@ The proxy will recreate the database on next start.
 
 Requirements:
 
-- Go 1.25 or later
+- Go (the project version is declared in `go.mod`)
 
 ```bash
 git clone https://github.com/git-pkgs/proxy.git
