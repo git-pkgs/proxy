@@ -91,6 +91,9 @@ type Config struct {
 	// Log configures logging.
 	Log LogConfig `json:"log" yaml:"log"`
 
+	// AccessLog configures the JSONL activity log.
+	AccessLog AccessLogConfig `json:"access_log" yaml:"access_log"`
+
 	// Upstream configures upstream registry URLs (optional overrides).
 	Upstream UpstreamConfig `json:"upstream" yaml:"upstream"`
 
@@ -278,6 +281,12 @@ type LogConfig struct {
 
 	// Format is the log format: "text" or "json".
 	Format string `json:"format" yaml:"format"`
+}
+
+// AccessLogConfig configures the JSONL activity log.
+type AccessLogConfig struct {
+	// Path is the file to append activity records to. Empty disables the access log.
+	Path string `json:"path" yaml:"path"`
 }
 
 // UpstreamConfig configures upstream registry URLs and authentication.
@@ -508,6 +517,7 @@ func setEnvBool(dst *bool, key string) {
 //   - PROXY_DATABASE_PATH
 //   - PROXY_LOG_LEVEL
 //   - PROXY_LOG_FORMAT
+//   - PROXY_ACCESS_LOG_PATH
 //   - PROXY_HEALTH_STORAGE_PROBE_INTERVAL
 func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Listen, "PROXY_LISTEN")
@@ -524,6 +534,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Database.URL, "PROXY_DATABASE_URL")
 	setEnvString(&c.Log.Level, "PROXY_LOG_LEVEL")
 	setEnvString(&c.Log.Format, "PROXY_LOG_FORMAT")
+	setEnvString(&c.AccessLog.Path, "PROXY_ACCESS_LOG_PATH")
 	setEnvString(&c.Upstream.Maven, "PROXY_UPSTREAM_MAVEN")
 	setEnvString(&c.Upstream.GradlePluginPortal, "PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL")
 	setEnvString(&c.Upstream.Debian, "PROXY_UPSTREAM_DEBIAN")

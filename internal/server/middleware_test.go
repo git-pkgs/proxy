@@ -2,12 +2,16 @@ package server
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"testing"
 
+	"github.com/git-pkgs/proxy/internal/accesslog"
 	"github.com/go-chi/chi/v5/middleware"
 )
 
@@ -45,7 +49,7 @@ func TestGetRequestID(t *testing.T) {
 	}{
 		{
 			name:     "with request ID",
-			ctx:      context.WithValue(context.Background(), requestIDKey, "test-123"),
+			ctx:      accesslog.WithRequestID(context.Background(), "test-123"),
 			expected: "test-123",
 		},
 		{
@@ -118,6 +122,50 @@ func TestLoggerMiddleware(t *testing.T) {
 
 	if rec.Code != http.StatusCreated {
 		t.Errorf("expected status 201, got %d", rec.Code)
+	}
+}
+
+func TestLoggerMiddlewareWritesAccessLog(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "access.jsonl")
+	activityLog, err := accesslog.Open(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	s := &Server{logger: logger, accessLog: activityLog}
+	next := http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	})
+	handler := middleware.RequestID(RequestIDMiddleware(s.LoggerMiddleware(next)))
+
+	req := httptest.NewRequest(http.MethodGet, "/packages/example?token=secret", nil)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+
+	if err := activityLog.Close(); err != nil {
+		t.Fatal(err)
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	var entry accesslog.Entry
+	if err := json.Unmarshal(data, &entry); err != nil {
+		t.Fatalf("decoding access log: %v", err)
+	}
+	if entry.Event != accesslog.EventRequest {
+		t.Errorf("event = %q, want %q", entry.Event, accesslog.EventRequest)
+	}
+	if entry.RequestID == "" {
+		t.Error("request_id is empty")
+	}
+	if entry.Path != "/packages/example" {
+		t.Errorf("path = %q, want query string omitted", entry.Path)
+	}
+	if entry.StatusCode != http.StatusNotFound {
+		t.Errorf("status_code = %d, want %d", entry.StatusCode, http.StatusNotFound)
 	}
 }
 

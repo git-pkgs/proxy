@@ -61,6 +61,7 @@ import (
 
 	"github.com/git-pkgs/cooldown"
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
+	"github.com/git-pkgs/proxy/internal/accesslog"
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/enrichment"
@@ -95,10 +96,26 @@ type Server struct {
 	templates   *Templates
 	cancel      context.CancelFunc
 	healthCache *healthCache
+	accessLog   *accesslog.Logger
 }
 
 // New creates a new Server with the given configuration.
 func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
+	var activityLog *accesslog.Logger
+	if cfg.AccessLog.Path != "" {
+		var err error
+		activityLog, err = accesslog.Open(cfg.AccessLog.Path)
+		if err != nil {
+			return nil, fmt.Errorf("initializing access log: %w", err)
+		}
+	}
+	closeAccessLog := true
+	defer func() {
+		if closeAccessLog && activityLog != nil {
+			_ = activityLog.Close()
+		}
+	}()
+
 	// Initialize database
 	var db *database.DB
 	var err error
@@ -147,14 +164,17 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("initializing health cache: %w", err)
 	}
 
-	return &Server{
+	server := &Server{
 		cfg:         cfg,
 		db:          db,
 		storage:     store,
 		logger:      logger,
 		templates:   &Templates{},
 		healthCache: hc,
-	}, nil
+		accessLog:   activityLog,
+	}
+	closeAccessLog = false
+	return server, nil
 }
 
 // Start starts the HTTP server.
@@ -162,7 +182,11 @@ func (s *Server) Start() error {
 	// Use one authentication-aware transport for metadata and artifacts so
 	// configured credentials and cached OCI challenges apply consistently.
 	safeClient := safehttp.New(nil, safehttp.Options{})
-	authTransport := upstreamhttp.NewTransport(safeClient.Transport, upstreamhttp.AuthFunc(s.authForURL))
+	baseTransport := safeClient.Transport
+	if s.accessLog != nil {
+		baseTransport = upstreamhttp.NewAccessLogTransport(baseTransport, s.accessLog, s.logger)
+	}
+	authTransport := upstreamhttp.NewTransport(baseTransport, upstreamhttp.AuthFunc(s.authForURL))
 	metadataClient := *safeClient
 	metadataClient.Timeout = s.cfg.ParseHTTPTimeout()
 	metadataClient.Transport = authTransport
@@ -370,6 +394,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.storage != nil {
 		if err := s.storage.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("storage close: %w", err))
+		}
+	}
+
+	if s.accessLog != nil {
+		if err := s.accessLog.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("access log close: %w", err))
 		}
 	}
 

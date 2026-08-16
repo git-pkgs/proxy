@@ -108,6 +108,30 @@ log:
 | `log.level` | `PROXY_LOG_LEVEL` | `-log-level` | `debug`, `info`, `warn`, `error` |
 | `log.format` | `PROXY_LOG_FORMAT` | `-log-format` | `text`, `json` |
 
+## Access Log
+
+The optional access log records client requests and each HTTP exchange with an upstream registry. It is always written as JSONL, with one JSON object per line. Records for the same client request share a `request_id`.
+
+```yaml
+access_log:
+  path: "/var/log/proxy/access.jsonl"
+```
+
+| Config | Environment | Flag | Description |
+|--------|-------------|------|-------------|
+| `access_log.path` | `PROXY_ACCESS_LOG_PATH` | `-access-log` | File to append JSONL records to; empty disables the log |
+
+The parent directory must exist and be writable when the proxy starts. A newly created log file is readable and writable only by the proxy process owner.
+
+A request that receives a rate limit response from an upstream can produce records like these:
+
+```json
+{"time":"2026-08-16T12:00:00Z","event":"upstream","request_id":"host/example-000001","method":"GET","url":"https://registry.example/packages/example","status_code":429,"duration_ms":42}
+{"time":"2026-08-16T12:00:00Z","event":"request","request_id":"host/example-000001","method":"GET","path":"/npm/example","status_code":502,"duration_ms":43,"remote_addr":"192.0.2.10:41234"}
+```
+
+Upstream retries and OCI authentication calls are separate `upstream` records, so the log preserves every status returned over the wire. Network failures have an `error` field and no `status_code`. URL credentials, query strings, and fragments are omitted from both upstream URLs and client paths.
+
 ## Upstream Registries
 
 Override default upstream registry URLs:

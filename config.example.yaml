@@ -78,6 +78,10 @@ log:
   # Log format: "text" or "json"
   format: "text"
 
+# JSONL access log. Leave path empty to disable it.
+access_log:
+  path: ""
+
 # Upstream registry URLs and authentication
 upstream:
   # npm registry URL
