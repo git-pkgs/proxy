@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"net/http"
@@ -67,7 +69,7 @@ func (h *HelmHandler) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.proxy.writeMetadataCachedResponse(w, r, helmMetadataEcosystem, h.indexCacheKey(repository), rewritten, contentType)
+	h.proxy.writeMetadataCachedResponse(w, r, helmMetadataEcosystem, h.indexCacheKey(repository, upstreamURL), rewritten, contentType)
 }
 
 func (h *HelmHandler) handleChart(w http.ResponseWriter, r *http.Request) {
@@ -111,7 +113,7 @@ func (h *HelmHandler) handleChart(w http.ResponseWriter, r *http.Request) {
 		if result.Reader != nil {
 			_ = result.Reader.Close()
 		}
-		if clearErr := h.proxy.ClearCachedArtifact(helmMetadataEcosystem, repository, digest, filename); clearErr != nil {
+		if clearErr := h.proxy.ClearCachedArtifact(r.Context(), helmMetadataEcosystem, repository, digest, filename); clearErr != nil {
 			h.proxy.Logger.Warn("failed to clear Helm chart with invalid digest", "error", clearErr)
 		}
 		http.Error(w, "chart digest verification failed", http.StatusBadGateway)
@@ -134,14 +136,16 @@ func (h *HelmHandler) fetchIndex(r *http.Request, repository, upstreamURL string
 	return h.proxy.FetchOrCacheMetadata(
 		r.Context(),
 		helmMetadataEcosystem,
-		h.indexCacheKey(repository),
+		h.indexCacheKey(repository, upstreamURL),
 		upstreamURL+"/"+helmIndexFilename,
 		"application/x-yaml, text/yaml;q=0.9, */*;q=0.1",
 	)
 }
 
-func (h *HelmHandler) indexCacheKey(repository string) string {
-	return repository + "/" + helmIndexFilename
+func (h *HelmHandler) indexCacheKey(repository, upstreamURL string) string {
+	identity := repository + "\x00" + upstreamURL
+	digest := sha256.Sum256([]byte(identity))
+	return hex.EncodeToString(digest[:])
 }
 
 func (h *HelmHandler) serveIndexError(w http.ResponseWriter, err error) {

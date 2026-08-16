@@ -392,7 +392,7 @@ upstream:
 ```
 
 ```bash
-helm pull oci://localhost:8080/upstream/ghcr/owner/charts/mychart --version 1.0.0
+helm pull oci://localhost:8080/upstream/ghcr/owner/charts/mychart --version 1.0.0 --plain-http
 ```
 
 ### Debian / APT

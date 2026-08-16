@@ -165,14 +165,24 @@ func (p *Proxy) GetCachedArtifact(ctx context.Context, ecosystem, name, version,
 	return p.checkCache(ctx, pkgPURL, versionPURL, filename)
 }
 
-// ClearCachedArtifact removes an artifact cache record after an external
-// integrity check fails. The unreferenced storage object is left for normal
-// storage cleanup, but it can no longer be served.
-func (p *Proxy) ClearCachedArtifact(ecosystem, name, version, filename string) error {
-	if p.DB == nil {
+// ClearCachedArtifact removes both an artifact cache record and its stored
+// bytes after an external integrity check fails.
+func (p *Proxy) ClearCachedArtifact(ctx context.Context, ecosystem, name, version, filename string) error {
+	if p.DB == nil || p.Storage == nil {
 		return nil
 	}
+	pkgPURL := purl.MakePURLString(ecosystem, name, "")
 	versionPURL := purl.MakePURLString(ecosystem, name, version)
+	cached, err := p.DB.GetCachedArtifact(pkgPURL, versionPURL, filename)
+	if err != nil {
+		return fmt.Errorf("looking up cached artifact: %w", err)
+	}
+	if cached == nil {
+		return nil
+	}
+	if err := p.Storage.Delete(ctx, cached.StoragePath); err != nil {
+		return fmt.Errorf("deleting cached artifact: %w", err)
+	}
 	return p.DB.ClearArtifactCache(versionPURL, filename)
 }
 

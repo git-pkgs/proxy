@@ -13,6 +13,7 @@ import (
 
 	"github.com/git-pkgs/cooldown"
 	upstreamhttp "github.com/git-pkgs/proxy/internal/httpclient"
+	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/registries/fetch"
 	"gopkg.in/yaml.v3"
 )
@@ -142,7 +143,7 @@ func TestHelmHandler_RejectsChartDigestMismatch(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	proxy, _, _, _ := setupTestProxy(t)
+	proxy, _, store, _ := setupTestProxy(t)
 	proxy.CacheMetadata = true
 	proxy.MetadataTTL = time.Hour
 	proxy.HTTPClient = upstream.Client()
@@ -159,6 +160,59 @@ func TestHelmHandler_RejectsChartDigestMismatch(t *testing.T) {
 	}
 	if requests != 2 {
 		t.Errorf("chart requests = %d, want 2 after invalid cache entry is cleared", requests)
+	}
+	storagePath := storage.ArtifactPath(helmMetadataEcosystem, "", "test", digest, "demo.tgz")
+	if exists, err := store.Exists(t.Context(), storagePath); err != nil {
+		t.Fatalf("checking rejected chart storage: %v", err)
+	} else if exists {
+		t.Errorf("rejected chart remains in storage at %q", storagePath)
+	}
+}
+
+func TestHelmHandler_IndexCacheChangesWithUpstreamURL(t *testing.T) {
+	firstDigest := strings.Repeat("a", sha256HexLength)
+	secondDigest := strings.Repeat("b", sha256HexLength)
+	firstRequests := 0
+	secondRequests := 0
+	first := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		firstRequests++
+		_, _ = fmt.Fprintf(w, "apiVersion: v1\nentries:\n  demo:\n    - digest: %s\n      urls: [demo.tgz]\n", firstDigest)
+	}))
+	defer first.Close()
+	second := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		secondRequests++
+		_, _ = fmt.Fprintf(w, "apiVersion: v1\nentries:\n  demo:\n    - digest: %s\n      urls: [demo.tgz]\n", secondDigest)
+	}))
+	defer second.Close()
+
+	proxy, db, store, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	proxy.HTTPClient = first.Client()
+	firstHandler := NewHelmHandler(proxy, "http://proxy.example", map[string]string{"stable": first.URL})
+	if response := serveHelmRequest(firstHandler, "/stable/index.yaml"); response.Code != http.StatusOK {
+		t.Fatalf("first index status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+
+	// Model a restarted server with the same database and storage but a changed
+	// repository URL. Its cache key must not reuse the previous index or ETag.
+	restartedProxy := NewProxy(db, store, &mockFetcher{}, fetch.NewResolver(), nil)
+	restartedProxy.CacheMetadata = true
+	restartedProxy.MetadataTTL = time.Hour
+	restartedProxy.HTTPClient = second.Client()
+	secondHandler := NewHelmHandler(restartedProxy, "http://proxy.example", map[string]string{"stable": second.URL})
+	response := serveHelmRequest(secondHandler, "/stable/index.yaml")
+	if response.Code != http.StatusOK {
+		t.Fatalf("second index status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), secondDigest) {
+		t.Errorf("second index did not use the new upstream: %s", response.Body.String())
+	}
+	if firstRequests != 1 {
+		t.Errorf("first upstream requests = %d, want 1", firstRequests)
+	}
+	if secondRequests != 1 {
+		t.Errorf("second upstream requests = %d, want 1", secondRequests)
 	}
 }
 

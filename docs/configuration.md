@@ -138,6 +138,8 @@ listed in the index. Relative and absolute chart URLs are both supported.
 Named OCI registries preserve the existing unprefixed Docker Hub mirror. A
 reference such as `oci://proxy.example.com/upstream/ghcr/owner/chart` is sent
 to the registry configured as `ghcr` with `owner/chart` as its repository.
+When the proxy uses plain HTTP (for example `localhost:8080`), pass
+`--plain-http` to Helm OCI commands.
 
 ## Authentication
 
