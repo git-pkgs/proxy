@@ -101,6 +101,21 @@ type Server struct {
 
 // New creates a new Server with the given configuration.
 func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
+	var activityLog *accesslog.Logger
+	if cfg.AccessLog.Path != "" {
+		var err error
+		activityLog, err = accesslog.Open(cfg.AccessLog.Path)
+		if err != nil {
+			return nil, fmt.Errorf("initializing access log: %w", err)
+		}
+	}
+	closeAccessLog := true
+	defer func() {
+		if closeAccessLog && activityLog != nil {
+			_ = activityLog.Close()
+		}
+	}()
+
 	// Initialize database
 	var db *database.DB
 	var err error
@@ -149,17 +164,7 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		return nil, fmt.Errorf("initializing health cache: %w", err)
 	}
 
-	var activityLog *accesslog.Logger
-	if cfg.AccessLog.Path != "" {
-		activityLog, err = accesslog.Open(cfg.AccessLog.Path)
-		if err != nil {
-			_ = store.Close()
-			_ = db.Close()
-			return nil, fmt.Errorf("initializing access log: %w", err)
-		}
-	}
-
-	return &Server{
+	server := &Server{
 		cfg:         cfg,
 		db:          db,
 		storage:     store,
@@ -167,7 +172,9 @@ func New(cfg *config.Config, logger *slog.Logger) (*Server, error) {
 		templates:   &Templates{},
 		healthCache: hc,
 		accessLog:   activityLog,
-	}, nil
+	}
+	closeAccessLog = false
+	return server, nil
 }
 
 // Start starts the HTTP server.
