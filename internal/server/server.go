@@ -235,7 +235,8 @@ func (s *Server) Start() error {
 	condaHandler := handler.NewCondaHandler(proxy, s.cfg.BaseURL)
 	cranHandler := handler.NewCRANHandler(proxy, s.cfg.BaseURL)
 	juliaHandler := handler.NewJuliaHandler(proxy, s.cfg.BaseURL)
-	containerHandler := handler.NewContainerHandler(proxy, s.cfg.BaseURL)
+	containerHandler := handler.NewContainerHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.OCI)
+	helmHandler := handler.NewHelmHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm)
 	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Debian)
 	rpmHandler := handler.NewRPMHandler(proxy, s.cfg.BaseURL)
 
@@ -255,6 +256,7 @@ func (s *Server) Start() error {
 	r.Mount("/cran", http.StripPrefix("/cran", cranHandler.Routes()))
 	r.Mount("/julia", http.StripPrefix("/julia", juliaHandler.Routes()))
 	r.Mount("/v2", http.StripPrefix("/v2", containerHandler.Routes()))
+	r.Mount("/helm", http.StripPrefix("/helm", helmHandler.Routes()))
 	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 

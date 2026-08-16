@@ -165,6 +165,17 @@ func (p *Proxy) GetCachedArtifact(ctx context.Context, ecosystem, name, version,
 	return p.checkCache(ctx, pkgPURL, versionPURL, filename)
 }
 
+// ClearCachedArtifact removes an artifact cache record after an external
+// integrity check fails. The unreferenced storage object is left for normal
+// storage cleanup, but it can no longer be served.
+func (p *Proxy) ClearCachedArtifact(ecosystem, name, version, filename string) error {
+	if p.DB == nil {
+		return nil
+	}
+	versionPURL := purl.MakePURLString(ecosystem, name, version)
+	return p.DB.ClearArtifactCache(versionPURL, filename)
+}
+
 // checkCache looks up an artifact in the cache. Returns nil if not cached.
 func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename string) (*CacheResult, error) {
 	artifact, err := p.DB.GetCachedArtifact(pkgPURL, versionPURL, filename)

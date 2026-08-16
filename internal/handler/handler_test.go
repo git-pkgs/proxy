@@ -3,7 +3,9 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
@@ -42,7 +44,8 @@ func (s *mockStorage) Store(_ context.Context, path string, r io.Reader) (int64,
 		return 0, "", err
 	}
 	s.files[path] = data
-	return int64(len(data)), "fakehash123", nil
+	digest := sha256.Sum256(data)
+	return int64(len(data)), hex.EncodeToString(digest[:]), nil
 }
 
 func (s *mockStorage) Open(_ context.Context, path string) (io.ReadCloser, error) {

@@ -866,3 +866,44 @@ func TestValidateUpstreamAuthURLs(t *testing.T) {
 		}
 	})
 }
+
+func TestValidateNamedUpstreams(t *testing.T) {
+	tests := []struct {
+		name    string
+		modify  func(*Config)
+		wantErr bool
+	}{
+		{
+			name: "valid Helm and OCI upstreams",
+			modify: func(cfg *Config) {
+				cfg.Upstream.Helm = map[string]string{"bitnami": "https://charts.bitnami.com/bitnami"}
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://ghcr.io"}
+			},
+		},
+		{
+			name: "Helm upstream name contains path separator",
+			modify: func(cfg *Config) {
+				cfg.Upstream.Helm = map[string]string{"team/charts": "https://charts.example.com"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI upstream URL is not absolute",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"private": "registry.example.com"}
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.modify(cfg)
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %t", err, tt.wantErr)
+			}
+		})
+	}
+}

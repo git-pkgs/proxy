@@ -119,7 +119,25 @@ upstream:
   gradle_plugin_portal: "https://plugins.gradle.org/m2"
   cargo: "https://index.crates.io"
   cargo_download: "https://static.crates.io/crates"
+
+  # Named HTTP Helm chart repositories, served at /helm/{name}/.
+  helm:
+    bitnami: "https://charts.bitnami.com/bitnami"
+
+  # Named OCI registries. Select one with the repository prefix
+  # upstream/{name}/, e.g. oci://proxy.example.com/upstream/ghcr/owner/chart.
+  oci:
+    ghcr: "https://ghcr.io"
 ```
+
+Helm HTTP repositories are read-only. The proxy fetches and rewrites each
+repository's `index.yaml` so chart archives are downloaded through the proxy.
+Chart archives are retained only when their SHA-256 digest matches the digest
+listed in the index. Relative and absolute chart URLs are both supported.
+
+Named OCI registries preserve the existing unprefixed Docker Hub mirror. A
+reference such as `oci://proxy.example.com/upstream/ghcr/owner/chart` is sent
+to the registry configured as `ghcr` with `owner/chart` as its repository.
 
 ## Authentication
 
