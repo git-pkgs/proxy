@@ -362,6 +362,39 @@ Or pull images directly:
 docker pull localhost:8080/library/nginx:latest
 ```
 
+### Helm
+
+Configure each HTTP chart repository with a name, then add the matching proxy
+URL to Helm:
+
+```yaml
+upstream:
+  helm:
+    bitnami: "https://charts.bitnami.com/bitnami"
+```
+
+```bash
+helm repo add bitnami http://localhost:8080/helm/bitnami
+helm repo update
+helm pull bitnami/nginx
+```
+
+The proxy caches `index.yaml` using the normal metadata-cache settings and
+caches chart archives after verifying their SHA-256 digest from the index.
+
+For charts stored in an OCI registry, configure a named OCI upstream and add
+the reserved `upstream/{name}` prefix to the chart reference:
+
+```yaml
+upstream:
+  oci:
+    ghcr: "https://ghcr.io"
+```
+
+```bash
+helm pull oci://localhost:8080/upstream/ghcr/owner/charts/mychart --version 1.0.0 --plain-http
+```
+
 ### Debian / APT
 
 Configure APT to use the proxy in `/etc/apt/sources.list.d/proxy.list`:
@@ -636,6 +669,7 @@ Recently cached:
 | `GET /conda/*` | Conda/Anaconda protocol |
 | `GET /cran/*` | CRAN (R) protocol |
 | `GET /julia/*` | Julia Pkg server protocol |
+| `GET /helm/{repository}/*` | HTTP Helm chart repository protocol |
 | `GET /v2/*` | OCI/Docker registry protocol |
 | `GET /debian/*` | Debian/APT repository protocol |
 | `GET /rpm/*` | RPM/Yum repository protocol |

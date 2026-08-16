@@ -318,6 +318,16 @@ type UpstreamConfig struct {
 	// Default: http://deb.debian.org/debian
 	Debian string `json:"debian" yaml:"debian"`
 
+	// Helm maps repository names to HTTP Helm chart repository URLs.
+	// Requests use /helm/{name}/index.yaml and chart URLs in the index are
+	// rewritten to the same named proxy endpoint.
+	Helm map[string]string `json:"helm" yaml:"helm"`
+
+	// OCI maps names to OCI registry URLs. Requests to a named registry use
+	// the repository prefix upstream/{name}/, for example
+	// oci://proxy.example.com/upstream/ghcr/owner/chart.
+	OCI map[string]string `json:"oci" yaml:"oci"`
+
 	// Auth configures authentication for upstream registries.
 	// Keys are absolute URL scopes matched by scheme, host, effective port,
 	// and path-segment prefix.
@@ -356,6 +366,24 @@ func (u *UpstreamConfig) Validate() error {
 	for pattern := range u.Auth {
 		if _, err := parseAuthURL(pattern); err != nil {
 			return fmt.Errorf("invalid upstream.auth URL %q: %w", pattern, err)
+		}
+	}
+	if err := validateNamedUpstreams("upstream.helm", u.Helm); err != nil {
+		return err
+	}
+	if err := validateNamedUpstreams("upstream.oci", u.OCI); err != nil {
+		return err
+	}
+	return nil
+}
+
+func validateNamedUpstreams(field string, upstreams map[string]string) error {
+	for name, upstreamURL := range upstreams {
+		if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\\`) {
+			return fmt.Errorf("invalid %s name %q", field, name)
+		}
+		if err := validateAbsoluteURL(field+"."+name, upstreamURL); err != nil {
+			return err
 		}
 	}
 	return nil

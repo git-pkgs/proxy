@@ -166,6 +166,27 @@ func (p *Proxy) GetCachedArtifact(ctx context.Context, ecosystem, name, version,
 	return p.checkCache(ctx, pkgPURL, versionPURL, filename)
 }
 
+// ClearCachedArtifact removes both an artifact cache record and its stored
+// bytes after an external integrity check fails.
+func (p *Proxy) ClearCachedArtifact(ctx context.Context, ecosystem, name, version, filename string) error {
+	if p.DB == nil || p.Storage == nil {
+		return nil
+	}
+	pkgPURL := purl.MakePURLString(ecosystem, name, "")
+	versionPURL := purl.MakePURLString(ecosystem, name, version)
+	cached, err := p.DB.GetCachedArtifact(pkgPURL, versionPURL, filename)
+	if err != nil {
+		return fmt.Errorf("looking up cached artifact: %w", err)
+	}
+	if cached == nil {
+		return nil
+	}
+	if err := p.Storage.Delete(ctx, cached.StoragePath); err != nil {
+		return fmt.Errorf("deleting cached artifact: %w", err)
+	}
+	return p.DB.ClearArtifactCache(versionPURL, filename)
+}
+
 // checkCache looks up an artifact in the cache. Returns nil if not cached.
 func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename string) (*CacheResult, error) {
 	artifact, err := p.DB.GetCachedArtifact(pkgPURL, versionPURL, filename)

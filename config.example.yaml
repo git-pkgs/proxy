@@ -102,6 +102,15 @@ upstream:
   # Debian/APT repository URL (used by /debian endpoint)
   debian: "http://deb.debian.org/debian"
 
+  # Named HTTP Helm chart repositories (used by /helm/{name}/)
+  # helm:
+  #   bitnami: "https://charts.bitnami.com/bitnami"
+
+  # Named OCI registries. Use the upstream/{name}/ repository prefix, e.g.
+  # oci://proxy.example.com/upstream/ghcr/owner/chart.
+  # oci:
+  #   ghcr: "https://ghcr.io"
+
   # Authentication for upstream registries
   # Keys are absolute URL scopes. Scheme, host, effective port, and path
   # segment boundaries must match; the longest matching scope wins.
