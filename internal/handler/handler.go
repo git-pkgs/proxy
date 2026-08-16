@@ -21,6 +21,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/proxy/internal/storage"
+	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
 )
 

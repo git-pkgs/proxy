@@ -24,6 +24,19 @@ func TestMakeStringSwiftSourceCoordinate(t *testing.T) {
 	}
 }
 
+func TestWithVersionStringPreservesQualifiers(t *testing.T) {
+	packagePURL := "pkg:generic/swift-registry/apple.example?repository_url=https:%2F%2Fold.example%2Fswift"
+	got := WithVersionString(packagePURL, "1.2.3")
+	want := "pkg:generic/swift-registry/apple.example@1.2.3?repository_url=https:%2F%2Fold.example%2Fswift"
+	if got != want {
+		t.Errorf("WithVersionString() = %q, want %q", got, want)
+	}
+
+	if got := WithVersionString("not a purl", "1.2.3"); got != "" {
+		t.Errorf("WithVersionString() = %q for invalid PURL, want empty string", got)
+	}
+}
+
 func TestMakeCacheStringsSwiftRegistryIdentity(t *testing.T) {
 	packagePURL, versionPURL := MakeCacheStrings(
 		"swift", "APPLE/EXAMPLE", "1.2.3", "https://tuist.dev/api/registry/swift/",

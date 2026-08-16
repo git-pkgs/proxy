@@ -885,7 +885,7 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 		return
 	}
 
-	versionPURL := s.cachePURLString(ecosystem, name, version)
+	versionPURL := packageurl.WithVersionString(pkg.PURL, version)
 	ver, err := s.db.GetVersionByPURL(versionPURL)
 	if err != nil || ver == nil {
 		s.logger.Error("failed to get version", "error", err)
@@ -927,19 +927,12 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 	}
 }
 
-func (s *Server) cachePURLString(ecosystem, name, version string) string {
-	registryURL := ""
-	if s.cfg != nil {
-		registryURL = s.cfg.Upstream.Swift
+func (s *Server) cachedVersionPURL(ecosystem, name, version string) string {
+	pkg, err := s.db.GetPackageByEcosystemName(ecosystem, name)
+	if err != nil || pkg == nil {
+		return ""
 	}
-	if registryURL == "" {
-		registryURL = config.DefaultSwiftUpstream
-	}
-	packagePURL, versionPURL := packageurl.MakeCacheStrings(ecosystem, name, version, registryURL)
-	if version == "" {
-		return packagePURL
-	}
-	return versionPURL
+	return packageurl.WithVersionString(pkg.PURL, version)
 }
 
 func (s *Server) showBrowseSource(w http.ResponseWriter, r *http.Request, ecosystem, name, version string) {
