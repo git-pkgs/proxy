@@ -405,6 +405,28 @@ func TestGetOrFetchArtifactFromURL_CacheMiss_StorageMissing(t *testing.T) {
 	}
 }
 
+func TestArtifactCacheRejectsUnsupportedPackageIdentity(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+
+	_, err := proxy.GetCachedArtifact(
+		context.Background(), "swift", "apple/example", "1.2.3", "example-1.2.3.zip",
+	)
+	if !errors.Is(err, errUnsupportedPackageIdentity) {
+		t.Fatalf("GetCachedArtifact() error = %v, want unsupported package identity", err)
+	}
+
+	_, err = proxy.GetOrFetchArtifactFromURL(
+		context.Background(), "swift", "apple/example", "1.2.3", "example-1.2.3.zip",
+		"https://registry.example/apple/example/1.2.3.zip",
+	)
+	if !errors.Is(err, errUnsupportedPackageIdentity) {
+		t.Fatalf("GetOrFetchArtifactFromURL() error = %v, want unsupported package identity", err)
+	}
+	if fetcher.fetchCalled {
+		t.Error("unsupported package identity reached the artifact fetcher")
+	}
+}
+
 func TestGetOrFetchArtifact_DirectServe_Redirect(t *testing.T) {
 	proxy, db, store, fetcher := setupTestProxy(t)
 	seedPackage(t, db, store, "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz", "cached content")

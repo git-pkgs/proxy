@@ -351,6 +351,16 @@ func TestSwiftHandlerMounted(t *testing.T) {
 	}
 }
 
+func TestSwiftCachePURLString(t *testing.T) {
+	s := &Server{}
+
+	got := s.cachePURLString("swift", "apple/example", "1.2.3")
+	want := "pkg:generic/swift-registry/apple.example@1.2.3?repository_url=https:%2F%2Ftuist.dev%2Fapi%2Fregistry%2Fswift"
+	if got != want {
+		t.Errorf("cachePURLString() = %q, want %q", got, want)
+	}
+}
+
 func min(a, b int) int {
 	if a < b {
 		return a
