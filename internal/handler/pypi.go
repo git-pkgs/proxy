@@ -31,28 +31,28 @@ const (
 
 // PyPIHandler handles PyPI registry protocol requests.
 type PyPIHandler struct {
-	proxy       *Proxy
-	upstreamURL string
-	downloadURL string
-	proxyURL    string
+	proxy          *Proxy
+	upstreamURL    string
+	downloadURL    string
+	downloadHrefRe *regexp.Regexp
+	proxyURL       string
 }
 
 // NewPyPIHandler creates a new PyPI protocol handler.
 func NewPyPIHandler(proxy *Proxy, proxyURL string) *PyPIHandler {
-	return &PyPIHandler{
-		proxy:       proxy,
-		upstreamURL: pypiUpstream,
-		downloadURL: pypiDownloadUpstream,
-		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
-	}
+	return NewPyPIHandlerWithUpstreams(proxy, proxyURL, "", "")
 }
 
 // NewPyPIHandlerWithUpstreams creates a PyPI handler with custom API and
 // package download upstreams.
 func NewPyPIHandlerWithUpstreams(proxy *Proxy, proxyURL, upstreamURL, downloadURL string) *PyPIHandler {
-	h := NewPyPIHandler(proxy, proxyURL)
-	h.upstreamURL = configuredUpstreamURL(upstreamURL, pypiUpstream)
-	h.downloadURL = configuredUpstreamURL(downloadURL, pypiDownloadUpstream)
+	h := &PyPIHandler{
+		proxy:       proxy,
+		upstreamURL: configuredUpstreamURL(upstreamURL, pypiUpstream),
+		downloadURL: configuredUpstreamURL(downloadURL, pypiDownloadUpstream),
+		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
+	}
+	h.downloadHrefRe = regexp.MustCompile(`href="(` + regexp.QuoteMeta(h.downloadURL) + `/packages/[^"]+)"`)
 	return h
 }
 
@@ -181,18 +181,15 @@ func (h *PyPIHandler) rewriteSimpleHTML(body []byte, filteredVersions map[string
 	}
 
 	// Match href attributes pointing to packages on the configured download host.
-	downloadURL := configuredUpstreamURL(h.downloadURL, pypiDownloadUpstream)
-	re := regexp.MustCompile(`href="(` + regexp.QuoteMeta(downloadURL) + `/packages/[^"]+)"`)
-
-	return re.ReplaceAllFunc(body, func(match []byte) []byte {
-		submatch := re.FindSubmatch(match)
+	return h.downloadHrefRe.ReplaceAllFunc(body, func(match []byte) []byte {
+		submatch := h.downloadHrefRe.FindSubmatch(match)
 		if len(submatch) < minSubmatchParts {
 			return match
 		}
 
 		origURL := string(submatch[1])
 
-		newURL := h.proxyURL + "/pypi/packages" + strings.TrimPrefix(origURL, downloadURL)
+		newURL := h.proxyURL + "/pypi/packages" + strings.TrimPrefix(origURL, h.downloadURL)
 		return []byte(fmt.Sprintf(`href="%s"`, newURL))
 	})
 }
@@ -397,9 +394,8 @@ func (h *PyPIHandler) rewriteURLEntry(entry map[string]any) {
 		return
 	}
 
-	downloadURL := configuredUpstreamURL(h.downloadURL, pypiDownloadUpstream)
-	if strings.HasPrefix(urlStr, downloadURL+"/packages/") {
-		entry["url"] = h.proxyURL + "/pypi/packages" + strings.TrimPrefix(urlStr, downloadURL)
+	if strings.HasPrefix(urlStr, h.downloadURL+"/packages/") {
+		entry["url"] = h.proxyURL + "/pypi/packages" + strings.TrimPrefix(urlStr, h.downloadURL)
 	}
 }
 
@@ -441,7 +437,7 @@ func (h *PyPIHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	// Construct upstream URL; the incoming path starts with
 	// '/packages' so there is no need to include it in the format
 	// string
-	upstreamURL := fmt.Sprintf("%s/%s", configuredUpstreamURL(h.downloadURL, pypiDownloadUpstream), path)
+	upstreamURL := fmt.Sprintf("%s/%s", h.downloadURL, path)
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "pypi", name, version, filename, upstreamURL)
 	if err != nil {

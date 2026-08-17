@@ -465,6 +465,7 @@ func TestNuGetProxyUpstreamForwardsAcceptEncoding(t *testing.T) {
 func TestNuGetBuildUpstreamURL(t *testing.T) {
 	h := &NuGetHandler{
 		upstreamURL: "https://api.nuget.org",
+		searchURL:   "https://azuresearch-usnc.nuget.org",
 	}
 
 	tests := []struct {
@@ -743,6 +744,7 @@ func TestNuGetHandleDownloadMissingFilename(t *testing.T) {
 func TestNuGetBuildUpstreamURLQueryPath(t *testing.T) {
 	h := &NuGetHandler{
 		upstreamURL: "https://api.nuget.org",
+		searchURL:   "https://azuresearch-usnc.nuget.org",
 	}
 
 	// Query endpoint should go to azuresearch
@@ -757,6 +759,7 @@ func TestNuGetBuildUpstreamURLQueryPath(t *testing.T) {
 func TestNuGetBuildUpstreamURLAutocompletePath(t *testing.T) {
 	h := &NuGetHandler{
 		upstreamURL: "https://api.nuget.org",
+		searchURL:   "https://azuresearch-usnc.nuget.org",
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/autocomplete?q=new&take=10", nil)

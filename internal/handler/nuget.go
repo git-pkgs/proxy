@@ -351,7 +351,7 @@ func (h *NuGetHandler) buildUpstreamURL(r *http.Request) string {
 
 	// Handle query and autocomplete which go to azuresearch
 	if strings.HasPrefix(path, "/query") || strings.HasPrefix(path, "/autocomplete") {
-		return configuredUpstreamURL(h.searchURL, nugetSearchUpstream) + path + "?" + r.URL.RawQuery
+		return h.searchURL + path + "?" + r.URL.RawQuery
 	}
 
 	return h.upstreamURL + path
