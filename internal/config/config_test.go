@@ -40,6 +40,8 @@ func upstreamConfigValues(upstream UpstreamConfig) map[string]string {
 		"oci_default":          upstream.OCIDefault,
 		"debian":               upstream.Debian,
 		"rpm":                  upstream.RPM,
+		"homebrew_api":         upstream.HomebrewAPI,
+		"homebrew_artifact":    upstream.HomebrewArtifact,
 	}
 }
 
@@ -69,6 +71,8 @@ func defaultUpstreamValues() map[string]string {
 		"oci_default":          "https://registry-1.docker.io",
 		"debian":               "http://deb.debian.org/debian",
 		"rpm":                  "https://dl.fedoraproject.org/pub/fedora/linux",
+		"homebrew_api":         "https://formulae.brew.sh/api",
+		"homebrew_artifact":    "https://ghcr.io",
 	}
 }
 
@@ -98,6 +102,8 @@ func upstreamEnvironmentVariables() map[string]string {
 		"oci_default":          "PROXY_UPSTREAM_OCI_DEFAULT",
 		"debian":               "PROXY_UPSTREAM_DEBIAN",
 		"rpm":                  "PROXY_UPSTREAM_RPM",
+		"homebrew_api":         "PROXY_UPSTREAM_HOMEBREW_API",
+		"homebrew_artifact":    "PROXY_UPSTREAM_HOMEBREW_ARTIFACT",
 	}
 }
 
@@ -312,6 +318,9 @@ log:
   format: "json"
 access_log:
   path: "/var/log/proxy/access.jsonl"
+upstream:
+  homebrew_api: "https://homebrew-api.example.com"
+  homebrew_artifact: "https://homebrew-artifact.example.com"
 `
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("writing config file: %v", err)
@@ -342,6 +351,12 @@ access_log:
 	}
 	if cfg.AccessLog.Path != "/var/log/proxy/access.jsonl" {
 		t.Errorf("AccessLog.Path = %q, want %q", cfg.AccessLog.Path, "/var/log/proxy/access.jsonl")
+	}
+	if cfg.Upstream.HomebrewAPI != "https://homebrew-api.example.com" {
+		t.Errorf("Upstream.HomebrewAPI = %q, want %q", cfg.Upstream.HomebrewAPI, "https://homebrew-api.example.com")
+	}
+	if cfg.Upstream.HomebrewArtifact != "https://homebrew-artifact.example.com" {
+		t.Errorf("Upstream.HomebrewArtifact = %q, want %q", cfg.Upstream.HomebrewArtifact, "https://homebrew-artifact.example.com")
 	}
 }
 
@@ -377,6 +392,8 @@ upstream:
   oci_default: "https://upstream.example.com/oci_default"
   debian: "https://upstream.example.com/debian"
   rpm: "https://upstream.example.com/rpm"
+  homebrew_api: "https://upstream.example.com/homebrew_api"
+  homebrew_artifact: "https://upstream.example.com/homebrew_artifact"
 `
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("writing config file: %v", err)

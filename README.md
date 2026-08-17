@@ -61,6 +61,7 @@ The proxy never uploads artifact bytes to a scanner. Each scanner is notified wi
 | Julia | Julia | | ✓ |
 | Swift | Swift | | ✓ |
 | Container | Docker/OCI | | ✓ |
+| Homebrew | macOS/Linux | | ✓ |
 | Debian | Debian/Ubuntu | | ✓ |
 | RPM | RHEL/Fedora | | ✓ |
 | Alpine | Alpine Linux | | ✓ |
@@ -176,6 +177,29 @@ export GOPROXY=http://localhost:8080/go,direct
 ```
 
 Or in your shell profile for persistence.
+
+### Homebrew
+
+Point Homebrew's JSON API and artifact domain at the proxy:
+
+```bash
+export HOMEBREW_API_DOMAIN=http://localhost:8080/homebrew
+export HOMEBREW_ARTIFACT_DOMAIN=http://localhost:8080
+```
+
+The artifact domain proxies manifests and bottle blobs under `/v2/homebrew/core/`. GHCR routing is limited to that repository. Source archives, cask application downloads, custom tap artifacts, and legacy flat-file bottle mirrors use Homebrew's normal fallback URLs. Keep fallback enabled by leaving `HOMEBREW_ARTIFACT_DOMAIN_NO_FALLBACK` unset.
+
+Enable `cache_metadata` or set `PROXY_CACHE_METADATA=true` to retain Homebrew JSON API responses for offline fallback. Bottle blobs and their OCI manifests are cached without this setting.
+
+The upstreams default to `https://formulae.brew.sh/api` for the JSON API and `https://ghcr.io` for artifacts. To chain this proxy to another proxy, configure its Homebrew endpoints as the upstreams:
+
+```yaml
+upstream:
+  homebrew_api: "https://upstream-proxy.example.com/homebrew"
+  homebrew_artifact: "https://upstream-proxy.example.com"
+```
+
+The equivalent environment variables are `PROXY_UPSTREAM_HOMEBREW_API` and `PROXY_UPSTREAM_HOMEBREW_ARTIFACT`.
 
 ### Hex (Elixir)
 
@@ -810,7 +834,9 @@ Recently cached:
 | `GET /julia/*` | Julia Pkg server protocol |
 | `GET /swift/*` | Swift Package Registry v1 protocol |
 | `GET /helm/{repository}/*` | HTTP Helm chart repository protocol |
+| `GET /homebrew/*` | Homebrew JSON API |
 | `GET /v2/*` | OCI/Docker registry protocol |
+| `GET /v2/homebrew/core/*` | Homebrew core bottle manifests and blobs from GHCR |
 | `GET /apk/{repository}/*` | Alpine APK repository protocol |
 | `GET /debian/*` | Debian/APT repository protocol |
 | `GET /rpm/*` | RPM/Yum repository protocol |

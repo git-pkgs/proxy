@@ -401,7 +401,7 @@ func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, fil
 		if delErr := p.Storage.Delete(ctx, storagePath); delErr != nil {
 			p.Logger.Warn("failed to discard artifact with mismatched checksum", "path", storagePath, "error", delErr)
 		}
-		return nil, fmt.Errorf("artifact checksum mismatch: upstream declared %s, got %s", upstreamHash, hash)
+		return nil, fmt.Errorf("%w: upstream declared %s, got %s", ErrArtifactDigestMismatch, upstreamHash, hash)
 	}
 
 	if p.Scanners != nil && p.Scanners.Enabled() {
@@ -790,6 +790,8 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 
 	if entry != nil && entry.ETag.Valid {
 		req.Header.Set("If-None-Match", entry.ETag.String)
+	} else if entry != nil && entry.LastModified.Valid {
+		req.Header.Set("If-Modified-Since", entry.LastModified.Time.UTC().Format(http.TimeFormat))
 	}
 
 	resp, err := p.HTTPClient.Do(req)
@@ -940,6 +942,12 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 	cm := p.lookupCachedMeta(ecosystem, cacheKey)
 
 	if cm.etag != "" {
+		w.Header().Set("ETag", cm.etag)
+	}
+	if !cm.lastModified.IsZero() {
+		w.Header().Set("Last-Modified", cm.lastModified.UTC().Format(http.TimeFormat))
+	}
+	if cm.etag != "" {
 		if match := r.Header.Get("If-None-Match"); match != "" && match == cm.etag {
 			w.WriteHeader(http.StatusNotModified)
 			return
@@ -969,13 +977,15 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 		w.Header().Set("Warning", `110 - "Response is Stale"`)
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(body)
+	}
 }
 
 // proxyMetadataStream forwards an upstream metadata response by streaming it to the client
 // without buffering the full body in memory.
 func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upstreamURL string, acceptHeaders ...string) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
 	if err != nil {
 		http.Error(w, "failed to create request", http.StatusInternalServerError)
 		return
@@ -1012,7 +1022,9 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 	}
 
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	if r.Method != http.MethodHead {
+		_, _ = io.Copy(w, resp.Body)
+	}
 }
 
 func (p *Proxy) applyUpstreamAuth(req *http.Request) {
@@ -1029,13 +1041,24 @@ func (p *Proxy) applyUpstreamAuth(req *http.Request) {
 // GetOrFetchArtifactFromURL retrieves an artifact from cache or fetches from a specific URL.
 // This is useful for registries where download URLs are determined from metadata.
 func (p *Proxy) GetOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, version, filename, downloadURL string) (*CacheResult, error) {
-	return p.GetOrFetchArtifactFromURLWithHeaders(ctx, ecosystem, name, version, filename, downloadURL, nil)
+	return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, nil, "")
 }
 
 // GetOrFetchArtifactFromURLWithHeaders retrieves an artifact from cache or fetches from a URL
 // with additional request-specific HTTP headers.
 func (p *Proxy) GetOrFetchArtifactFromURLWithHeaders(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header) (*CacheResult, error) {
 	return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, headers, "")
+}
+
+// GetOrFetchArtifactFromURLWithDigest retrieves an artifact and verifies its
+// SHA-256 digest before adding a newly fetched response to the cache.
+// Non-sha256 digests are proxied without verification.
+func (p *Proxy) GetOrFetchArtifactFromURLWithDigest(ctx context.Context, ecosystem, name, version, filename, downloadURL, digest string) (*CacheResult, error) {
+	upstreamHash, _ := strings.CutPrefix(digest, "sha256:")
+	if upstreamHash == digest {
+		upstreamHash = ""
+	}
+	return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, nil, upstreamHash)
 }
 
 func (p *Proxy) getOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header, upstreamHash string) (*CacheResult, error) {
@@ -1100,6 +1123,10 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 
 	return p.storeArtifact(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, upstreamHash, artifact)
 }
+
+// ErrArtifactDigestMismatch indicates that fetched bytes did not match the
+// checksum the upstream declared and were not recorded in the cache database.
+var ErrArtifactDigestMismatch = errors.New("artifact digest mismatch")
 
 func artifactHashMatches(got, expected string) bool {
 	return expected == "" || strings.EqualFold(got, expected)

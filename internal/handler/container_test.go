@@ -302,17 +302,18 @@ func TestContainerHandler_TagsListRewritesRelativePaginationLinkForNamedRegistry
 }
 
 func TestContainerHandler_NamedOCIRegistryServesHelmArtifacts(t *testing.T) {
-	digest := "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd"
+	const blob = "chart archive"
+	digest := "sha256:" + sha256Hex(blob)
 	manifest := `{"schemaVersion":2,"config":{"mediaType":"application/vnd.cncf.helm.config.v1+json"},"layers":[{"mediaType":"application/vnd.cncf.helm.chart.content.v1.tar+gzip","digest":"` + digest + `"}]}`
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/v2/owner/demo/manifests/1.0.0":
 			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
-			w.Header().Set("Docker-Content-Digest", digest)
+			w.Header().Set("Docker-Content-Digest", "sha256:"+sha256Hex(manifest))
 			_, _ = io.WriteString(w, manifest)
 		case "/v2/owner/demo/blobs/" + digest:
 			w.Header().Set("Content-Type", "application/vnd.cncf.helm.chart.content.v1.tar+gzip")
-			_, _ = io.WriteString(w, "chart archive")
+			_, _ = io.WriteString(w, blob)
 		default:
 			http.NotFound(w, r)
 		}
@@ -347,8 +348,28 @@ func TestContainerHandler_NamedOCIRegistryServesHelmArtifacts(t *testing.T) {
 	}
 }
 
+func TestContainerHandler_registryURLForUsesLongestRepositoryPrefix(t *testing.T) {
+	h := &ContainerHandler{registryURL: "https://registry-1.docker.io"}
+	h.RegisterRegistry("homebrew", "https://example.test")
+	h.RegisterRegistry("homebrew/core", "https://ghcr.io/")
+
+	tests := map[string]string{
+		"homebrew/core":            "https://ghcr.io",
+		"homebrew/core/jq":         "https://ghcr.io",
+		"homebrew/portable-ruby":   "https://example.test",
+		"homebrew-core/jq":         "https://registry-1.docker.io",
+		"library/homebrew/core/jq": "https://registry-1.docker.io",
+	}
+	for name, want := range tests {
+		if got := h.registryURLFor(name); got != want {
+			t.Errorf("registryURLFor(%q) = %q, want %q", name, got, want)
+		}
+	}
+}
+
 func TestContainerHandler_BlobDownload_DiscoversBearerChallenge(t *testing.T) {
-	digest := "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd"
+	blob := "upstream blob"
+	digest := sha256Digest([]byte(blob))
 	registryRequests := 0
 	tokenRequests := 0
 	var upstream *httptest.Server
@@ -369,7 +390,7 @@ func TestContainerHandler_BlobDownload_DiscoversBearerChallenge(t *testing.T) {
 				return
 			}
 			w.Header().Set("Content-Type", "application/octet-stream")
-			_, _ = io.WriteString(w, "upstream blob")
+			_, _ = io.WriteString(w, blob)
 		default:
 			http.NotFound(w, r)
 		}
@@ -400,8 +421,8 @@ func TestContainerHandler_BlobDownload_DiscoversBearerChallenge(t *testing.T) {
 		if w.Code != http.StatusOK {
 			t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
 		}
-		if got := w.Body.String(); got != "upstream blob" {
-			t.Errorf("body = %q, want %q", got, "upstream blob")
+		if got := w.Body.String(); got != blob {
+			t.Errorf("body = %q, want %q", got, blob)
 		}
 	}
 
@@ -413,10 +434,102 @@ func TestContainerHandler_BlobDownload_DiscoversBearerChallenge(t *testing.T) {
 	}
 }
 
+func TestContainerHandler_HomebrewBlobDoesNotForwardClientCredentialsToRegistryOrCDN(t *testing.T) {
+	blob := "homebrew bottle"
+	digest := sha256Digest([]byte(blob))
+	var registryAuthorization, cdnAuthorization string
+
+	cdn := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		cdnAuthorization = r.Header.Get("Authorization")
+		w.Header().Set("Content-Type", "application/vnd.homebrew.bottle")
+		_, _ = io.WriteString(w, blob)
+	}))
+	defer cdn.Close()
+
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		registryAuthorization = r.Header.Get("Authorization")
+		http.Redirect(w, r, cdn.URL+"/bottle", http.StatusTemporaryRedirect)
+	}))
+	defer registry.Close()
+
+	defaultRequests := 0
+	defaultRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		defaultRequests++
+		http.NotFound(w, r)
+	}))
+	defer defaultRegistry.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	client := registry.Client()
+	artifactFetcher := fetch.NewFetcher(
+		fetch.WithHTTPClient(client),
+		fetch.WithMaxRetries(0),
+	)
+	t.Cleanup(func() { _ = artifactFetcher.Close() })
+	proxy.Fetcher = artifactFetcher
+
+	h := &ContainerHandler{proxy: proxy, registryURL: defaultRegistry.URL}
+	h.RegisterRegistry("homebrew/core", registry.URL)
+	req := httptest.NewRequest(http.MethodGet, "/homebrew/core/jq/blobs/"+digest, nil)
+	req.Header.Set("Authorization", "Bearer client-secret")
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if got := w.Body.String(); got != blob {
+		t.Errorf("body = %q, want %q", got, blob)
+	}
+	if got := w.Header().Get("Content-Type"); got != "application/vnd.homebrew.bottle" {
+		t.Errorf("Content-Type = %q, want application/vnd.homebrew.bottle", got)
+	}
+	if registryAuthorization != "" {
+		t.Errorf("registry Authorization = %q, want empty", registryAuthorization)
+	}
+	if cdnAuthorization != "" {
+		t.Errorf("CDN Authorization = %q, want empty", cdnAuthorization)
+	}
+	if defaultRequests != 0 {
+		t.Errorf("default registry requests = %d, want 0", defaultRequests)
+	}
+}
+
+func TestContainerHandler_BlobDigestMismatchIsNotCached(t *testing.T) {
+	proxy, _, store, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("wrong bottle")),
+		ContentType: "application/octet-stream",
+	}
+	digest := sha256Digest([]byte("expected bottle"))
+	h := &ContainerHandler{proxy: proxy, registryURL: "https://registry.example.test"}
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/homebrew/core/jq/blobs/"+digest, nil))
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadGateway, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "DIGEST_INVALID") {
+		t.Errorf("body = %q, want DIGEST_INVALID", w.Body.String())
+	}
+	cached, err := proxy.GetCachedArtifact(t.Context(), "oci", "homebrew/core/jq", digest, digest)
+	if err != nil {
+		t.Fatalf("checking cache: %v", err)
+	}
+	if cached != nil {
+		t.Error("digest-mismatched blob was recorded in the cache")
+	}
+	if len(store.files) != 0 {
+		t.Errorf("stored files = %d, want 0", len(store.files))
+	}
+}
+
 func TestContainerHandler_CachedImagePullSurvivesRegistryAndTokenOutages(t *testing.T) {
-	digest := "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd"
 	manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`
 	blob := "cached image blob"
+	manifestDigest := sha256Digest([]byte(manifest))
+	blobDigest := sha256Digest([]byte(blob))
 	registryAvailable := true
 	tokenAvailable := true
 	registryRequests := 0
@@ -451,9 +564,9 @@ func TestContainerHandler_CachedImagePullSurvivesRegistryAndTokenOutages(t *test
 		switch r.URL.Path {
 		case "/v2/library/nginx/manifests/latest":
 			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
-			w.Header().Set("Docker-Content-Digest", digest)
+			w.Header().Set("Docker-Content-Digest", manifestDigest)
 			_, _ = io.WriteString(w, manifest)
-		case "/v2/library/nginx/blobs/" + digest:
+		case "/v2/library/nginx/blobs/" + blobDigest:
 			w.Header().Set("Content-Type", "application/octet-stream")
 			_, _ = io.WriteString(w, blob)
 		default:
@@ -483,7 +596,7 @@ func TestContainerHandler_CachedImagePullSurvivesRegistryAndTokenOutages(t *test
 		body string
 	}{
 		{path: "/library/nginx/manifests/latest", body: manifest},
-		{path: "/library/nginx/blobs/" + digest, body: blob},
+		{path: "/library/nginx/blobs/" + blobDigest, body: blob},
 	} {
 		response := httptest.NewRecorder()
 		warmHandler.ServeHTTP(response, httptest.NewRequest(http.MethodGet, request.path, nil))
@@ -516,13 +629,14 @@ func TestContainerHandler_CachedImagePullSurvivesRegistryAndTokenOutages(t *test
 	}).Routes()
 
 	for _, request := range []struct {
-		name string
-		path string
-		body string
+		name   string
+		path   string
+		body   string
+		digest string
 	}{
-		{name: "tag manifest", path: "/library/nginx/manifests/latest", body: manifest},
-		{name: "digest manifest", path: "/library/nginx/manifests/" + digest, body: manifest},
-		{name: "blob", path: "/library/nginx/blobs/" + digest, body: blob},
+		{name: "tag manifest", path: "/library/nginx/manifests/latest", body: manifest, digest: manifestDigest},
+		{name: "digest manifest", path: "/library/nginx/manifests/" + manifestDigest, body: manifest, digest: manifestDigest},
+		{name: "blob", path: "/library/nginx/blobs/" + blobDigest, body: blob, digest: blobDigest},
 	} {
 		t.Run(request.name, func(t *testing.T) {
 			response := httptest.NewRecorder()
@@ -533,8 +647,8 @@ func TestContainerHandler_CachedImagePullSurvivesRegistryAndTokenOutages(t *test
 			if got := response.Body.String(); got != request.body {
 				t.Errorf("body = %q, want %q", got, request.body)
 			}
-			if got := response.Header().Get("Docker-Content-Digest"); got != digest {
-				t.Errorf("Docker-Content-Digest = %q, want %q", got, digest)
+			if got := response.Header().Get("Docker-Content-Digest"); got != request.digest {
+				t.Errorf("Docker-Content-Digest = %q, want %q", got, request.digest)
 			}
 		})
 	}
@@ -662,8 +776,9 @@ func TestContainerHandler_BlobHead_DirectServeRedirects(t *testing.T) {
 }
 
 func TestContainerHandler_ManifestByDigest_CacheHitSkipsUpstream(t *testing.T) {
-	digest := "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
 	manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`
+	digest := sha256Digest([]byte(manifest))
+	lastModified := time.Date(2026, time.August, 14, 9, 30, 0, 0, time.UTC)
 	upstreamAvailable := true
 	upstreamRequests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -679,6 +794,7 @@ func TestContainerHandler_ManifestByDigest_CacheHitSkipsUpstream(t *testing.T) {
 		w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 		w.Header().Set("Docker-Content-Digest", digest)
 		w.Header().Set("ETag", `"manifest-etag"`)
+		w.Header().Set("Last-Modified", lastModified.Format(http.TimeFormat))
 		if r.Method != http.MethodHead {
 			_, _ = io.WriteString(w, manifest)
 		}
@@ -710,6 +826,23 @@ func TestContainerHandler_ManifestByDigest_CacheHitSkipsUpstream(t *testing.T) {
 	if got := second.Header().Get("Docker-Content-Digest"); got != digest {
 		t.Errorf("cached Docker-Content-Digest = %q, want %q", got, digest)
 	}
+	if got := second.Header().Get("Last-Modified"); got != lastModified.Format(http.TimeFormat) {
+		t.Errorf("cached Last-Modified = %q, want %q", got, lastModified.Format(http.TimeFormat))
+	}
+
+	conditionalRequest := httptest.NewRequest(http.MethodGet, "/library/nginx/manifests/"+digest, nil)
+	conditionalRequest.Header.Set("If-None-Match", `"manifest-etag"`)
+	conditional := httptest.NewRecorder()
+	h.Routes().ServeHTTP(conditional, conditionalRequest)
+	if conditional.Code != http.StatusNotModified {
+		t.Fatalf("conditional status = %d, want %d", conditional.Code, http.StatusNotModified)
+	}
+	if got := conditional.Header().Get("ETag"); got != `"manifest-etag"` {
+		t.Errorf("conditional ETag = %q, want %q", got, `"manifest-etag"`)
+	}
+	if conditional.Body.Len() != 0 {
+		t.Errorf("conditional body length = %d, want 0", conditional.Body.Len())
+	}
 
 	head := httptest.NewRecorder()
 	h.Routes().ServeHTTP(head, httptest.NewRequest(http.MethodHead, "/library/nginx/manifests/"+digest, nil))
@@ -728,9 +861,72 @@ func TestContainerHandler_ManifestByDigest_CacheHitSkipsUpstream(t *testing.T) {
 	}
 }
 
+func TestContainerHandler_ManifestDigestMismatchIsNotCached(t *testing.T) {
+	manifest := `{"schemaVersion":2}`
+	digest := sha256Digest([]byte("different manifest"))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+		w.Header().Set("Docker-Content-Digest", digest)
+		_, _ = io.WriteString(w, manifest)
+	}))
+	defer upstream.Close()
+
+	proxy, db, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := &ContainerHandler{proxy: proxy, registryURL: upstream.URL}
+	req := httptest.NewRequest(http.MethodGet, "/homebrew/core/jq/manifests/"+digest, nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadGateway, w.Body.String())
+	}
+	if !strings.Contains(w.Body.String(), "DIGEST_INVALID") {
+		t.Errorf("body = %q, want DIGEST_INVALID", w.Body.String())
+	}
+	cacheKey := h.containerManifestCacheKey(upstream.URL, "homebrew/core/jq", digest, containerManifestAccept(req))
+	entry, err := db.GetMetadataCache(containerManifestCacheEcosystem, cacheKey)
+	if err != nil {
+		t.Fatalf("checking manifest cache: %v", err)
+	}
+	if entry != nil {
+		t.Error("digest-mismatched manifest was recorded in the cache")
+	}
+}
+
+func TestContainerHandler_ManifestTagWithInvalidDigestIsNotAliased(t *testing.T) {
+	manifest := `{"schemaVersion":2}`
+	invalidDigest := sha256Digest([]byte("different manifest"))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+		w.Header().Set("Docker-Content-Digest", invalidDigest)
+		_, _ = io.WriteString(w, manifest)
+	}))
+	defer upstream.Close()
+
+	proxy, db, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := &ContainerHandler{proxy: proxy, registryURL: upstream.URL}
+	req := httptest.NewRequest(http.MethodGet, "/homebrew/core/jq/manifests/latest", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusBadGateway, w.Body.String())
+	}
+	cacheKey := h.containerManifestCacheKey(upstream.URL, "homebrew/core/jq", invalidDigest, containerManifestAccept(req))
+	entry, err := db.GetMetadataCache(containerManifestCacheEcosystem, cacheKey)
+	if err != nil {
+		t.Fatalf("checking manifest cache: %v", err)
+	}
+	if entry != nil {
+		t.Error("tag manifest was cached under an unverified digest")
+	}
+}
+
 func TestContainerHandler_ManifestByTag_UsesStaleCacheOnUpstreamFailure(t *testing.T) {
-	digest := "sha256:bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 	manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json"}`
+	digest := sha256Digest([]byte(manifest))
 	upstreamAvailable := true
 	upstreamRequests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -992,8 +1188,8 @@ func TestContainerHandler_ManifestVariantCacheHonorsParameterizedAcceptExclusion
 }
 
 func TestContainerHandler_ManifestByTag_CachesDigestAlias(t *testing.T) {
-	digest := "sha256:cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
 	manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`
+	digest := sha256Digest([]byte(manifest))
 	upstreamAvailable := true
 	upstreamRequests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1040,7 +1236,8 @@ func TestContainerHandler_ManifestByTag_CachesDigestAlias(t *testing.T) {
 }
 
 func TestContainerHandler_ManifestByTag_StaleHeadChecksUpstream(t *testing.T) {
-	oldDigest := "sha256:dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+	manifest := `{"schemaVersion":2}`
+	oldDigest := sha256Digest([]byte(manifest))
 	newDigest := "sha256:eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
 	currentDigest := oldDigest
 	upstreamRequests := 0
@@ -1050,7 +1247,7 @@ func TestContainerHandler_ManifestByTag_StaleHeadChecksUpstream(t *testing.T) {
 		w.Header().Set("Docker-Content-Digest", currentDigest)
 		w.Header().Set("ETag", `"`+currentDigest+`"`)
 		if r.Method != http.MethodHead {
-			_, _ = io.WriteString(w, `{"schemaVersion":2}`)
+			_, _ = io.WriteString(w, manifest)
 		}
 	}))
 	defer upstream.Close()

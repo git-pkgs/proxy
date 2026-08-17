@@ -177,6 +177,12 @@ upstream:
   # RPM repository URL (used by /rpm endpoint)
   rpm: "https://dl.fedoraproject.org/pub/fedora/linux"
 
+  # Homebrew JSON API URL (used by /homebrew endpoint)
+  homebrew_api: "https://formulae.brew.sh/api"
+
+  # Homebrew artifact registry URL (used for /v2/homebrew/core requests)
+  homebrew_artifact: "https://ghcr.io"
+
   # Named HTTP Helm chart repositories (used by /helm/{name}/)
   # helm:
   #   bitnami: "https://charts.bitnami.com/bitnami"

@@ -160,7 +160,7 @@ func (h *ContainerHandler) loadContainerTags(ctx context.Context, cacheKey strin
 
 func (h *ContainerHandler) storeContainerTags(ctx context.Context, cacheKey string, tags *cachedContainerTags) error {
 	size, err := h.storeContainerMetadata(ctx, containerTagsCacheEcosystem, cacheKey, tags.body,
-		tags.etag, tags.link, tags.contentType, "", tags.fetchedAt)
+		tags.etag, tags.link, tags.contentType, "", time.Time{}, tags.fetchedAt)
 	if err != nil {
 		return fmt.Errorf("storing tag list: %w", err)
 	}
