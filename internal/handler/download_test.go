@@ -49,7 +49,7 @@ func seedPackageWithPURL(t *testing.T, db *database.DB, store *mockStorage, ecos
 		Filename:    filename,
 		UpstreamURL: "https://example.com/" + filename,
 		StoragePath: sql.NullString{String: storagePath, Valid: true},
-		ContentHash: sql.NullString{String: "abc123", Valid: true},
+		ContentHash: sql.NullString{String: sha256Hex(content), Valid: true},
 		Size:        sql.NullInt64{Int64: int64(len(content)), Valid: true},
 		ContentType: sql.NullString{String: "application/octet-stream", Valid: true},
 		FetchedAt:   sql.NullTime{Time: time.Now(), Valid: true},

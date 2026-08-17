@@ -3,9 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"database/sql"
-	"encoding/hex"
 	"errors"
 	"io"
 	"log/slog"
@@ -46,8 +44,7 @@ func (s *mockStorage) Store(_ context.Context, path string, r io.Reader) (int64,
 		return 0, "", err
 	}
 	s.files[path] = data
-	digest := sha256.Sum256(data)
-	return int64(len(data)), hex.EncodeToString(digest[:]), nil
+	return int64(len(data)), sha256Hex(string(data)), nil
 }
 
 func (s *mockStorage) Open(_ context.Context, path string) (io.ReadCloser, error) {
@@ -182,7 +179,7 @@ func seedPackage(t testing.TB, db *database.DB, store *mockStorage, ecosystem, n
 		Filename:    filename,
 		UpstreamURL: "https://example.com/" + filename,
 		StoragePath: sql.NullString{String: storagePath, Valid: true},
-		ContentHash: sql.NullString{String: "abc123", Valid: true},
+		ContentHash: sql.NullString{String: sha256Hex(content), Valid: true},
 		Size:        sql.NullInt64{Int64: int64(len(content)), Valid: true},
 		ContentType: sql.NullString{String: "application/octet-stream", Valid: true},
 		FetchedAt:   sql.NullTime{Time: time.Now(), Valid: true},
@@ -271,8 +268,74 @@ func TestGetOrFetchArtifact_CacheHit(t *testing.T) {
 	if result.ContentType != "application/octet-stream" {
 		t.Errorf("got content type %q, want %q", result.ContentType, "application/octet-stream")
 	}
-	if result.Hash != "abc123" {
-		t.Errorf("got hash %q, want %q", result.Hash, "abc123")
+	if result.Hash != sha256Hex("cached content") {
+		t.Errorf("got hash %q, want %q", result.Hash, sha256Hex("cached content"))
+	}
+}
+
+func TestGetCachedArtifactRejectsMalformedIntegrityMetadata(t *testing.T) {
+	tests := []struct {
+		name               string
+		malformedHash      string
+		malformedIntegrity string
+	}{
+		{name: "content hash", malformedHash: "abc123"},
+		{name: "native integrity", malformedIntegrity: "sha512-abc123"},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			assertMalformedCacheRejected(t, test.malformedHash, test.malformedIntegrity)
+		})
+	}
+}
+
+func assertMalformedCacheRejected(t *testing.T, malformedHash, malformedIntegrity string) {
+	t.Helper()
+	proxy, db, store, _ := setupTestProxy(t)
+	const (
+		packageName = "broken"
+		version     = "1.0.0"
+		filename    = "broken-1.0.0.tgz"
+	)
+	seedPackage(t, db, store, "npm", packageName, version, filename, "cached content")
+	versionPURL := purl.MakePURLString("npm", packageName, version)
+
+	if malformedHash != "" {
+		artifact, err := db.GetArtifact(versionPURL, filename)
+		if err != nil {
+			t.Fatal(err)
+		}
+		artifact.ContentHash = sql.NullString{String: malformedHash, Valid: true}
+		if err := db.UpsertArtifact(artifact); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if malformedIntegrity != "" {
+		versionRecord := &database.Version{
+			PURL:        versionPURL,
+			PackagePURL: purl.MakePURLString("npm", packageName, ""),
+			Integrity:   sql.NullString{String: malformedIntegrity, Valid: true},
+		}
+		if err := db.UpsertVersion(versionRecord); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	proxy.DirectServe = true
+	store.signedURL = "https://cache.example/broken"
+	result, err := proxy.GetCachedArtifact(context.Background(), "npm", packageName, version, filename)
+	if err != nil {
+		t.Fatalf("GetCachedArtifact: %v", err)
+	}
+	if result != nil {
+		t.Errorf("GetCachedArtifact = %+v, want nil", result)
+	}
+	artifact, err := db.GetArtifact(versionPURL, filename)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if artifact.StoragePath.Valid {
+		t.Error("unusable cache record retained its storage path")
 	}
 }
 
@@ -307,7 +370,7 @@ func TestGetOrFetchArtifactFromURL_CacheMiss_StorageMissing(t *testing.T) {
 		Filename:    "missing-1.0.0.tgz",
 		UpstreamURL: "https://example.com/missing.tgz",
 		StoragePath: sql.NullString{String: "nonexistent/path.tgz", Valid: true},
-		ContentHash: sql.NullString{String: "hash", Valid: true},
+		ContentHash: sql.NullString{String: sha256Hex("missing content"), Valid: true},
 		Size:        sql.NullInt64{Int64: 100, Valid: true},
 		ContentType: sql.NullString{String: "application/octet-stream", Valid: true},
 		FetchedAt:   sql.NullTime{Time: time.Now(), Valid: true},

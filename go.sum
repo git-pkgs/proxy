@@ -250,6 +250,8 @@ github.com/git-pkgs/cooldown v0.1.1 h1:9OqqzCB8gANz/y44SmqGD0Jp8Qtu81D1sCbKl6Ehg
 github.com/git-pkgs/cooldown v0.1.1/go.mod h1:v7APuK/UouTiu8mWQZbdDmj7DfxxkGUeuhjaRB5gv9E=
 github.com/git-pkgs/enrichment v0.6.5 h1:U0SPzWVGoK4R8TwojCTASBRTEV+QSs0IitdLmzI/g/k=
 github.com/git-pkgs/enrichment v0.6.5/go.mod h1:Vt2PLMvWPOio9DLyC8Gdhh1yxsHwcRcG+L2Kkc9+kak=
+github.com/git-pkgs/integrity v0.1.1 h1:nHQ7SktOiGM1dOb5BFnkdtttG/6FCgE6r5ru6QnsGts=
+github.com/git-pkgs/integrity v0.1.1/go.mod h1:hxu24lcd230377hCF28JQW7sGcCbuNLqo/0ULeb+F1Q=
 github.com/git-pkgs/magic v0.2.0 h1:c7HqVxnP8c88EaVMH0/KraDFVTcmiXckRiSvNZEnvMQ=
 github.com/git-pkgs/magic v0.2.0/go.mod h1:3ndidt+yvFaI1M0aEkkzkOlFnLPkeVQASIUojazcxCI=
 github.com/git-pkgs/packageurl-go v0.3.1 h1:WM3RBABQZLaRBxgKyYughc3cVBE8KyQxbSC6Jt5ak7M=

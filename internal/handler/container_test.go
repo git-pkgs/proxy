@@ -482,8 +482,9 @@ func TestContainerHandler_BlobHead_DirectServeRedirects(t *testing.T) {
 	if got := w.Header().Get("Location"); got != store.signedURL {
 		t.Errorf("Location = %q, want %q", got, store.signedURL)
 	}
-	if got := w.Header().Get("ETag"); got != `"abc123"` {
-		t.Errorf("ETag = %q, want %q", got, `"abc123"`)
+	wantETag := `"` + sha256Hex("cached blob") + `"`
+	if got := w.Header().Get("ETag"); got != wantETag {
+		t.Errorf("ETag = %q, want %q", got, wantETag)
 	}
 	if w.Body.Len() != 0 {
 		t.Errorf("HEAD response body length = %d, want 0", w.Body.Len())
