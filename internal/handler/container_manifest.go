@@ -30,6 +30,7 @@ type cachedContainerManifest struct {
 	contentDigest string
 	etag          string
 	size          int64
+	lastModified  time.Time
 	fetchedAt     time.Time
 }
 
@@ -44,7 +45,7 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 
 	immutable := manifestDigestReferencePattern.MatchString(reference)
 	if cached != nil && (immutable || h.containerManifestFresh(cached)) {
-		writeContainerManifest(w, r.Method, cached, false)
+		writeContainerManifest(w, r, cached, false)
 		return
 	}
 
@@ -71,12 +72,12 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 		if err := h.storeContainerManifest(r.Context(), cacheKey, cached); err != nil {
 			h.proxy.Logger.Warn("failed to refresh cached container manifest", "error", err)
 		}
-		writeContainerManifest(w, r.Method, cached, false)
+		writeContainerManifest(w, r, cached, false)
 		return
 	}
 	if resp.StatusCode != http.StatusOK {
 		if cached != nil && shouldServeStaleManifest(resp.StatusCode) {
-			writeContainerManifest(w, r.Method, cached, true)
+			writeContainerManifest(w, r, cached, true)
 			return
 		}
 		copyContainerManifestHeaders(w.Header(), resp.Header)
@@ -96,16 +97,26 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 		h.serveStaleManifestOrError(w, r, cached, fmt.Errorf("reading manifest: %w", err))
 		return
 	}
+	computedDigest := sha256Digest(body)
+	contentDigest := resp.Header.Get("Docker-Content-Digest")
+	if contentDigest == "" {
+		contentDigest = computedDigest
+	}
+	if (immutable && reference != computedDigest) || contentDigest != computedDigest {
+		h.proxy.Logger.Error("upstream manifest failed digest verification",
+			"name", name, "reference", reference, "expected", contentDigest, "actual", computedDigest)
+		h.containerError(w, http.StatusBadGateway, "DIGEST_INVALID", "manifest digest verification failed")
+		return
+	}
+
 	manifest := &cachedContainerManifest{
 		body:          body,
 		contentType:   resp.Header.Get("Content-Type"),
-		contentDigest: resp.Header.Get("Docker-Content-Digest"),
+		contentDigest: contentDigest,
 		etag:          resp.Header.Get("ETag"),
 		size:          int64(len(body)),
+		lastModified:  parseHTTPTime(resp.Header.Get("Last-Modified")),
 		fetchedAt:     time.Now(),
-	}
-	if manifest.contentDigest == "" {
-		manifest.contentDigest = sha256Digest(body)
 	}
 	if err := h.storeContainerManifest(r.Context(), cacheKey, manifest); err != nil {
 		h.proxy.Logger.Warn("failed to cache container manifest", "error", err)
@@ -116,13 +127,13 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 			h.proxy.Logger.Warn("failed to cache container manifest by digest", "error", err)
 		}
 	}
-	writeContainerManifest(w, r.Method, manifest, false)
+	writeContainerManifest(w, r, manifest, false)
 }
 
 func (h *ContainerHandler) serveStaleManifestOrError(w http.ResponseWriter, r *http.Request, cached *cachedContainerManifest, err error) {
 	if cached != nil {
 		h.proxy.Logger.Warn("upstream manifest fetch failed, serving stale cache", "error", err)
-		writeContainerManifest(w, r.Method, cached, true)
+		writeContainerManifest(w, r, cached, true)
 		return
 	}
 	h.proxy.Logger.Error("failed to fetch manifest", "error", err)
@@ -172,6 +183,9 @@ func (h *ContainerHandler) loadContainerManifest(ctx context.Context, cacheKey s
 	if entry.Size.Valid {
 		manifest.size = entry.Size.Int64
 	}
+	if entry.LastModified.Valid {
+		manifest.lastModified = entry.LastModified.Time
+	}
 	if entry.FetchedAt.Valid {
 		manifest.fetchedAt = entry.FetchedAt.Time
 	}
@@ -196,11 +210,12 @@ func (h *ContainerHandler) storeContainerManifest(ctx context.Context, cacheKey 
 		ContentType:   sql.NullString{String: manifest.contentType, Valid: manifest.contentType != ""},
 		ContentDigest: sql.NullString{String: manifest.contentDigest, Valid: manifest.contentDigest != ""},
 		Size:          sql.NullInt64{Int64: size, Valid: true},
+		LastModified:  sql.NullTime{Time: manifest.lastModified, Valid: !manifest.lastModified.IsZero()},
 		FetchedAt:     sql.NullTime{Time: manifest.fetchedAt, Valid: !manifest.fetchedAt.IsZero()},
 	})
 }
 
-func writeContainerManifest(w http.ResponseWriter, method string, manifest *cachedContainerManifest, stale bool) {
+func writeContainerManifest(w http.ResponseWriter, r *http.Request, manifest *cachedContainerManifest, stale bool) {
 	if manifest.contentType != "" {
 		w.Header().Set("Content-Type", manifest.contentType)
 	}
@@ -211,11 +226,24 @@ func writeContainerManifest(w http.ResponseWriter, method string, manifest *cach
 	if manifest.etag != "" {
 		w.Header().Set("ETag", manifest.etag)
 	}
+	if !manifest.lastModified.IsZero() {
+		w.Header().Set("Last-Modified", manifest.lastModified.UTC().Format(http.TimeFormat))
+	}
 	if stale {
 		w.Header().Set("Warning", containerStaleWarning)
 	}
+	if manifest.etag != "" && r.Header.Get("If-None-Match") == manifest.etag {
+		w.WriteHeader(http.StatusNotModified)
+		return
+	}
+	if !manifest.lastModified.IsZero() {
+		if modifiedSince, err := http.ParseTime(r.Header.Get("If-Modified-Since")); err == nil && !manifest.lastModified.After(modifiedSince) {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+	}
 	w.WriteHeader(http.StatusOK)
-	if method != http.MethodHead {
+	if r.Method != http.MethodHead {
 		_, _ = w.Write(manifest.body)
 	}
 }
@@ -234,11 +262,16 @@ func containerManifestAccept(r *http.Request) string {
 }
 
 func copyContainerManifestHeaders(destination, source http.Header) {
-	for _, header := range []string{"Content-Type", "Content-Length", "Docker-Content-Digest", "ETag", "WWW-Authenticate"} {
+	for _, header := range []string{"Content-Type", "Content-Length", "Docker-Content-Digest", "ETag", "Last-Modified", "WWW-Authenticate"} {
 		if value := source.Get(header); value != "" {
 			destination.Set(header, value)
 		}
 	}
+}
+
+func parseHTTPTime(value string) time.Time {
+	parsed, _ := http.ParseTime(value)
+	return parsed
 }
 
 func shouldServeStaleManifest(status int) bool {

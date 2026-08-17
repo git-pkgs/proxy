@@ -633,6 +633,8 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 
 	if entry != nil && entry.ETag.Valid {
 		req.Header.Set("If-None-Match", entry.ETag.String)
+	} else if entry != nil && entry.LastModified.Valid {
+		req.Header.Set("If-Modified-Since", entry.LastModified.Time.UTC().Format(http.TimeFormat))
 	}
 
 	resp, err := p.HTTPClient.Do(req)
@@ -776,6 +778,12 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 	cm := p.lookupCachedMeta(ecosystem, cacheKey)
 
 	if cm.etag != "" {
+		w.Header().Set("ETag", cm.etag)
+	}
+	if !cm.lastModified.IsZero() {
+		w.Header().Set("Last-Modified", cm.lastModified.UTC().Format(http.TimeFormat))
+	}
+	if cm.etag != "" {
 		if match := r.Header.Get("If-None-Match"); match != "" && match == cm.etag {
 			w.WriteHeader(http.StatusNotModified)
 			return
@@ -792,23 +800,19 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-	if cm.etag != "" {
-		w.Header().Set("ETag", cm.etag)
-	}
-	if !cm.lastModified.IsZero() {
-		w.Header().Set("Last-Modified", cm.lastModified.UTC().Format(http.TimeFormat))
-	}
 	if cm.stale {
 		w.Header().Set("Warning", `110 - "Response is Stale"`)
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(body)
+	}
 }
 
 // proxyMetadataStream forwards an upstream metadata response by streaming it to the client
 // without buffering the full body in memory.
 func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upstreamURL string, acceptHeaders ...string) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
 	if err != nil {
 		http.Error(w, "failed to create request", http.StatusInternalServerError)
 		return
@@ -841,7 +845,9 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 	}
 
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	if r.Method != http.MethodHead {
+		_, _ = io.Copy(w, resp.Body)
+	}
 }
 
 func (p *Proxy) applyUpstreamAuth(req *http.Request) {
@@ -858,12 +864,22 @@ func (p *Proxy) applyUpstreamAuth(req *http.Request) {
 // GetOrFetchArtifactFromURL retrieves an artifact from cache or fetches from a specific URL.
 // This is useful for registries where download URLs are determined from metadata.
 func (p *Proxy) GetOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, version, filename, downloadURL string) (*CacheResult, error) {
-	return p.GetOrFetchArtifactFromURLWithHeaders(ctx, ecosystem, name, version, filename, downloadURL, nil)
+	return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, nil, "")
 }
 
 // GetOrFetchArtifactFromURLWithHeaders retrieves an artifact from cache or fetches from a URL
 // with additional request-specific HTTP headers.
 func (p *Proxy) GetOrFetchArtifactFromURLWithHeaders(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header) (*CacheResult, error) {
+	return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, headers, "")
+}
+
+// GetOrFetchArtifactFromURLWithDigest retrieves an artifact and verifies its
+// SHA-256 digest before adding a newly fetched response to the cache.
+func (p *Proxy) GetOrFetchArtifactFromURLWithDigest(ctx context.Context, ecosystem, name, version, filename, downloadURL, digest string) (*CacheResult, error) {
+	return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, nil, digest)
+}
+
+func (p *Proxy) getOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header, digest string) (*CacheResult, error) {
 	if cached, err := p.GetCachedArtifact(ctx, ecosystem, name, version, filename); err != nil {
 		return nil, err
 	} else if cached != nil {
@@ -873,10 +889,10 @@ func (p *Proxy) GetOrFetchArtifactFromURLWithHeaders(ctx context.Context, ecosys
 
 	pkgPURL := purl.MakePURLString(ecosystem, name, "")
 	versionPURL := purl.MakePURLString(ecosystem, name, version)
-	return p.fetchAndCacheFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers)
+	return p.fetchAndCacheFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, digest)
 }
 
-func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header) (*CacheResult, error) {
+func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, expectedDigest string) (*CacheResult, error) {
 	p.Logger.Info("fetching from upstream",
 		"ecosystem", ecosystem, "name", name, "version", version, "url", downloadURL)
 
@@ -893,6 +909,12 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 	_ = artifact.Body.Close()
 	if err != nil {
 		return nil, fmt.Errorf("storing artifact: %w", err)
+	}
+	if expectedDigest != "" && expectedDigest != "sha256:"+hash {
+		if deleteErr := p.Storage.Delete(ctx, storagePath); deleteErr != nil {
+			p.Logger.Warn("failed to remove artifact with invalid digest", "path", storagePath, "error", deleteErr)
+		}
+		return nil, fmt.Errorf("%w: expected %s, got sha256:%s", ErrArtifactDigestMismatch, expectedDigest, hash)
 	}
 
 	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, downloadURL, storagePath, hash, size, artifact.ContentType); err != nil {
@@ -912,3 +934,7 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 		Cached:      false,
 	}, nil
 }
+
+// ErrArtifactDigestMismatch indicates that fetched bytes did not match their
+// digest-addressed URL and were not recorded in the cache database.
+var ErrArtifactDigestMismatch = errors.New("artifact digest mismatch")

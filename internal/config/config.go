@@ -318,6 +318,14 @@ type UpstreamConfig struct {
 	// Default: http://deb.debian.org/debian
 	Debian string `json:"debian" yaml:"debian"`
 
+	// HomebrewAPI is the upstream Homebrew JSON API URL.
+	// Default: https://formulae.brew.sh/api
+	HomebrewAPI string `json:"homebrew_api" yaml:"homebrew_api"`
+
+	// HomebrewArtifact is the upstream registry URL for Homebrew artifacts.
+	// Default: https://ghcr.io
+	HomebrewArtifact string `json:"homebrew_artifact" yaml:"homebrew_artifact"`
+
 	// Helm maps repository names to HTTP Helm chart repository URLs.
 	// Requests use /helm/{name}/index.yaml and chart URLs in the index are
 	// rewritten to the same named proxy endpoint.
@@ -476,6 +484,8 @@ func Default() *Config {
 			Cargo:              "https://index.crates.io",
 			CargoDownload:      "https://static.crates.io/crates",
 			Debian:             "http://deb.debian.org/debian",
+			HomebrewAPI:        "https://formulae.brew.sh/api",
+			HomebrewArtifact:   "https://ghcr.io",
 		},
 		Gradle: GradleConfig{
 			BuildCache: GradleBuildCacheConfig{
@@ -566,6 +576,8 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Upstream.Maven, "PROXY_UPSTREAM_MAVEN")
 	setEnvString(&c.Upstream.GradlePluginPortal, "PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL")
 	setEnvString(&c.Upstream.Debian, "PROXY_UPSTREAM_DEBIAN")
+	setEnvString(&c.Upstream.HomebrewAPI, "PROXY_UPSTREAM_HOMEBREW_API")
+	setEnvString(&c.Upstream.HomebrewArtifact, "PROXY_UPSTREAM_HOMEBREW_ARTIFACT")
 	setEnvString(&c.Cooldown.Default, "PROXY_COOLDOWN_DEFAULT")
 	setEnvBool(&c.CacheMetadata, "PROXY_CACHE_METADATA")
 	setEnvBool(&c.MirrorAPI, "PROXY_MIRROR_API")
