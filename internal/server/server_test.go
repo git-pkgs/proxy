@@ -30,6 +30,7 @@ import (
 
 type testServer struct {
 	handler http.Handler
+	server  *Server
 	db      *database.DB
 	storage storage.Storage
 	tempDir string
@@ -129,6 +130,7 @@ func newTestServer(t *testing.T) *testServer {
 
 	return &testServer{
 		handler: r,
+		server:  s,
 		db:      db,
 		storage: store,
 		tempDir: tempDir,

@@ -30,6 +30,12 @@ const (
 type HealthResponse struct {
 	Status string                 `json:"status"`
 	Checks map[string]HealthCheck `json:"checks"`
+	// CircuitBreakers reports the state ("open" or "closed") of each upstream
+	// registry's artifact-fetch circuit breaker, omitted when no breaker has
+	// been created yet. An open breaker fails every artifact fetch for that
+	// host without contacting it, but says nothing about this proxy's own
+	// health, so it does not change Status.
+	CircuitBreakers map[string]string `json:"circuit_breakers,omitempty"`
 }
 
 // HealthCheck reports the status of a single subsystem check.
