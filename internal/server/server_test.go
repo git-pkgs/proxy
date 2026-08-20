@@ -605,6 +605,9 @@ func TestVersionShowWithHitCount(t *testing.T) {
 	if !strings.Contains(body, "42 cache hits") {
 		t.Error("expected page to show hit count")
 	}
+	if !strings.Contains(body, "proxy test-version (test-commit)") {
+		t.Error("version show footer should contain proxy build information, not the package version")
+	}
 }
 
 func TestSearchWithNullValues(t *testing.T) {

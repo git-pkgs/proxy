@@ -12,9 +12,9 @@
                         <i data-lucide="github" class="w-4 h-4"></i><span>github.com/git-pkgs/proxy</span>
                     </a>
                 </p>
-                {{if .Version}}
+                {{if .BuildInfo.Version}}
                 <p class="text-xs text-gray-500 dark:text-gray-500 mt-2">
-                    proxy {{.Version}}{{if .Commit}} ({{.Commit}}){{end}}
+                    proxy {{.BuildInfo.Version}}{{if .BuildInfo.Commit}} ({{.BuildInfo.Commit}}){{end}}
                 </p>
                 {{end}}
             </div>

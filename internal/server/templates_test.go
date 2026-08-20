@@ -186,6 +186,64 @@ func TestRenderEmitsCanonicalAndOG(t *testing.T) {
 	}
 }
 
+func TestFooterUsesBuildInfoWhenPageDefinesVersion(t *testing.T) {
+	templates := &Templates{}
+	buildInfo := BuildInfo{Version: "proxy-build-1.2.3", Commit: "abc123def"}
+	wantFooter := "proxy proxy-build-1.2.3 (abc123def)"
+
+	tests := []struct {
+		name   string
+		page   string
+		data   any
+		shadow string
+	}{
+		{
+			name: "version show page",
+			page: "version_show",
+			data: VersionShowData{
+				Layout: Layout{BuildInfo: buildInfo},
+				Package: &database.Package{
+					PURL:      "pkg:npm/lodash",
+					Ecosystem: "npm",
+					Name:      "lodash",
+				},
+				Version: &database.Version{
+					PURL:        "pkg:npm/lodash@9.9.9",
+					PackagePURL: "pkg:npm/lodash",
+				},
+			},
+			shadow: "9.9.9",
+		},
+		{
+			name: "browse source page",
+			page: "browse_source",
+			data: BrowseSourceData{
+				Layout:      Layout{BuildInfo: buildInfo},
+				Ecosystem:   "npm",
+				PackageName: "lodash",
+				Version:     "9.9.9",
+			},
+			shadow: "9.9.9",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			if err := templates.Render(w, tt.page, tt.data); err != nil {
+				t.Fatalf("Render(%q) failed: %v", tt.page, err)
+			}
+			body := w.Body.String()
+			if !strings.Contains(body, wantFooter) {
+				t.Errorf("footer missing build info %q", wantFooter)
+			}
+			if strings.Contains(body, "proxy "+tt.shadow) {
+				t.Errorf("footer used page Version %q instead of BuildInfo", tt.shadow)
+			}
+		})
+	}
+}
+
 func TestRenderOmitsCanonicalWhenUIBaseURLUnset(t *testing.T) {
 	templates := &Templates{}
 
