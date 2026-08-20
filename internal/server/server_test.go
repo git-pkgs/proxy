@@ -100,14 +100,11 @@ func newTestServer(t *testing.T) *testServer {
 
 	// Create a minimal server struct for the handlers
 	s := &Server{
-		cfg:     cfg,
-		db:      db,
-		storage: store,
-		logger:  logger,
-		buildInfo: BuildInfo{
-			Version: "test-version",
-			Commit:  "test-commit",
-		},
+		cfg:         cfg,
+		db:          db,
+		storage:     store,
+		logger:      logger,
+		buildInfo:   BuildInfo{Version: "test-version", Commit: "test-commit"},
 		templates:   &Templates{},
 		healthCache: hc,
 	}

@@ -12,7 +12,7 @@ type BuildInfo struct {
 // in every page data struct so templates can access canonical URL and build
 // information alongside the page's own fields.
 type Layout struct {
-	BuildInfo
+	BuildInfo     BuildInfo
 	UIBaseURL     string
 	CanonicalPath string
 }
