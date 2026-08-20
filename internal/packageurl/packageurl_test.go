@@ -38,31 +38,25 @@ func TestWithVersionStringPreservesQualifiers(t *testing.T) {
 }
 
 func TestMakeCacheStringsSwiftRegistryIdentity(t *testing.T) {
-	packagePURL, versionPURL := MakeCacheStrings(
-		"swift", "APPLE/EXAMPLE", "1.2.3", "https://tuist.dev/api/registry/swift/",
-	)
+	packagePURL, versionPURL := MakeCacheStrings("swift", "APPLE/EXAMPLE", "1.2.3")
 
-	wantPackage := "pkg:generic/swift-registry/apple.example?repository_url=https:%2F%2Ftuist.dev%2Fapi%2Fregistry%2Fswift"
+	wantPackage := "pkg:generic/swift-registry/apple.example"
 	if packagePURL != wantPackage {
 		t.Errorf("package PURL = %q, want %q", packagePURL, wantPackage)
 	}
-	wantVersion := "pkg:generic/swift-registry/apple.example@1.2.3?repository_url=https:%2F%2Ftuist.dev%2Fapi%2Fregistry%2Fswift"
+	wantVersion := "pkg:generic/swift-registry/apple.example@1.2.3"
 	if versionPURL != wantVersion {
 		t.Errorf("version PURL = %q, want %q", versionPURL, wantVersion)
 	}
 
-	dottedPackage, dottedVersion := MakeCacheStrings(
-		"swift", "apple.example", "1.2.3", "https://tuist.dev/api/registry/swift",
-	)
+	dottedPackage, dottedVersion := MakeCacheStrings("swift", "apple.example", "1.2.3")
 	if dottedPackage != packagePURL || dottedVersion != versionPURL {
 		t.Errorf("dotted identity cache PURLs = %q, %q; want %q, %q", dottedPackage, dottedVersion, packagePURL, versionPURL)
 	}
 }
 
 func TestMakeCacheStringsUsesSourcePURLWhenAvailable(t *testing.T) {
-	packagePURL, versionPURL := MakeCacheStrings(
-		"swift", "github.com/apple/swift-package-manager", "1.7.0", "https://tuist.dev/api/registry/swift",
-	)
+	packagePURL, versionPURL := MakeCacheStrings("swift", "github.com/apple/swift-package-manager", "1.7.0")
 
 	if packagePURL != "pkg:swift/github.com/apple/swift-package-manager" {
 		t.Errorf("package PURL = %q", packagePURL)

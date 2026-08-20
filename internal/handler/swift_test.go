@@ -204,9 +204,7 @@ func TestSwiftSourceArchiveCachesAndPreservesSecurityMetadata(t *testing.T) {
 		t.Errorf("Content-Disposition = %q", got)
 	}
 
-	packagePURL, versionPURL := packageurl.MakeCacheStrings(
-		"swift", "apple/example", "1.2.3", upstream.URL+"/registry",
-	)
+	packagePURL, versionPURL := packageurl.MakeCacheStrings("swift", "apple/example", "1.2.3")
 	if strings.HasPrefix(packagePURL, "pkg:swift/") {
 		t.Fatalf("registry identity produced source PURL %q", packagePURL)
 	}
@@ -269,7 +267,7 @@ func TestSwiftSourceArchiveRejectsChecksumMismatch(t *testing.T) {
 	if len(store.files) != 0 {
 		t.Errorf("mismatched archive remained in storage: %v", store.files)
 	}
-	packagePURL, versionPURL := packageurl.MakeCacheStrings("swift", "apple/example", "1.2.3", upstream.URL)
+	packagePURL, versionPURL := packageurl.MakeCacheStrings("swift", "apple/example", "1.2.3")
 	cached, err := db.GetCachedArtifact(packagePURL, versionPURL, "example-1.2.3.zip")
 	if err != nil {
 		t.Fatalf("checking cache: %v", err)
@@ -319,7 +317,7 @@ func TestSwiftSourceArchiveCanonicalizesPackageIdentity(t *testing.T) {
 		}
 	}
 
-	canonicalPURL, _ := packageurl.MakeCacheStrings("swift", "apple/example", "1.2.3", upstream.URL)
+	canonicalPURL, _ := packageurl.MakeCacheStrings("swift", "apple/example", "1.2.3")
 	canonical, err := db.GetPackageByPURL(canonicalPURL)
 	if err != nil {
 		t.Fatalf("getting canonical package: %v", err)
@@ -328,29 +326,37 @@ func TestSwiftSourceArchiveCanonicalizesPackageIdentity(t *testing.T) {
 		t.Fatalf("canonical package %q not found", canonicalPURL)
 	}
 
-	nonCanonicalPURL, _ := packageurl.MakeCacheStrings("swift", "APPLE/EXAMPLE", "1.2.3", upstream.URL)
+	nonCanonicalPURL, _ := packageurl.MakeCacheStrings("swift", "APPLE/EXAMPLE", "1.2.3")
 	if nonCanonicalPURL != canonicalPURL {
 		t.Errorf("uppercase cache PURL = %q, want %q", nonCanonicalPURL, canonicalPURL)
 	}
 }
 
-func TestSwiftSourceArchiveHeadRejectsCachedChecksumMismatch(t *testing.T) {
+func TestSwiftSourceArchiveHeadDiscardsCachedChecksumMismatch(t *testing.T) {
 	archive := []byte("cached archive")
-	expectedChecksum := sha256.Sum256([]byte("expected archive"))
+	upstreamChecksum := sha256.Sum256([]byte("upstream archive"))
 
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var probed bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasSuffix(r.URL.Path, ".zip") {
+			probed = true
+			w.Header().Set("Content-Range", "bytes 0-0/456")
+			w.WriteHeader(http.StatusPartialContent)
+			_, _ = w.Write([]byte("x"))
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = fmt.Fprintf(w, `{"id":"apple.example","version":"1.2.3","resources":[{"name":"source-archive","type":"application/zip","checksum":%q}]}`, hex.EncodeToString(expectedChecksum[:]))
+		_, _ = fmt.Fprintf(w, `{"id":"apple.example","version":"1.2.3","resources":[{"name":"source-archive","type":"application/zip","checksum":%q}]}`, hex.EncodeToString(upstreamChecksum[:]))
 	}))
 	defer upstream.Close()
 
-	proxy, _, store, fetcher := setupTestProxy(t)
+	proxy, db, store, fetcher := setupTestProxy(t)
 	fetcher.artifact = &fetch.Artifact{
 		Body:        io.NopCloser(strings.NewReader(string(archive))),
 		Size:        int64(len(archive)),
 		ContentType: "application/zip",
 	}
-	packagePURL, versionPURL := packageurl.MakeCacheStrings("swift", "apple/example", "1.2.3", upstream.URL)
+	packagePURL, versionPURL := packageurl.MakeCacheStrings("swift", "apple/example", "1.2.3")
 	cached, err := proxy.getOrFetchArtifactFromURLWithCachePURLs(
 		context.Background(), "swift", "apple/example", "1.2.3", "example-1.2.3.zip",
 		packagePURL, versionPURL, upstream.URL+"/apple/example/1.2.3.zip", nil, "",
@@ -364,11 +370,20 @@ func TestSwiftSourceArchiveHeadRejectsCachedChecksumMismatch(t *testing.T) {
 	w := httptest.NewRecorder()
 	handler.ServeHTTP(w, httptest.NewRequest(http.MethodHead, "/apple/example/1.2.3.zip", nil))
 
-	if w.Code != http.StatusBadGateway {
-		t.Fatalf("status = %d, want 502; body: %s", w.Code, w.Body.String())
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	if !probed {
+		t.Error("stale cache entry was not replaced by an upstream probe")
+	}
+	if got := w.Header().Get("Content-Length"); got != "456" {
+		t.Errorf("Content-Length = %q, want 456 from upstream probe", got)
 	}
 	if len(store.files) != 0 {
-		t.Errorf("cached mismatched archive remained in storage: %v", store.files)
+		t.Errorf("mismatched cached archive remained in storage: %v", store.files)
+	}
+	if rec, _ := db.GetCachedArtifact(packagePURL, versionPURL, "example-1.2.3.zip"); rec != nil {
+		t.Error("mismatched cache record was not cleared")
 	}
 }
 
