@@ -161,7 +161,7 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 	packageName := scope + "/" + name
 	filename := fmt.Sprintf("%s-%s.zip", name, version)
 	upstreamURL := h.buildUpstreamURL(scope, name, version+".zip", "", r.URL.RawQuery)
-	packagePURL, versionPURL := packageurl.MakeCacheStrings("swift", packageName, version, h.upstreamURL)
+	packagePURL, versionPURL := packageurl.MakeCacheStrings("swift", packageName, version)
 	if packagePURL == "" || versionPURL == "" {
 		h.writeArtifactError(w, fmt.Errorf("%w: swift %q", errUnsupportedPackageIdentity, packageName))
 		return
@@ -173,7 +173,7 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 	}
 
 	if r.Method == http.MethodHead {
-		h.handleSourceArchiveHead(w, r, packageName, version, filename, packagePURL, versionPURL, upstreamURL, archiveInfo)
+		h.handleSourceArchiveHead(w, r, name, version, filename, packagePURL, versionPURL, upstreamURL, archiveInfo)
 		return
 	}
 
@@ -196,10 +196,10 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 func (h *SwiftHandler) handleSourceArchiveHead(
 	w http.ResponseWriter,
 	r *http.Request,
-	packageName, version, filename, packagePURL, versionPURL, upstreamURL string,
+	name, version, filename, packagePURL, versionPURL, upstreamURL string,
 	archiveInfo swiftArchiveInfo,
 ) {
-	result, err := h.proxy.getCachedArtifactWithExpectedHash(
+	result, err := h.proxy.getCachedArtifactWithUpstreamHash(
 		r.Context(), packagePURL, versionPURL, filename, archiveInfo.checksum,
 	)
 	if err != nil {
@@ -208,7 +208,6 @@ func (h *SwiftHandler) handleSourceArchiveHead(
 	}
 	if result != nil {
 		result.ContentType = "application/zip"
-		_, name, _ := strings.Cut(packageName, "/")
 		setSwiftArchiveHeaders(w.Header(), name, version, result.Hash, archiveInfo)
 		serveArtifact(w, r.Method, result)
 		return
@@ -219,7 +218,6 @@ func (h *SwiftHandler) handleSourceArchiveHead(
 		h.writeArtifactError(w, err)
 		return
 	}
-	_, name, _ := strings.Cut(packageName, "/")
 	setSwiftArchiveHeaders(w.Header(), name, version, "", archiveInfo)
 	w.Header().Set("Content-Type", "application/zip")
 	if size >= 0 {

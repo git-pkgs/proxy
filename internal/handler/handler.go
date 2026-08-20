@@ -903,44 +903,52 @@ func (p *Proxy) GetOrFetchArtifactFromURLWithHeaders(ctx context.Context, ecosys
 	return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, headers, "")
 }
 
-func (p *Proxy) getOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header, expectedHash string) (*CacheResult, error) {
+func (p *Proxy) getOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header, upstreamHash string) (*CacheResult, error) {
 	pkgPURL, versionPURL, err := packagePURLStrings(ecosystem, name, version)
 	if err != nil {
 		return nil, err
 	}
 	return p.getOrFetchArtifactFromURLWithCachePURLs(
-		ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, expectedHash,
+		ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, upstreamHash,
 	)
 }
 
-func (p *Proxy) getOrFetchArtifactFromURLWithCachePURLs(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, expectedHash string) (*CacheResult, error) {
-	if cached, err := p.getCachedArtifactWithExpectedHash(ctx, pkgPURL, versionPURL, filename, expectedHash); err != nil {
+func (p *Proxy) getOrFetchArtifactFromURLWithCachePURLs(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, upstreamHash string) (*CacheResult, error) {
+	if cached, err := p.getCachedArtifactWithUpstreamHash(ctx, pkgPURL, versionPURL, filename, upstreamHash); err != nil {
 		return nil, err
 	} else if cached != nil {
 		return cached, nil
 	}
 	metrics.RecordCacheMiss(ecosystem)
 
-	return p.fetchAndCacheFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, expectedHash)
+	return p.fetchAndCacheFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, upstreamHash)
 }
 
-func (p *Proxy) getCachedArtifactWithExpectedHash(ctx context.Context, pkgPURL, versionPURL, filename, expectedHash string) (*CacheResult, error) {
+// getCachedArtifactWithUpstreamHash returns a cached artifact whose recorded
+// content hash matches the checksum the upstream currently declares for it.
+// This detects an upstream re-publishing under the same version, which the
+// stream integrity check in checkCache cannot: that check only verifies the
+// stored blob against the hash recorded when it was cached. On mismatch the
+// stale entry is discarded and nil is returned so the caller re-fetches.
+func (p *Proxy) getCachedArtifactWithUpstreamHash(ctx context.Context, pkgPURL, versionPURL, filename, upstreamHash string) (*CacheResult, error) {
 	cached, err := p.checkCache(ctx, pkgPURL, versionPURL, filename)
 	if err != nil || cached == nil {
 		return cached, err
 	}
-	if artifactHashMatches(cached.Hash, expectedHash) {
+	if artifactHashMatches(cached.Hash, upstreamHash) {
 		return cached, nil
 	}
 
 	if cached.Reader != nil {
 		_ = cached.Reader.Close()
 	}
+	p.Logger.Warn("cached artifact hash disagrees with upstream metadata, discarding",
+		"purl", versionPURL, "filename", filename, "cached", cached.Hash, "upstream", upstreamHash)
 	p.discardCachedArtifact(ctx, versionPURL, filename, cached.storagePath)
-	return nil, artifactHashMismatchError(expectedHash, cached.Hash)
+	return nil, nil
 }
 
-func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, expectedHash string) (*CacheResult, error) {
+func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, upstreamHash string) (*CacheResult, error) {
 	p.Logger.Info("fetching from upstream",
 		"ecosystem", ecosystem, "name", name, "version", version, "url", downloadURL)
 
@@ -964,11 +972,11 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 		metrics.RecordStorageError("write")
 		return nil, fmt.Errorf("storing artifact: %w", err)
 	}
-	if !artifactHashMatches(hash, expectedHash) {
+	if !artifactHashMatches(hash, upstreamHash) {
 		if err := p.Storage.Delete(ctx, storagePath); err != nil {
 			p.Logger.Warn("failed to discard artifact with mismatched checksum", "path", storagePath, "error", err)
 		}
-		return nil, artifactHashMismatchError(expectedHash, hash)
+		return nil, fmt.Errorf("artifact checksum mismatch: upstream declared %s, got %s", upstreamHash, hash)
 	}
 
 	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, downloadURL, storagePath, hash, size, artifact.ContentType); err != nil {
@@ -994,10 +1002,6 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 
 func artifactHashMatches(got, expected string) bool {
 	return expected == "" || strings.EqualFold(got, expected)
-}
-
-func artifactHashMismatchError(expected, got string) error {
-	return fmt.Errorf("artifact checksum mismatch: expected %s, got %s", expected, got)
 }
 
 func (p *Proxy) discardCachedArtifact(ctx context.Context, versionPURL, filename, storagePath string) {
