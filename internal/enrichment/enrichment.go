@@ -9,6 +9,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries"
 	_ "github.com/git-pkgs/registries/all" // Import all registry implementations
@@ -67,7 +68,10 @@ type VulnInfo struct {
 
 // EnrichPackage fetches metadata for a package from registry APIs.
 func (s *Service) EnrichPackage(ctx context.Context, ecosystem, name string) (*PackageInfo, error) {
-	purlStr := purl.MakePURLString(ecosystem, name, "")
+	purlStr := packageurl.MakeString(ecosystem, name, "")
+	if purlStr == "" {
+		return nil, nil
+	}
 
 	pkg, err := registries.FetchPackageFromPURL(ctx, purlStr, s.regClient)
 	if err != nil {
@@ -102,7 +106,10 @@ func (s *Service) EnrichPackage(ctx context.Context, ecosystem, name string) (*P
 
 // EnrichVersion fetches metadata for a specific package version.
 func (s *Service) EnrichVersion(ctx context.Context, ecosystem, name, version string) (*VersionInfo, error) {
-	purlStr := purl.MakePURLString(ecosystem, name, version)
+	purlStr := packageurl.MakeString(ecosystem, name, version)
+	if purlStr == "" {
+		return nil, nil
+	}
 
 	ver, err := registries.FetchVersionFromPURL(ctx, purlStr, s.regClient)
 	if err != nil {
@@ -134,9 +141,14 @@ func (s *Service) EnrichVersion(ctx context.Context, ecosystem, name, version st
 
 // BulkEnrichPackages fetches metadata for multiple packages in parallel.
 func (s *Service) BulkEnrichPackages(ctx context.Context, packages []struct{ Ecosystem, Name string }) map[string]*PackageInfo {
-	purls := make([]string, len(packages))
-	for i, pkg := range packages {
-		purls[i] = purl.MakePURLString(pkg.Ecosystem, pkg.Name, "")
+	purls := make([]string, 0, len(packages))
+	for _, pkg := range packages {
+		if purlStr := packageurl.MakeString(pkg.Ecosystem, pkg.Name, ""); purlStr != "" {
+			purls = append(purls, purlStr)
+		}
+	}
+	if len(purls) == 0 {
+		return map[string]*PackageInfo{}
 	}
 
 	pkgData := registries.BulkFetchPackages(ctx, purls, s.regClient)
@@ -147,7 +159,10 @@ func (s *Service) BulkEnrichPackages(ctx context.Context, packages []struct{ Eco
 			continue
 		}
 
-		p, _ := purl.Parse(purlStr)
+		p, err := purl.Parse(purlStr)
+		if err != nil {
+			continue
+		}
 		info := &PackageInfo{
 			Ecosystem:     p.Type,
 			Name:          pkg.Name,
@@ -174,7 +189,10 @@ func (s *Service) BulkEnrichPackages(ctx context.Context, packages []struct{ Eco
 
 // CheckVulnerabilities queries for vulnerabilities affecting a package version.
 func (s *Service) CheckVulnerabilities(ctx context.Context, ecosystem, name, version string) ([]VulnInfo, error) {
-	p := purl.MakePURL(ecosystem, name, version)
+	p := packageurl.Make(ecosystem, name, version)
+	if p == nil {
+		return nil, nil
+	}
 
 	vulnList, err := s.vulnSource.Query(ctx, p)
 	if err != nil {
@@ -203,9 +221,17 @@ func (s *Service) CheckVulnerabilities(ctx context.Context, ecosystem, name, ver
 
 // BulkCheckVulnerabilities queries vulnerabilities for multiple package versions.
 func (s *Service) BulkCheckVulnerabilities(ctx context.Context, packages []struct{ Ecosystem, Name, Version string }) (map[string][]VulnInfo, error) {
-	purls := make([]*purl.PURL, len(packages))
+	purls := make([]*purl.PURL, 0, len(packages))
+	supported := make([]int, 0, len(packages))
 	for i, pkg := range packages {
-		purls[i] = purl.MakePURL(pkg.Ecosystem, pkg.Name, pkg.Version)
+		if packagePURL := packageurl.Make(pkg.Ecosystem, pkg.Name, pkg.Version); packagePURL != nil {
+			purls = append(purls, packagePURL)
+			supported = append(supported, i)
+		}
+	}
+	result := make(map[string][]VulnInfo, len(purls))
+	if len(purls) == 0 {
+		return result, nil
 	}
 
 	vulnResults, err := s.vulnSource.QueryBatch(ctx, purls)
@@ -213,10 +239,9 @@ func (s *Service) BulkCheckVulnerabilities(ctx context.Context, packages []struc
 		return nil, err
 	}
 
-	result := make(map[string][]VulnInfo, len(packages))
 	for i, vulnList := range vulnResults {
-		pkg := packages[i]
-		key := purl.MakePURLString(pkg.Ecosystem, pkg.Name, pkg.Version)
+		pkg := packages[supported[i]]
+		key := purls[i].String()
 
 		var infos []VulnInfo
 		for _, v := range vulnList {
@@ -248,7 +273,10 @@ func (s *Service) IsOutdated(currentVersion, latestVersion string) bool {
 
 // GetLatestVersion fetches the latest version for a package.
 func (s *Service) GetLatestVersion(ctx context.Context, ecosystem, name string) (string, error) {
-	purlStr := purl.MakePURLString(ecosystem, name, "")
+	purlStr := packageurl.MakeString(ecosystem, name, "")
+	if purlStr == "" {
+		return "", nil
+	}
 
 	latest, err := registries.FetchLatestVersionFromPURL(ctx, purlStr, s.regClient)
 	if err != nil {

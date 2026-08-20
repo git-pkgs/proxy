@@ -41,6 +41,9 @@ func TestDefault(t *testing.T) {
 	if cfg.Upstream.GradlePluginPortal != "https://plugins.gradle.org/m2" {
 		t.Errorf("Upstream.GradlePluginPortal = %q, want %q", cfg.Upstream.GradlePluginPortal, "https://plugins.gradle.org/m2")
 	}
+	if cfg.Upstream.Swift != "https://tuist.dev/api/registry/swift" {
+		t.Errorf("Upstream.Swift = %q, want %q", cfg.Upstream.Swift, "https://tuist.dev/api/registry/swift")
+	}
 	if cfg.Upstream.Debian != "http://deb.debian.org/debian" {
 		t.Errorf("Upstream.Debian = %q, want %q", cfg.Upstream.Debian, "http://deb.debian.org/debian")
 	}
@@ -286,6 +289,7 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("PROXY_ACCESS_LOG_PATH", "/tmp/proxy-access.jsonl")
 	t.Setenv("PROXY_UPSTREAM_MAVEN", "https://maven.example.com/repository/maven-public")
 	t.Setenv("PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL", "https://plugins.example.com/m2")
+	t.Setenv("PROXY_UPSTREAM_SWIFT", "https://swift.example.com/registry")
 	t.Setenv("PROXY_UPSTREAM_DEBIAN", "http://archive.ubuntu.com/ubuntu")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY", "true")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE", "32MB")
@@ -318,6 +322,9 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.Upstream.GradlePluginPortal != "https://plugins.example.com/m2" {
 		t.Errorf("Upstream.GradlePluginPortal = %q, want %q", cfg.Upstream.GradlePluginPortal, "https://plugins.example.com/m2")
+	}
+	if cfg.Upstream.Swift != "https://swift.example.com/registry" {
+		t.Errorf("Upstream.Swift = %q, want %q", cfg.Upstream.Swift, "https://swift.example.com/registry")
 	}
 	if cfg.Upstream.Debian != "http://archive.ubuntu.com/ubuntu" {
 		t.Errorf("Upstream.Debian = %q, want %q", cfg.Upstream.Debian, "http://archive.ubuntu.com/ubuntu")

@@ -14,7 +14,6 @@ import (
 	"github.com/git-pkgs/magic"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/handler"
-	"github.com/git-pkgs/purl"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -226,7 +225,7 @@ func (s *Server) browseList(w http.ResponseWriter, r *http.Request, ecosystem, n
 	dirPath := r.URL.Query().Get("path")
 
 	// Get the artifact for this version
-	versionPURL := purl.MakePURLString(ecosystem, name, version)
+	versionPURL := s.cachedVersionPURL(ecosystem, name, version)
 	artifacts, err := s.db.GetArtifactsByVersionPURL(versionPURL)
 	if err != nil {
 		notFound(w, "version not found")
@@ -313,7 +312,7 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	}
 
 	// Get the artifact for this version
-	versionPURL := purl.MakePURLString(ecosystem, name, version)
+	versionPURL := s.cachedVersionPURL(ecosystem, name, version)
 	artifacts, err := s.db.GetArtifactsByVersionPURL(versionPURL)
 	if err != nil {
 		notFound(w, "version not found")
@@ -534,8 +533,8 @@ type BrowseSourceData struct {
 // @Router /ui/api/compare/{ecosystem}/{name}/{fromVersion}/{toVersion} [get]
 func (s *Server) compareDiff(w http.ResponseWriter, r *http.Request, ecosystem, name, fromVersion, toVersion string) {
 	// Get artifacts for both versions
-	fromPURL := purl.MakePURLString(ecosystem, name, fromVersion)
-	toPURL := purl.MakePURLString(ecosystem, name, toVersion)
+	fromPURL := s.cachedVersionPURL(ecosystem, name, fromVersion)
+	toPURL := s.cachedVersionPURL(ecosystem, name, toVersion)
 
 	fromArtifacts, err := s.db.GetArtifactsByVersionPURL(fromPURL)
 	if err != nil || len(fromArtifacts) == 0 {

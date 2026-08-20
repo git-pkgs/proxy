@@ -208,6 +208,7 @@ func runServe() {
 		fmt.Fprintf(os.Stderr, "  PROXY_ACCESS_LOG_PATH  JSONL access log path\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_MAVEN   Maven repository upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL Gradle Plugin Portal upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_SWIFT  Swift Package Registry upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_READ_ONLY       Disable Gradle PUT uploads\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE Max Gradle PUT request body size\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_AGE         Gradle cache max age eviction\n")

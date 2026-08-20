@@ -143,6 +143,7 @@ upstream:
   gradle_plugin_portal: "https://plugins.gradle.org/m2"
   cargo: "https://index.crates.io"
   cargo_download: "https://static.crates.io/crates"
+  swift: "https://tuist.dev/api/registry/swift"
 
   # Named HTTP Helm chart repositories, served at /helm/{name}/.
   helm:

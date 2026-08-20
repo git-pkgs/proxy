@@ -105,15 +105,17 @@ type mockFetcher struct {
 	fetchErrByURL map[string]error
 	fetchCalled   bool
 	fetchedURL    string
+	fetchedHeader http.Header
 }
 
 func (f *mockFetcher) Fetch(ctx context.Context, url string) (*fetch.Artifact, error) {
 	return f.FetchWithHeaders(ctx, url, nil)
 }
 
-func (f *mockFetcher) FetchWithHeaders(_ context.Context, url string, _ http.Header) (*fetch.Artifact, error) {
+func (f *mockFetcher) FetchWithHeaders(_ context.Context, url string, headers http.Header) (*fetch.Artifact, error) {
 	f.fetchCalled = true
 	f.fetchedURL = url
+	f.fetchedHeader = headers.Clone()
 	if f.fetchErrByURL != nil {
 		if err, ok := f.fetchErrByURL[url]; ok {
 			return nil, err
@@ -400,6 +402,28 @@ func TestGetOrFetchArtifactFromURL_CacheMiss_StorageMissing(t *testing.T) {
 	storagePath := storage.ArtifactPath("npm", "", "missing", "1.0.0", "missing-1.0.0.tgz")
 	if _, ok := store.files[storagePath]; !ok {
 		t.Error("refetched artifact should be stored")
+	}
+}
+
+func TestArtifactCacheRejectsUnsupportedPackageIdentity(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+
+	_, err := proxy.GetCachedArtifact(
+		context.Background(), "swift", "apple/example", "1.2.3", "example-1.2.3.zip",
+	)
+	if !errors.Is(err, errUnsupportedPackageIdentity) {
+		t.Fatalf("GetCachedArtifact() error = %v, want unsupported package identity", err)
+	}
+
+	_, err = proxy.GetOrFetchArtifactFromURL(
+		context.Background(), "swift", "apple/example", "1.2.3", "example-1.2.3.zip",
+		"https://registry.example/apple/example/1.2.3.zip",
+	)
+	if !errors.Is(err, errUnsupportedPackageIdentity) {
+		t.Fatalf("GetOrFetchArtifactFromURL() error = %v, want unsupported package identity", err)
+	}
+	if fetcher.fetchCalled {
+		t.Error("unsupported package identity reached the artifact fetcher")
 	}
 }
 
