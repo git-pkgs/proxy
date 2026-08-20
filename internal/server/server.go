@@ -61,6 +61,7 @@ import (
 
 	"github.com/git-pkgs/cooldown"
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
+	"github.com/git-pkgs/proxy/internal/accesslog"
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/enrichment"
@@ -96,10 +97,26 @@ type Server struct {
 	templates   *Templates
 	cancel      context.CancelFunc
 	healthCache *healthCache
+	accessLog   *accesslog.Logger
 }
 
 // New creates a new Server with the given configuration.
 func New(cfg *config.Config, logger *slog.Logger, buildInfo BuildInfo) (*Server, error) {
+	var activityLog *accesslog.Logger
+	if cfg.AccessLog.Path != "" {
+		var err error
+		activityLog, err = accesslog.Open(cfg.AccessLog.Path)
+		if err != nil {
+			return nil, fmt.Errorf("initializing access log: %w", err)
+		}
+	}
+	closeAccessLog := true
+	defer func() {
+		if closeAccessLog && activityLog != nil {
+			_ = activityLog.Close()
+		}
+	}()
+
 	// Initialize database
 	var db *database.DB
 	var err error
@@ -148,7 +165,7 @@ func New(cfg *config.Config, logger *slog.Logger, buildInfo BuildInfo) (*Server,
 		return nil, fmt.Errorf("initializing health cache: %w", err)
 	}
 
-	return &Server{
+	server := &Server{
 		cfg:         cfg,
 		db:          db,
 		storage:     store,
@@ -156,7 +173,10 @@ func New(cfg *config.Config, logger *slog.Logger, buildInfo BuildInfo) (*Server,
 		buildInfo:   buildInfo,
 		templates:   &Templates{},
 		healthCache: hc,
-	}, nil
+		accessLog:   activityLog,
+	}
+	closeAccessLog = false
+	return server, nil
 }
 
 // Start starts the HTTP server.
@@ -164,7 +184,11 @@ func (s *Server) Start() error {
 	// Use one authentication-aware transport for metadata and artifacts so
 	// configured credentials and cached OCI challenges apply consistently.
 	safeClient := safehttp.New(nil, safehttp.Options{})
-	authTransport := upstreamhttp.NewTransport(safeClient.Transport, upstreamhttp.AuthFunc(s.authForURL))
+	baseTransport := safeClient.Transport
+	if s.accessLog != nil {
+		baseTransport = upstreamhttp.NewAccessLogTransport(baseTransport, s.accessLog, s.logger)
+	}
+	authTransport := upstreamhttp.NewTransport(baseTransport, upstreamhttp.AuthFunc(s.authForURL))
 	metadataClient := *safeClient
 	metadataClient.Timeout = s.cfg.ParseHTTPTimeout()
 	metadataClient.Transport = authTransport
@@ -237,7 +261,8 @@ func (s *Server) Start() error {
 	condaHandler := handler.NewCondaHandler(proxy, s.cfg.BaseURL)
 	cranHandler := handler.NewCRANHandler(proxy, s.cfg.BaseURL)
 	juliaHandler := handler.NewJuliaHandler(proxy, s.cfg.BaseURL)
-	containerHandler := handler.NewContainerHandler(proxy, s.cfg.BaseURL)
+	containerHandler := handler.NewContainerHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.OCI)
+	helmHandler := handler.NewHelmHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm)
 	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Debian)
 	rpmHandler := handler.NewRPMHandler(proxy, s.cfg.BaseURL)
 
@@ -257,6 +282,7 @@ func (s *Server) Start() error {
 	r.Mount("/cran", http.StripPrefix("/cran", cranHandler.Routes()))
 	r.Mount("/julia", http.StripPrefix("/julia", juliaHandler.Routes()))
 	r.Mount("/v2", http.StripPrefix("/v2", containerHandler.Routes()))
+	r.Mount("/helm", http.StripPrefix("/helm", helmHandler.Routes()))
 	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 
@@ -372,6 +398,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	if s.storage != nil {
 		if err := s.storage.Close(); err != nil {
 			errs = append(errs, fmt.Errorf("storage close: %w", err))
+		}
+	}
+
+	if s.accessLog != nil {
+		if err := s.accessLog.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("access log close: %w", err))
 		}
 	}
 

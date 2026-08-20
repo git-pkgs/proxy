@@ -11,28 +11,40 @@ import (
 )
 
 const (
-	dockerHubRegistry  = "https://registry-1.docker.io"
-	blobMatchCount     = 3 // full match + name + digest
-	manifestMatchCount = 3 // full match + name + reference
-	tagsListMatchCount = 2 // full match + name
+	dockerHubRegistry     = "https://registry-1.docker.io"
+	blobMatchCount        = 3 // full match + name + digest
+	manifestMatchCount    = 3 // full match + name + reference
+	tagsListMatchCount    = 2 // full match + name
+	registrySelectorParts = 3 // upstream + name + repository
 )
 
 // ContainerHandler handles OCI/Docker container registry protocol requests.
 // It implements the OCI Distribution Spec for pulling images.
 // Reference: https://github.com/opencontainers/distribution-spec/blob/main/spec.md
 type ContainerHandler struct {
-	proxy       *Proxy
-	registryURL string
-	proxyURL    string
+	proxy           *Proxy
+	registryURL     string
+	proxyURL        string
+	namedRegistries map[string]string
 }
 
 // NewContainerHandler creates a new container registry protocol handler.
-func NewContainerHandler(proxy *Proxy, proxyURL string) *ContainerHandler {
-	return &ContainerHandler{
+// Named registries are selected with the repository prefix
+// upstream/{name}/, leaving unprefixed requests compatible with the Docker Hub
+// mirror behavior.
+func NewContainerHandler(proxy *Proxy, proxyURL string, namedRegistries ...map[string]string) *ContainerHandler {
+	h := &ContainerHandler{
 		proxy:       proxy,
 		registryURL: dockerHubRegistry,
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 	}
+	if len(namedRegistries) > 0 {
+		h.namedRegistries = make(map[string]string, len(namedRegistries[0]))
+		for name, registryURL := range namedRegistries[0] {
+			h.namedRegistries[name] = strings.TrimSuffix(registryURL, "/")
+		}
+	}
+	return h
 }
 
 // Routes returns the HTTP handler for container registry requests.
@@ -85,10 +97,16 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	h.proxy.Logger.Info("container blob request", "name", name, "digest", digest)
+	registryURL, upstreamName, cacheName, ok := h.registryForName(name)
+	if !ok {
+		h.containerError(w, http.StatusNotFound, "NAME_UNKNOWN", "unknown upstream registry")
+		return
+	}
+
+	h.proxy.Logger.Info("container blob request", "name", upstreamName, "digest", digest)
 
 	filename := digest
-	cached, err := h.proxy.GetCachedArtifact(r.Context(), "oci", name, digest, filename)
+	cached, err := h.proxy.GetCachedArtifact(r.Context(), "oci", cacheName, digest, filename)
 	if err != nil {
 		h.proxy.Logger.Error("failed to check blob cache", "error", err)
 		h.containerError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to check blob cache")
@@ -96,14 +114,18 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 	}
 	if cached != nil {
 		w.Header().Set("Docker-Content-Digest", digest)
-		w.Header().Set("Content-Type", "application/octet-stream")
+		if cached.ContentType != "" {
+			w.Header().Set("Content-Type", cached.ContentType)
+		} else {
+			w.Header().Set("Content-Type", "application/octet-stream")
+		}
 		serveArtifact(w, r.Method, cached)
 		return
 	}
 
 	// For HEAD requests, just proxy to upstream
 	if r.Method == http.MethodHead {
-		h.proxyBlobHead(w, r, name, digest)
+		h.proxyBlobHead(w, r, registryURL, upstreamName, digest)
 		return
 	}
 
@@ -111,10 +133,10 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 	result, err := h.proxy.GetOrFetchArtifactFromURL(
 		r.Context(),
 		"oci",
-		name,
+		cacheName,
 		digest, // use digest as version
 		filename,
-		fmt.Sprintf("%s/v2/%s/blobs/%s", h.registryURL, name, digest),
+		fmt.Sprintf("%s/v2/%s/blobs/%s", registryURL, upstreamName, digest),
 	)
 
 	if err != nil {
@@ -128,7 +150,11 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 	}
 
 	w.Header().Set("Docker-Content-Digest", digest)
-	w.Header().Set("Content-Type", "application/octet-stream")
+	if result.ContentType != "" {
+		w.Header().Set("Content-Type", result.ContentType)
+	} else {
+		w.Header().Set("Content-Type", "application/octet-stream")
+	}
 	ServeArtifact(w, result)
 }
 
@@ -146,8 +172,14 @@ func (h *ContainerHandler) handleManifest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	h.proxy.Logger.Info("container manifest request", "name", name, "reference", reference)
-	h.serveManifest(w, r, name, reference)
+	registryURL, upstreamName, _, ok := h.registryForName(name)
+	if !ok {
+		h.containerError(w, http.StatusNotFound, "NAME_UNKNOWN", "unknown upstream registry")
+		return
+	}
+
+	h.proxy.Logger.Info("container manifest request", "name", upstreamName, "reference", reference)
+	h.serveManifest(w, r, registryURL, upstreamName, reference)
 }
 
 // handleTagsList proxies tag list requests to upstream.
@@ -163,7 +195,13 @@ func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	upstreamURL := fmt.Sprintf("%s/v2/%s/tags/list", h.registryURL, name)
+	registryURL, upstreamName, _, ok := h.registryForName(name)
+	if !ok {
+		h.containerError(w, http.StatusNotFound, "NAME_UNKNOWN", "unknown upstream registry")
+		return
+	}
+
+	upstreamURL := fmt.Sprintf("%s/v2/%s/tags/list", registryURL, upstreamName)
 	if r.URL.RawQuery != "" {
 		upstreamURL += "?" + r.URL.RawQuery
 	}
@@ -187,8 +225,8 @@ func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request
 }
 
 // proxyBlobHead handles HEAD requests for blobs.
-func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request, name, digest string) {
-	upstreamURL := fmt.Sprintf("%s/v2/%s/blobs/%s", h.registryURL, name, digest)
+func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request, registryURL, name, digest string) {
+	upstreamURL := fmt.Sprintf("%s/v2/%s/blobs/%s", registryURL, name, digest)
 
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodHead, upstreamURL, nil)
 	if err != nil {
@@ -210,6 +248,24 @@ func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request,
 	}
 
 	w.WriteHeader(resp.StatusCode)
+}
+
+// registryForName resolves a client-visible OCI repository name to an upstream
+// registry and its repository name. Named upstreams use upstream/{name}/ as a
+// reserved prefix; all other names continue to target Docker Hub.
+func (h *ContainerHandler) registryForName(name string) (registryURL, upstreamName, cacheName string, ok bool) {
+	parts := strings.SplitN(name, "/", registrySelectorParts)
+	if len(parts) >= 2 && parts[0] == "upstream" {
+		if len(parts) != registrySelectorParts || parts[2] == "" {
+			return "", "", "", false
+		}
+		registryURL, ok = h.namedRegistries[parts[1]]
+		if !ok || registryURL == "" {
+			return "", "", "", false
+		}
+		return registryURL, parts[2], name, true
+	}
+	return h.registryURL, name, name, true
 }
 
 // containerError writes an OCI-compliant error response.

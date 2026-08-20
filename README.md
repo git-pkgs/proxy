@@ -362,6 +362,39 @@ Or pull images directly:
 docker pull localhost:8080/library/nginx:latest
 ```
 
+### Helm
+
+Configure each HTTP chart repository with a name, then add the matching proxy
+URL to Helm:
+
+```yaml
+upstream:
+  helm:
+    bitnami: "https://charts.bitnami.com/bitnami"
+```
+
+```bash
+helm repo add bitnami http://localhost:8080/helm/bitnami
+helm repo update
+helm pull bitnami/nginx
+```
+
+The proxy caches `index.yaml` using the normal metadata-cache settings and
+caches chart archives after verifying their SHA-256 digest from the index.
+
+For charts stored in an OCI registry, configure a named OCI upstream and add
+the reserved `upstream/{name}` prefix to the chart reference:
+
+```yaml
+upstream:
+  oci:
+    ghcr: "https://ghcr.io"
+```
+
+```bash
+helm pull oci://localhost:8080/upstream/ghcr/owner/charts/mychart --version 1.0.0 --plain-http
+```
+
 ### Debian / APT
 
 Configure APT to use the proxy in `/etc/apt/sources.list.d/proxy.list`:
@@ -423,6 +456,7 @@ The proxy can be configured via:
 -database-url string     PostgreSQL connection URL
 -log-level string        Log level: debug, info, warn, error (default "info")
 -log-format string       Log format: text, json (default "text")
+-access-log string       Path to the JSONL access log
 -version                 Print version and exit
 ```
 
@@ -438,6 +472,7 @@ PROXY_DATABASE_PATH=./cache/proxy.db
 PROXY_DATABASE_URL=postgres://user:pass@localhost/proxy?sslmode=disable
 PROXY_LOG_LEVEL=info
 PROXY_LOG_FORMAT=text
+PROXY_ACCESS_LOG_PATH=/var/log/proxy/access.jsonl
 ```
 
 ### Configuration File
@@ -457,6 +492,9 @@ database:
 log:
   level: "info"
   format: "text"
+
+access_log:
+  path: "/var/log/proxy/access.jsonl"  # Optional JSONL activity log
 
 # Optional: override upstream URLs
 upstream:
@@ -631,6 +669,7 @@ Recently cached:
 | `GET /conda/*` | Conda/Anaconda protocol |
 | `GET /cran/*` | CRAN (R) protocol |
 | `GET /julia/*` | Julia Pkg server protocol |
+| `GET /helm/{repository}/*` | HTTP Helm chart repository protocol |
 | `GET /v2/*` | OCI/Docker registry protocol |
 | `GET /debian/*` | Debian/APT repository protocol |
 | `GET /rpm/*` | RPM/Yum repository protocol |
@@ -844,6 +883,8 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 
 | Metric | Type | Labels | Description |
 |--------|------|--------|-------------|
+| `proxy_requests_total` | counter | `ecosystem`, `status` | Proxy responses by package ecosystem and HTTP status |
+| `proxy_request_duration_seconds` | histogram | `ecosystem`, `status` | Proxy request duration |
 | `proxy_cache_hits_total` | counter | `ecosystem` | Cache hits |
 | `proxy_cache_misses_total` | counter | `ecosystem` | Cache misses |
 | `proxy_cache_size_bytes` | gauge | | Total size of cached artifacts |
@@ -1024,7 +1065,7 @@ The proxy will recreate the database on next start.
 
 Requirements:
 
-- Go 1.25 or later
+- Go (the project version is declared in `go.mod`)
 
 ```bash
 git clone https://github.com/git-pkgs/proxy.git

@@ -33,9 +33,9 @@ type cachedContainerManifest struct {
 	fetchedAt     time.Time
 }
 
-func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request, name, reference string) {
+func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request, registryURL, name, reference string) {
 	accept := containerManifestAccept(r)
-	cacheKey := h.containerManifestCacheKey(name, reference, accept)
+	cacheKey := h.containerManifestCacheKey(registryURL, name, reference, accept)
 	cached, err := h.loadContainerManifest(r.Context(), cacheKey)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to read cached container manifest", "error", err)
@@ -48,7 +48,7 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 		return
 	}
 
-	upstreamURL := fmt.Sprintf("%s/v2/%s/manifests/%s", h.registryURL, name, reference)
+	upstreamURL := fmt.Sprintf("%s/v2/%s/manifests/%s", registryURL, name, reference)
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
 	if err != nil {
 		h.containerError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create request")
@@ -111,7 +111,7 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 		h.proxy.Logger.Warn("failed to cache container manifest", "error", err)
 	}
 	if manifest.contentDigest != reference && manifestDigestReferencePattern.MatchString(manifest.contentDigest) {
-		digestKey := h.containerManifestCacheKey(name, manifest.contentDigest, accept)
+		digestKey := h.containerManifestCacheKey(registryURL, name, manifest.contentDigest, accept)
 		if err := h.storeContainerManifest(r.Context(), digestKey, manifest); err != nil {
 			h.proxy.Logger.Warn("failed to cache container manifest by digest", "error", err)
 		}
@@ -133,8 +133,8 @@ func (h *ContainerHandler) containerManifestFresh(manifest *cachedContainerManif
 	return h.proxy.MetadataTTL > 0 && !manifest.fetchedAt.IsZero() && time.Since(manifest.fetchedAt) < h.proxy.MetadataTTL
 }
 
-func (h *ContainerHandler) containerManifestCacheKey(name, reference, accept string) string {
-	identity := strings.Join([]string{h.registryURL, name, reference, accept}, "\x00")
+func (h *ContainerHandler) containerManifestCacheKey(registryURL, name, reference, accept string) string {
+	identity := strings.Join([]string{registryURL, name, reference, accept}, "\x00")
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
 }

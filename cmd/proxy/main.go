@@ -40,6 +40,8 @@
 //	      Log level: debug, info, warn, error (default "info")
 //	-log-format string
 //	      Log format: text, json (default "text")
+//	-access-log string
+//	      Path to the JSONL access log (disabled by default)
 //
 // Stats Flags:
 //
@@ -72,6 +74,7 @@
 //	PROXY_DATABASE_URL     - PostgreSQL connection URL
 //	PROXY_LOG_LEVEL        - Log level
 //	PROXY_LOG_FORMAT       - Log format
+//	PROXY_ACCESS_LOG_PATH  - JSONL access log path
 //	PROXY_UPSTREAM_MAVEN   - Maven repository upstream URL
 //	PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL - Gradle Plugin Portal upstream URL
 //	PROXY_GRADLE_BUILD_CACHE_READ_ONLY       - Disable Gradle PUT uploads
@@ -184,6 +187,7 @@ func runServe() {
 	databaseURL := fs.String("database-url", "", "PostgreSQL connection URL")
 	logLevel := fs.String("log-level", "", "Log level: debug, info, warn, error")
 	logFormat := fs.String("log-format", "", "Log format: text, json")
+	accessLogPath := fs.String("access-log", "", "Path to the JSONL access log")
 	version := fs.Bool("version", false, "Print version and exit")
 
 	fs.Usage = func() {
@@ -201,6 +205,7 @@ func runServe() {
 		fmt.Fprintf(os.Stderr, "  PROXY_DATABASE_URL     PostgreSQL connection URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_LOG_LEVEL        Log level\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_LOG_FORMAT       Log format\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_ACCESS_LOG_PATH  JSONL access log path\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_MAVEN   Maven repository upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL Gradle Plugin Portal upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_READ_ONLY       Disable Gradle PUT uploads\n")
@@ -255,6 +260,9 @@ func runServe() {
 	}
 	if *logFormat != "" {
 		cfg.Log.Format = *logFormat
+	}
+	if *accessLogPath != "" {
+		cfg.AccessLog.Path = *accessLogPath
 	}
 
 	// Validate configuration

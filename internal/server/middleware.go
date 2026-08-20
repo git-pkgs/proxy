@@ -3,15 +3,14 @@ package server
 import (
 	"context"
 	"net/http"
+	"strings"
 	"sync/atomic"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/accesslog"
+	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/go-chi/chi/v5/middleware"
 )
-
-type contextKey string
-
-const requestIDKey contextKey = "request_id"
 
 var requestCounter atomic.Uint64
 
@@ -23,7 +22,7 @@ func RequestIDMiddleware(next http.Handler) http.Handler {
 		requestID := middleware.GetReqID(r.Context())
 
 		// Store formatted ID in context
-		ctx := context.WithValue(r.Context(), requestIDKey, requestID)
+		ctx := accesslog.WithRequestID(r.Context(), requestID)
 
 		// Add to response header for client tracking
 		w.Header().Set("X-Request-ID", requestID)
@@ -34,10 +33,7 @@ func RequestIDMiddleware(next http.Handler) http.Handler {
 
 // GetRequestID retrieves the request ID from context.
 func GetRequestID(ctx context.Context) string {
-	if id, ok := ctx.Value(requestIDKey).(string); ok {
-		return id
-	}
-	return ""
+	return accesslog.RequestID(ctx)
 }
 
 // LoggerMiddleware logs HTTP requests with request ID correlation.
@@ -48,15 +44,53 @@ func (s *Server) LoggerMiddleware(next http.Handler) http.Handler {
 
 		rw := &responseWriter{ResponseWriter: w, status: http.StatusOK}
 		next.ServeHTTP(rw, r)
+		duration := time.Since(start)
 
 		s.logger.Info("request",
 			"request_id", requestID,
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", rw.status,
-			"duration", time.Since(start),
+			"duration", duration,
 			"remote", r.RemoteAddr)
+
+		if r.URL.Path != "/metrics" {
+			metrics.RecordRequest(requestEcosystem(r.URL.Path), rw.status, duration)
+		}
+
+		if s.accessLog != nil {
+			if err := s.accessLog.Write(accesslog.Entry{
+				Event:      accesslog.EventRequest,
+				RequestID:  requestID,
+				Method:     r.Method,
+				Path:       r.URL.EscapedPath(),
+				StatusCode: rw.status,
+				DurationMS: duration.Milliseconds(),
+				RemoteAddr: r.RemoteAddr,
+			}); err != nil {
+				s.logger.Error("failed to write access log", "error", err)
+			}
+		}
 	})
+}
+
+func requestEcosystem(path string) string {
+	segment, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
+	switch segment {
+	case "npm", "cargo", "hex", "pub", "pypi", "maven", "gradle", "nuget",
+		"conan", "conda", "cran", "julia", "debian", "rpm":
+		return segment
+	case "gem":
+		return "rubygems"
+	case "go":
+		return "golang"
+	case "composer":
+		return "packagist"
+	case "v2":
+		return "oci"
+	default:
+		return "other"
+	}
 }
 
 // ActiveRequestsMiddleware tracks the number of active requests using Prometheus metrics.

@@ -1358,6 +1358,27 @@ func TestNewServer_StorageConnectivityCheck(t *testing.T) {
 	_ = srv.db.Close()
 }
 
+func TestNewServer_InvalidAccessLogFailsBeforeDatabaseInit(t *testing.T) {
+	tempDir := t.TempDir()
+	dbPath := filepath.Join(tempDir, "test.db")
+	cfg := &config.Config{
+		Storage:   config.StorageConfig{Path: filepath.Join(tempDir, "artifacts")},
+		Database:  config.DatabaseConfig{Path: dbPath},
+		AccessLog: config.AccessLogConfig{Path: filepath.Join(tempDir, "missing", "access.jsonl")},
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	if _, err := New(cfg, logger, BuildInfo{}); err == nil {
+		t.Fatal("New() succeeded with invalid access log path")
+	} else if !strings.Contains(err.Error(), "initializing access log") {
+		t.Fatalf("New() error = %v, want access log initialization error", err)
+	}
+
+	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
+		t.Errorf("database initialized before access log validation: %v", err)
+	}
+}
+
 func TestStatsEndpoint_StorageURL(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()

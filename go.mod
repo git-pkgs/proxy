@@ -2,14 +2,17 @@ module github.com/git-pkgs/proxy
 
 go 1.25.6
 
+toolchain go1.26.6
+
 require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/CycloneDX/cyclonedx-go v0.11.0
 	github.com/git-pkgs/archives v0.5.1
 	github.com/git-pkgs/cooldown v0.1.1
 	github.com/git-pkgs/enrichment v0.6.5
+	github.com/git-pkgs/integrity v0.1.1
 	github.com/git-pkgs/magic v0.2.0
-	github.com/git-pkgs/purl v0.1.16
+	github.com/git-pkgs/purl v0.1.17
 	github.com/git-pkgs/registries v0.7.0
 	github.com/git-pkgs/spdx v0.3.1
 	github.com/git-pkgs/vers v0.3.1

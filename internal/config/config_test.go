@@ -26,6 +26,9 @@ func TestDefault(t *testing.T) {
 	if cfg.Database.Path == "" {
 		t.Error("Database.Path should not be empty")
 	}
+	if cfg.AccessLog.Path != "" {
+		t.Errorf("AccessLog.Path = %q, want disabled by default", cfg.AccessLog.Path)
+	}
 	if cfg.Gradle.BuildCache.MaxUploadSize != "100MB" {
 		t.Errorf("Gradle.BuildCache.MaxUploadSize = %q, want %q", cfg.Gradle.BuildCache.MaxUploadSize, "100MB")
 	}
@@ -212,6 +215,8 @@ database:
 log:
   level: "debug"
   format: "json"
+access_log:
+  path: "/var/log/proxy/access.jsonl"
 `
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("writing config file: %v", err)
@@ -239,6 +244,9 @@ log:
 	}
 	if cfg.Log.Format != "json" {
 		t.Errorf("Log.Format = %q, want %q", cfg.Log.Format, "json")
+	}
+	if cfg.AccessLog.Path != "/var/log/proxy/access.jsonl" {
+		t.Errorf("AccessLog.Path = %q, want %q", cfg.AccessLog.Path, "/var/log/proxy/access.jsonl")
 	}
 }
 
@@ -275,6 +283,7 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("PROXY_UI_URL", "https://ui.env.example.com/ui")
 	t.Setenv("PROXY_STORAGE_PATH", "/env/cache")
 	t.Setenv("PROXY_LOG_LEVEL", testLevelDebug)
+	t.Setenv("PROXY_ACCESS_LOG_PATH", "/tmp/proxy-access.jsonl")
 	t.Setenv("PROXY_UPSTREAM_MAVEN", "https://maven.example.com/repository/maven-public")
 	t.Setenv("PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL", "https://plugins.example.com/m2")
 	t.Setenv("PROXY_UPSTREAM_DEBIAN", "http://archive.ubuntu.com/ubuntu")
@@ -300,6 +309,9 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.Log.Level != testLevelDebug {
 		t.Errorf("Log.Level = %q, want %q", cfg.Log.Level, testLevelDebug)
+	}
+	if cfg.AccessLog.Path != "/tmp/proxy-access.jsonl" {
+		t.Errorf("AccessLog.Path = %q, want %q", cfg.AccessLog.Path, "/tmp/proxy-access.jsonl")
 	}
 	if cfg.Upstream.Maven != "https://maven.example.com/repository/maven-public" {
 		t.Errorf("Upstream.Maven = %q, want %q", cfg.Upstream.Maven, "https://maven.example.com/repository/maven-public")
@@ -865,4 +877,45 @@ func TestValidateUpstreamAuthURLs(t *testing.T) {
 			t.Errorf("Validate() error = %q, want field and URL", err)
 		}
 	})
+}
+
+func TestValidateNamedUpstreams(t *testing.T) {
+	tests := []struct {
+		name    string
+		modify  func(*Config)
+		wantErr bool
+	}{
+		{
+			name: "valid Helm and OCI upstreams",
+			modify: func(cfg *Config) {
+				cfg.Upstream.Helm = map[string]string{"bitnami": "https://charts.bitnami.com/bitnami"}
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://ghcr.io"}
+			},
+		},
+		{
+			name: "Helm upstream name contains path separator",
+			modify: func(cfg *Config) {
+				cfg.Upstream.Helm = map[string]string{"team/charts": "https://charts.example.com"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI upstream URL is not absolute",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"private": "registry.example.com"}
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.modify(cfg)
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %t", err, tt.wantErr)
+			}
+		})
+	}
 }

@@ -134,6 +134,52 @@ func TestContainerHandler_parseTagsListPath(t *testing.T) {
 	}
 }
 
+func TestContainerHandler_NamedOCIRegistryServesHelmArtifacts(t *testing.T) {
+	digest := "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd"
+	manifest := `{"schemaVersion":2,"config":{"mediaType":"application/vnd.cncf.helm.config.v1+json"},"layers":[{"mediaType":"application/vnd.cncf.helm.chart.content.v1.tar+gzip","digest":"` + digest + `"}]}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/v2/owner/demo/manifests/1.0.0":
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			w.Header().Set("Docker-Content-Digest", digest)
+			_, _ = io.WriteString(w, manifest)
+		case "/v2/owner/demo/blobs/" + digest:
+			w.Header().Set("Content-Type", "application/vnd.cncf.helm.chart.content.v1.tar+gzip")
+			_, _ = io.WriteString(w, "chart archive")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+	h := NewContainerHandler(proxy, "http://proxy.example", map[string]string{"ghcr": upstream.URL})
+
+	manifestResponse := httptest.NewRecorder()
+	h.Routes().ServeHTTP(manifestResponse,
+		httptest.NewRequest(http.MethodGet, "/upstream/ghcr/owner/demo/manifests/1.0.0", nil))
+	if manifestResponse.Code != http.StatusOK {
+		t.Fatalf("manifest status = %d, want 200: %s", manifestResponse.Code, manifestResponse.Body.String())
+	}
+	if got := manifestResponse.Header().Get("Content-Type"); got != "application/vnd.oci.image.manifest.v1+json" {
+		t.Errorf("manifest Content-Type = %q", got)
+	}
+
+	blobResponse := httptest.NewRecorder()
+	h.Routes().ServeHTTP(blobResponse,
+		httptest.NewRequest(http.MethodGet, "/upstream/ghcr/owner/demo/blobs/"+digest, nil))
+	if blobResponse.Code != http.StatusOK {
+		t.Fatalf("blob status = %d, want 200: %s", blobResponse.Code, blobResponse.Body.String())
+	}
+	if got := blobResponse.Header().Get("Content-Type"); got != "application/vnd.cncf.helm.chart.content.v1.tar+gzip" {
+		t.Errorf("blob Content-Type = %q", got)
+	}
+}
+
 func TestContainerHandler_BlobDownload_DiscoversBearerChallenge(t *testing.T) {
 	digest := "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd"
 	registryRequests := 0
@@ -436,8 +482,9 @@ func TestContainerHandler_BlobHead_DirectServeRedirects(t *testing.T) {
 	if got := w.Header().Get("Location"); got != store.signedURL {
 		t.Errorf("Location = %q, want %q", got, store.signedURL)
 	}
-	if got := w.Header().Get("ETag"); got != `"abc123"` {
-		t.Errorf("ETag = %q, want %q", got, `"abc123"`)
+	wantETag := `"` + sha256Hex("cached blob") + `"`
+	if got := w.Header().Get("ETag"); got != wantETag {
+		t.Errorf("ETag = %q, want %q", got, wantETag)
 	}
 	if w.Body.Len() != 0 {
 		t.Errorf("HEAD response body length = %d, want 0", w.Body.Len())
