@@ -51,30 +51,30 @@ func newECRTokens(logger *slog.Logger) *ecrTokens {
 // upstream 401 surfaces to the client.
 func (e *ecrTokens) header(region string) (name, value string) {
 	e.mu.Lock()
-	if tok, ok := e.cache[region]; ok && time.Now().Before(tok.expiresAt) {
+	tok, ok := e.cache[region]
+	e.mu.Unlock()
+
+	if !ok || !time.Now().Before(tok.expiresAt) {
+		ctx, cancel := context.WithTimeout(context.Background(), ecrTokenTimeout)
+		defer cancel()
+
+		raw, expiresAt, err := e.getToken(ctx, region)
+		if err != nil {
+			e.logger.Error("fetching ECR authorization token", "region", region, "error", err)
+			return "", ""
+		}
+		if raw == "" {
+			e.logger.Error("ECR authorization token response was empty", "region", region)
+			return "", ""
+		}
+
+		tok = ecrToken{value: "Basic " + raw, expiresAt: expiresAt.Add(-ecrTokenSkew)}
+		e.mu.Lock()
+		e.cache[region] = tok
 		e.mu.Unlock()
-		return "Authorization", "Basic " + tok.value
-	}
-	e.mu.Unlock()
-
-	ctx, cancel := context.WithTimeout(context.Background(), ecrTokenTimeout)
-	defer cancel()
-
-	token, expiresAt, err := e.getToken(ctx, region)
-	if err != nil {
-		e.logger.Error("fetching ECR authorization token", "region", region, "error", err)
-		return "", ""
-	}
-	if token == "" {
-		e.logger.Error("ECR authorization token response was empty", "region", region)
-		return "", ""
 	}
 
-	e.mu.Lock()
-	e.cache[region] = ecrToken{value: token, expiresAt: expiresAt.Add(-ecrTokenSkew)}
-	e.mu.Unlock()
-
-	return "Authorization", "Basic " + token
+	return "Authorization", tok.value
 }
 
 func fetchECRToken(ctx context.Context, region string) (string, time.Time, error) {
