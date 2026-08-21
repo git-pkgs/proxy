@@ -32,7 +32,7 @@ type fakeStorage struct {
 	// Failure injection.
 	storeErr  error
 	openErr   error
-	readErr   error  // returned by the io.ReadCloser.Read after partial bytes
+	readErr   error // returned by the io.ReadCloser.Read after partial bytes
 	deleteErr error
 
 	// Misbehavior knobs.
@@ -132,8 +132,8 @@ func (f *fakeStorage) SignedURL(ctx context.Context, path string, expiry time.Du
 	return "", storage.ErrSignedURLUnsupported
 }
 func (f *fakeStorage) UsedSpace(ctx context.Context) (int64, error) { return 0, nil }
-func (f *fakeStorage) URL() string                                   { return "fake://" }
-func (f *fakeStorage) Close() error                                  { return nil }
+func (f *fakeStorage) URL() string                                  { return "fake://" }
+func (f *fakeStorage) Close() error                                 { return nil }
 
 // --- Tests follow. First test: happy path ---
 
