@@ -5,6 +5,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -67,6 +69,37 @@ func TestECRTokensPerRegion(t *testing.T) {
 
 	if seen["eu-west-1"] != 1 || seen["us-east-1"] != 1 {
 		t.Fatalf("per-region calls = %v, want one each", seen)
+	}
+}
+
+func TestECRTokensConcurrentMissesShareOneFetch(t *testing.T) {
+	e := testECRTokens()
+	var calls atomic.Int32
+	release := make(chan struct{})
+	e.getToken = func(_ context.Context, _ string) (string, time.Time, error) {
+		calls.Add(1)
+		<-release
+		return "dG9rZW4=", time.Now().Add(time.Hour), nil
+	}
+
+	const n = 10
+	var wg sync.WaitGroup
+	wg.Add(n)
+	for range n {
+		go func() {
+			defer wg.Done()
+			name, value := e.header("eu-west-1")
+			if name != "Authorization" || value != "Basic dG9rZW4=" {
+				t.Errorf("header() = %q, %q", name, value)
+			}
+		}()
+	}
+
+	close(release)
+	wg.Wait()
+
+	if got := calls.Load(); got != 1 {
+		t.Fatalf("getToken called %d times, want 1", got)
 	}
 }
 

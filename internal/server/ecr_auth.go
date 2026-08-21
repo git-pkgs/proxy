@@ -2,12 +2,14 @@ package server
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
 	"time"
 
 	awsconfig "github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/ecr"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -15,6 +17,8 @@ const (
 	ecrTokenSkew            = 5 * time.Minute
 	ecrDefaultTokenLifetime = 12 * time.Hour
 )
+
+var errEmptyECRToken = errors.New("empty ECR authorization token")
 
 // ecrTokens caches AWS ECR authorization tokens per region and refreshes them
 // on demand when they expire. Tokens are obtained via the AWS SDK default
@@ -25,6 +29,7 @@ type ecrTokens struct {
 
 	mu    sync.Mutex
 	cache map[string]ecrToken
+	sf    singleflight.Group
 
 	// getToken fetches a fresh authorization token for the given region and
 	// returns the raw base64 "AWS:password" value plus its expiry. Overridable
@@ -46,35 +51,52 @@ func newECRTokens(logger *slog.Logger) *ecrTokens {
 }
 
 // header returns an Authorization header for the given region, fetching and
-// caching a token on first use and after expiry. On failure it logs and
-// returns empty strings so the request proceeds unauthenticated and the
-// upstream 401 surfaces to the client.
+// caching a token on first use and after expiry. Concurrent misses for the
+// same region share a single GetAuthorizationToken call. On failure it logs
+// and returns empty strings so the request proceeds unauthenticated; the OCI
+// transport then follows the Bearer challenge and surfaces the token-endpoint
+// error, matching the behaviour of any other misconfigured upstream credential.
 func (e *ecrTokens) header(region string) (name, value string) {
-	e.mu.Lock()
-	tok, ok := e.cache[region]
-	e.mu.Unlock()
+	if tok, ok := e.cached(region); ok {
+		return "Authorization", tok.value
+	}
 
-	if !ok || !time.Now().Before(tok.expiresAt) {
+	v, err, _ := e.sf.Do(region, func() (any, error) {
+		if tok, ok := e.cached(region); ok {
+			return tok, nil
+		}
+
 		ctx, cancel := context.WithTimeout(context.Background(), ecrTokenTimeout)
 		defer cancel()
 
 		raw, expiresAt, err := e.getToken(ctx, region)
 		if err != nil {
 			e.logger.Error("fetching ECR authorization token", "region", region, "error", err)
-			return "", ""
+			return ecrToken{}, err
 		}
 		if raw == "" {
 			e.logger.Error("ECR authorization token response was empty", "region", region)
-			return "", ""
+			return ecrToken{}, errEmptyECRToken
 		}
 
-		tok = ecrToken{value: "Basic " + raw, expiresAt: expiresAt.Add(-ecrTokenSkew)}
+		tok := ecrToken{value: "Basic " + raw, expiresAt: expiresAt.Add(-ecrTokenSkew)}
 		e.mu.Lock()
 		e.cache[region] = tok
 		e.mu.Unlock()
+		return tok, nil
+	})
+	if err != nil {
+		return "", ""
 	}
 
-	return "Authorization", tok.value
+	return "Authorization", v.(ecrToken).value
+}
+
+func (e *ecrTokens) cached(region string) (ecrToken, bool) {
+	e.mu.Lock()
+	tok, ok := e.cache[region]
+	e.mu.Unlock()
+	return tok, ok && time.Now().Before(tok.expiresAt)
 }
 
 func fetchECRToken(ctx context.Context, region string) (string, time.Time, error) {
