@@ -275,7 +275,10 @@ func runServe() {
 	logger := setupLogger(cfg.Log.Level, cfg.Log.Format)
 
 	// Create and start server
-	srv, err := server.New(cfg, logger)
+	srv, err := server.New(cfg, logger, server.BuildInfo{
+		Version: Version,
+		Commit:  Commit,
+	})
 	if err != nil {
 		logger.Error("failed to create server", "error", err)
 		os.Exit(1)

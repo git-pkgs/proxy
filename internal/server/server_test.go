@@ -104,6 +104,7 @@ func newTestServer(t *testing.T) *testServer {
 		db:          db,
 		storage:     store,
 		logger:      logger,
+		buildInfo:   BuildInfo{Version: "test-version", Commit: "test-commit"},
 		templates:   &Templates{},
 		healthCache: hc,
 	}
@@ -312,6 +313,9 @@ func TestDashboard(t *testing.T) {
 	}
 	if !strings.Contains(body, "Cached Artifacts") {
 		t.Error("dashboard should contain stats")
+	}
+	if !strings.Contains(body, "proxy test-version (test-commit)") {
+		t.Error("dashboard footer should contain build information")
 	}
 	if !strings.Contains(body, "Popular Packages") {
 		t.Error("dashboard should contain popular packages section")
@@ -597,6 +601,9 @@ func TestVersionShowWithHitCount(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "42 cache hits") {
 		t.Error("expected page to show hit count")
+	}
+	if !strings.Contains(body, "proxy test-version (test-commit)") {
+		t.Error("version show footer should contain proxy build information, not the package version")
 	}
 }
 
@@ -1327,9 +1334,13 @@ func TestNewServer_StorageConnectivityCheck(t *testing.T) {
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 
-	srv, err := New(cfg, logger)
+	buildInfo := BuildInfo{Version: "test-version", Commit: "test-commit"}
+	srv, err := New(cfg, logger, buildInfo)
 	if err != nil {
 		t.Fatalf("New() failed: %v", err)
+	}
+	if srv.buildInfo != buildInfo {
+		t.Errorf("build info = %#v, want %#v", srv.buildInfo, buildInfo)
 	}
 
 	// On Windows, OpenBucket normalises to file:///C:/path; on Unix the
@@ -1354,7 +1365,7 @@ func TestNewServer_InvalidAccessLogFailsBeforeDatabaseInit(t *testing.T) {
 	}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	if _, err := New(cfg, logger); err == nil {
+	if _, err := New(cfg, logger, BuildInfo{}); err == nil {
 		t.Fatal("New() succeeded with invalid access log path")
 	} else if !strings.Contains(err.Error(), "initializing access log") {
 		t.Fatalf("New() error = %v, want access log initialization error", err)

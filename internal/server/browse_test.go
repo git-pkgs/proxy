@@ -430,6 +430,10 @@ func TestHandleBrowseSourcePage(t *testing.T) {
 		}
 	}
 
+	if !strings.Contains(body, "proxy test-version (test-commit)") {
+		t.Error("browse source footer should contain proxy build information, not the package version")
+	}
+
 	// Check that the escapeHTML function is present for XSS protection
 	if !strings.Contains(body, "function escapeHTML(str)") {
 		t.Error("browse source page missing escapeHTML function for XSS protection")
