@@ -430,7 +430,7 @@ func authURLPort(value *url.URL) string {
 
 // AuthConfig configures authentication for an upstream registry.
 type AuthConfig struct {
-	// Type is the authentication type: "bearer", "basic", or "header".
+	// Type is the authentication type: "bearer", "basic", "header", or "ecr".
 	Type string `json:"type" yaml:"type"`
 
 	// Token is used for bearer authentication.
@@ -450,6 +450,11 @@ type AuthConfig struct {
 	// HeaderValue is the custom header value (for type "header").
 	// Can reference environment variables with ${VAR_NAME} syntax.
 	HeaderValue string `json:"header_value" yaml:"header_value"`
+
+	// Region is the AWS region for ECR authentication (for type "ecr").
+	// If empty, the AWS SDK default region chain is used (AWS_REGION,
+	// shared config, IMDS).
+	Region string `json:"region" yaml:"region"`
 }
 
 // Default returns a Config with sensible defaults.
