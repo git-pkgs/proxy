@@ -73,36 +73,6 @@ func TestGetRequestID(t *testing.T) {
 	}
 }
 
-func TestActiveRequestsMiddleware(t *testing.T) {
-	handler := ActiveRequestsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/test", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", rec.Code)
-	}
-}
-
-func TestActiveRequestsMiddleware_SkipsMetricsEndpoint(t *testing.T) {
-	handler := ActiveRequestsMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
-
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	rec := httptest.NewRecorder()
-
-	handler.ServeHTTP(rec, req)
-
-	if rec.Code != http.StatusOK {
-		t.Errorf("expected status 200, got %d", rec.Code)
-	}
-}
-
 func TestLoggerMiddleware(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	s := &Server{logger: logger}

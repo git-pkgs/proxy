@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"database/sql"
 	"encoding/json"
 	"fmt"
@@ -51,7 +52,7 @@ func newTestServer(t *testing.T) *testServer {
 		t.Fatalf("failed to create database: %v", err)
 	}
 
-	store, err := storage.NewFilesystem(storagePath)
+	store, err := storage.OpenBucket(context.Background(), "file://"+storagePath)
 	if err != nil {
 		_ = db.Close()
 		_ = os.RemoveAll(tempDir)
@@ -65,7 +66,7 @@ func newTestServer(t *testing.T) *testServer {
 
 	cfg := &config.Config{
 		BaseURL:  "http://localhost:8080",
-		Storage:  config.StorageConfig{Path: storagePath},
+		Storage:  config.StorageConfig{URL: "file://" + storagePath},
 		Database: config.DatabaseConfig{Path: dbPath},
 	}
 
@@ -1359,7 +1360,7 @@ func TestNewServer_InvalidAccessLogFailsBeforeDatabaseInit(t *testing.T) {
 	tempDir := t.TempDir()
 	dbPath := filepath.Join(tempDir, "test.db")
 	cfg := &config.Config{
-		Storage:   config.StorageConfig{Path: filepath.Join(tempDir, "artifacts")},
+		Storage:   config.StorageConfig{URL: "file://" + filepath.Join(tempDir, "artifacts")},
 		Database:  config.DatabaseConfig{Path: dbPath},
 		AccessLog: config.AccessLogConfig{Path: filepath.Join(tempDir, "missing", "access.jsonl")},
 	}

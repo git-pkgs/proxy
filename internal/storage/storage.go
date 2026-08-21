@@ -11,8 +11,6 @@ package storage
 
 import (
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"errors"
 	"io"
 	"time"
@@ -79,43 +77,4 @@ func ArtifactPath(ecosystem, namespace, name, version, filename string) string {
 		return ecosystem + "/" + namespace + "/" + name + "/" + version + "/" + filename
 	}
 	return ecosystem + "/" + name + "/" + version + "/" + filename
-}
-
-// HashingReader wraps a reader and computes SHA256 hash as content is read.
-type HashingReader struct {
-	r    io.Reader
-	hash []byte
-	h    interface{ Sum([]byte) []byte }
-	size int64
-	done bool
-}
-
-func NewHashingReader(r io.Reader) *HashingReader {
-	h := sha256.New()
-	return &HashingReader{
-		r: io.TeeReader(r, h),
-		h: h,
-	}
-}
-
-func (hr *HashingReader) Read(p []byte) (n int, err error) {
-	n, err = hr.r.Read(p)
-	hr.size += int64(n)
-	if err == io.EOF {
-		hr.done = true
-		hr.hash = hr.h.Sum(nil)
-	}
-	return
-}
-
-func (hr *HashingReader) Sum() string {
-	if !hr.done {
-		hr.hash = hr.h.Sum(nil)
-		hr.done = true
-	}
-	return hex.EncodeToString(hr.hash)
-}
-
-func (hr *HashingReader) Size() int64 {
-	return hr.size
 }

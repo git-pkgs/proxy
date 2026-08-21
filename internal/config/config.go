@@ -928,8 +928,7 @@ func ParseSize(s string) (int64, error) {
 	}
 
 	for _, s2 := range suffixes {
-		if strings.HasSuffix(s, s2.suffix) {
-			numStr := strings.TrimSuffix(s, s2.suffix)
+		if numStr, ok := strings.CutSuffix(s, s2.suffix); ok {
 			num, err := strconv.ParseFloat(numStr, 64)
 			if err != nil {
 				return 0, fmt.Errorf("invalid number %q", numStr)

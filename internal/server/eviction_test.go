@@ -15,7 +15,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/storage"
 )
 
-func setupEvictionTest(t *testing.T) (*database.DB, *storage.Filesystem) {
+func setupEvictionTest(t *testing.T) (*database.DB, *storage.Blob) {
 	t.Helper()
 
 	tempDir := t.TempDir()
@@ -27,7 +27,7 @@ func setupEvictionTest(t *testing.T) (*database.DB, *storage.Filesystem) {
 		t.Fatalf("failed to create database: %v", err)
 	}
 
-	store, err := storage.NewFilesystem(storagePath)
+	store, err := storage.OpenBucket(context.Background(), "file://"+storagePath)
 	if err != nil {
 		_ = db.Close()
 		t.Fatalf("failed to create storage: %v", err)
@@ -243,7 +243,7 @@ func TestStartEvictionLoop_UnlimitedSkips(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	store, err := storage.NewFilesystem(storagePath)
+	store, err := storage.OpenBucket(context.Background(), "file://"+storagePath)
 	if err != nil {
 		t.Fatalf("failed to create storage: %v", err)
 	}
@@ -280,7 +280,7 @@ func defaultTestConfig(storagePath, dbPath string) *config.Config {
 	return &config.Config{
 		Listen:  ":8080",
 		BaseURL: "http://localhost:8080",
-		Storage: config.StorageConfig{Path: storagePath, MaxSize: ""},
+		Storage: config.StorageConfig{URL: "file://" + storagePath, MaxSize: ""},
 		Database: config.DatabaseConfig{
 			Driver: "sqlite",
 			Path:   dbPath,

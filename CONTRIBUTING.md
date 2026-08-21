@@ -39,7 +39,7 @@ proxy/
 │   │   └── queries.go       # CRUD operations
 │   ├── storage/             # Artifact file storage
 │   │   ├── storage.go       # Storage interface
-│   │   └── filesystem.go    # Local filesystem impl
+│   │   └── blob.go          # gocloud.dev/blob backends (file, S3, Azure)
 │   ├── upstream/            # Upstream registry clients
 │   │   ├── fetcher.go       # HTTP artifact fetching
 │   │   └── resolver.go      # Download URL resolution
@@ -72,7 +72,7 @@ Key types:
 
 ### `internal/storage`
 
-Artifact file storage abstraction. Currently implements local filesystem storage. Designed to allow future backends (S3, GCS).
+Artifact file storage abstraction backed by `gocloud.dev/blob`. Supports local filesystem (`file://`), S3 (`s3://`), and Azure (`azblob://`) URLs.
 
 Interface:
 ```go
