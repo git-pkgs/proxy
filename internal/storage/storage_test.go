@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"io"
-	"strings"
 	"testing"
 )
 
@@ -32,30 +31,6 @@ func TestArtifactPath(t *testing.T) {
 			t.Errorf("ArtifactPath(%q, %q, %q, %q, %q) = %q, want %q",
 				tt.ecosystem, tt.namespace, tt.name, tt.version, tt.filename, got, tt.want)
 		}
-	}
-}
-
-func TestHashingReader(t *testing.T) {
-	content := "hello world"
-	r := NewHashingReader(strings.NewReader(content))
-
-	data, err := io.ReadAll(r)
-	if err != nil {
-		t.Fatalf("ReadAll failed: %v", err)
-	}
-
-	if string(data) != content {
-		t.Errorf("got content %q, want %q", string(data), content)
-	}
-
-	if r.Size() != int64(len(content)) {
-		t.Errorf("got size %d, want %d", r.Size(), len(content))
-	}
-
-	h := sha256.Sum256([]byte(content))
-	wantHash := hex.EncodeToString(h[:])
-	if r.Sum() != wantHash {
-		t.Errorf("got hash %s, want %s", r.Sum(), wantHash)
 	}
 }
 

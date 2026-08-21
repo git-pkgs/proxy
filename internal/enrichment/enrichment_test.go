@@ -74,25 +74,3 @@ func TestCategorizeLicense(t *testing.T) {
 		}
 	}
 }
-
-func TestNormalizeLicense(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	svc := New(logger)
-
-	tests := []struct {
-		input    string
-		expected string
-	}{
-		{"MIT", "MIT"},
-		{"Apache 2", "Apache-2.0"},
-		{"Apache-2.0", "Apache-2.0"},
-		{"", ""},
-	}
-
-	for _, tc := range tests {
-		result := svc.NormalizeLicense(tc.input)
-		if result != tc.expected {
-			t.Errorf("NormalizeLicense(%q) = %q, want %q", tc.input, result, tc.expected)
-		}
-	}
-}

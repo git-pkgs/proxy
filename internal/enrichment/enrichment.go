@@ -201,43 +201,6 @@ func (s *Service) CheckVulnerabilities(ctx context.Context, ecosystem, name, ver
 	return results, nil
 }
 
-// BulkCheckVulnerabilities queries vulnerabilities for multiple package versions.
-func (s *Service) BulkCheckVulnerabilities(ctx context.Context, packages []struct{ Ecosystem, Name, Version string }) (map[string][]VulnInfo, error) {
-	purls := make([]*purl.PURL, len(packages))
-	for i, pkg := range packages {
-		purls[i] = purl.MakePURL(pkg.Ecosystem, pkg.Name, pkg.Version)
-	}
-
-	vulnResults, err := s.vulnSource.QueryBatch(ctx, purls)
-	if err != nil {
-		return nil, err
-	}
-
-	result := make(map[string][]VulnInfo, len(packages))
-	for i, vulnList := range vulnResults {
-		pkg := packages[i]
-		key := purl.MakePURLString(pkg.Ecosystem, pkg.Name, pkg.Version)
-
-		var infos []VulnInfo
-		for _, v := range vulnList {
-			info := VulnInfo{
-				ID:           v.ID,
-				Summary:      v.Summary,
-				Severity:     v.SeverityLevel(),
-				CVSSScore:    v.CVSSScore(),
-				FixedVersion: v.FixedVersion(pkg.Ecosystem, pkg.Name),
-			}
-			for _, ref := range v.References {
-				info.References = append(info.References, ref.URL)
-			}
-			infos = append(infos, info)
-		}
-		result[key] = infos
-	}
-
-	return result, nil
-}
-
 // IsOutdated checks if a version is older than the latest version.
 func (s *Service) IsOutdated(currentVersion, latestVersion string) bool {
 	if latestVersion == "" || currentVersion == "" {
@@ -286,19 +249,6 @@ func (s *Service) CategorizeLicense(license string) LicenseCategory {
 	}
 
 	return LicenseUnknown
-}
-
-// NormalizeLicense normalizes a license string to SPDX format.
-func (s *Service) NormalizeLicense(license string) string {
-	if license == "" {
-		return ""
-	}
-
-	if normalized, err := spdx.NormalizeExpressionLax(license); err == nil {
-		return normalized
-	}
-
-	return license
 }
 
 // EnrichmentResult contains all enrichment data for a package version.

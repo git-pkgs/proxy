@@ -92,17 +92,3 @@ func requestEcosystem(path string) string {
 		return "other"
 	}
 }
-
-// ActiveRequestsMiddleware tracks the number of active requests using Prometheus metrics.
-func ActiveRequestsMiddleware(next http.Handler) http.Handler {
-	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		// Don't track metrics endpoint itself
-		if r.URL.Path == "/metrics" {
-			next.ServeHTTP(w, r)
-			return
-		}
-
-		// Implemented in server.go where metrics package is imported
-		next.ServeHTTP(w, r)
-	})
-}
