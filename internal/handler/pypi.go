@@ -8,18 +8,18 @@ import (
 	"fmt"
 	"io"
 	"net/http"
-	"net/url"
 	"regexp"
 	"strings"
 	"time"
 )
 
 const (
-	pypiUpstream     = "https://pypi.org"
-	minWheelParts    = 5 // name + version + python + abi + platform
-	minSubmatchParts = 2 // full match + first capture group
-	minPyPIPathParts = 3 // hash_prefix + hash + filename
-	minEggParts      = 3 // name + version + python tag
+	pypiUpstream         = "https://pypi.org"
+	pypiDownloadUpstream = "https://files.pythonhosted.org"
+	minWheelParts        = 5 // name + version + python + abi + platform
+	minSubmatchParts     = 2 // full match + first capture group
+	minPyPIPathParts     = 3 // hash_prefix + hash + filename
+	minEggParts          = 3 // name + version + python tag
 
 	// PyPIMetadataSuffix is the PEP 658 core-metadata sidecar suffix that pip
 	// appends to a distribution URL when the index advertises core metadata.
@@ -31,18 +31,29 @@ const (
 
 // PyPIHandler handles PyPI registry protocol requests.
 type PyPIHandler struct {
-	proxy       *Proxy
-	upstreamURL string
-	proxyURL    string
+	proxy          *Proxy
+	upstreamURL    string
+	downloadURL    string
+	downloadHrefRe *regexp.Regexp
+	proxyURL       string
 }
 
 // NewPyPIHandler creates a new PyPI protocol handler.
 func NewPyPIHandler(proxy *Proxy, proxyURL string) *PyPIHandler {
-	return &PyPIHandler{
+	return NewPyPIHandlerWithUpstreams(proxy, proxyURL, "", "")
+}
+
+// NewPyPIHandlerWithUpstreams creates a PyPI handler with custom API and
+// package download upstreams.
+func NewPyPIHandlerWithUpstreams(proxy *Proxy, proxyURL, upstreamURL, downloadURL string) *PyPIHandler {
+	h := &PyPIHandler{
 		proxy:       proxy,
-		upstreamURL: pypiUpstream,
+		upstreamURL: configuredUpstreamURL(upstreamURL, pypiUpstream),
+		downloadURL: configuredUpstreamURL(downloadURL, pypiDownloadUpstream),
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 	}
+	h.downloadHrefRe = regexp.MustCompile(`href="(` + regexp.QuoteMeta(h.downloadURL) + `/packages/[^"]+)"`)
+	return h
 }
 
 // Routes returns the HTTP handler for PyPI requests.
@@ -169,24 +180,16 @@ func (h *PyPIHandler) rewriteSimpleHTML(body []byte, filteredVersions map[string
 		})
 	}
 
-	// Match href attributes pointing to packages
-	// PyPI URLs look like: https://files.pythonhosted.org/packages/...
-	re := regexp.MustCompile(`href="(https://files\.pythonhosted\.org/packages/[^"]+)"`)
-
-	return re.ReplaceAllFunc(body, func(match []byte) []byte {
-		submatch := re.FindSubmatch(match)
+	// Match href attributes pointing to packages on the configured download host.
+	return h.downloadHrefRe.ReplaceAllFunc(body, func(match []byte) []byte {
+		submatch := h.downloadHrefRe.FindSubmatch(match)
 		if len(submatch) < minSubmatchParts {
 			return match
 		}
 
 		origURL := string(submatch[1])
 
-		u, err := url.Parse(origURL)
-		if err != nil {
-			return match
-		}
-
-		newURL := fmt.Sprintf("%s/pypi/packages%s", h.proxyURL, u.Path)
+		newURL := h.proxyURL + "/pypi/packages" + strings.TrimPrefix(origURL, h.downloadURL)
 		return []byte(fmt.Sprintf(`href="%s"`, newURL))
 	})
 }
@@ -391,15 +394,8 @@ func (h *PyPIHandler) rewriteURLEntry(entry map[string]any) {
 		return
 	}
 
-	u, err := url.Parse(urlStr)
-	if err != nil {
-		return
-	}
-
-	// Only rewrite pythonhosted.org URLs
-	if u.Host == "files.pythonhosted.org" {
-		newURL := fmt.Sprintf("%s/pypi/packages%s", h.proxyURL, u.Path)
-		entry["url"] = newURL
+	if strings.HasPrefix(urlStr, h.downloadURL+"/packages/") {
+		entry["url"] = h.proxyURL + "/pypi/packages" + strings.TrimPrefix(urlStr, h.downloadURL)
 	}
 }
 
@@ -441,7 +437,7 @@ func (h *PyPIHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	// Construct upstream URL; the incoming path starts with
 	// '/packages' so there is no need to include it in the format
 	// string
-	upstreamURL := fmt.Sprintf("https://files.pythonhosted.org/%s", path)
+	upstreamURL := fmt.Sprintf("%s/%s", h.downloadURL, path)
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "pypi", name, version, filename, upstreamURL)
 	if err != nil {

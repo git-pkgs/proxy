@@ -134,16 +134,51 @@ Upstream retries and OCI authentication calls are separate `upstream` records, s
 
 ## Upstream Registries
 
-Override default upstream registry URLs:
+Each upstream used by a built-in package route can be set in YAML or JSON under `upstream`, or with its matching environment variable. Existing installations keep the same public upstreams by default. Trailing slashes are ignored.
+
+| Config | Environment | Default |
+|--------|-------------|---------|
+| `upstream.npm` | `PROXY_UPSTREAM_NPM` | `https://registry.npmjs.org` |
+| `upstream.cargo` | `PROXY_UPSTREAM_CARGO` | `https://index.crates.io` |
+| `upstream.cargo_download` | `PROXY_UPSTREAM_CARGO_DOWNLOAD` | `https://static.crates.io/crates` |
+| `upstream.gem` | `PROXY_UPSTREAM_GEM` | `https://rubygems.org` |
+| `upstream.go` | `PROXY_UPSTREAM_GO` | `https://proxy.golang.org` |
+| `upstream.hex` | `PROXY_UPSTREAM_HEX` | `https://repo.hex.pm` |
+| `upstream.hex_api` | `PROXY_UPSTREAM_HEX_API` | `https://hex.pm` |
+| `upstream.pub` | `PROXY_UPSTREAM_PUB` | `https://pub.dev` |
+| `upstream.pypi` | `PROXY_UPSTREAM_PYPI` | `https://pypi.org` |
+| `upstream.pypi_download` | `PROXY_UPSTREAM_PYPI_DOWNLOAD` | `https://files.pythonhosted.org` |
+| `upstream.maven` | `PROXY_UPSTREAM_MAVEN` | `https://repo1.maven.org/maven2` |
+| `upstream.gradle_plugin_portal` | `PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL` | `https://plugins.gradle.org/m2` |
+| `upstream.nuget` | `PROXY_UPSTREAM_NUGET` | `https://api.nuget.org` |
+| `upstream.nuget_search` | `PROXY_UPSTREAM_NUGET_SEARCH` | `https://azuresearch-usnc.nuget.org` |
+| `upstream.composer` | `PROXY_UPSTREAM_COMPOSER` | `https://packagist.org` |
+| `upstream.composer_repository` | `PROXY_UPSTREAM_COMPOSER_REPOSITORY` | `https://repo.packagist.org` |
+| `upstream.conan` | `PROXY_UPSTREAM_CONAN` | `https://center.conan.io` |
+| `upstream.conda` | `PROXY_UPSTREAM_CONDA` | `https://conda.anaconda.org` |
+| `upstream.cran` | `PROXY_UPSTREAM_CRAN` | `https://cloud.r-project.org` |
+| `upstream.julia` | `PROXY_UPSTREAM_JULIA` | `https://pkg.julialang.org` |
+| `upstream.debian` | `PROXY_UPSTREAM_DEBIAN` | `http://deb.debian.org/debian` |
+| `upstream.rpm` | `PROXY_UPSTREAM_RPM` | `https://dl.fedoraproject.org/pub/fedora/linux` |
+
+For protocols that use separate metadata and download services, configure both values. They may point to the same endpoint when chaining proxies:
 
 ```yaml
 upstream:
-  npm: "https://registry.npmjs.org"
-  maven: "https://repo1.maven.org/maven2"
-  gradle_plugin_portal: "https://plugins.gradle.org/m2"
-  cargo: "https://index.crates.io"
-  cargo_download: "https://static.crates.io/crates"
+  pypi: "https://upstream-proxy.example.com/pypi"
+  pypi_download: "https://upstream-proxy.example.com/pypi"
+  nuget: "https://upstream-proxy.example.com/nuget"
+  nuget_search: "https://upstream-proxy.example.com/nuget"
+  composer: "https://upstream-proxy.example.com/composer"
+  composer_repository: "https://upstream-proxy.example.com/composer"
+```
 
+`upstream.hex_api` is used for cooldown timestamps and must expose Hex's `/api/packages/{name}` JSON endpoint.
+
+Helm HTTP repositories and additional OCI registries are configured as named maps rather than single URLs:
+
+```yaml
+upstream:
   # Named HTTP Helm chart repositories, served at /helm/{name}/.
   helm:
     bitnami: "https://charts.bitnami.com/bitnami"

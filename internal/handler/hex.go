@@ -21,6 +21,7 @@ const (
 type HexHandler struct {
 	proxy       *Proxy
 	upstreamURL string
+	apiURL      string
 	proxyURL    string
 }
 
@@ -29,8 +30,18 @@ func NewHexHandler(proxy *Proxy, proxyURL string) *HexHandler {
 	return &HexHandler{
 		proxy:       proxy,
 		upstreamURL: hexUpstream,
+		apiURL:      hexAPIURL,
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 	}
+}
+
+// NewHexHandlerWithUpstreams creates a Hex handler with custom repository and
+// API upstreams.
+func NewHexHandlerWithUpstreams(proxy *Proxy, proxyURL, upstreamURL, apiURL string) *HexHandler {
+	h := NewHexHandler(proxy, proxyURL)
+	h.upstreamURL = configuredUpstreamURL(upstreamURL, hexUpstream)
+	h.apiURL = configuredUpstreamURL(apiURL, hexAPIURL)
+	return h
 }
 
 // Routes returns the HTTP handler for Hex requests.
@@ -197,7 +208,7 @@ type hexPackageAPI struct {
 // fetchFilteredVersions fetches the Hex API and returns a set of version
 // strings that should be filtered out by cooldown.
 func (h *HexHandler) fetchFilteredVersions(r *http.Request, name string) (map[string]bool, error) {
-	apiURL := fmt.Sprintf("%s/api/packages/%s", hexAPIURL, name)
+	apiURL := fmt.Sprintf("%s/api/packages/%s", h.apiURL, name)
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, apiURL, nil)
 	if err != nil {
 		return nil, err

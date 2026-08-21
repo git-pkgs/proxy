@@ -82,16 +82,10 @@ log:
 access_log:
   path: ""
 
-# Upstream registry URLs and authentication
+# Upstream URLs for built-in routes and authentication
 upstream:
   # npm registry URL
   npm: "https://registry.npmjs.org"
-
-  # Maven repository URL (used by /maven endpoint)
-  maven: "https://repo1.maven.org/maven2"
-
-  # Gradle Plugin Portal Maven URL (fallback for plugin marker artifacts)
-  gradle_plugin_portal: "https://plugins.gradle.org/m2"
 
   # Cargo sparse index URL
   cargo: "https://index.crates.io"
@@ -99,8 +93,62 @@ upstream:
   # Cargo crate download URL
   cargo_download: "https://static.crates.io/crates"
 
+  # RubyGems registry URL
+  gem: "https://rubygems.org"
+
+  # Go module proxy URL
+  go: "https://proxy.golang.org"
+
+  # Hex repository URL
+  hex: "https://repo.hex.pm"
+
+  # Hex API URL used for package timestamps
+  hex_api: "https://hex.pm"
+
+  # pub registry URL
+  pub: "https://pub.dev"
+
+  # PyPI index and API URL
+  pypi: "https://pypi.org"
+
+  # PyPI package download URL
+  pypi_download: "https://files.pythonhosted.org"
+
+  # Maven repository URL (used by /maven endpoint)
+  maven: "https://repo1.maven.org/maven2"
+
+  # Gradle Plugin Portal Maven URL (fallback for plugin marker artifacts)
+  gradle_plugin_portal: "https://plugins.gradle.org/m2"
+
+  # NuGet API URL
+  nuget: "https://api.nuget.org"
+
+  # NuGet search API URL
+  nuget_search: "https://azuresearch-usnc.nuget.org"
+
+  # Packagist API URL
+  composer: "https://packagist.org"
+
+  # Packagist repository URL
+  composer_repository: "https://repo.packagist.org"
+
+  # Conan registry URL
+  conan: "https://center.conan.io"
+
+  # Conda channel base URL
+  conda: "https://conda.anaconda.org"
+
+  # CRAN mirror URL
+  cran: "https://cloud.r-project.org"
+
+  # Julia package server URL
+  julia: "https://pkg.julialang.org"
+
   # Debian/APT repository URL (used by /debian endpoint)
   debian: "http://deb.debian.org/debian"
+
+  # RPM repository URL (used by /rpm endpoint)
+  rpm: "https://dl.fedoraproject.org/pub/fedora/linux"
 
   # Named HTTP Helm chart repositories (used by /helm/{name}/)
   # helm:

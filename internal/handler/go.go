@@ -30,6 +30,13 @@ func NewGoHandler(proxy *Proxy, proxyURL string) *GoHandler {
 	}
 }
 
+// NewGoHandlerWithUpstream creates a Go module handler with a custom upstream.
+func NewGoHandlerWithUpstream(proxy *Proxy, proxyURL, upstreamURL string) *GoHandler {
+	h := NewGoHandler(proxy, proxyURL)
+	h.upstreamURL = configuredUpstreamURL(upstreamURL, goUpstream)
+	return h
+}
+
 // Routes returns the HTTP handler for Go proxy requests.
 func (h *GoHandler) Routes() http.Handler {
 	// Go module paths can contain slashes, so just use the handler directly
