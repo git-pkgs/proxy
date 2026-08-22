@@ -279,7 +279,7 @@ HTTP server setup, web UI, and API handlers.
 - Web UI under `/ui`: dashboard, package browser, source browser, version comparison
 - Templates are embedded in the binary via `//go:embed`
 - Enrichment API for package metadata, vulnerability scanning, and outdated detection
-- Health, stats, and Prometheus metrics endpoints. `/health` runs an active write → size-check → read → verify → delete probe against the storage backend and returns a structured JSON response (`HealthResponse`) with `"ok"` / `"error"` status per subsystem. Probe results are cached (default 30 s, configurable via `health.storage_probe_interval`) to avoid overwhelming remote backends.
+- Health, stats, and Prometheus metrics endpoints. `/health` runs an active write → size-check → read → verify → delete probe against the storage backend and returns a structured JSON response (`HealthResponse`) with `"ok"` / `"error"` status per subsystem. Probe results are cached (default 30 s, configurable via `health.storage_probe_interval`) to avoid overwhelming remote backends. The response also carries a `circuit_breakers` map reporting each upstream host's artifact-fetch breaker as `"open"` or `"closed"`; the same state is published as the `proxy_circuit_breaker_state` gauge on each `/metrics` scrape. An open breaker leaves the overall status `"ok"` — it describes an upstream, not this proxy.
 
 ### `internal/metrics`
 

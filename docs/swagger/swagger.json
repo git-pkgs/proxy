@@ -531,6 +531,13 @@
                         "$ref": "#/definitions/server.HealthCheck"
                     }
                 },
+                "circuit_breakers": {
+                    "description": "CircuitBreakers reports the state (\"open\" or \"closed\") of each upstream\nregistry's artifact-fetch circuit breaker, omitted when no breaker has\nbeen created yet. An open breaker fails every artifact fetch for that\nhost without contacting it, but says nothing about this proxy's own\nhealth, so it does not change Status.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
                 "status": {
                     "type": "string"
                 }

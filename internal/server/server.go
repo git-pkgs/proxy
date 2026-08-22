@@ -98,6 +98,7 @@ type Server struct {
 	cancel      context.CancelFunc
 	healthCache *healthCache
 	accessLog   *accesslog.Logger
+	breakers    *breakerMonitor
 }
 
 // New creates a new Server with the given configuration.
@@ -198,6 +199,7 @@ func (s *Server) Start() error {
 	// Create shared components with circuit breaker.
 	baseFetcher := fetch.NewFetcher(fetch.WithHTTPClient(&artifactClient))
 	fetcher := fetch.NewCircuitBreakerFetcher(baseFetcher)
+	s.breakers = newBreakerMonitor(fetcher, s.logger)
 	resolver := fetch.NewResolver()
 	cd := &cooldown.Config{
 		Default:    s.cfg.Cooldown.Default,
@@ -291,6 +293,8 @@ func (s *Server) Start() error {
 	r.Get("/stats", s.handleStats)
 	r.Get("/openapi.json", s.handleOpenAPIJSON)
 	r.Get("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		// Breaker state is only held in the fetcher, so publish it on scrape.
+		s.breakers.snapshot()
 		metrics.Handler().ServeHTTP(w, r)
 	})
 
@@ -907,7 +911,11 @@ func (s *Server) showComparePage(w http.ResponseWriter, r *http.Request, ecosyst
 func (s *Server) handleHealth(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 
-	resp := HealthResponse{Status: "ok", Checks: map[string]HealthCheck{}}
+	resp := HealthResponse{
+		Status:          "ok",
+		Checks:          map[string]HealthCheck{},
+		CircuitBreakers: s.breakers.snapshot(),
+	}
 
 	// Database check (short-circuit; do not waste a storage probe call when DB is down).
 	// On DB failure the storage entry reports "skipped" rather than being omitted so
