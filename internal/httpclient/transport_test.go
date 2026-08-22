@@ -107,7 +107,9 @@ func TestTransportRetriesTemporaryTokenLookupFailures(t *testing.T) {
 		}
 		return http.DefaultTransport.RoundTrip(req)
 	})
-	client := &http.Client{Transport: NewTransport(base, nil)}
+	transport := NewTransport(base, nil)
+	transport.retryWait = func(context.Context, time.Duration) error { return nil }
+	client := &http.Client{Transport: transport}
 
 	resp, err := client.Get(server.URL + "/v2/library/test/blobs/sha256:test")
 	if err != nil {
@@ -126,6 +128,24 @@ func TestTransportRetriesTemporaryTokenLookupFailures(t *testing.T) {
 	}
 	if registryRequests != 2 {
 		t.Errorf("registry requests = %d, want 2", registryRequests)
+	}
+}
+
+func TestTransportDoesNotRetryPermanentTokenLookupFailures(t *testing.T) {
+	var tokenRequests int
+	base := roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		tokenRequests++
+		return nil, &net.DNSError{Err: "no such host"}
+	})
+	transport := NewTransport(base, nil)
+	transport.retryWait = func(context.Context, time.Duration) error { return nil }
+
+	_, _, err := transport.fetchToken(context.Background(), bearerChallenge{realm: "https://auth.example.test/token"})
+	if err == nil {
+		t.Fatal("fetchToken succeeded, want error")
+	}
+	if tokenRequests != 1 {
+		t.Errorf("token requests = %d, want 1", tokenRequests)
 	}
 }
 

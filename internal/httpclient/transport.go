@@ -31,6 +31,7 @@ type AuthFunc func(url string) (headerName, headerValue string)
 type Transport struct {
 	base       http.RoundTripper
 	authForURL AuthFunc
+	retryWait  func(context.Context, time.Duration) error
 
 	mu         sync.Mutex
 	tokens     map[string]cachedToken
@@ -63,6 +64,7 @@ func NewTransport(base http.RoundTripper, authForURL AuthFunc) *Transport {
 	return &Transport{
 		base:       base,
 		authForURL: authForURL,
+		retryWait:  waitForRetry,
 		tokens:     make(map[string]cachedToken),
 		challenges: make(map[string]bearerChallenge),
 	}
@@ -183,7 +185,7 @@ func (t *Transport) fetchToken(ctx context.Context, challenge bearerChallenge) (
 			if !shouldRetryTokenRequest(ctx, err) || attempt == tokenMaxRetries {
 				return "", time.Time{}, requestErr
 			}
-			if err := waitForTokenRetry(ctx, attempt); err != nil {
+			if err := t.waitForTokenRetry(ctx, attempt); err != nil {
 				return "", time.Time{}, err
 			}
 			continue
@@ -197,7 +199,7 @@ func (t *Transport) fetchToken(ctx context.Context, challenge bearerChallenge) (
 		if !shouldRetryTokenStatus(resp.StatusCode) || attempt == tokenMaxRetries {
 			return "", time.Time{}, responseErr
 		}
-		if err := waitForTokenRetry(ctx, attempt); err != nil {
+		if err := t.waitForTokenRetry(ctx, attempt); err != nil {
 			return "", time.Time{}, err
 		}
 	}
@@ -246,15 +248,30 @@ func shouldRetryTokenRequest(ctx context.Context, err error) bool {
 	}
 
 	var networkErr net.Error
-	return errors.As(err, &networkErr)
+	if !errors.As(err, &networkErr) {
+		return false
+	}
+
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) {
+		return dnsErr.IsTemporary || dnsErr.IsTimeout
+	}
+	return networkErr.Timeout()
 }
 
 func shouldRetryTokenStatus(status int) bool {
 	return status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
 }
 
-func waitForTokenRetry(ctx context.Context, attempt int) error {
+func (t *Transport) waitForTokenRetry(ctx context.Context, attempt int) error {
 	delay := tokenRetryBaseDelay << attempt
+	if t.retryWait != nil {
+		return t.retryWait(ctx, delay)
+	}
+	return waitForRetry(ctx, delay)
+}
+
+func waitForRetry(ctx context.Context, delay time.Duration) error {
 	timer := time.NewTimer(delay)
 	defer timer.Stop()
 
