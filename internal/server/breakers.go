@@ -39,8 +39,10 @@ type breakerMonitor struct {
 	source breakerStateSource
 	logger *slog.Logger
 
-	// mu guards seen, which holds one entry per registry that has tripped at
-	// least once in this process — the only registries published as metrics.
+	// mu serializes snapshots. It guards seen, which holds one entry per
+	// registry that has tripped at least once in this process — the only
+	// registries published as metrics — and keeps each state read paired with
+	// the updates it produces.
 	mu   sync.Mutex
 	seen map[string]string
 }
@@ -79,10 +81,15 @@ func (m *breakerMonitor) snapshot() map[string]string {
 		return nil
 	}
 
-	states := m.source.GetBreakerState()
-
 	m.mu.Lock()
 	defer m.mu.Unlock()
+
+	// Read under the lock. Two concurrent snapshots — a /health request and a
+	// /metrics scrape landing during a transition — can otherwise apply their
+	// reads to seen in the opposite order, counting one trip twice, logging a
+	// close for a breaker that is still open, and leaving the gauge at 0 until
+	// the next call.
+	states := m.source.GetBreakerState()
 
 	for registry, state := range states {
 		previous, published := m.seen[registry]
