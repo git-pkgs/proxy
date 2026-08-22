@@ -44,6 +44,12 @@ func TestDefault(t *testing.T) {
 	if cfg.Upstream.Debian != "http://deb.debian.org/debian" {
 		t.Errorf("Upstream.Debian = %q, want %q", cfg.Upstream.Debian, "http://deb.debian.org/debian")
 	}
+	if cfg.Upstream.HomebrewAPI != "https://formulae.brew.sh/api" {
+		t.Errorf("Upstream.HomebrewAPI = %q, want %q", cfg.Upstream.HomebrewAPI, "https://formulae.brew.sh/api")
+	}
+	if cfg.Upstream.HomebrewArtifact != "https://ghcr.io" {
+		t.Errorf("Upstream.HomebrewArtifact = %q, want %q", cfg.Upstream.HomebrewArtifact, "https://ghcr.io")
+	}
 }
 
 func TestValidate(t *testing.T) {
@@ -217,6 +223,9 @@ log:
   format: "json"
 access_log:
   path: "/var/log/proxy/access.jsonl"
+upstream:
+  homebrew_api: "https://homebrew-api.example.com"
+  homebrew_artifact: "https://homebrew-artifact.example.com"
 `
 	if err := os.WriteFile(path, []byte(content), 0644); err != nil {
 		t.Fatalf("writing config file: %v", err)
@@ -247,6 +256,12 @@ access_log:
 	}
 	if cfg.AccessLog.Path != "/var/log/proxy/access.jsonl" {
 		t.Errorf("AccessLog.Path = %q, want %q", cfg.AccessLog.Path, "/var/log/proxy/access.jsonl")
+	}
+	if cfg.Upstream.HomebrewAPI != "https://homebrew-api.example.com" {
+		t.Errorf("Upstream.HomebrewAPI = %q, want %q", cfg.Upstream.HomebrewAPI, "https://homebrew-api.example.com")
+	}
+	if cfg.Upstream.HomebrewArtifact != "https://homebrew-artifact.example.com" {
+		t.Errorf("Upstream.HomebrewArtifact = %q, want %q", cfg.Upstream.HomebrewArtifact, "https://homebrew-artifact.example.com")
 	}
 }
 
@@ -287,6 +302,8 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("PROXY_UPSTREAM_MAVEN", "https://maven.example.com/repository/maven-public")
 	t.Setenv("PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL", "https://plugins.example.com/m2")
 	t.Setenv("PROXY_UPSTREAM_DEBIAN", "http://archive.ubuntu.com/ubuntu")
+	t.Setenv("PROXY_UPSTREAM_HOMEBREW_API", "https://homebrew-api.example.com")
+	t.Setenv("PROXY_UPSTREAM_HOMEBREW_ARTIFACT", "https://homebrew-artifact.example.com")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY", "true")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE", "32MB")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_AGE", "12h")
@@ -321,6 +338,12 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.Upstream.Debian != "http://archive.ubuntu.com/ubuntu" {
 		t.Errorf("Upstream.Debian = %q, want %q", cfg.Upstream.Debian, "http://archive.ubuntu.com/ubuntu")
+	}
+	if cfg.Upstream.HomebrewAPI != "https://homebrew-api.example.com" {
+		t.Errorf("Upstream.HomebrewAPI = %q, want %q", cfg.Upstream.HomebrewAPI, "https://homebrew-api.example.com")
+	}
+	if cfg.Upstream.HomebrewArtifact != "https://homebrew-artifact.example.com" {
+		t.Errorf("Upstream.HomebrewArtifact = %q, want %q", cfg.Upstream.HomebrewArtifact, "https://homebrew-artifact.example.com")
 	}
 	if !cfg.Gradle.BuildCache.ReadOnly {
 		t.Error("Gradle.BuildCache.ReadOnly = false, want true")
