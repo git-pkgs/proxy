@@ -44,7 +44,7 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 		h.proxy.Logger.Warn("failed to read cached container manifest", "error", err)
 		cached = nil
 	}
-	if cached != nil && !containerManifestAccepts(accept, cached.contentType) {
+	if cached != nil && cached.contentType != "" && !containerManifestAccepts(accept, cached.contentType) {
 		cached = nil
 	}
 
@@ -240,7 +240,7 @@ func containerManifestAccept(r *http.Request) string {
 }
 
 func normalizeContainerManifestAccept(accept string) string {
-	mediaTypes := make([]string, 0)
+	mediaTypes := make(map[string]struct{})
 	for _, value := range strings.Split(accept, ",") {
 		value = strings.TrimSpace(value)
 		if value == "" {
@@ -248,7 +248,7 @@ func normalizeContainerManifestAccept(accept string) string {
 		}
 		mediaType, params, err := mime.ParseMediaType(value)
 		if err != nil {
-			mediaTypes = append(mediaTypes, strings.ToLower(value))
+			mediaTypes[strings.ToLower(value)] = struct{}{}
 			continue
 		}
 		paramKeys := make([]string, 0, len(params))
@@ -261,15 +261,22 @@ func normalizeContainerManifestAccept(accept string) string {
 			value := params[key]
 			if strings.EqualFold(key, "q") {
 				if quality, err := strconv.ParseFloat(value, 64); err == nil {
+					if quality == 1 {
+						continue
+					}
 					value = strconv.FormatFloat(quality, 'g', -1, 64)
 				}
 			}
 			canonical += ";" + strings.ToLower(key) + "=" + value
 		}
-		mediaTypes = append(mediaTypes, canonical)
+		mediaTypes[canonical] = struct{}{}
 	}
-	sort.Strings(mediaTypes)
-	return strings.Join(mediaTypes, ",")
+	canonicalMediaTypes := make([]string, 0, len(mediaTypes))
+	for mediaType := range mediaTypes {
+		canonicalMediaTypes = append(canonicalMediaTypes, mediaType)
+	}
+	sort.Strings(canonicalMediaTypes)
+	return strings.Join(canonicalMediaTypes, ",")
 }
 
 func containerManifestAccepts(accept, contentType string) bool {

@@ -671,7 +671,7 @@ func TestContainerHandler_ManifestVariantCacheNormalizesCompatibleAccept(t *test
 			http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
 			return
 		}
-		w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
+		w.Header().Set("Content-Type", "")
 		w.Header().Set("Docker-Content-Digest", digest)
 		_, _ = io.WriteString(w, manifest)
 	}))
@@ -683,7 +683,7 @@ func TestContainerHandler_ManifestVariantCacheNormalizesCompatibleAccept(t *test
 	h := &ContainerHandler{proxy: proxy, registryURL: upstream.URL, proxyURL: "http://localhost:8080"}
 
 	firstRequest := httptest.NewRequest(http.MethodGet, "/library/nginx/manifests/latest", nil)
-	firstRequest.Header.Set("Accept", "application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json")
+	firstRequest.Header.Set("Accept", "application/vnd.oci.image.index.v1+json;q=1, application/vnd.oci.image.manifest.v1+json;q=1, application/vnd.oci.image.index.v1+json;q=1")
 	first := httptest.NewRecorder()
 	h.Routes().ServeHTTP(first, firstRequest)
 	if first.Code != http.StatusOK {
