@@ -3,12 +3,19 @@ package httpclient
 import (
 	"context"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"testing"
 	"time"
 )
+
+type roundTripperFunc func(*http.Request) (*http.Response, error)
+
+func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) {
+	return fn(req)
+}
 
 func TestTransportFollowsBearerChallengeAndCachesToken(t *testing.T) {
 	var registryRequests int
@@ -65,6 +72,98 @@ func TestTransportFollowsBearerChallengeAndCachesToken(t *testing.T) {
 	}
 	if registryRequests != 3 {
 		t.Errorf("registry requests = %d, want 3", registryRequests)
+	}
+}
+
+func TestTransportRetriesTemporaryTokenLookupFailures(t *testing.T) {
+	var registryRequests int
+	var tokenRequests int
+	var tokenLookupFailures int
+	var server *httptest.Server
+
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/token":
+			tokenRequests++
+			_, _ = io.WriteString(w, `{"token":"registry-token"}`)
+		case "/v2/library/test/blobs/sha256:test":
+			registryRequests++
+			if r.Header.Get("Authorization") != "Bearer registry-token" {
+				w.Header().Set("WWW-Authenticate", `Bearer realm="`+server.URL+`/token",service="registry.test",scope="repository:library/test:pull"`)
+				http.Error(w, "authentication required", http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(w, "blob")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	base := roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+		if req.URL.Path == "/token" && tokenLookupFailures < 2 {
+			tokenLookupFailures++
+			return nil, &net.DNSError{Err: "server misbehaving", IsTemporary: true}
+		}
+		return http.DefaultTransport.RoundTrip(req)
+	})
+	transport := NewTransport(base, nil)
+	transport.retryWait = func(context.Context, time.Duration) error { return nil }
+	client := &http.Client{Transport: transport}
+
+	resp, err := client.Get(server.URL + "/v2/library/test/blobs/sha256:test")
+	if err != nil {
+		t.Fatalf("GET blob: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if tokenLookupFailures != 2 {
+		t.Errorf("token lookup failures = %d, want 2", tokenLookupFailures)
+	}
+	if tokenRequests != 1 {
+		t.Errorf("token requests = %d, want 1", tokenRequests)
+	}
+	if registryRequests != 2 {
+		t.Errorf("registry requests = %d, want 2", registryRequests)
+	}
+}
+
+func TestTransportDoesNotRetryPermanentTokenLookupFailures(t *testing.T) {
+	var tokenRequests int
+	base := roundTripperFunc(func(*http.Request) (*http.Response, error) {
+		tokenRequests++
+		return nil, &net.DNSError{Err: "no such host"}
+	})
+	transport := NewTransport(base, nil)
+	transport.retryWait = func(context.Context, time.Duration) error { return nil }
+
+	_, _, err := transport.fetchToken(context.Background(), bearerChallenge{realm: "https://auth.example.test/token"})
+	if err == nil {
+		t.Fatal("fetchToken succeeded, want error")
+	}
+	if tokenRequests != 1 {
+		t.Errorf("token requests = %d, want 1", tokenRequests)
+	}
+}
+
+func TestTransportDoesNotRetryPermanentTokenFailures(t *testing.T) {
+	var tokenRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenRequests++
+		http.Error(w, "invalid credentials", http.StatusUnauthorized)
+	}))
+	defer server.Close()
+
+	transport := NewTransport(http.DefaultTransport, nil)
+	_, _, err := transport.fetchToken(context.Background(), bearerChallenge{realm: server.URL + "/token"})
+	if err == nil {
+		t.Fatal("fetchToken succeeded, want error")
+	}
+	if tokenRequests != 1 {
+		t.Errorf("token requests = %d, want 1", tokenRequests)
 	}
 }
 
