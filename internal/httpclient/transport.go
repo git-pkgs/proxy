@@ -4,8 +4,10 @@ package httpclient
 import (
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -18,6 +20,8 @@ const (
 	tokenExpirySkew       = 5 * time.Second
 	maxTokenResponseSize  = 1 << 20
 	shortTokenSkewDivisor = 10
+	tokenMaxRetries       = 3
+	tokenRetryBaseDelay   = 500 * time.Millisecond
 )
 
 // AuthFunc returns a configured authentication header for a URL.
@@ -172,16 +176,37 @@ func (t *Transport) fetchToken(ctx context.Context, challenge bearerChallenge) (
 	}
 
 	client := &http.Client{Transport: configuredTransport{parent: t}}
-	resp, err := client.Do(req)
-	if err != nil {
-		return "", time.Time{}, fmt.Errorf("requesting token: %w", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
+	for attempt := 0; attempt <= tokenMaxRetries; attempt++ {
+		resp, err := client.Do(req.Clone(ctx))
+		if err != nil {
+			requestErr := fmt.Errorf("requesting token: %w", err)
+			if !shouldRetryTokenRequest(ctx, err) || attempt == tokenMaxRetries {
+				return "", time.Time{}, requestErr
+			}
+			if err := waitForTokenRetry(ctx, attempt); err != nil {
+				return "", time.Time{}, err
+			}
+			continue
+		}
 
-	if resp.StatusCode < http.StatusOK || resp.StatusCode >= http.StatusMultipleChoices {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxTokenResponseSize))
-		return "", time.Time{}, fmt.Errorf("token service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices {
+			return decodeTokenResponse(resp)
+		}
+
+		responseErr := tokenResponseError(resp)
+		if !shouldRetryTokenStatus(resp.StatusCode) || attempt == tokenMaxRetries {
+			return "", time.Time{}, responseErr
+		}
+		if err := waitForTokenRetry(ctx, attempt); err != nil {
+			return "", time.Time{}, err
+		}
 	}
+
+	return "", time.Time{}, errors.New("token request retries exhausted")
+}
+
+func decodeTokenResponse(resp *http.Response) (string, time.Time, error) {
+	defer func() { _ = resp.Body.Close() }()
 
 	var payload tokenResponse
 	if err := json.NewDecoder(io.LimitReader(resp.Body, maxTokenResponseSize)).Decode(&payload); err != nil {
@@ -207,6 +232,38 @@ func (t *Transport) fetchToken(ctx context.Context, challenge bearerChallenge) (
 	}
 	expiresAt := issuedAt.Add(lifetime).Add(-expirySkew(lifetime))
 	return token, expiresAt, nil
+}
+
+func tokenResponseError(resp *http.Response) error {
+	defer func() { _ = resp.Body.Close() }()
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, maxTokenResponseSize))
+	return fmt.Errorf("token service returned %d: %s", resp.StatusCode, strings.TrimSpace(string(body)))
+}
+
+func shouldRetryTokenRequest(ctx context.Context, err error) bool {
+	if ctx.Err() != nil || errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return false
+	}
+
+	var networkErr net.Error
+	return errors.As(err, &networkErr)
+}
+
+func shouldRetryTokenStatus(status int) bool {
+	return status == http.StatusTooManyRequests || status >= http.StatusInternalServerError
+}
+
+func waitForTokenRetry(ctx context.Context, attempt int) error {
+	delay := tokenRetryBaseDelay << attempt
+	timer := time.NewTimer(delay)
+	defer timer.Stop()
+
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
 }
 
 type configuredTransport struct {
