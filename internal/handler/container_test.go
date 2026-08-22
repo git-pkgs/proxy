@@ -134,6 +134,57 @@ func TestContainerHandler_parseTagsListPath(t *testing.T) {
 	}
 }
 
+func TestContainerHandler_TagsListUsesStaleCacheOnUpstreamFailure(t *testing.T) {
+	tags := `{"name":"library/nginx","tags":["1.0","latest"]}`
+	upstreamAvailable := true
+	upstreamRequests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests++
+		if r.URL.Path != "/v2/library/nginx/tags/list" {
+			http.NotFound(w, r)
+			return
+		}
+		if !upstreamAvailable {
+			http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", `"tags-etag"`)
+		_, _ = io.WriteString(w, tags)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	proxy.MetadataTTL = 0
+	h := &ContainerHandler{proxy: proxy, registryURL: upstream.URL, proxyURL: "http://localhost:8080"}
+
+	first := httptest.NewRecorder()
+	h.Routes().ServeHTTP(first, httptest.NewRequest(http.MethodGet, "/library/nginx/tags/list?n=2", nil))
+	if first.Code != http.StatusOK {
+		t.Fatalf("initial status = %d, want 200: %s", first.Code, first.Body.String())
+	}
+	if first.Body.String() != tags {
+		t.Errorf("initial body = %q, want %q", first.Body.String(), tags)
+	}
+
+	upstreamAvailable = false
+	second := httptest.NewRecorder()
+	h.Routes().ServeHTTP(second, httptest.NewRequest(http.MethodGet, "/library/nginx/tags/list?n=2", nil))
+	if second.Code != http.StatusOK {
+		t.Fatalf("stale status = %d, want 200: %s", second.Code, second.Body.String())
+	}
+	if second.Body.String() != tags {
+		t.Errorf("stale body = %q, want %q", second.Body.String(), tags)
+	}
+	if got := second.Header().Get("Warning"); got != `110 - "Response is Stale"` {
+		t.Errorf("Warning = %q, want stale warning", got)
+	}
+	if upstreamRequests != 2 {
+		t.Errorf("upstream requests = %d, want 2", upstreamRequests)
+	}
+}
+
 func TestContainerHandler_NamedOCIRegistryServesHelmArtifacts(t *testing.T) {
 	digest := "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd"
 	manifest := `{"schemaVersion":2,"config":{"mediaType":"application/vnd.cncf.helm.config.v1+json"},"layers":[{"mediaType":"application/vnd.cncf.helm.chart.content.v1.tar+gzip","digest":"` + digest + `"}]}`
@@ -606,6 +657,92 @@ func TestContainerHandler_ManifestByTag_UsesStaleCacheOnUpstreamFailure(t *testi
 	}
 	if upstreamRequests != 2 {
 		t.Errorf("upstream requests = %d, want 2", upstreamRequests)
+	}
+}
+
+func TestContainerHandler_ManifestVariantCacheNormalizesCompatibleAccept(t *testing.T) {
+	digest := "sha256:abababababababababababababababababababababababababababababababab"
+	manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json"}`
+	upstreamAvailable := true
+	upstreamRequests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests++
+		if !upstreamAvailable {
+			http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
+		w.Header().Set("Docker-Content-Digest", digest)
+		_, _ = io.WriteString(w, manifest)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	proxy.MetadataTTL = 0
+	h := &ContainerHandler{proxy: proxy, registryURL: upstream.URL, proxyURL: "http://localhost:8080"}
+
+	firstRequest := httptest.NewRequest(http.MethodGet, "/library/nginx/manifests/latest", nil)
+	firstRequest.Header.Set("Accept", "application/vnd.oci.image.index.v1+json,application/vnd.oci.image.manifest.v1+json")
+	first := httptest.NewRecorder()
+	h.Routes().ServeHTTP(first, firstRequest)
+	if first.Code != http.StatusOK {
+		t.Fatalf("initial status = %d, want 200: %s", first.Code, first.Body.String())
+	}
+
+	upstreamAvailable = false
+	secondRequest := httptest.NewRequest(http.MethodGet, "/library/nginx/manifests/latest", nil)
+	secondRequest.Header.Set("Accept", " application/vnd.oci.image.manifest.v1+json , application/vnd.oci.image.index.v1+json ")
+	second := httptest.NewRecorder()
+	h.Routes().ServeHTTP(second, secondRequest)
+	if second.Code != http.StatusOK {
+		t.Fatalf("stale status = %d, want 200: %s", second.Code, second.Body.String())
+	}
+	if second.Body.String() != manifest {
+		t.Errorf("stale body = %q, want %q", second.Body.String(), manifest)
+	}
+	if got := second.Header().Get("Warning"); got != `110 - "Response is Stale"` {
+		t.Errorf("Warning = %q, want stale warning", got)
+	}
+	if upstreamRequests != 2 {
+		t.Errorf("upstream requests = %d, want 2", upstreamRequests)
+	}
+}
+
+func TestContainerHandler_ManifestVariantCacheDoesNotServeUnacceptedContentType(t *testing.T) {
+	digest := "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	upstreamAvailable := true
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if !upstreamAvailable {
+			http.Error(w, "upstream unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
+		w.Header().Set("Docker-Content-Digest", digest)
+		_, _ = io.WriteString(w, `{"schemaVersion":2}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	proxy.MetadataTTL = 0
+	h := &ContainerHandler{proxy: proxy, registryURL: upstream.URL, proxyURL: "http://localhost:8080"}
+
+	warmRequest := httptest.NewRequest(http.MethodGet, "/library/nginx/manifests/latest", nil)
+	warmRequest.Header.Set("Accept", "application/vnd.oci.image.index.v1+json")
+	warm := httptest.NewRecorder()
+	h.Routes().ServeHTTP(warm, warmRequest)
+	if warm.Code != http.StatusOK {
+		t.Fatalf("warm status = %d, want 200", warm.Code)
+	}
+
+	upstreamAvailable = false
+	offlineRequest := httptest.NewRequest(http.MethodGet, "/library/nginx/manifests/latest", nil)
+	offlineRequest.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json")
+	offline := httptest.NewRecorder()
+	h.Routes().ServeHTTP(offline, offlineRequest)
+	if offline.Code != http.StatusServiceUnavailable {
+		t.Errorf("offline status = %d, want 503", offline.Code)
 	}
 }
 
