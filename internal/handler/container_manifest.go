@@ -8,8 +8,10 @@ import (
 	"encoding/hex"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -35,10 +37,14 @@ type cachedContainerManifest struct {
 
 func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request, registryURL, name, reference string) {
 	accept := containerManifestAccept(r)
-	cacheKey := h.containerManifestCacheKey(registryURL, name, reference, accept)
+	cacheAccept := normalizeContainerManifestAccept(accept)
+	cacheKey := h.containerManifestCacheKey(registryURL, name, reference, cacheAccept)
 	cached, err := h.loadContainerManifest(r.Context(), cacheKey)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to read cached container manifest", "error", err)
+		cached = nil
+	}
+	if cached != nil && cached.contentType != "" && !containerManifestAccepts(accept, cached.contentType) {
 		cached = nil
 	}
 
@@ -111,7 +117,7 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 		h.proxy.Logger.Warn("failed to cache container manifest", "error", err)
 	}
 	if manifest.contentDigest != reference && manifestDigestReferencePattern.MatchString(manifest.contentDigest) {
-		digestKey := h.containerManifestCacheKey(registryURL, name, manifest.contentDigest, accept)
+		digestKey := h.containerManifestCacheKey(registryURL, name, manifest.contentDigest, cacheAccept)
 		if err := h.storeContainerManifest(r.Context(), digestKey, manifest); err != nil {
 			h.proxy.Logger.Warn("failed to cache container manifest by digest", "error", err)
 		}
@@ -231,6 +237,83 @@ func containerManifestAccept(r *http.Request) string {
 		"application/vnd.docker.distribution.manifest.list.v2+json",
 		"application/vnd.docker.distribution.manifest.v1+prettyjws",
 	}, ", ")
+}
+
+func normalizeContainerManifestAccept(accept string) string {
+	mediaTypes := make(map[string]struct{})
+	for _, value := range strings.Split(accept, ",") {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		mediaType, params, err := mime.ParseMediaType(value)
+		if err != nil {
+			mediaTypes[strings.ToLower(value)] = struct{}{}
+			continue
+		}
+		paramKeys := make([]string, 0, len(params))
+		for key := range params {
+			paramKeys = append(paramKeys, key)
+		}
+		sort.Strings(paramKeys)
+		canonical := strings.ToLower(mediaType)
+		for _, key := range paramKeys {
+			value := params[key]
+			if strings.EqualFold(key, "q") {
+				if quality, err := strconv.ParseFloat(value, 64); err == nil {
+					if quality == 1 {
+						continue
+					}
+					value = strconv.FormatFloat(quality, 'g', -1, 64)
+				}
+			}
+			canonical += ";" + strings.ToLower(key) + "=" + value
+		}
+		mediaTypes[canonical] = struct{}{}
+	}
+	canonicalMediaTypes := make([]string, 0, len(mediaTypes))
+	for mediaType := range mediaTypes {
+		canonicalMediaTypes = append(canonicalMediaTypes, mediaType)
+	}
+	sort.Strings(canonicalMediaTypes)
+	return strings.Join(canonicalMediaTypes, ",")
+}
+
+func containerManifestAccepts(accept, contentType string) bool {
+	contentType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	contentType = strings.ToLower(contentType)
+	contentMajor, contentMinor, found := strings.Cut(contentType, "/")
+	if !found {
+		return false
+	}
+
+	for _, value := range strings.Split(accept, ",") {
+		mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(value))
+		if err != nil || containerAcceptQuality(params) == 0 {
+			continue
+		}
+		mediaType = strings.ToLower(mediaType)
+		major, minor, found := strings.Cut(mediaType, "/")
+		if found && (major == "*" || major == contentMajor) && (minor == "*" || minor == contentMinor) {
+			return true
+		}
+	}
+	return false
+}
+
+func containerAcceptQuality(params map[string]string) float64 {
+	value, ok := params["q"]
+	if !ok {
+		return 1
+	}
+	quality, err := strconv.ParseFloat(value, 64)
+	if err != nil || quality < 0 || quality > 1 {
+		return 0
+	}
+	return quality
 }
 
 func copyContainerManifestHeaders(destination, source http.Header) {
