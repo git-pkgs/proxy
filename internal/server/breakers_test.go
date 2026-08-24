@@ -8,7 +8,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/registries/fetch"
@@ -258,5 +260,87 @@ func TestHealthEndpoint_OmitsBreakersWhenNoneExist(t *testing.T) {
 
 	if strings.Contains(w.Body.String(), "circuit_breakers") {
 		t.Errorf("body should omit circuit_breakers when no breaker exists: %s", w.Body.String())
+	}
+}
+
+// blockingBreakerSource holds each state read open until the test releases it,
+// and reports every entry, so a read that escaped the monitor lock announces
+// itself. inFlight is a second net: it catches an overlap anywhere in the test,
+// not just while the release channel is held.
+type blockingBreakerSource struct {
+	states   map[string]string
+	entered  chan struct{}
+	release  chan struct{}
+	inFlight atomic.Int32
+	overlap  atomic.Bool
+}
+
+func (b *blockingBreakerSource) GetBreakerState() map[string]string {
+	if b.inFlight.Add(1) > 1 {
+		b.overlap.Store(true)
+	}
+	defer b.inFlight.Add(-1)
+
+	b.entered <- struct{}{}
+	<-b.release
+
+	states := make(map[string]string, len(b.states))
+	for registry, state := range b.states {
+		states[registry] = state
+	}
+	return states
+}
+
+// /health requests and /metrics scrapes call snapshot concurrently. The state
+// read has to happen under the same lock as the seen updates it feeds: read
+// outside it, two snapshots straddling a transition can apply their reads to
+// seen in the opposite order and count one trip twice.
+func TestBreakerMonitor_SnapshotSerializesStateReads(t *testing.T) {
+	const host = "serialized.example.com"
+
+	resetSeries(host)
+
+	source := &blockingBreakerSource{
+		states:  map[string]string{host: breakerStateOpen},
+		entered: make(chan struct{}, 2),
+		release: make(chan struct{}),
+	}
+	monitor := newBreakerMonitor(source, slog.New(slog.DiscardHandler))
+
+	first := make(chan map[string]string, 1)
+	go func() { first <- monitor.snapshot() }()
+
+	// The first snapshot is inside GetBreakerState now, holding the lock.
+	<-source.entered
+
+	second := make(chan map[string]string, 1)
+	go func() { second <- monitor.snapshot() }()
+
+	// Nothing can release the first read, so the second cannot get past the
+	// lock: an unlocked read would have queued an entry on the channel.
+	select {
+	case <-source.entered:
+		t.Fatal("second snapshot read breaker state while the first still held the lock")
+	case <-time.After(100 * time.Millisecond):
+	}
+
+	close(source.release)
+
+	if state := (<-first)[host]; state != breakerStateOpen {
+		t.Errorf("first snapshot state for %s = %q, want open", host, state)
+	}
+	// Only reached once the first snapshot has returned the lock.
+	<-source.entered
+	if state := (<-second)[host]; state != breakerStateOpen {
+		t.Errorf("second snapshot state for %s = %q, want open", host, state)
+	}
+
+	if source.overlap.Load() {
+		t.Error("two snapshots read breaker state concurrently")
+	}
+	// The same open breaker seen twice is one trip, which is what the paired
+	// read and update buys.
+	if trips, _ := metricValue(t, metrics.CircuitBreakerTrips, host); trips != 1 {
+		t.Errorf("trips = %v, want 1", trips)
 	}
 }
