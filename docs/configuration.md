@@ -227,10 +227,9 @@ upstream:
   auth:
     "https://123456789012.dkr.ecr.eu-west-1.amazonaws.com":
       type: ecr
-      region: eu-west-1
 ```
 
-AWS credentials are resolved by the SDK's default chain, which covers EKS IAM Roles for Service Accounts (IRSA), EC2/ECS instance profiles, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` environment variables, and `~/.aws/credentials`. The IAM identity needs the `ecr:GetAuthorizationToken` action plus the usual `ecr:BatchGetImage` / `ecr:GetDownloadUrlForLayer` permissions on the target repositories. If `region` is omitted the SDK's default region resolution applies.
+AWS credentials are resolved by the SDK's default chain, which covers EKS IAM Roles for Service Accounts (IRSA), EC2/ECS instance profiles, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` environment variables, and `~/.aws/credentials`. The IAM identity needs the `ecr:GetAuthorizationToken` action plus the usual `ecr:BatchGetImage` / `ecr:GetDownloadUrlForLayer` permissions on the target repositories. The region is inferred from private ECR IPv4, dual-stack, and FIPS hostnames. For other endpoint formats, set `region` explicitly or configure a default region for the SDK.
 
 ### URL Matching
 

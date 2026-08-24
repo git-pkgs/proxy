@@ -5,12 +5,15 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/httpclient"
 )
 
 func testECRTokens() *ecrTokens {
@@ -40,7 +43,7 @@ func TestECRTokensCachesUntilExpiry(t *testing.T) {
 	}
 }
 
-func TestECRTokensRefreshesAfterExpiry(t *testing.T) {
+func TestECRTokensRefreshesWithinSkew(t *testing.T) {
 	e := testECRTokens()
 	calls := 0
 	e.getToken = func(_ context.Context, _ string) (string, time.Time, error) {
@@ -52,6 +55,40 @@ func TestECRTokensRefreshesAfterExpiry(t *testing.T) {
 	e.header("us-east-1")
 	if calls != 2 {
 		t.Fatalf("getToken called %d times, want 2 (token within skew window)", calls)
+	}
+}
+
+func TestECRTokensUsesValidCachedTokenWhenRefreshFails(t *testing.T) {
+	e := testECRTokens()
+	e.cache["eu-west-1"] = ecrToken{
+		value:     "Basic Y2FjaGVk",
+		refreshAt: time.Now().Add(-time.Minute),
+		expiresAt: time.Now().Add(time.Minute),
+	}
+	e.getToken = func(_ context.Context, _ string) (string, time.Time, error) {
+		return "", time.Time{}, errors.New("ECR unavailable")
+	}
+
+	name, value := e.header("eu-west-1")
+	if name != "Authorization" || value != "Basic Y2FjaGVk" {
+		t.Fatalf("header() = %q, %q; want cached token", name, value)
+	}
+}
+
+func TestECRTokensRejectsExpiredCachedTokenWhenRefreshFails(t *testing.T) {
+	e := testECRTokens()
+	e.cache["eu-west-1"] = ecrToken{
+		value:     "Basic ZXhwaXJlZA==",
+		refreshAt: time.Now().Add(-2 * time.Minute),
+		expiresAt: time.Now().Add(-time.Minute),
+	}
+	e.getToken = func(_ context.Context, _ string) (string, time.Time, error) {
+		return "", time.Time{}, errors.New("ECR unavailable")
+	}
+
+	name, value := e.header("eu-west-1")
+	if name != "" || value != "" {
+		t.Fatalf("header() = %q, %q; want empty for expired token", name, value)
 	}
 }
 
@@ -112,6 +149,105 @@ func TestECRTokensErrorReturnsNoAuth(t *testing.T) {
 	name, value := e.header("eu-west-1")
 	if name != "" || value != "" {
 		t.Fatalf("header() = %q, %q; want empty on error", name, value)
+	}
+}
+
+func TestECRAuthFailureReturnsBasicChallengeResponse(t *testing.T) {
+	e := testECRTokens()
+	var tokenRequests atomic.Int32
+	e.getToken = func(_ context.Context, _ string) (string, time.Time, error) {
+		tokenRequests.Add(1)
+		return "", time.Time{}, errors.New("no credentials")
+	}
+
+	var upstreamRequests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests.Add(1)
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("Authorization = %q, want empty", got)
+		}
+		w.Header().Set("WWW-Authenticate", `Basic realm="Amazon ECR"`)
+		w.WriteHeader(http.StatusUnauthorized)
+	}))
+	defer upstream.Close()
+
+	s := &Server{
+		ecr: e,
+		cfg: &config.Config{Upstream: config.UpstreamConfig{
+			Auth: map[string]config.AuthConfig{
+				upstream.URL: {Type: "ecr"},
+			},
+		}},
+	}
+	client := &http.Client{Transport: httpclient.NewTransport(http.DefaultTransport, s.authForURL)}
+
+	resp, err := client.Get(upstream.URL + "/v2/repo/manifests/latest")
+	if err != nil {
+		t.Fatalf("GET upstream: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusUnauthorized {
+		t.Errorf("status = %d, want %d", resp.StatusCode, http.StatusUnauthorized)
+	}
+	if got := resp.Header.Get("WWW-Authenticate"); got != `Basic realm="Amazon ECR"` {
+		t.Errorf("WWW-Authenticate = %q, want Basic challenge", got)
+	}
+	if got := tokenRequests.Load(); got != 1 {
+		t.Errorf("token requests = %d, want 1", got)
+	}
+	if got := upstreamRequests.Load(); got != 1 {
+		t.Errorf("upstream requests = %d, want 1", got)
+	}
+}
+
+func TestECRRegion(t *testing.T) {
+	tests := []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"commercial", "https://123456789012.dkr.ecr.eu-west-1.amazonaws.com/v2/repo", "eu-west-1"},
+		{"China", "https://123456789012.dkr.ecr.cn-north-1.amazonaws.com.cn/v2/repo", "cn-north-1"},
+		{"GovCloud", "https://123456789012.dkr.ecr.us-gov-west-1.amazonaws.com/v2/repo", "us-gov-west-1"},
+		{"dual-stack", "https://123456789012.dkr-ecr.us-west-2.on.aws/v2/repo", "us-west-2"},
+		{"FIPS", "https://123456789012.dkr.ecr-fips.us-east-1.amazonaws.com/v2/repo", "us-east-1"},
+		{"FIPS dual-stack", "https://123456789012.dkr-ecr-fips.us-east-1.on.aws/v2/repo", "us-east-1"},
+		{"case insensitive", "https://123456789012.DKR.ECR.EU-WEST-1.AMAZONAWS.COM/v2/repo", "eu-west-1"},
+		{"lookalike suffix", "https://123456789012.dkr.ecr.eu-west-1.amazonaws.com.example/v2/repo", ""},
+		{"not ECR", "https://registry.example.com/v2/repo", ""},
+		{"invalid URL", "://invalid", ""},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := ecrRegion(tt.url); got != tt.want {
+				t.Errorf("ecrRegion(%q) = %q, want %q", tt.url, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestAuthForURLInfersECRRegion(t *testing.T) {
+	e := testECRTokens()
+	e.getToken = func(_ context.Context, region string) (string, time.Time, error) {
+		if region != "eu-west-1" {
+			t.Errorf("region = %q, want eu-west-1", region)
+		}
+		return "QVdTOnNlY3JldA==", time.Now().Add(time.Hour), nil
+	}
+
+	s := &Server{
+		ecr: e,
+		cfg: &config.Config{Upstream: config.UpstreamConfig{
+			Auth: map[string]config.AuthConfig{
+				"https://123456789012.dkr.ecr.eu-west-1.amazonaws.com": {Type: "ecr"},
+			},
+		}},
+	}
+
+	name, value := s.authForURL("https://123456789012.dkr.ecr.eu-west-1.amazonaws.com/v2/repo")
+	if name != "Authorization" || value != "Basic QVdTOnNlY3JldA==" {
+		t.Fatalf("authForURL() = %q, %q", name, value)
 	}
 }
 

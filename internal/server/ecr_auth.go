@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"net/url"
+	"strings"
 	"sync"
 	"time"
 
@@ -39,6 +41,7 @@ type ecrTokens struct {
 
 type ecrToken struct {
 	value     string
+	refreshAt time.Time
 	expiresAt time.Time
 }
 
@@ -51,18 +54,16 @@ func newECRTokens(logger *slog.Logger) *ecrTokens {
 }
 
 // header returns an Authorization header for the given region, fetching and
-// caching a token on first use and after expiry. Concurrent misses for the
-// same region share a single GetAuthorizationToken call. On failure it logs
-// and returns empty strings so the request proceeds unauthenticated; the OCI
-// transport then follows the Bearer challenge and surfaces the token-endpoint
-// error, matching the behaviour of any other misconfigured upstream credential.
+// caching a token on first use and shortly before expiry. Concurrent refreshes
+// for the same region share a single GetAuthorizationToken call. If a refresh
+// fails, a cached token remains available until its actual expiry.
 func (e *ecrTokens) header(region string) (name, value string) {
-	if tok, ok := e.cached(region); ok {
+	if tok, ok := e.fresh(region); ok {
 		return "Authorization", tok.value
 	}
 
 	v, err, _ := e.sf.Do(region, func() (any, error) {
-		if tok, ok := e.cached(region); ok {
+		if tok, ok := e.fresh(region); ok {
 			return tok, nil
 		}
 
@@ -72,14 +73,24 @@ func (e *ecrTokens) header(region string) (name, value string) {
 		raw, expiresAt, err := e.getToken(ctx, region)
 		if err != nil {
 			e.logger.Error("fetching ECR authorization token", "region", region, "error", err)
+			if tok, ok := e.valid(region); ok {
+				return tok, nil
+			}
 			return ecrToken{}, err
 		}
 		if raw == "" {
 			e.logger.Error("ECR authorization token response was empty", "region", region)
+			if tok, ok := e.valid(region); ok {
+				return tok, nil
+			}
 			return ecrToken{}, errEmptyECRToken
 		}
 
-		tok := ecrToken{value: "Basic " + raw, expiresAt: expiresAt.Add(-ecrTokenSkew)}
+		tok := ecrToken{
+			value:     "Basic " + raw,
+			refreshAt: expiresAt.Add(-ecrTokenSkew),
+			expiresAt: expiresAt,
+		}
 		e.mu.Lock()
 		e.cache[region] = tok
 		e.mu.Unlock()
@@ -92,11 +103,48 @@ func (e *ecrTokens) header(region string) (name, value string) {
 	return "Authorization", v.(ecrToken).value
 }
 
+func (e *ecrTokens) fresh(region string) (ecrToken, bool) {
+	tok, ok := e.cached(region)
+	return tok, ok && time.Now().Before(tok.refreshAt)
+}
+
+func (e *ecrTokens) valid(region string) (ecrToken, bool) {
+	tok, ok := e.cached(region)
+	return tok, ok && time.Now().Before(tok.expiresAt)
+}
+
 func (e *ecrTokens) cached(region string) (ecrToken, bool) {
 	e.mu.Lock()
 	tok, ok := e.cache[region]
 	e.mu.Unlock()
-	return tok, ok && time.Now().Before(tok.expiresAt)
+	return tok, ok
+}
+
+func ecrRegion(rawURL string) string {
+	parsed, err := url.Parse(rawURL)
+	if err != nil {
+		return ""
+	}
+
+	labels := strings.Split(strings.ToLower(parsed.Hostname()), ".")
+	for i := 1; i < len(labels); i++ {
+		if labels[i] == "dkr" && i+4 < len(labels) && (labels[i+1] == "ecr" || labels[i+1] == "ecr-fips") {
+			region := labels[i+2]
+			suffix := strings.Join(labels[i+3:], ".")
+			if region != "" && (suffix == "amazonaws.com" || suffix == "amazonaws.com.cn") {
+				return region
+			}
+		}
+
+		if (labels[i] == "dkr-ecr" || labels[i] == "dkr-ecr-fips") && i+3 < len(labels) {
+			region := labels[i+1]
+			if region != "" && strings.Join(labels[i+2:], ".") == "on.aws" {
+				return region
+			}
+		}
+	}
+
+	return ""
 }
 
 func fetchECRToken(ctx context.Context, region string) (string, time.Time, error) {

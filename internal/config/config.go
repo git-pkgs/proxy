@@ -452,8 +452,8 @@ type AuthConfig struct {
 	HeaderValue string `json:"header_value" yaml:"header_value"`
 
 	// Region is the AWS region for ECR authentication (for type "ecr").
-	// If empty, the AWS SDK default region chain is used (AWS_REGION,
-	// shared config, IMDS).
+	// If empty, the region is inferred from private ECR registry URLs before
+	// falling back to the AWS SDK default region chain.
 	Region string `json:"region" yaml:"region"`
 }
 

@@ -428,7 +428,11 @@ func (s *Server) authForURL(url string) (headerName, headerValue string) {
 		return "", ""
 	}
 	if strings.EqualFold(auth.Type, "ecr") {
-		return s.ecr.header(auth.Region)
+		region := auth.Region
+		if region == "" {
+			region = ecrRegion(url)
+		}
+		return s.ecr.header(region)
 	}
 	return auth.Header()
 }

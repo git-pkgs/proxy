@@ -146,10 +146,10 @@ upstream:
 
     # Example: private AWS ECR registry (12h tokens auto-refreshed via
     # ecr:GetAuthorizationToken; credentials come from the AWS SDK default
-    # chain, so IRSA / instance profiles / AWS_* env vars all work)
+    # chain, so IRSA / instance profiles / AWS_* env vars all work; the region
+    # is inferred from the private ECR hostname)
     # "https://123456789012.dkr.ecr.eu-west-1.amazonaws.com":
     #   type: ecr
-    #   region: eu-west-1
 
 # Gradle HttpBuildCache configuration
 gradle:
