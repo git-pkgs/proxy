@@ -60,12 +60,14 @@ func TestECRTokensRefreshesWithinSkew(t *testing.T) {
 
 func TestECRTokensUsesValidCachedTokenWhenRefreshFails(t *testing.T) {
 	e := testECRTokens()
+	calls := 0
 	e.cache["eu-west-1"] = ecrToken{
 		value:     "Basic Y2FjaGVk",
 		refreshAt: time.Now().Add(-time.Minute),
 		expiresAt: time.Now().Add(time.Minute),
 	}
 	e.getToken = func(_ context.Context, _ string) (string, time.Time, error) {
+		calls++
 		return "", time.Time{}, errors.New("ECR unavailable")
 	}
 
@@ -73,22 +75,32 @@ func TestECRTokensUsesValidCachedTokenWhenRefreshFails(t *testing.T) {
 	if name != "Authorization" || value != "Basic Y2FjaGVk" {
 		t.Fatalf("header() = %q, %q; want cached token", name, value)
 	}
+	e.header("eu-west-1")
+	if calls != 1 {
+		t.Fatalf("getToken called %d times, want 1 during failure backoff", calls)
+	}
 }
 
 func TestECRTokensRejectsExpiredCachedTokenWhenRefreshFails(t *testing.T) {
 	e := testECRTokens()
+	calls := 0
 	e.cache["eu-west-1"] = ecrToken{
 		value:     "Basic ZXhwaXJlZA==",
 		refreshAt: time.Now().Add(-2 * time.Minute),
 		expiresAt: time.Now().Add(-time.Minute),
 	}
 	e.getToken = func(_ context.Context, _ string) (string, time.Time, error) {
+		calls++
 		return "", time.Time{}, errors.New("ECR unavailable")
 	}
 
 	name, value := e.header("eu-west-1")
 	if name != "" || value != "" {
 		t.Fatalf("header() = %q, %q; want empty for expired token", name, value)
+	}
+	e.header("eu-west-1")
+	if calls != 1 {
+		t.Fatalf("getToken called %d times, want 1 during failure backoff", calls)
 	}
 }
 
@@ -112,9 +124,12 @@ func TestECRTokensPerRegion(t *testing.T) {
 func TestECRTokensConcurrentMissesShareOneFetch(t *testing.T) {
 	e := testECRTokens()
 	var calls atomic.Int32
+	started := make(chan struct{})
 	release := make(chan struct{})
+	var startedOnce sync.Once
 	e.getToken = func(_ context.Context, _ string) (string, time.Time, error) {
 		calls.Add(1)
+		startedOnce.Do(func() { close(started) })
 		<-release
 		return "dG9rZW4=", time.Now().Add(time.Hour), nil
 	}
@@ -132,6 +147,8 @@ func TestECRTokensConcurrentMissesShareOneFetch(t *testing.T) {
 		}()
 	}
 
+	<-started
+	time.Sleep(100 * time.Millisecond)
 	close(release)
 	wg.Wait()
 
@@ -140,15 +157,33 @@ func TestECRTokensConcurrentMissesShareOneFetch(t *testing.T) {
 	}
 }
 
-func TestECRTokensErrorReturnsNoAuth(t *testing.T) {
+func TestECRTokensBacksOffAfterError(t *testing.T) {
 	e := testECRTokens()
+	calls := 0
 	e.getToken = func(_ context.Context, _ string) (string, time.Time, error) {
+		calls++
 		return "", time.Time{}, errors.New("no credentials")
 	}
 
 	name, value := e.header("eu-west-1")
 	if name != "" || value != "" {
 		t.Fatalf("header() = %q, %q; want empty on error", name, value)
+	}
+	e.header("eu-west-1")
+	if calls != 1 {
+		t.Fatalf("getToken called %d times, want 1 during failure backoff", calls)
+	}
+
+	tok, ok := e.cached("eu-west-1")
+	if !ok {
+		t.Fatal("failure was not cached")
+	}
+	tok.refreshAt = time.Now().Add(-time.Second)
+	tok.expiresAt = tok.refreshAt
+	e.store("eu-west-1", tok)
+	e.header("eu-west-1")
+	if calls != 2 {
+		t.Fatalf("getToken called %d times, want retry after failure backoff", calls)
 	}
 }
 
