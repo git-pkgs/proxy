@@ -2,6 +2,7 @@ package httpclient
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -161,6 +162,69 @@ func TestTransportDoesNotRetryPermanentTokenFailures(t *testing.T) {
 	_, _, err := transport.fetchToken(context.Background(), bearerChallenge{realm: server.URL + "/token"})
 	if err == nil {
 		t.Fatal("fetchToken succeeded, want error")
+	}
+	if tokenRequests != 1 {
+		t.Errorf("token requests = %d, want 1", tokenRequests)
+	}
+}
+
+func TestTransportRetriesTokenServiceFailures(t *testing.T) {
+	for _, status := range []int{http.StatusTooManyRequests, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			var tokenRequests int
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				tokenRequests++
+				http.Error(w, "temporary token service failure", status)
+			}))
+			defer server.Close()
+
+			var delays []time.Duration
+			transport := NewTransport(http.DefaultTransport, nil)
+			transport.retryWait = func(_ context.Context, delay time.Duration) error {
+				delays = append(delays, delay)
+				return nil
+			}
+
+			_, _, err := transport.fetchToken(context.Background(), bearerChallenge{realm: server.URL + "/token"})
+			if err == nil {
+				t.Fatal("fetchToken succeeded, want error")
+			}
+			if tokenRequests != tokenMaxRetries+1 {
+				t.Errorf("token requests = %d, want %d", tokenRequests, tokenMaxRetries+1)
+			}
+			wantDelays := []time.Duration{500 * time.Millisecond, time.Second, 2 * time.Second}
+			if len(delays) != len(wantDelays) {
+				t.Fatalf("retry delays = %v, want %v", delays, wantDelays)
+			}
+			for index, want := range wantDelays {
+				if delays[index] != want {
+					t.Errorf("retry delay %d = %s, want %s", index, delays[index], want)
+				}
+			}
+		})
+	}
+}
+
+func TestTransportStopsTokenRetriesWhenWaitingIsCancelled(t *testing.T) {
+	var tokenRequests int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		tokenRequests++
+		http.Error(w, "temporary token service failure", http.StatusServiceUnavailable)
+	}))
+	defer server.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	transport := NewTransport(http.DefaultTransport, nil)
+	transport.retryWait = func(ctx context.Context, _ time.Duration) error {
+		cancel()
+		<-ctx.Done()
+		return ctx.Err()
+	}
+
+	_, _, err := transport.fetchToken(ctx, bearerChallenge{realm: server.URL + "/token"})
+	if !errors.Is(err, context.Canceled) {
+		t.Errorf("fetchToken error = %v, want context canceled", err)
 	}
 	if tokenRequests != 1 {
 		t.Errorf("token requests = %d, want 1", tokenRequests)
