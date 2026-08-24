@@ -709,7 +709,61 @@ func TestContainerHandler_ManifestVariantCacheNormalizesCompatibleAccept(t *test
 	}
 }
 
-func TestContainerHandler_ManifestVariantCacheDoesNotServeUnacceptedContentType(t *testing.T) {
+func TestContainerHandler_ManifestMigratesLegacyAcceptCacheKey(t *testing.T) {
+	digest := "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json"}`
+	upstreamRequests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamRequests++
+		http.Error(w, "upstream should not be called", http.StatusServiceUnavailable)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	proxy.MetadataTTL = time.Hour
+	h := &ContainerHandler{proxy: proxy, registryURL: upstream.URL, proxyURL: "http://localhost:8080"}
+	accept := "application/vnd.oci.image.index.v1+json;q=1, application/vnd.oci.image.manifest.v1+json;q=1"
+	cacheAccept := normalizeContainerManifestAccept(accept)
+	legacyCacheKey := h.containerManifestCacheKey(upstream.URL, "library/nginx", "latest", accept)
+	cacheKey := h.containerManifestCacheKey(upstream.URL, "library/nginx", "latest", cacheAccept)
+	if legacyCacheKey == cacheKey {
+		t.Fatal("legacy and normalized cache keys are equal")
+	}
+
+	request := httptest.NewRequest(http.MethodGet, "/library/nginx/manifests/latest", nil)
+	request.Header.Set("Accept", accept)
+	legacyManifest := &cachedContainerManifest{
+		body:          []byte(manifest),
+		contentType:   "application/vnd.oci.image.index.v1+json",
+		contentDigest: digest,
+		fetchedAt:     time.Now(),
+	}
+	if err := h.storeContainerManifest(request.Context(), legacyCacheKey, legacyManifest); err != nil {
+		t.Fatalf("store legacy manifest: %v", err)
+	}
+
+	response := httptest.NewRecorder()
+	h.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if response.Body.String() != manifest {
+		t.Errorf("body = %q, want %q", response.Body.String(), manifest)
+	}
+	if upstreamRequests != 0 {
+		t.Errorf("upstream requests = %d, want 0", upstreamRequests)
+	}
+	migrated, err := h.loadContainerManifest(request.Context(), cacheKey)
+	if err != nil {
+		t.Fatalf("load migrated manifest: %v", err)
+	}
+	if migrated == nil {
+		t.Error("normalized cache entry was not created")
+	}
+}
+
+func TestContainerHandler_ManifestVariantCacheHonorsSpecificAcceptExclusions(t *testing.T) {
 	digest := "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
 	upstreamAvailable := true
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -729,7 +783,7 @@ func TestContainerHandler_ManifestVariantCacheDoesNotServeUnacceptedContentType(
 	h := &ContainerHandler{proxy: proxy, registryURL: upstream.URL, proxyURL: "http://localhost:8080"}
 
 	warmRequest := httptest.NewRequest(http.MethodGet, "/library/nginx/manifests/latest", nil)
-	warmRequest.Header.Set("Accept", "application/vnd.oci.image.index.v1+json")
+	warmRequest.Header.Set("Accept", "application/vnd.oci.image.index.v1+json;q=0, */*;q=1")
 	warm := httptest.NewRecorder()
 	h.Routes().ServeHTTP(warm, warmRequest)
 	if warm.Code != http.StatusOK {
@@ -738,7 +792,7 @@ func TestContainerHandler_ManifestVariantCacheDoesNotServeUnacceptedContentType(
 
 	upstreamAvailable = false
 	offlineRequest := httptest.NewRequest(http.MethodGet, "/library/nginx/manifests/latest", nil)
-	offlineRequest.Header.Set("Accept", "application/vnd.oci.image.manifest.v1+json")
+	offlineRequest.Header.Set("Accept", "application/vnd.oci.image.index.v1+json;q=0, */*;q=1")
 	offline := httptest.NewRecorder()
 	h.Routes().ServeHTTP(offline, offlineRequest)
 	if offline.Code != http.StatusServiceUnavailable {
