@@ -763,6 +763,44 @@ func TestContainerHandler_ManifestMigratesLegacyAcceptCacheKey(t *testing.T) {
 	}
 }
 
+func TestContainerHandler_ManifestDualWritesLegacyAcceptCacheKeys(t *testing.T) {
+	digest := "sha256:dededededededededededededededededededededededededededededededede"
+	manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/library/nginx/manifests/latest" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+		w.Header().Set("Docker-Content-Digest", digest)
+		_, _ = io.WriteString(w, manifest)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := &ContainerHandler{proxy: proxy, registryURL: upstream.URL, proxyURL: "http://localhost:8080"}
+	accept := "application/vnd.oci.image.manifest.v1+json;q=1, application/vnd.oci.image.manifest.v1+json;q=1"
+	request := httptest.NewRequest(http.MethodGet, "/library/nginx/manifests/latest", nil)
+	request.Header.Set("Accept", accept)
+	response := httptest.NewRecorder()
+	h.Routes().ServeHTTP(response, request)
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+
+	for _, reference := range []string{"latest", digest} {
+		legacyCacheKey := h.containerManifestCacheKey(upstream.URL, "library/nginx", reference, accept)
+		cached, err := h.loadContainerManifest(request.Context(), legacyCacheKey)
+		if err != nil {
+			t.Fatalf("load legacy %s manifest: %v", reference, err)
+		}
+		if cached == nil {
+			t.Errorf("legacy %s cache entry was not written", reference)
+		}
+	}
+}
+
 func TestContainerHandler_ManifestVariantCacheHonorsSpecificAcceptExclusions(t *testing.T) {
 	digest := "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
 	upstreamAvailable := true

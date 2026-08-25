@@ -71,9 +71,7 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 
 	if resp.StatusCode == http.StatusNotModified && cached != nil {
 		cached.fetchedAt = time.Now()
-		if err := h.storeContainerManifest(r.Context(), cacheKey, cached); err != nil {
-			h.proxy.Logger.Warn("failed to refresh cached container manifest", "error", err)
-		}
+		h.storeContainerManifestForAccept(r.Context(), registryURL, name, reference, accept, cacheAccept, cached)
 		writeContainerManifest(w, r.Method, cached, false)
 		return
 	}
@@ -110,14 +108,9 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 	if manifest.contentDigest == "" {
 		manifest.contentDigest = sha256Digest(body)
 	}
-	if err := h.storeContainerManifest(r.Context(), cacheKey, manifest); err != nil {
-		h.proxy.Logger.Warn("failed to cache container manifest", "error", err)
-	}
+	h.storeContainerManifestForAccept(r.Context(), registryURL, name, reference, accept, cacheAccept, manifest)
 	if manifest.contentDigest != reference && manifestDigestReferencePattern.MatchString(manifest.contentDigest) {
-		digestKey := h.containerManifestCacheKey(registryURL, name, manifest.contentDigest, cacheAccept)
-		if err := h.storeContainerManifest(r.Context(), digestKey, manifest); err != nil {
-			h.proxy.Logger.Warn("failed to cache container manifest by digest", "error", err)
-		}
+		h.storeContainerManifestForAccept(r.Context(), registryURL, name, manifest.contentDigest, accept, cacheAccept, manifest)
 	}
 	writeContainerManifest(w, r.Method, manifest, false)
 }
@@ -171,6 +164,21 @@ func (h *ContainerHandler) loadContainerManifestForAccept(ctx context.Context, r
 		h.proxy.Logger.Warn("failed to migrate cached container manifest", "error", err)
 	}
 	return cached
+}
+
+func (h *ContainerHandler) storeContainerManifestForAccept(ctx context.Context, registryURL, name, reference, accept, cacheAccept string, manifest *cachedContainerManifest) {
+	cacheKey := h.containerManifestCacheKey(registryURL, name, reference, cacheAccept)
+	if err := h.storeContainerManifest(ctx, cacheKey, manifest); err != nil {
+		h.proxy.Logger.Warn("failed to cache container manifest", "error", err)
+	}
+
+	legacyCacheKey := h.containerManifestCacheKey(registryURL, name, reference, accept)
+	if legacyCacheKey == cacheKey {
+		return
+	}
+	if err := h.storeContainerManifest(ctx, legacyCacheKey, manifest); err != nil {
+		h.proxy.Logger.Warn("failed to cache legacy container manifest", "error", err)
+	}
 }
 
 func (h *ContainerHandler) loadContainerManifest(ctx context.Context, cacheKey string) (*cachedContainerManifest, error) {
