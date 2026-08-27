@@ -12,10 +12,10 @@ require (
 	github.com/git-pkgs/enrichment v0.7.0
 	github.com/git-pkgs/integrity v0.1.1
 	github.com/git-pkgs/magic v0.2.0
-	github.com/git-pkgs/purl v0.1.17
+	github.com/git-pkgs/purl v0.1.19
 	github.com/git-pkgs/registries v0.8.1
 	github.com/git-pkgs/spdx v0.3.1
-	github.com/git-pkgs/vers v0.3.1
+	github.com/git-pkgs/vers v0.6.0
 	github.com/git-pkgs/vulns v0.2.2
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/jmoiron/sqlx v1.4.0
@@ -227,7 +227,7 @@ require (
 	github.com/nunnatsa/ginkgolinter v0.24.0 // indirect
 	github.com/oapi-codegen/nullable v1.2.0 // indirect
 	github.com/oapi-codegen/runtime v1.6.0 // indirect
-	github.com/package-url/packageurl-go v0.1.6 // indirect
+	github.com/package-url/packageurl-go v0.1.7 // indirect
 	github.com/pandatix/go-cvss v0.6.2 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
