@@ -9,7 +9,7 @@ require (
 	github.com/CycloneDX/cyclonedx-go v0.11.0
 	github.com/git-pkgs/archives v0.5.1
 	github.com/git-pkgs/cooldown v0.1.1
-	github.com/git-pkgs/enrichment v0.6.5
+	github.com/git-pkgs/enrichment v0.7.0
 	github.com/git-pkgs/integrity v0.1.1
 	github.com/git-pkgs/magic v0.2.0
 	github.com/git-pkgs/purl v0.1.17
