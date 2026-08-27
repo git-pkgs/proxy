@@ -277,8 +277,8 @@ github.com/git-pkgs/registries v0.8.1 h1:Yf2FFdARQ1HcdtZfWBYa5OZFwZHzhFYStiz7qbT
 github.com/git-pkgs/registries v0.8.1/go.mod h1:5dc3V7rOhAI5755L/bDtjtYV4D5XV4J/4ZtyIXSEs0U=
 github.com/git-pkgs/spdx v0.3.1 h1:58JPY5X9pYpXvnzzZIgehItlBykeOOw52pNc4OBcS+c=
 github.com/git-pkgs/spdx v0.3.1/go.mod h1:cqRoZcvl530s/W+oGNvwjt4ODN8T1W6D/20MUZEFdto=
-github.com/git-pkgs/vers v0.3.1 h1:jy/ht2wIRJI5zQrccm6GTeYr+hGFwe2z8LV1HOr4Wco=
-github.com/git-pkgs/vers v0.3.1/go.mod h1:biTbSQK1qdbrsxDEKnqe3Jzclxz8vW6uDcwKjfUGcOo=
+github.com/git-pkgs/vers v0.6.0 h1:droJw8+oSyl8/UoDj/96B9ZPggmxJDTl/JeixzfKzSc=
+github.com/git-pkgs/vers v0.6.0/go.mod h1:biTbSQK1qdbrsxDEKnqe3Jzclxz8vW6uDcwKjfUGcOo=
 github.com/git-pkgs/vulns v0.2.2 h1:4z6fE/Yqf34PTVSv1WsN09hMznjPa9t+1fHDIywZI3g=
 github.com/git-pkgs/vulns v0.2.2/go.mod h1:cQkJfI2WyW53Seg55Su0gjOSFE5ImSZ0XbHXeb33gfs=
 github.com/github/go-spdx/v2 v2.7.0 h1:GzfXx4wFdlilARxmFRXW/mgUy3A4vSqZocCMFV6XFdQ=
