@@ -1,10 +1,8 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -15,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/git-pkgs/proxy/internal/database"
 )
 
 const (
@@ -221,25 +217,13 @@ func (h *ContainerHandler) loadContainerManifest(ctx context.Context, cacheKey s
 }
 
 func (h *ContainerHandler) storeContainerManifest(ctx context.Context, cacheKey string, manifest *cachedContainerManifest) error {
-	if h.proxy.DB == nil || h.proxy.Storage == nil {
-		return nil
-	}
-	storagePath := metadataStoragePath(containerManifestCacheEcosystem, cacheKey)
-	size, _, err := h.proxy.Storage.Store(ctx, storagePath, bytes.NewReader(manifest.body))
+	size, err := h.storeContainerMetadata(ctx, containerManifestCacheEcosystem, cacheKey, manifest.body,
+		manifest.etag, "", manifest.contentType, manifest.contentDigest, manifest.fetchedAt)
 	if err != nil {
 		return fmt.Errorf("storing manifest: %w", err)
 	}
 	manifest.size = size
-	return h.proxy.DB.UpsertMetadataCache(&database.MetadataCacheEntry{
-		Ecosystem:     containerManifestCacheEcosystem,
-		Name:          cacheKey,
-		StoragePath:   storagePath,
-		ETag:          sql.NullString{String: manifest.etag, Valid: manifest.etag != ""},
-		ContentType:   sql.NullString{String: manifest.contentType, Valid: manifest.contentType != ""},
-		ContentDigest: sql.NullString{String: manifest.contentDigest, Valid: manifest.contentDigest != ""},
-		Size:          sql.NullInt64{Int64: size, Valid: true},
-		FetchedAt:     sql.NullTime{Time: manifest.fetchedAt, Valid: !manifest.fetchedAt.IsZero()},
-	})
+	return nil
 }
 
 func writeContainerManifest(w http.ResponseWriter, method string, manifest *cachedContainerManifest, stale bool) {
@@ -316,7 +300,7 @@ func normalizeContainerManifestAccept(accept string) string {
 }
 
 func containerManifestAccepts(accept, contentType string) bool {
-	contentType, _, err := mime.ParseMediaType(contentType)
+	contentType, contentParams, err := mime.ParseMediaType(contentType)
 	if err != nil {
 		return false
 	}
@@ -326,7 +310,8 @@ func containerManifestAccepts(accept, contentType string) bool {
 		return false
 	}
 
-	bestSpecificity := -1
+	bestMediaTypeSpecificity := -1
+	bestParameterSpecificity := 0
 	bestQuality := 0.0
 	for _, value := range strings.Split(accept, ",") {
 		mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(value))
@@ -335,10 +320,12 @@ func containerManifestAccepts(accept, contentType string) bool {
 		}
 		mediaType = strings.ToLower(mediaType)
 		major, minor, found := strings.Cut(mediaType, "/")
-		if found && (major == "*" || major == contentMajor) && (minor == "*" || minor == contentMinor) {
-			specificity := containerAcceptSpecificity(major, minor)
-			if specificity > bestSpecificity {
-				bestSpecificity = specificity
+		if found && containerAcceptRangeMatches(major, minor, params, contentMajor, contentMinor, contentParams) {
+			mediaTypeSpecificity, parameterSpecificity := containerAcceptSpecificity(major, minor, params)
+			if mediaTypeSpecificity > bestMediaTypeSpecificity ||
+				(mediaTypeSpecificity == bestMediaTypeSpecificity && parameterSpecificity > bestParameterSpecificity) {
+				bestMediaTypeSpecificity = mediaTypeSpecificity
+				bestParameterSpecificity = parameterSpecificity
 				bestQuality = containerAcceptQuality(params)
 			}
 		}
@@ -350,14 +337,36 @@ func containerManifestCacheCompatible(accept string, manifest *cachedContainerMa
 	return manifest.contentType == "" || containerManifestAccepts(accept, manifest.contentType)
 }
 
-func containerAcceptSpecificity(major, minor string) int {
+func containerAcceptRangeMatches(major, minor string, params map[string]string, contentMajor, contentMinor string, contentParams map[string]string) bool {
+	if (major != "*" && major != contentMajor) || (minor != "*" && minor != contentMinor) {
+		return false
+	}
+	for key, value := range params {
+		if strings.EqualFold(key, "q") {
+			continue
+		}
+		if contentParams[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func containerAcceptSpecificity(major, minor string, params map[string]string) (int, int) {
+	parameterSpecificity := 0
+	for key := range params {
+		if !strings.EqualFold(key, "q") {
+			parameterSpecificity++
+		}
+	}
+
 	switch {
 	case major == "*" && minor == "*":
-		return containerAcceptWildcardSpecificity
+		return containerAcceptWildcardSpecificity, parameterSpecificity
 	case major == "*" || minor == "*":
-		return containerAcceptTypeWildcardSpecificity
+		return containerAcceptTypeWildcardSpecificity, parameterSpecificity
 	default:
-		return containerAcceptExactSpecificity
+		return containerAcceptExactSpecificity, parameterSpecificity
 	}
 }
 

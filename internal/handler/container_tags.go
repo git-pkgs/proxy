@@ -1,27 +1,28 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strconv"
+	"strings"
 	"time"
-
-	"github.com/git-pkgs/proxy/internal/database"
 )
 
 const containerTagsCacheEcosystem = "oci-tags"
+
+var containerLinkTargetPattern = regexp.MustCompile(`<([^>]*)>`)
 
 type cachedContainerTags struct {
 	body        []byte
 	contentType string
 	etag        string
+	link        string
 	size        int64
 	fetchedAt   time.Time
 }
@@ -87,6 +88,7 @@ func (h *ContainerHandler) serveTagsList(w http.ResponseWriter, r *http.Request,
 		body:        body,
 		contentType: resp.Header.Get("Content-Type"),
 		etag:        resp.Header.Get("ETag"),
+		link:        h.rewriteContainerTagsLink(strings.Join(resp.Header.Values("Link"), ", "), registryURL, r.URL.Path),
 		size:        int64(len(body)),
 		fetchedAt:   time.Now(),
 	}
@@ -144,6 +146,9 @@ func (h *ContainerHandler) loadContainerTags(ctx context.Context, cacheKey strin
 	if entry.ETag.Valid {
 		tags.etag = entry.ETag.String
 	}
+	if entry.Link.Valid {
+		tags.link = entry.Link.String
+	}
 	if entry.Size.Valid {
 		tags.size = entry.Size.Int64
 	}
@@ -154,24 +159,13 @@ func (h *ContainerHandler) loadContainerTags(ctx context.Context, cacheKey strin
 }
 
 func (h *ContainerHandler) storeContainerTags(ctx context.Context, cacheKey string, tags *cachedContainerTags) error {
-	if h.proxy.DB == nil || h.proxy.Storage == nil {
-		return nil
-	}
-	storagePath := metadataStoragePath(containerTagsCacheEcosystem, cacheKey)
-	size, _, err := h.proxy.Storage.Store(ctx, storagePath, bytes.NewReader(tags.body))
+	size, err := h.storeContainerMetadata(ctx, containerTagsCacheEcosystem, cacheKey, tags.body,
+		tags.etag, tags.link, tags.contentType, "", tags.fetchedAt)
 	if err != nil {
 		return fmt.Errorf("storing tag list: %w", err)
 	}
 	tags.size = size
-	return h.proxy.DB.UpsertMetadataCache(&database.MetadataCacheEntry{
-		Ecosystem:   containerTagsCacheEcosystem,
-		Name:        cacheKey,
-		StoragePath: storagePath,
-		ETag:        sql.NullString{String: tags.etag, Valid: tags.etag != ""},
-		ContentType: sql.NullString{String: tags.contentType, Valid: tags.contentType != ""},
-		Size:        sql.NullInt64{Int64: size, Valid: true},
-		FetchedAt:   sql.NullTime{Time: tags.fetchedAt, Valid: !tags.fetchedAt.IsZero()},
-	})
+	return nil
 }
 
 func writeContainerTags(w http.ResponseWriter, tags *cachedContainerTags, stale bool) {
@@ -179,6 +173,9 @@ func writeContainerTags(w http.ResponseWriter, tags *cachedContainerTags, stale 
 	w.Header().Set("Content-Length", strconv.FormatInt(tags.size, 10))
 	if tags.etag != "" {
 		w.Header().Set("ETag", tags.etag)
+	}
+	if tags.link != "" {
+		w.Header().Set("Link", tags.link)
 	}
 	if stale {
 		w.Header().Set("Warning", containerStaleWarning)
@@ -188,9 +185,36 @@ func writeContainerTags(w http.ResponseWriter, tags *cachedContainerTags, stale 
 }
 
 func copyContainerTagsHeaders(destination, source http.Header) {
-	for _, header := range []string{"Content-Type", "Content-Length", "ETag", "WWW-Authenticate"} {
+	for _, header := range []string{"Content-Type", "Content-Length", "ETag", "Link", "WWW-Authenticate"} {
 		if value := source.Get(header); value != "" {
 			destination.Set(header, value)
 		}
 	}
+}
+
+func (h *ContainerHandler) rewriteContainerTagsLink(link, registryURL, requestPath string) string {
+	if link == "" {
+		return ""
+	}
+	upstreamURL, err := url.Parse(registryURL)
+	if err != nil {
+		return link
+	}
+	proxyURL, err := url.Parse(h.proxyURL)
+	if err != nil {
+		return link
+	}
+
+	return containerLinkTargetPattern.ReplaceAllStringFunc(link, func(target string) string {
+		linkURL, err := url.Parse(target[1 : len(target)-1])
+		if err != nil || !linkURL.IsAbs() || linkURL.Scheme != upstreamURL.Scheme || linkURL.Host != upstreamURL.Host {
+			return target
+		}
+		linkURL.Scheme = proxyURL.Scheme
+		linkURL.Host = proxyURL.Host
+		linkURL.User = proxyURL.User
+		linkURL.Path = strings.TrimSuffix(proxyURL.Path, "/") + "/v2" + requestPath
+		linkURL.RawPath = ""
+		return "<" + linkURL.String() + ">"
+	})
 }

@@ -163,6 +163,7 @@ type MetadataCacheEntry struct {
 	Name          string         `db:"name" json:"name"`
 	StoragePath   string         `db:"storage_path" json:"storage_path"`
 	ETag          sql.NullString `db:"etag" json:"etag,omitempty"`
+	Link          sql.NullString `db:"link" json:"link,omitempty"`
 	ContentType   sql.NullString `db:"content_type" json:"content_type,omitempty"`
 	ContentDigest sql.NullString `db:"content_digest" json:"content_digest,omitempty"`
 	Size          sql.NullInt64  `db:"size" json:"size,omitempty"`
