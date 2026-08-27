@@ -7,19 +7,27 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"net/url"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 )
 
 const (
-	pypiUpstream     = "https://pypi.org"
-	minWheelParts    = 5 // name + version + python + abi + platform
-	minSubmatchParts = 2 // full match + first capture group
-	minPyPIPathParts = 3 // hash_prefix + hash + filename
-	minEggParts      = 3 // name + version + python tag
+	pypiUpstream         = "https://pypi.org"
+	pypiSimpleJSON       = "application/vnd.pypi.simple.v1+json"
+	pypiSimpleHTML       = "application/vnd.pypi.simple.v1+html"
+	pypiSimpleLatestJSON = "application/vnd.pypi.simple.latest+json"
+	pypiSimpleLatestHTML = "application/vnd.pypi.simple.latest+html"
+	pypiLegacyHTML       = "text/html"
+	pypiExactSpecificity = 2
+	minWheelParts        = 5 // name + version + python + abi + platform
+	minSubmatchParts     = 2 // full match + first capture group
+	minPyPIPathParts     = 3 // hash_prefix + hash + filename
+	minEggParts          = 3 // name + version + python tag
 
 	// PyPIMetadataSuffix is the PEP 658 core-metadata sidecar suffix that pip
 	// appends to a distribution URL when the index advertises core metadata.
@@ -49,7 +57,7 @@ func NewPyPIHandler(proxy *Proxy, proxyURL string) *PyPIHandler {
 func (h *PyPIHandler) Routes() http.Handler {
 	mux := http.NewServeMux()
 
-	// Simple API (used by pip)
+	// Simple API
 	mux.HandleFunc("GET /simple/", h.handleSimpleIndex)
 	mux.HandleFunc("GET /simple/{name}/", h.handleSimplePackage)
 
@@ -80,9 +88,10 @@ func (h *PyPIHandler) handleSimplePackage(w http.ResponseWriter, r *http.Request
 	h.proxy.Logger.Info("pypi simple request", "package", name)
 
 	upstreamURL := fmt.Sprintf("%s/simple/%s/", h.upstreamURL, name)
-	cacheKey := name + "/simple"
+	accept := selectPyPISimpleRepresentation(r.Header.Get("Accept"))
+	cacheKey := pypiSimpleCacheKey(name, accept)
 
-	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "pypi", cacheKey, upstreamURL, "text/html")
+	body, contentType, err := h.proxy.FetchOrCacheMetadata(r.Context(), "pypi", cacheKey, upstreamURL, accept)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -99,11 +108,129 @@ func (h *PyPIHandler) handleSimplePackage(w http.ResponseWriter, r *http.Request
 		filteredVersions = h.fetchFilteredVersions(r, name)
 	}
 
-	rewritten := h.rewriteSimpleHTML(body, filteredVersions)
+	var rewritten []byte
+	if isJSONMediaType(contentType) {
+		rewritten, err = h.rewriteSimpleJSON(body, filteredVersions)
+		if err != nil {
+			h.proxy.Logger.Warn("failed to rewrite pypi simple json, proxying original", "error", err)
+			rewritten = body
+		}
+	} else {
+		rewritten = h.rewriteSimpleHTML(body, filteredVersions)
+	}
 
-	w.Header().Set("Content-Type", "text/html")
+	w.Header().Set("Content-Type", contentType)
+	ensureVaryAccept(w.Header())
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(rewritten)
+}
+
+func selectPyPISimpleRepresentation(accept string) string {
+	if strings.TrimSpace(accept) == "" {
+		return pypiLegacyHTML
+	}
+
+	type score struct {
+		quality     float64
+		specificity int
+		matched     bool
+	}
+
+	scores := map[string]score{
+		pypiSimpleJSON: {},
+		pypiSimpleHTML: {},
+		pypiLegacyHTML: {},
+	}
+
+	update := func(representation string, quality float64, specificity int) {
+		current := scores[representation]
+		if !current.matched || specificity > current.specificity ||
+			(specificity == current.specificity && quality > current.quality) {
+			scores[representation] = score{quality: quality, specificity: specificity, matched: true}
+		}
+	}
+
+	for part := range strings.SplitSeq(accept, ",") {
+		mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(part))
+		if err != nil {
+			continue
+		}
+
+		quality := 1.0
+		if value, ok := params["q"]; ok {
+			quality, err = strconv.ParseFloat(value, 64)
+			if err != nil || quality < 0 || quality > 1 {
+				continue
+			}
+		}
+
+		switch mediaType {
+		case pypiSimpleJSON, pypiSimpleLatestJSON:
+			update(pypiSimpleJSON, quality, pypiExactSpecificity)
+		case pypiSimpleHTML, pypiSimpleLatestHTML:
+			update(pypiSimpleHTML, quality, pypiExactSpecificity)
+		case pypiLegacyHTML:
+			update(pypiLegacyHTML, quality, pypiExactSpecificity)
+		case "application/*":
+			update(pypiSimpleJSON, quality, 1)
+			update(pypiSimpleHTML, quality, 1)
+		case "text/*":
+			update(pypiLegacyHTML, quality, 1)
+		case "*/*":
+			update(pypiSimpleJSON, quality, 0)
+			update(pypiSimpleHTML, quality, 0)
+			update(pypiLegacyHTML, quality, 0)
+		}
+	}
+
+	bestMediaType := ""
+	bestScore := score{}
+	for _, mediaType := range []string{pypiSimpleJSON, pypiSimpleHTML, pypiLegacyHTML} {
+		candidate := scores[mediaType]
+		if !candidate.matched || candidate.quality == 0 {
+			continue
+		}
+		if bestMediaType == "" || candidate.quality > bestScore.quality ||
+			(candidate.quality == bestScore.quality && candidate.specificity > bestScore.specificity) {
+			bestMediaType = mediaType
+			bestScore = candidate
+		}
+	}
+
+	if bestMediaType == "" || bestScore.specificity == 0 {
+		return pypiLegacyHTML
+	}
+	return bestMediaType
+}
+
+func pypiSimpleCacheKey(name, mediaType string) string {
+	switch mediaType {
+	case pypiSimpleJSON:
+		return name + "/simple/json"
+	case pypiSimpleHTML:
+		return name + "/simple/html"
+	default:
+		return name + "/simple"
+	}
+}
+
+func isJSONMediaType(contentType string) bool {
+	mediaType, _, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	return mediaType == "application/json" || strings.HasSuffix(mediaType, "+json")
+}
+
+func ensureVaryAccept(header http.Header) {
+	for _, value := range header.Values("Vary") {
+		for field := range strings.SplitSeq(value, ",") {
+			if strings.EqualFold(strings.TrimSpace(field), "Accept") {
+				return
+			}
+		}
+	}
+	header.Add("Vary", "Accept")
 }
 
 // fetchFilteredVersions fetches JSON metadata and returns a set of version strings
@@ -189,6 +316,40 @@ func (h *PyPIHandler) rewriteSimpleHTML(body []byte, filteredVersions map[string
 		newURL := fmt.Sprintf("%s/pypi/packages%s", h.proxyURL, u.Path)
 		return []byte(fmt.Sprintf(`href="%s"`, newURL))
 	})
+}
+
+func (h *PyPIHandler) rewriteSimpleJSON(body []byte, filteredVersions map[string]bool) ([]byte, error) {
+	var metadata map[string]any
+	if err := json.Unmarshal(body, &metadata); err != nil {
+		return nil, err
+	}
+
+	files, ok := metadata["files"].([]any)
+	if !ok {
+		return nil, errors.New("pypi simple json response has no files array")
+	}
+
+	rewrittenFiles := make([]any, 0, len(files))
+	for _, file := range files {
+		entry, ok := file.(map[string]any)
+		if !ok {
+			rewrittenFiles = append(rewrittenFiles, file)
+			continue
+		}
+
+		if filename, ok := entry["filename"].(string); ok {
+			_, version := h.parseFilename(filename)
+			if version != "" && filteredVersions[version] {
+				continue
+			}
+		}
+
+		h.rewriteURLEntry(entry)
+		rewrittenFiles = append(rewrittenFiles, entry)
+	}
+
+	metadata["files"] = rewrittenFiles
+	return json.Marshal(metadata)
 }
 
 // handleJSON serves the JSON API package metadata.
@@ -629,7 +790,7 @@ func (h *PyPIHandler) proxySimple(w http.ResponseWriter, r *http.Request, path s
 		http.Error(w, "failed to create request", http.StatusInternalServerError)
 		return
 	}
-	req.Header.Set("Accept", "text/html")
+	req.Header.Set("Accept", selectPyPISimpleRepresentation(r.Header.Get("Accept")))
 
 	resp, err := h.proxy.HTTPClient.Do(req)
 	if err != nil {
@@ -644,6 +805,7 @@ func (h *PyPIHandler) proxySimple(w http.ResponseWriter, r *http.Request, path s
 			w.Header().Add(k, v)
 		}
 	}
+	ensureVaryAccept(w.Header())
 
 	w.WriteHeader(resp.StatusCode)
 	_, _ = io.Copy(w, resp.Body)
