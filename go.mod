@@ -17,7 +17,7 @@ require (
 	github.com/git-pkgs/spdx v0.3.1
 	github.com/git-pkgs/vers v0.3.1
 	github.com/git-pkgs/vulns v0.2.2
-	github.com/go-chi/chi/v5 v5.3.1
+	github.com/go-chi/chi/v5 v5.3.2
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.3
 	github.com/prometheus/client_golang v1.24.1
