@@ -259,8 +259,8 @@ github.com/ghostiam/protogetter v0.3.21 h1:EeWTGvL/Eyosp653hiWb6Byx4b69iJC4/E+za
 github.com/ghostiam/protogetter v0.3.21/go.mod h1:iAKSpyoHwYzay+OpjoWgwzRtPFthEfuUvmlomTThck0=
 github.com/git-pkgs/archives v0.5.1 h1:qwu/vsoerQZF1iysRtfcxpy1KIUSJJSpXJ5JNxzNoQw=
 github.com/git-pkgs/archives v0.5.1/go.mod h1:AKpkxnts49R9uAt1mL2ULYcHrmYujCDVu24IsFvW9so=
-github.com/git-pkgs/cooldown v0.1.1 h1:9OqqzCB8gANz/y44SmqGD0Jp8Qtu81D1sCbKl6Ehg7w=
-github.com/git-pkgs/cooldown v0.1.1/go.mod h1:v7APuK/UouTiu8mWQZbdDmj7DfxxkGUeuhjaRB5gv9E=
+github.com/git-pkgs/cooldown v0.2.0 h1:0MWPHtkzZgvCR0wdiQeyvMea/dxgw9tParH1zzaFopc=
+github.com/git-pkgs/cooldown v0.2.0/go.mod h1:v7APuK/UouTiu8mWQZbdDmj7DfxxkGUeuhjaRB5gv9E=
 github.com/git-pkgs/enrichment v0.7.0 h1:LfIzlVArc2p0MONO08ybC5jiHlysfzS3YyZ5ry2d6Lw=
 github.com/git-pkgs/enrichment v0.7.0/go.mod h1:ZgZJq7cz1H/nlkgHjCdIRLF/TA5VcbUmpE970VQmG14=
 github.com/git-pkgs/integrity v0.1.1 h1:nHQ7SktOiGM1dOb5BFnkdtttG/6FCgE6r5ru6QnsGts=

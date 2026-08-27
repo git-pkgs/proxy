@@ -8,7 +8,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/CycloneDX/cyclonedx-go v0.11.0
 	github.com/git-pkgs/archives v0.5.1
-	github.com/git-pkgs/cooldown v0.1.1
+	github.com/git-pkgs/cooldown v0.2.0
 	github.com/git-pkgs/enrichment v0.7.0
 	github.com/git-pkgs/integrity v0.1.1
 	github.com/git-pkgs/magic v0.2.0
