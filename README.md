@@ -558,7 +558,7 @@ storage:
   url: "gs://my-bucket-name"
 ```
 
-Authentication uses [Application Default Credentials](https://cloud.google.com/docs/authentication/application-default-credentials), which means no credentials need to be embedded in the config or environment. Supported sources, in order:
+Authentication uses [Application Default Credentials](https://docs.cloud.google.com/docs/authentication/application-default-credentials), which means no credentials need to be embedded in the config or environment. Supported sources, in order:
 
 - **GKE Workload Identity** — bind the Kubernetes service account running the proxy to a Google service account that has `roles/storage.objectAdmin` on the bucket. The proxy will use the workload's token automatically.
 - **Attached service account** on GCE, Cloud Run, Cloud Functions, etc.
@@ -591,7 +591,7 @@ kubectl annotate serviceaccount KSA_NAME \
 
 #### Direct serve (signed URLs) with Workload Identity
 
-When `direct_serve: true` is enabled, the proxy issues HTTP 302 redirects to presigned GCS URLs. Because Workload Identity provides no private key, the gcsblob driver falls back to the [IAM Credentials `signBlob` API](https://cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/signBlob). For this to work, grant the service account the token-creator role on itself:
+When `direct_serve: true` is enabled, the proxy issues HTTP 302 redirects to presigned GCS URLs. Workload Identity provides no private key, so the GCS backend calls the [IAM Credentials `signBlob` API](https://docs.cloud.google.com/iam/docs/reference/credentials/rest/v1/projects.serviceAccounts/signBlob). Grant the service account the token-creator role on itself:
 
 ```bash
 gcloud iam service-accounts add-iam-policy-binding \

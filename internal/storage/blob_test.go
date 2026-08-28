@@ -278,7 +278,11 @@ func createTestBlob(t *testing.T) *Blob {
 		t.Fatalf("OpenBucket failed: %v", err)
 	}
 	t.Cleanup(func() { _ = b.Close() })
-	return b
+	blob, ok := b.(*Blob)
+	if !ok {
+		t.Fatalf("OpenBucket returned %T, want *Blob", b)
+	}
+	return blob
 }
 
 func fileURLFromPath(path string) string {

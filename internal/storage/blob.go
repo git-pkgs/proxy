@@ -25,9 +25,8 @@ const osWindows = "windows"
 // Blob implements Storage using gocloud.dev/blob.
 // Supports local filesystem (file://) and S3 (s3://) URLs.
 type Blob struct {
-	bucket  *blob.Bucket
-	backend Storage
-	url     string
+	bucket *blob.Bucket
+	url    string
 }
 
 // OpenBucket opens a blob bucket from a URL.
@@ -41,13 +40,11 @@ type Blob struct {
 //   - azblob://container-name - Azure Blob Storage
 //
 // For local filesystem, the directory is created if it doesn't exist.
-func OpenBucket(ctx context.Context, urlStr string) (*Blob, error) {
+//
+//nolint:ireturn // The URL scheme selects the storage implementation.
+func OpenBucket(ctx context.Context, urlStr string) (Storage, error) {
 	if strings.HasPrefix(urlStr, "gs://") {
-		backend, err := OpenGCS(ctx, urlStr)
-		if err != nil {
-			return nil, err
-		}
-		return &Blob{backend: backend, url: urlStr}, nil
+		return OpenGCS(ctx, urlStr)
 	}
 
 	// Handle file:// URLs specially to create the directory
@@ -102,10 +99,6 @@ func OpenBucket(ctx context.Context, urlStr string) (*Blob, error) {
 }
 
 func (b *Blob) Store(ctx context.Context, path string, r io.Reader) (int64, string, error) {
-	if b.backend != nil {
-		return b.backend.Store(ctx, path, r)
-	}
-
 	// Compute hash while writing
 	h := sha256.New()
 	tee := io.TeeReader(r, h)
@@ -131,10 +124,6 @@ func (b *Blob) Store(ctx context.Context, path string, r io.Reader) (int64, stri
 }
 
 func (b *Blob) Open(ctx context.Context, path string) (io.ReadCloser, error) {
-	if b.backend != nil {
-		return b.backend.Open(ctx, path)
-	}
-
 	r, err := b.bucket.NewReader(ctx, path, nil)
 	if err != nil {
 		if isNotExist(err) {
@@ -146,10 +135,6 @@ func (b *Blob) Open(ctx context.Context, path string) (io.ReadCloser, error) {
 }
 
 func (b *Blob) Exists(ctx context.Context, path string) (bool, error) {
-	if b.backend != nil {
-		return b.backend.Exists(ctx, path)
-	}
-
 	exists, err := b.bucket.Exists(ctx, path)
 	if err != nil {
 		return false, fmt.Errorf("checking existence: %w", err)
@@ -158,10 +143,6 @@ func (b *Blob) Exists(ctx context.Context, path string) (bool, error) {
 }
 
 func (b *Blob) Delete(ctx context.Context, path string) error {
-	if b.backend != nil {
-		return b.backend.Delete(ctx, path)
-	}
-
 	err := b.bucket.Delete(ctx, path)
 	if err != nil && !isNotExist(err) {
 		return fmt.Errorf("deleting object: %w", err)
@@ -170,10 +151,6 @@ func (b *Blob) Delete(ctx context.Context, path string) error {
 }
 
 func (b *Blob) SignedURL(ctx context.Context, path string, expiry time.Duration) (string, error) {
-	if b.backend != nil {
-		return b.backend.SignedURL(ctx, path, expiry)
-	}
-
 	url, err := b.bucket.SignedURL(ctx, path, &blob.SignedURLOptions{
 		Method: http.MethodGet,
 		Expiry: expiry,
@@ -188,10 +165,6 @@ func (b *Blob) SignedURL(ctx context.Context, path string, expiry time.Duration)
 }
 
 func (b *Blob) Size(ctx context.Context, path string) (int64, error) {
-	if b.backend != nil {
-		return b.backend.Size(ctx, path)
-	}
-
 	attrs, err := b.bucket.Attributes(ctx, path)
 	if err != nil {
 		if isNotExist(err) {
@@ -203,10 +176,6 @@ func (b *Blob) Size(ctx context.Context, path string) (int64, error) {
 }
 
 func (b *Blob) UsedSpace(ctx context.Context) (int64, error) {
-	if b.backend != nil {
-		return b.backend.UsedSpace(ctx)
-	}
-
 	var total int64
 
 	iter := b.bucket.List(nil)
@@ -226,16 +195,6 @@ func (b *Blob) UsedSpace(ctx context.Context) (int64, error) {
 
 // ListPrefix returns object metadata for keys under a prefix.
 func (b *Blob) ListPrefix(ctx context.Context, prefix string) ([]ObjectInfo, error) {
-	if b.backend != nil {
-		lister, ok := b.backend.(interface {
-			ListPrefix(context.Context, string) ([]ObjectInfo, error)
-		})
-		if !ok {
-			return nil, ErrNotFound
-		}
-		return lister.ListPrefix(ctx, prefix)
-	}
-
 	iter := b.bucket.List(&blob.ListOptions{Prefix: prefix})
 	objects := make([]ObjectInfo, 0)
 
@@ -264,18 +223,10 @@ func (b *Blob) ListPrefix(ctx context.Context, prefix string) ([]ObjectInfo, err
 }
 
 func (b *Blob) Close() error {
-	if b.backend != nil {
-		return b.backend.Close()
-	}
-
 	return b.bucket.Close()
 }
 
 func (b *Blob) URL() string {
-	if b.backend != nil {
-		return b.backend.URL()
-	}
-
 	return b.url
 }
 

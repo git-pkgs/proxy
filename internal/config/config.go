@@ -33,13 +33,12 @@
 //
 //	AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
 //
-// For GCS, authentication uses Application Default Credentials. This works
-// transparently on GKE with Workload Identity, GCE/Cloud Run with attached
-// service accounts, or locally via `gcloud auth application-default login`.
-// When the proxy is signing URLs (direct_serve) without a private key,
-// gcsblob automatically falls back to the IAM Credentials signBlob API,
-// which requires the service account to hold roles/iam.serviceAccountTokenCreator
-// on itself.
+// For GCS, authentication uses Application Default Credentials. This supports
+// GKE Workload Identity, attached service accounts on GCE and Cloud Run, and
+// local credentials created by `gcloud auth application-default login`.
+// When direct_serve is enabled without a private key, the GCS backend uses the
+// IAM Credentials signBlob API. The service account must hold
+// roles/iam.serviceAccountTokenCreator on itself.
 //
 // Database Configuration:
 //
