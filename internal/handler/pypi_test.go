@@ -15,6 +15,267 @@ import (
 	"github.com/git-pkgs/registries/fetch"
 )
 
+const uvPyPIAccept = "application/vnd.pypi.simple.v1+json, application/vnd.pypi.simple.v1+html;q=0.2, text/html;q=0.01"
+
+type pypiRoundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f pypiRoundTripFunc) RoundTrip(r *http.Request) (*http.Response, error) {
+	return f(r)
+}
+
+func pypiHTTPResponse(r *http.Request, contentType, body string) *http.Response {
+	return &http.Response{
+		StatusCode:    http.StatusOK,
+		Status:        "200 OK",
+		Header:        http.Header{"Content-Type": []string{contentType}},
+		Body:          io.NopCloser(strings.NewReader(body)),
+		ContentLength: int64(len(body)),
+		Request:       r,
+	}
+}
+
+func setupPyPIHandler(t testing.TB, transport pypiRoundTripFunc) (*PyPIHandler, *Proxy) {
+	t.Helper()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = &http.Client{Transport: transport}
+	h := NewPyPIHandler(proxy, "http://proxy.test")
+	h.upstreamURL = "https://pypi.test"
+	return h, proxy
+}
+
+func TestSelectPyPISimpleRepresentation(t *testing.T) {
+	tests := []struct {
+		name   string
+		accept string
+		want   string
+	}{
+		{"missing header uses legacy html", "", "text/html"},
+		{"wildcard uses legacy html", "*/*", "text/html"},
+		{"uv prefers json", uvPyPIAccept, pypiSimpleJSON},
+		{"json only", pypiSimpleJSON, pypiSimpleJSON},
+		{"latest json", pypiSimpleLatestJSON, pypiSimpleJSON},
+		{"vendor html", pypiSimpleHTML, pypiSimpleHTML},
+		{"higher html quality", pypiSimpleJSON + ";q=0.2, text/html;q=0.8", "text/html"},
+		{"json excluded", pypiSimpleJSON + ";q=0, text/html", "text/html"},
+		{"application wildcard", "application/*", pypiSimpleJSON},
+		{"unsupported type uses legacy html", "application/xml", "text/html"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := selectPyPISimpleRepresentation(tt.accept); got != tt.want {
+				t.Errorf("selectPyPISimpleRepresentation(%q) = %q, want %q", tt.accept, got, tt.want)
+			}
+		})
+	}
+}
+
+func TestPyPISimplePackageNegotiatesJSON(t *testing.T) {
+	const upstreamBody = `{
+		"meta":{"api-version":"1.4"},
+		"name":"ruff",
+		"files":[{
+			"filename":"ruff-0.16.0-py3-none-any.whl",
+			"url":"https://files.pythonhosted.org/packages/ab/cd/ruff-0.16.0-py3-none-any.whl",
+			"hashes":{"sha256":"abc123"},
+			"upload-time":"2026-08-01T12:00:00Z"
+		}]
+	}`
+
+	var upstreamAccept string
+	h, _ := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+		upstreamAccept = r.Header.Get("Accept")
+		if r.URL.Path != "/simple/ruff/" {
+			t.Fatalf("upstream path = %q, want %q", r.URL.Path, "/simple/ruff/")
+		}
+		return pypiHTTPResponse(r, pypiSimpleJSON, upstreamBody), nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/simple/ruff/", nil)
+	req.Header.Set("Accept", uvPyPIAccept)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if upstreamAccept != pypiSimpleJSON {
+		t.Errorf("upstream Accept = %q, want %q", upstreamAccept, pypiSimpleJSON)
+	}
+	if got := w.Header().Get("Content-Type"); got != pypiSimpleJSON {
+		t.Errorf("Content-Type = %q, want %q", got, pypiSimpleJSON)
+	}
+	if got := w.Header().Get("Vary"); !strings.Contains(got, "Accept") {
+		t.Errorf("Vary = %q, want Accept", got)
+	}
+
+	var result struct {
+		Meta  map[string]string `json:"meta"`
+		Files []struct {
+			URL        string `json:"url"`
+			UploadTime string `json:"upload-time"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if result.Meta["api-version"] != "1.4" {
+		t.Errorf("api-version = %q, want 1.4", result.Meta["api-version"])
+	}
+	if len(result.Files) != 1 {
+		t.Fatalf("files = %d, want 1", len(result.Files))
+	}
+	if got, want := result.Files[0].URL, "http://proxy.test/pypi/packages/packages/ab/cd/ruff-0.16.0-py3-none-any.whl"; got != want {
+		t.Errorf("file URL = %q, want %q", got, want)
+	}
+	if got := result.Files[0].UploadTime; got != "2026-08-01T12:00:00Z" {
+		t.Errorf("upload-time = %q, want %q", got, "2026-08-01T12:00:00Z")
+	}
+}
+
+func TestPyPISimpleIndexNegotiatesJSON(t *testing.T) {
+	const upstreamBody = `{"meta":{"api-version":"1.4"},"projects":[{"name":"ruff"}]}`
+
+	var upstreamAccept string
+	h, _ := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+		upstreamAccept = r.Header.Get("Accept")
+		return pypiHTTPResponse(r, pypiSimpleJSON, upstreamBody), nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/simple/", nil)
+	req.Header.Set("Accept", uvPyPIAccept)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if upstreamAccept != pypiSimpleJSON {
+		t.Errorf("upstream Accept = %q, want %q", upstreamAccept, pypiSimpleJSON)
+	}
+	if got := w.Header().Get("Content-Type"); got != pypiSimpleJSON {
+		t.Errorf("Content-Type = %q, want %q", got, pypiSimpleJSON)
+	}
+	if got := w.Header().Get("Vary"); !strings.Contains(got, "Accept") {
+		t.Errorf("Vary = %q, want Accept", got)
+	}
+	if got := w.Body.String(); got != upstreamBody {
+		t.Errorf("body = %q, want %q", got, upstreamBody)
+	}
+}
+
+func TestPyPISimplePackageKeepsHTMLDefault(t *testing.T) {
+	const upstreamBody = `<a href="https://files.pythonhosted.org/packages/ab/cd/ruff-0.16.0.tar.gz">ruff-0.16.0.tar.gz</a>`
+
+	var upstreamAccept string
+	h, _ := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+		upstreamAccept = r.Header.Get("Accept")
+		return pypiHTTPResponse(r, "text/html", upstreamBody), nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/simple/ruff/", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if upstreamAccept != "text/html" {
+		t.Errorf("upstream Accept = %q, want text/html", upstreamAccept)
+	}
+	if got := w.Header().Get("Content-Type"); got != "text/html" {
+		t.Errorf("Content-Type = %q, want text/html", got)
+	}
+	if !strings.Contains(w.Body.String(), `href="http://proxy.test/pypi/packages/packages/ab/cd/ruff-0.16.0.tar.gz"`) {
+		t.Errorf("download URL was not rewritten: %s", w.Body.String())
+	}
+}
+
+func TestPyPISimplePackageCachesRepresentationsSeparately(t *testing.T) {
+	hits := make(map[string]int)
+	h, proxy := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+		accept := r.Header.Get("Accept")
+		hits[accept]++
+		if accept == pypiSimpleJSON {
+			body := `{"meta":{"api-version":"1.4"},"name":"ruff","files":[]}`
+			return pypiHTTPResponse(r, pypiSimpleJSON, body), nil
+		}
+		return pypiHTTPResponse(r, accept, `<a href="/ruff.tar.gz">ruff.tar.gz</a>`), nil
+	})
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+
+	for range 2 {
+		for _, accept := range []string{pypiLegacyHTML, pypiSimpleHTML, uvPyPIAccept} {
+			req := httptest.NewRequest(http.MethodGet, "/simple/ruff/", nil)
+			req.Header.Set("Accept", accept)
+			w := httptest.NewRecorder()
+			h.Routes().ServeHTTP(w, req)
+			if w.Code != http.StatusOK {
+				t.Fatalf("Accept %q: status = %d, want 200: %s", accept, w.Code, w.Body.String())
+			}
+		}
+	}
+
+	if got := hits[pypiLegacyHTML]; got != 1 {
+		t.Errorf("HTML upstream requests = %d, want 1", got)
+	}
+	if got := hits[pypiSimpleHTML]; got != 1 {
+		t.Errorf("vendor HTML upstream requests = %d, want 1", got)
+	}
+	if got := hits[pypiSimpleJSON]; got != 1 {
+		t.Errorf("JSON upstream requests = %d, want 1", got)
+	}
+}
+
+func TestPyPISimpleJSONCooldown(t *testing.T) {
+	now := time.Now()
+	old := now.Add(-30 * 24 * time.Hour).Format(time.RFC3339)
+	recent := now.Add(-time.Hour).Format(time.RFC3339)
+
+	h, proxy := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+		switch r.URL.Path {
+		case "/simple/ruff/":
+			body := `{"meta":{"api-version":"1.4"},"name":"ruff","files":[` +
+				`{"filename":"ruff-1.0.0.tar.gz","url":"https://files.pythonhosted.org/packages/ab/ruff-1.0.0.tar.gz","upload-time":"` + old + `"},` +
+				`{"filename":"ruff-2.0.0.tar.gz","url":"https://files.pythonhosted.org/packages/cd/ruff-2.0.0.tar.gz","upload-time":"` + recent + `"}` +
+				`]}`
+			return pypiHTTPResponse(r, pypiSimpleJSON, body), nil
+		case "/pypi/ruff/json":
+			body := `{"releases":{` +
+				`"1.0.0":[{"upload_time_iso_8601":"` + old + `"}],` +
+				`"2.0.0":[{"upload_time_iso_8601":"` + recent + `"}]` +
+				`}}`
+			return pypiHTTPResponse(r, "application/json", body), nil
+		default:
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+			return nil, nil
+		}
+	})
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+
+	req := httptest.NewRequest(http.MethodGet, "/simple/ruff/", nil)
+	req.Header.Set("Accept", uvPyPIAccept)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	var result struct {
+		Files []struct {
+			Filename string `json:"filename"`
+		} `json:"files"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if len(result.Files) != 1 || result.Files[0].Filename != "ruff-1.0.0.tar.gz" {
+		t.Errorf("files = %#v, want only ruff-1.0.0.tar.gz", result.Files)
+	}
+}
+
 func TestPyPIParseFilename(t *testing.T) {
 	h := &PyPIHandler{proxy: &Proxy{Logger: slog.Default()}}
 
