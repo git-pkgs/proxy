@@ -207,9 +207,18 @@ func (h *ContainerHandler) rewriteContainerTagsLink(link, registryURL, requestPa
 
 	return containerLinkTargetPattern.ReplaceAllStringFunc(link, func(target string) string {
 		linkURL, err := url.Parse(target[1 : len(target)-1])
-		if err != nil || !linkURL.IsAbs() || linkURL.Scheme != upstreamURL.Scheme || linkURL.Host != upstreamURL.Host {
+		if err != nil {
 			return target
 		}
+		if linkURL.IsAbs() {
+			if linkURL.Scheme != upstreamURL.Scheme || linkURL.Host != upstreamURL.Host {
+				return target
+			}
+		} else if linkURL.Host != "" || (linkURL.Path != "" && !strings.HasPrefix(linkURL.Path, "/v2/")) {
+			return target
+		}
+		// Relative registry API links resolve against the current tag-list
+		// endpoint. Rebuild them below so named-registry selectors are kept.
 		linkURL.Scheme = proxyURL.Scheme
 		linkURL.Host = proxyURL.Host
 		linkURL.User = proxyURL.User

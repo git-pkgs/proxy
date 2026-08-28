@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 
@@ -245,6 +246,58 @@ func TestContainerHandler_TagsListCachesPaginationLink(t *testing.T) {
 	}
 	if upstreamRequests != 2 {
 		t.Errorf("upstream requests after stale fallback = %d, want 2", upstreamRequests)
+	}
+}
+
+func TestContainerHandler_TagsListRewritesRelativePaginationLinkForNamedRegistry(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/owner/repo/tags/list" {
+			http.NotFound(w, r)
+			return
+		}
+		if r.URL.Query().Get("n") != "1" {
+			http.Error(w, "unexpected page size", http.StatusBadRequest)
+			return
+		}
+
+		w.Header().Set("Content-Type", "application/json")
+		if r.URL.Query().Get("last") == "" {
+			w.Header().Set("Link", `</v2/owner/repo/tags/list?last=1.0&n=1>; rel="next"`)
+			_, _ = io.WriteString(w, `{"name":"owner/repo","tags":["1.0"]}`)
+			return
+		}
+		if r.URL.Query().Get("last") != "1.0" {
+			http.Error(w, "unexpected pagination token", http.StatusBadRequest)
+			return
+		}
+		_, _ = io.WriteString(w, `{"name":"owner/repo","tags":["2.0"]}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := NewContainerHandler(proxy, "http://proxy.example.test", map[string]string{"test": upstream.URL})
+	routes := http.StripPrefix("/v2", h.Routes())
+
+	first := httptest.NewRecorder()
+	routes.ServeHTTP(first, httptest.NewRequest(http.MethodGet,
+		"/v2/upstream/test/owner/repo/tags/list?n=1", nil))
+	if first.Code != http.StatusOK {
+		t.Fatalf("first page status = %d, want 200: %s", first.Code, first.Body.String())
+	}
+	const wantLink = `<http://proxy.example.test/v2/upstream/test/owner/repo/tags/list?last=1.0&n=1>; rel="next"`
+	if got := first.Header().Get("Link"); got != wantLink {
+		t.Fatalf("first page Link = %q, want %q", got, wantLink)
+	}
+
+	nextURL := strings.TrimPrefix(strings.SplitN(first.Header().Get("Link"), ">", 2)[0], "<")
+	next := httptest.NewRecorder()
+	routes.ServeHTTP(next, httptest.NewRequest(http.MethodGet, nextURL, nil))
+	if next.Code != http.StatusOK {
+		t.Fatalf("next page status = %d, want 200: %s", next.Code, next.Body.String())
+	}
+	if got, want := next.Body.String(), `{"name":"owner/repo","tags":["2.0"]}`; got != want {
+		t.Errorf("next page body = %q, want %q", got, want)
 	}
 }
 
