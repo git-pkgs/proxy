@@ -886,10 +886,11 @@ func TestValidateNamedUpstreams(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "valid Helm and OCI upstreams",
+			name: "valid Helm, OCI, and APK upstreams",
 			modify: func(cfg *Config) {
 				cfg.Upstream.Helm = map[string]string{"bitnami": "https://charts.bitnami.com/bitnami"}
 				cfg.Upstream.OCI = map[string]string{"ghcr": "https://ghcr.io"}
+				cfg.Upstream.APK = map[string]string{"alpine": "https://dl-cdn.alpinelinux.org/alpine"}
 			},
 		},
 		{
@@ -903,6 +904,20 @@ func TestValidateNamedUpstreams(t *testing.T) {
 			name: "OCI upstream URL is not absolute",
 			modify: func(cfg *Config) {
 				cfg.Upstream.OCI = map[string]string{"private": "registry.example.com"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "APK upstream name contains path separator",
+			modify: func(cfg *Config) {
+				cfg.Upstream.APK = map[string]string{"alpine/edge": "https://dl-cdn.alpinelinux.org/alpine"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "APK upstream URL is not absolute",
+			modify: func(cfg *Config) {
+				cfg.Upstream.APK = map[string]string{"private": "apk.example.com"}
 			},
 			wantErr: true,
 		},

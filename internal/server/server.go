@@ -17,6 +17,7 @@
 //   - /cran/*     - CRAN (R) protocol
 //   - /julia/*    - Julia Pkg server protocol
 //   - /v2/*       - OCI/Docker container registry protocol
+//   - /apk/*      - Alpine APK repository protocol
 //   - /debian/*   - Debian/APT repository protocol
 //   - /rpm/*      - RPM/Yum repository protocol
 //
@@ -263,6 +264,7 @@ func (s *Server) Start() error {
 	juliaHandler := handler.NewJuliaHandler(proxy, s.cfg.BaseURL)
 	containerHandler := handler.NewContainerHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.OCI)
 	helmHandler := handler.NewHelmHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm)
+	apkHandler := handler.NewAPKHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.APK)
 	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Debian)
 	rpmHandler := handler.NewRPMHandler(proxy, s.cfg.BaseURL)
 
@@ -283,6 +285,7 @@ func (s *Server) Start() error {
 	r.Mount("/julia", http.StripPrefix("/julia", juliaHandler.Routes()))
 	r.Mount("/v2", http.StripPrefix("/v2", containerHandler.Routes()))
 	r.Mount("/helm", http.StripPrefix("/helm", helmHandler.Routes()))
+	r.Mount("/apk", http.StripPrefix("/apk", apkHandler.Routes()))
 	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 

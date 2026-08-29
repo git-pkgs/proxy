@@ -152,12 +152,24 @@ upstream:
   # upstream/{name}/, e.g. oci://proxy.example.com/upstream/ghcr/owner/chart.
   oci:
     ghcr: "https://ghcr.io"
+
+  # Named Alpine APK repositories, served at /apk/{name}/.
+  apk:
+    alpine: "https://dl-cdn.alpinelinux.org/alpine"
 ```
 
 Helm HTTP repositories are read-only. The proxy fetches and rewrites each
 repository's `index.yaml` so chart archives are downloaded through the proxy.
 Chart archives are retained only when their SHA-256 digest matches the digest
 listed in the index. Relative and absolute chart URLs are both supported.
+
+Alpine APK repositories are read-only. Requests to `/apk/{name}/…` mirror the
+upstream layout, e.g. `/apk/alpine/v3.22/main/x86_64/APKINDEX.tar.gz`. Indexes
+(v2 `APKINDEX.tar.gz`, v3 `Packages.adb`) and detached signatures are cached
+with the metadata TTL and served byte-for-byte unchanged so apk signature
+verification keeps working; `.apk` packages use the shared artifact cache.
+When `upstream.apk` is empty, a single repository named `alpine` pointing at
+the official mirror is available; configuring any entry replaces that default.
 
 Named OCI registries preserve the existing unprefixed Docker Hub mirror. A
 reference such as `oci://proxy.example.com/upstream/ghcr/owner/chart` is sent

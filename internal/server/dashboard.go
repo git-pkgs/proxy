@@ -123,6 +123,7 @@ func supportedEcosystems() []string {
 	// that the 'select' list in the UI will be in the expected
 	// order
 	return []string{
+		"alpine",
 		"cargo",
 		"composer",
 		"conan",
@@ -190,6 +191,8 @@ func ecosystemBadgeClasses(ecosystem string) string {
 		return base + " bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300"
 	case "rpm":
 		return base + " bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300"
+	case "alpine":
+		return base + " bg-lime-100 text-lime-800 dark:bg-lime-900/50 dark:text-lime-300"
 	default:
 		return base + " bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"
 	}
@@ -443,6 +446,19 @@ gpgcheck=0
 # Then run:
 sudo dnf clean all
 sudo dnf update</code></pre>`),
+		},
+		{
+			ID:       "apk",
+			Name:     "Alpine APK",
+			Language: "Alpine Linux",
+			Endpoint: "/apk/",
+			Instructions: template.HTML(`<p class="config-note">Configure apk to use the proxy:</p>
+<pre><code># In /etc/apk/repositories
+` + baseURL + `/apk/alpine/v3.22/main
+` + baseURL + `/apk/alpine/v3.22/community
+
+# Then run:
+apk update</code></pre>`),
 		},
 	}
 }

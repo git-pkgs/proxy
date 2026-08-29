@@ -323,6 +323,12 @@ type UpstreamConfig struct {
 	// rewritten to the same named proxy endpoint.
 	Helm map[string]string `json:"helm" yaml:"helm"`
 
+	// APK maps repository names to Alpine APK repository base URLs, served
+	// at /apk/{name}/. The remaining request path mirrors the upstream
+	// layout, e.g. /apk/alpine/v3.22/main/x86_64/APKINDEX.tar.gz.
+	// Default when empty: {"alpine": "https://dl-cdn.alpinelinux.org/alpine"}.
+	APK map[string]string `json:"apk" yaml:"apk"`
+
 	// OCI maps names to OCI registry URLs. Requests to a named registry use
 	// the repository prefix upstream/{name}/, for example
 	// oci://proxy.example.com/upstream/ghcr/owner/chart.
@@ -369,6 +375,9 @@ func (u *UpstreamConfig) Validate() error {
 		}
 	}
 	if err := validateNamedUpstreams("upstream.helm", u.Helm); err != nil {
+		return err
+	}
+	if err := validateNamedUpstreams("upstream.apk", u.APK); err != nil {
 		return err
 	}
 	if err := validateNamedUpstreams("upstream.oci", u.OCI); err != nil {

@@ -42,7 +42,7 @@ Resolution order: package override, then ecosystem override, then global default
 | Container | Docker/OCI | | ✓ |
 | Debian | Debian/Ubuntu | | ✓ |
 | RPM | RHEL/Fedora | | ✓ |
-| Alpine | Alpine Linux | | ✗ |
+| Alpine | Alpine Linux | | ✓ |
 | Arch | Arch Linux | | ✗ |
 | Chef | Chef | | ✗ |
 | Generic | Any | | ✗ |
@@ -435,6 +435,46 @@ sudo dnf clean all
 sudo dnf update
 ```
 
+### Alpine / apk
+
+Point `/etc/apk/repositories` at the proxy. The default repository name
+`alpine` proxies the official mirror (`https://dl-cdn.alpinelinux.org/alpine`):
+
+```
+http://localhost:8080/apk/alpine/v3.22/main
+http://localhost:8080/apk/alpine/v3.22/community
+```
+
+Then:
+
+```bash
+apk update
+```
+
+Repository indexes (v2 `APKINDEX.tar.gz` and v3 `Packages.adb`), detached
+signatures, and packages are served byte-for-byte unchanged, so apk's normal
+signature verification keeps working. Indexes use the metadata cache
+(`metadata_ttl`, stale fallback); `.apk` packages are stored in the shared
+artifact cache and remain available when the upstream is unreachable.
+
+To proxy other mirrors or private repositories, configure named upstreams
+under `upstream.apk` (this replaces the built-in default; re-add `alpine` if
+you still want it):
+
+```yaml
+upstream:
+  apk:
+    alpine: "https://dl-cdn.alpinelinux.org/alpine"
+    private: "https://apk.example.com"
+```
+
+```
+http://localhost:8080/apk/private
+```
+
+apk appends the architecture and index filename to each repository line
+itself.
+
 ## Configuration
 
 The proxy can be configured via:
@@ -671,6 +711,7 @@ Recently cached:
 | `GET /julia/*` | Julia Pkg server protocol |
 | `GET /helm/{repository}/*` | HTTP Helm chart repository protocol |
 | `GET /v2/*` | OCI/Docker registry protocol |
+| `GET /apk/{repository}/*` | Alpine APK repository protocol |
 | `GET /debian/*` | Debian/APT repository protocol |
 | `GET /rpm/*` | RPM/Yum repository protocol |
 

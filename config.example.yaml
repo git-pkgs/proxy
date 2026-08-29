@@ -111,6 +111,13 @@ upstream:
   # oci:
   #   ghcr: "https://ghcr.io"
 
+  # Named Alpine APK repositories (used by /apk/{name}/).
+  # Defaults to {"alpine": "https://dl-cdn.alpinelinux.org/alpine"} when empty;
+  # configuring any entry replaces that default.
+  # apk:
+  #   alpine: "https://dl-cdn.alpinelinux.org/alpine"
+  #   private: "https://apk.example.com"
+
   # Authentication for upstream registries
   # Keys are absolute URL scopes. Scheme, host, effective port, and path
   # segment boundaries must match; the longest matching scope wins.
