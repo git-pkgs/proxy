@@ -320,6 +320,41 @@ func (a *authRoundTripper) RoundTrip(req *http.Request) (*http.Response, error) 
 	return base.RoundTrip(req)
 }
 
+// TestAPKHandler_PackageHeadOmitsBody verifies that HEAD requests for cached
+// packages return headers (including Content-Length) without a body.
+func TestAPKHandler_PackageHeadOmitsBody(t *testing.T) {
+	pkg := []byte("package bytes")
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/octet-stream")
+		_, _ = w.Write(pkg)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+
+	h := NewAPKHandler(proxy, "http://proxy.example", map[string]string{"alpine": upstream.URL})
+
+	target := "/alpine/v3.22/main/x86_64/busybox-1.37.0-r12.apk"
+	if w := serveAPKRequest(h, target); w.Code != http.StatusOK {
+		t.Fatalf("seeding GET: status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodHead, target, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("HEAD: status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if got := w.Body.Len(); got != 0 {
+		t.Errorf("HEAD body length = %d, want 0", got)
+	}
+	if got := w.Header().Get("Content-Length"); got != fmt.Sprint(len(pkg)) {
+		t.Errorf("HEAD Content-Length = %q, want %d", got, len(pkg))
+	}
+}
+
 func serveAPKRequest(h *APKHandler, target string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, target, nil))
