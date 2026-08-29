@@ -27,9 +27,20 @@ storage:
   #   - file:///path/to/dir - Local filesystem (default)
   #   - s3://bucket-name - Amazon S3
   #   - s3://bucket?endpoint=http://localhost:9000 - S3-compatible (MinIO)
+  #   - gs://bucket-name - Google Cloud Storage
+  #   - azblob://container-name - Azure Blob Storage
   #
   # For S3, configure credentials via environment variables:
   #   AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+  #
+  # For GCS, authentication uses Application Default Credentials. On GKE with
+  # Workload Identity, bind the Kubernetes service account to a Google service
+  # account that has roles/storage.objectAdmin on the bucket. No extra config
+  # is needed in this file. For local development, run:
+  #   gcloud auth application-default login
+  # If direct_serve is enabled, the service account also needs
+  # roles/iam.serviceAccountTokenCreator on itself so the IAM Credentials
+  # signBlob API can sign URLs without a private key.
   url: ""
 
   # Local filesystem path (used when url is empty)
@@ -42,7 +53,7 @@ storage:
   max_size: ""
 
   # Redirect cached artifact downloads to presigned storage URLs (HTTP 302)
-  # instead of streaming through the proxy. Only effective for S3 and Azure.
+  # instead of streaming through the proxy. Only effective for S3, GCS, and Azure.
   # Leave disabled if clients reach the proxy through an authenticating gateway,
   # since presigned URLs bypass it.
   direct_serve: false
@@ -82,16 +93,16 @@ log:
 access_log:
   path: ""
 
-# Upstream registry URLs and authentication
+# Upstream URLs for built-in routes and authentication
 upstream:
+  # Hosts allowed to resolve to private, ULA, or CGNAT addresses
+  allow_private_hosts: []
+
+  # Permit upstream requests and redirects to loopback addresses
+  allow_loopback: false
+
   # npm registry URL
   npm: "https://registry.npmjs.org"
-
-  # Maven repository URL (used by /maven endpoint)
-  maven: "https://repo1.maven.org/maven2"
-
-  # Gradle Plugin Portal Maven URL (fallback for plugin marker artifacts)
-  gradle_plugin_portal: "https://plugins.gradle.org/m2"
 
   # Cargo sparse index URL
   cargo: "https://index.crates.io"
@@ -99,8 +110,65 @@ upstream:
   # Cargo crate download URL
   cargo_download: "https://static.crates.io/crates"
 
+  # RubyGems registry URL
+  gem: "https://rubygems.org"
+
+  # Go module proxy URL
+  go: "https://proxy.golang.org"
+
+  # Hex repository URL
+  hex: "https://repo.hex.pm"
+
+  # Hex API URL used for package timestamps
+  hex_api: "https://hex.pm"
+
+  # pub registry URL
+  pub: "https://pub.dev"
+
+  # PyPI index and API URL
+  pypi: "https://pypi.org"
+
+  # PyPI package download URL
+  pypi_download: "https://files.pythonhosted.org"
+
+  # Maven repository URL (used by /maven endpoint)
+  maven: "https://repo1.maven.org/maven2"
+
+  # Gradle Plugin Portal Maven URL (fallback for plugin marker artifacts)
+  gradle_plugin_portal: "https://plugins.gradle.org/m2"
+
+  # NuGet API URL
+  nuget: "https://api.nuget.org"
+
+  # NuGet search API URL
+  nuget_search: "https://azuresearch-usnc.nuget.org"
+
+  # Packagist API URL
+  composer: "https://packagist.org"
+
+  # Packagist repository URL
+  composer_repository: "https://repo.packagist.org"
+
+  # Conan registry URL
+  conan: "https://center.conan.io"
+
+  # Conda channel base URL
+  conda: "https://conda.anaconda.org"
+
+  # CRAN mirror URL
+  cran: "https://cloud.r-project.org"
+
+  # Julia package server URL
+  julia: "https://pkg.julialang.org"
+
+  # Default OCI registry URL for unprefixed /v2 requests
+  oci_default: "https://registry-1.docker.io"
+
   # Debian/APT repository URL (used by /debian endpoint)
   debian: "http://deb.debian.org/debian"
+
+  # RPM repository URL (used by /rpm endpoint)
+  rpm: "https://dl.fedoraproject.org/pub/fedora/linux"
 
   # Named HTTP Helm chart repositories (used by /helm/{name}/)
   # helm:

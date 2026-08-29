@@ -35,9 +35,18 @@ type Blob struct {
 //   - file:///path/to/dir - Local filesystem storage
 //   - s3://bucket-name - Amazon S3 (uses AWS_* environment variables)
 //   - s3://bucket-name?region=us-east-1&endpoint=http://localhost:9000 - S3-compatible (MinIO, etc.)
+//   - gs://bucket-name - Google Cloud Storage (uses Application Default Credentials;
+//     supports Workload Identity on GKE/GCE without any extra configuration)
+//   - azblob://container-name - Azure Blob Storage
 //
 // For local filesystem, the directory is created if it doesn't exist.
-func OpenBucket(ctx context.Context, urlStr string) (*Blob, error) {
+//
+//nolint:ireturn // The URL scheme selects the storage implementation.
+func OpenBucket(ctx context.Context, urlStr string) (Storage, error) {
+	if strings.HasPrefix(urlStr, "gs://") {
+		return OpenGCS(ctx, urlStr)
+	}
+
 	// Handle file:// URLs specially to create the directory
 	if strings.HasPrefix(urlStr, "file://") {
 		path := strings.TrimPrefix(urlStr, "file://")

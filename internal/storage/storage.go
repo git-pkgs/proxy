@@ -5,6 +5,9 @@
 //   - file:///path/to/dir - Local filesystem storage
 //   - s3://bucket-name - Amazon S3
 //   - s3://bucket?endpoint=http://localhost:9000 - S3-compatible (MinIO)
+//   - gs://bucket-name - Google Cloud Storage (supports GKE Workload Identity
+//     via Application Default Credentials)
+//   - azblob://container-name - Azure Blob Storage
 //
 // Use OpenBucket to create a storage backend from a URL.
 package storage

@@ -75,8 +75,7 @@
 //	PROXY_LOG_LEVEL        - Log level
 //	PROXY_LOG_FORMAT       - Log format
 //	PROXY_ACCESS_LOG_PATH  - JSONL access log path
-//	PROXY_UPSTREAM_MAVEN   - Maven repository upstream URL
-//	PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL - Gradle Plugin Portal upstream URL
+//	PROXY_UPSTREAM_*       - Upstream URLs and network access controls
 //	PROXY_GRADLE_BUILD_CACHE_READ_ONLY       - Disable Gradle PUT uploads
 //	PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE - Max Gradle PUT request body size
 //	PROXY_GRADLE_BUILD_CACHE_MAX_AGE         - Gradle cache max age eviction
@@ -206,8 +205,31 @@ func runServe() {
 		fmt.Fprintf(os.Stderr, "  PROXY_LOG_LEVEL        Log level\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_LOG_FORMAT       Log format\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_ACCESS_LOG_PATH  JSONL access log path\n")
-		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_MAVEN   Maven repository upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_ALLOW_PRIVATE_HOSTS  Comma-separated private upstream hosts\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_ALLOW_LOOPBACK       Permit loopback upstreams and redirects\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_NPM                  npm registry upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_CARGO                Cargo index upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_CARGO_DOWNLOAD       Cargo download upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_GEM                  RubyGems upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_GO                   Go module proxy upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_HEX                  Hex repository upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_HEX_API              Hex API upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_PUB                  pub registry upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_PYPI                 PyPI index and API upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_PYPI_DOWNLOAD        PyPI download upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_MAVEN                Maven repository upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL Gradle Plugin Portal upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_NUGET                NuGet API upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_NUGET_SEARCH         NuGet search upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_COMPOSER             Packagist API upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_COMPOSER_REPOSITORY  Packagist repository upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_CONAN                Conan registry upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_CONDA                Conda channel upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_CRAN                 CRAN mirror upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_JULIA                Julia package server upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_OCI_DEFAULT          Default OCI registry upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_DEBIAN               Debian repository upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_RPM                  RPM repository upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_READ_ONLY       Disable Gradle PUT uploads\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE Max Gradle PUT request body size\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_AGE         Gradle cache max age eviction\n")

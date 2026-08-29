@@ -47,6 +47,18 @@ func NewContainerHandler(proxy *Proxy, proxyURL string, namedRegistries ...map[s
 	return h
 }
 
+// NewContainerHandlerWithRegistry creates a container handler with a custom
+// default registry and optional named registries.
+func NewContainerHandlerWithRegistry(
+	proxy *Proxy,
+	proxyURL, registryURL string,
+	namedRegistries ...map[string]string,
+) *ContainerHandler {
+	h := NewContainerHandler(proxy, proxyURL, namedRegistries...)
+	h.registryURL = configuredUpstreamURL(registryURL, dockerHubRegistry)
+	return h
+}
+
 // Routes returns the HTTP handler for container registry requests.
 // Mount this at /v2 on your router.
 func (h *ContainerHandler) Routes() http.Handler {

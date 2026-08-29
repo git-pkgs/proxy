@@ -27,6 +27,13 @@ func NewConanHandler(proxy *Proxy, proxyURL string) *ConanHandler {
 	}
 }
 
+// NewConanHandlerWithUpstream creates a Conan handler with a custom upstream.
+func NewConanHandlerWithUpstream(proxy *Proxy, proxyURL, upstreamURL string) *ConanHandler {
+	h := NewConanHandler(proxy, proxyURL)
+	h.upstreamURL = configuredUpstreamURL(upstreamURL, conanUpstream)
+	return h
+}
+
 // Routes returns the HTTP handler for Conan requests.
 func (h *ConanHandler) Routes() http.Handler {
 	mux := http.NewServeMux()
