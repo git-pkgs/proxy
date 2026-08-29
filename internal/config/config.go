@@ -24,9 +24,21 @@
 //	storage:
 //	  url: "s3://bucket?endpoint=http://localhost:9000"
 //
+// Google Cloud Storage:
+//
+//	storage:
+//	  url: "gs://bucket-name"
+//
 // For S3, configure credentials via AWS environment variables:
 //
 //	AWS_ACCESS_KEY_ID, AWS_SECRET_ACCESS_KEY, AWS_REGION
+//
+// For GCS, authentication uses Application Default Credentials. This supports
+// GKE Workload Identity, attached service accounts on GCE and Cloud Run, and
+// local credentials created by `gcloud auth application-default login`.
+// When direct_serve is enabled without a private key, the GCS backend uses the
+// IAM Credentials signBlob API. The service account must hold
+// roles/iam.serviceAccountTokenCreator on itself.
 //
 // Database Configuration:
 //
@@ -181,6 +193,8 @@ type StorageConfig struct {
 	//   - file:///path/to/dir - Local filesystem (default)
 	//   - s3://bucket-name - Amazon S3
 	//   - s3://bucket?endpoint=http://localhost:9000 - S3-compatible (MinIO)
+	//   - gs://bucket-name - Google Cloud Storage (Workload Identity supported)
+	//   - azblob://container-name - Azure Blob Storage
 	// If empty, defaults to file:// with the Path value.
 	URL string `json:"url" yaml:"url"`
 
@@ -197,7 +211,7 @@ type StorageConfig struct {
 
 	// DirectServe enables redirecting cached artifact downloads to presigned
 	// storage URLs (HTTP 302) instead of streaming bytes through the proxy.
-	// Only effective for backends that support URL signing (S3, Azure).
+	// Only effective for backends that support URL signing (S3, GCS, Azure).
 	DirectServe bool `json:"direct_serve" yaml:"direct_serve"`
 
 	// DirectServeTTL is how long presigned URLs remain valid.

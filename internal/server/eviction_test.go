@@ -32,12 +32,17 @@ func setupEvictionTest(t *testing.T) (*database.DB, *storage.Blob) {
 		_ = db.Close()
 		t.Fatalf("failed to create storage: %v", err)
 	}
+	blob, ok := store.(*storage.Blob)
+	if !ok {
+		_ = db.Close()
+		t.Fatalf("OpenBucket returned %T, want *storage.Blob", store)
+	}
 
 	t.Cleanup(func() {
 		_ = db.Close()
 	})
 
-	return db, store
+	return db, blob
 }
 
 func seedArtifact(t *testing.T, ctx context.Context, db *database.DB, store storage.Storage, name string, dataSize int, accessedAt time.Time) {
