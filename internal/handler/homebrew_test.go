@@ -99,19 +99,22 @@ func TestHomebrewHandler_PreservesSignedResponseAndClientValidators(t *testing.T
 	}
 }
 
-func TestHomebrewHandler_HeadPreservesUpstreamMethodWithMetadataCacheEnabled(t *testing.T) {
+func TestHomebrewHandler_HeadUsesMetadataCacheAndSurvivesOutage(t *testing.T) {
 	body := `{"payload":"signed bytes","signatures":[]}`
-	upstreamMethod := ""
-	upstreamAuthorization := ""
+	available := true
+	requests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upstreamMethod = r.Method
-		upstreamAuthorization = r.Header.Get("Authorization")
-		w.Header().Set("Content-Type", "application/json")
-		w.Header().Set("Content-Length", strconv.Itoa(len(body)))
-		w.Header().Set("ETag", `"head-etag"`)
-		if r.Method != http.MethodHead {
-			_, _ = io.WriteString(w, body)
+		requests++
+		if got := r.Header.Get("Authorization"); got != "" {
+			t.Errorf("upstream Authorization = %q, want empty", got)
 		}
+		if !available {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("ETag", `"head-etag"`)
+		_, _ = io.WriteString(w, body)
 	}))
 	defer upstream.Close()
 
@@ -121,28 +124,81 @@ func TestHomebrewHandler_HeadPreservesUpstreamMethodWithMetadataCacheEnabled(t *
 	proxy.HTTPClient = upstream.Client()
 	h := NewHomebrewHandler(proxy, upstream.URL+"/api").Routes()
 
-	headRequest := httptest.NewRequest(http.MethodHead, "/formula.jws.json", nil)
-	headRequest.Header.Set("Authorization", "Bearer client-secret")
-	head := httptest.NewRecorder()
-	h.ServeHTTP(head, headRequest)
+	coldRequest := httptest.NewRequest(http.MethodHead, "/formula.jws.json", nil)
+	coldRequest.Header.Set("Authorization", "Bearer client-secret")
+	cold := httptest.NewRecorder()
+	h.ServeHTTP(cold, coldRequest)
+	if cold.Code != http.StatusOK {
+		t.Fatalf("cold status = %d, want %d", cold.Code, http.StatusOK)
+	}
+	if cold.Body.Len() != 0 {
+		t.Errorf("cold body length = %d, want 0", cold.Body.Len())
+	}
+	if got := cold.Header().Get("Content-Length"); got != strconv.Itoa(len(body)) {
+		t.Errorf("Content-Length = %q, want %d", got, len(body))
+	}
+	if got := cold.Header().Get("ETag"); got != `"head-etag"` {
+		t.Errorf("ETag = %q, want %q", got, `"head-etag"`)
+	}
+	if requests != 1 {
+		t.Fatalf("cold upstream requests = %d, want 1", requests)
+	}
 
+	warm := httptest.NewRecorder()
+	h.ServeHTTP(warm, httptest.NewRequest(http.MethodHead, "/formula.jws.json", nil))
+	if warm.Code != http.StatusOK {
+		t.Fatalf("warm status = %d, want %d", warm.Code, http.StatusOK)
+	}
+	if warm.Body.Len() != 0 {
+		t.Errorf("warm body length = %d, want 0", warm.Body.Len())
+	}
+	if requests != 1 {
+		t.Errorf("warm upstream requests = %d, want 1", requests)
+	}
+
+	proxy.MetadataTTL = time.Nanosecond
+	available = false
+	stale := httptest.NewRecorder()
+	h.ServeHTTP(stale, httptest.NewRequest(http.MethodHead, "/formula.jws.json", nil))
+	if stale.Code != http.StatusOK {
+		t.Fatalf("stale status = %d, want %d; body: %s", stale.Code, http.StatusOK, stale.Body.String())
+	}
+	if stale.Body.Len() != 0 {
+		t.Errorf("stale body length = %d, want 0", stale.Body.Len())
+	}
+	if got := stale.Header().Get("Warning"); got != containerStaleWarning {
+		t.Errorf("Warning = %q, want %q", got, containerStaleWarning)
+	}
+}
+
+func TestHomebrewHandler_HeadWithoutMetadataCachePreservesUpstreamMethod(t *testing.T) {
+	upstreamMethod := ""
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamMethod = r.Method
+		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set("Content-Length", "42")
+		w.Header().Set("ETag", `"head-etag"`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = false
+	proxy.HTTPClient = upstream.Client()
+	h := NewHomebrewHandler(proxy, upstream.URL+"/api").Routes()
+
+	head := httptest.NewRecorder()
+	h.ServeHTTP(head, httptest.NewRequest(http.MethodHead, "/formula.jws.json", nil))
 	if head.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", head.Code, http.StatusOK)
 	}
 	if upstreamMethod != http.MethodHead {
 		t.Errorf("upstream method = %q, want HEAD", upstreamMethod)
 	}
-	if upstreamAuthorization != "" {
-		t.Errorf("upstream Authorization = %q, want empty", upstreamAuthorization)
-	}
 	if head.Body.Len() != 0 {
 		t.Errorf("body length = %d, want 0", head.Body.Len())
 	}
-	if got := head.Header().Get("Content-Length"); got != strconv.Itoa(len(body)) {
-		t.Errorf("Content-Length = %q, want %d", got, len(body))
-	}
-	if got := head.Header().Get("ETag"); got != `"head-etag"` {
-		t.Errorf("ETag = %q, want %q", got, `"head-etag"`)
+	if got := head.Header().Get("Content-Length"); got != "42" {
+		t.Errorf("Content-Length = %q, want 42", got)
 	}
 }
 

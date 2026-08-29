@@ -96,14 +96,16 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 	}
 	computedDigest := sha256Digest(body)
 	contentDigest := resp.Header.Get("Docker-Content-Digest")
+	for _, expected := range []string{reference, contentDigest} {
+		if strings.HasPrefix(expected, "sha256:") && expected != computedDigest {
+			h.proxy.Logger.Error("upstream manifest failed digest verification",
+				"name", name, "reference", reference, "expected", expected, "actual", computedDigest)
+			h.containerError(w, http.StatusBadGateway, "DIGEST_INVALID", "manifest digest verification failed")
+			return
+		}
+	}
 	if contentDigest == "" {
 		contentDigest = computedDigest
-	}
-	if (immutable && reference != computedDigest) || contentDigest != computedDigest {
-		h.proxy.Logger.Error("upstream manifest failed digest verification",
-			"name", name, "reference", reference, "expected", contentDigest, "actual", computedDigest)
-		h.containerError(w, http.StatusBadGateway, "DIGEST_INVALID", "manifest digest verification failed")
-		return
 	}
 
 	manifest := &cachedContainerManifest{

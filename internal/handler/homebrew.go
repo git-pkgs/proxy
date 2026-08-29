@@ -55,12 +55,7 @@ func (h *HomebrewHandler) Routes() http.Handler {
 			upstreamURL += "?" + r.URL.RawQuery
 		}
 
-		accept := r.Header.Get("Accept")
-		if r.Method == http.MethodHead {
-			h.proxy.proxyMetadataStream(w, r, upstreamURL, accept)
-			return
-		}
-		h.proxy.ProxyCached(w, r, upstreamURL, homebrewMetadataEcosystem, homebrewMetadataCacheKey(requestPath, r.URL.RawQuery), accept)
+		h.proxy.ProxyCached(w, r, upstreamURL, homebrewMetadataEcosystem, homebrewMetadataCacheKey(requestPath, r.URL.RawQuery), r.Header.Get("Accept"))
 	})
 }
 

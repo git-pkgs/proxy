@@ -894,6 +894,38 @@ func TestContainerHandler_ManifestDigestMismatchIsNotCached(t *testing.T) {
 	}
 }
 
+func TestContainerHandler_ManifestNonSHA256DigestReferenceIsProxied(t *testing.T) {
+	manifest := `{"schemaVersion":2}`
+	sha512Reference := "sha512:" + strings.Repeat("a", 128)
+	sha512Header := "sha512:" + strings.Repeat("b", 128)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+		w.Header().Set("Docker-Content-Digest", sha512Header)
+		_, _ = io.WriteString(w, manifest)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := &ContainerHandler{proxy: proxy, registryURL: upstream.URL}
+
+	for _, reference := range []string{sha512Reference, "latest"} {
+		t.Run(reference, func(t *testing.T) {
+			w := httptest.NewRecorder()
+			h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/library/nginx/manifests/"+reference, nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+			}
+			if got := w.Body.String(); got != manifest {
+				t.Errorf("body = %q, want %q", got, manifest)
+			}
+			if got := w.Header().Get("Docker-Content-Digest"); got != sha512Header {
+				t.Errorf("Docker-Content-Digest = %q, want %q", got, sha512Header)
+			}
+		})
+	}
+}
+
 func TestContainerHandler_ManifestTagWithInvalidDigestIsNotAliased(t *testing.T) {
 	manifest := `{"schemaVersion":2}`
 	invalidDigest := sha256Digest([]byte("different manifest"))
