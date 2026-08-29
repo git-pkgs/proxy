@@ -25,6 +25,13 @@ func NewCRANHandler(proxy *Proxy, proxyURL string) *CRANHandler {
 	}
 }
 
+// NewCRANHandlerWithUpstream creates a CRAN handler with a custom upstream.
+func NewCRANHandlerWithUpstream(proxy *Proxy, proxyURL, upstreamURL string) *CRANHandler {
+	h := NewCRANHandler(proxy, proxyURL)
+	h.upstreamURL = configuredUpstreamURL(upstreamURL, cranUpstream)
+	return h
+}
+
 // Routes returns the HTTP handler for CRAN requests.
 func (h *CRANHandler) Routes() http.Handler {
 	mux := http.NewServeMux()

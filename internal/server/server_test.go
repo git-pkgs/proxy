@@ -4,14 +4,17 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"html"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"strconv"
@@ -25,6 +28,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
+	"github.com/git-pkgs/registries/safehttp"
 	"github.com/go-chi/chi/v5"
 )
 
@@ -138,6 +142,142 @@ func newTestServer(t *testing.T) *testServer {
 func (ts *testServer) close() {
 	_ = ts.db.Close()
 	_ = os.RemoveAll(ts.tempDir)
+}
+
+func TestUpstreamSafeHTTPOptions(t *testing.T) {
+	opts := upstreamSafeHTTPOptions(config.UpstreamConfig{
+		AllowPrivateHosts: []string{"registry.internal"},
+		AllowLoopback:     true,
+	})
+
+	if !opts.AllowLoopback {
+		t.Fatal("AllowLoopback = false, want true")
+	}
+	privateIP := net.ParseIP("10.0.0.12")
+	if err := safehttp.CheckHostIP("registry.internal", privateIP, opts); err != nil {
+		t.Fatalf("listed private upstream rejected: %v", err)
+	}
+	if err := safehttp.CheckHostIP("other.internal", privateIP, opts); err == nil {
+		t.Fatal("unlisted private upstream was allowed")
+	}
+}
+
+func TestStartUsesConfiguredLoopbackUpstreams(t *testing.T) {
+	if os.Getenv("PROXY_TEST_LOOPBACK_UPSTREAM") == "1" {
+		testStartUsesConfiguredLoopbackUpstreams(t)
+		return
+	}
+
+	cmd := exec.Command(os.Args[0], "-test.run=^TestStartUsesConfiguredLoopbackUpstreams$")
+	cmd.Env = append(os.Environ(), "PROXY_TEST_LOOPBACK_UPSTREAM=1")
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("configured loopback upstream test failed: %v\n%s", err, output)
+	}
+}
+
+func testStartUsesConfiguredLoopbackUpstreams(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/pypi/simple/ruff/":
+			w.Header().Set("Content-Type", "application/vnd.pypi.simple.v1+json")
+			_, _ = io.WriteString(w, `{"meta":{"api-version":"1.4"},"name":"ruff","files":[]}`)
+		case "/v2/library/demo/manifests/latest":
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			w.Header().Set("Docker-Content-Digest", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
+			_, _ = io.WriteString(w, `{"schemaVersion":2}`)
+		default:
+			t.Errorf("unexpected upstream path: %q", r.URL.Path)
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving proxy address: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	listenAddress := listener.Addr().String()
+
+	tempDir := t.TempDir()
+	cfg := config.Default()
+	cfg.Listen = listenAddress
+	cfg.BaseURL = "http://" + listenAddress
+	cfg.Database.Path = filepath.Join(tempDir, "proxy.db")
+	cfg.Storage.URL = "file://" + filepath.Join(tempDir, "artifacts")
+	cfg.Upstream.PyPI = upstream.URL + "/pypi"
+	cfg.Upstream.PyPIDownload = upstream.URL + "/pypi"
+	cfg.Upstream.OCIDefault = upstream.URL
+	cfg.Upstream.AllowLoopback = true
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validating config: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	proxyServer, err := New(cfg, logger, BuildInfo{Version: "test", Commit: "test"})
+	if err != nil {
+		t.Fatalf("creating server: %v", err)
+	}
+	startErr := make(chan error, 1)
+	go func() {
+		startErr <- proxyServer.Start(listener)
+	}()
+
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := proxyServer.Shutdown(ctx); err != nil {
+			t.Errorf("shutting down server: %v", err)
+		}
+		if err := <-startErr; !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("Start() error = %v, want %v", err, http.ErrServerClosed)
+		}
+	}()
+
+	client := &http.Client{Timeout: 250 * time.Millisecond}
+	deadline := time.Now().Add(5 * time.Second)
+	for {
+		req, err := http.NewRequest(http.MethodGet, cfg.BaseURL+"/pypi/simple/ruff/", nil)
+		if err != nil {
+			t.Fatalf("creating request: %v", err)
+		}
+		req.Header.Set("Accept", "application/vnd.pypi.simple.v1+json")
+		resp, requestErr := client.Do(req)
+		if requestErr == nil {
+			body, readErr := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if readErr != nil {
+				t.Fatalf("reading response: %v", readErr)
+			}
+			if resp.StatusCode != http.StatusOK {
+				t.Fatalf("status = %d, want %d; body: %s", resp.StatusCode, http.StatusOK, body)
+			}
+			if !strings.Contains(string(body), `"name":"ruff"`) {
+				t.Fatalf("response body = %s, want PyPI metadata", body)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("proxy did not start: %v", requestErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+
+	resp, err := client.Get(cfg.BaseURL + "/v2/library/demo/manifests/latest")
+	if err != nil {
+		t.Fatalf("OCI request failed: %v", err)
+	}
+	body, readErr := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	if readErr != nil {
+		t.Fatalf("reading OCI response: %v", readErr)
+	}
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("OCI status = %d, want %d; body: %s", resp.StatusCode, http.StatusOK, body)
+	}
+	if !strings.Contains(string(body), `"schemaVersion":2`) {
+		t.Fatalf("OCI response body = %s, want manifest", body)
+	}
 }
 
 // seedTestPackage creates a package, version, and artifact in the database for testing

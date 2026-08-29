@@ -30,6 +30,13 @@ func NewPubHandler(proxy *Proxy, proxyURL string) *PubHandler {
 	}
 }
 
+// NewPubHandlerWithUpstream creates a pub handler with a custom upstream.
+func NewPubHandlerWithUpstream(proxy *Proxy, proxyURL, upstreamURL string) *PubHandler {
+	h := NewPubHandler(proxy, proxyURL)
+	h.upstreamURL = configuredUpstreamURL(upstreamURL, pubUpstream)
+	return h
+}
+
 // Routes returns the HTTP handler for pub requests.
 func (h *PubHandler) Routes() http.Handler {
 	mux := http.NewServeMux()
@@ -65,7 +72,10 @@ func (h *PubHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	h.proxy.Logger.Info("pub download request",
 		"name", name, "version", version)
 
-	result, err := h.proxy.GetOrFetchArtifact(r.Context(), "pub", name, version, filename)
+	downloadURL := h.upstreamURL + r.URL.Path
+	result, err := h.proxy.GetOrFetchArtifactFromURL(
+		r.Context(), "pub", name, version, filename, downloadURL,
+	)
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to fetch package")
 		return

@@ -53,6 +53,13 @@ func NewJuliaHandler(proxy *Proxy, _ string) *JuliaHandler {
 	}
 }
 
+// NewJuliaHandlerWithUpstream creates a Julia handler with a custom upstream.
+func NewJuliaHandlerWithUpstream(proxy *Proxy, upstreamURL string) *JuliaHandler {
+	h := NewJuliaHandler(proxy, "")
+	h.upstreamURL = configuredUpstreamURL(upstreamURL, juliaUpstream)
+	return h
+}
+
 // Routes returns the HTTP handler for Julia requests.
 func (h *JuliaHandler) Routes() http.Handler {
 	mux := http.NewServeMux()

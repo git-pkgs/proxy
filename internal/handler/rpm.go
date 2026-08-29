@@ -30,6 +30,13 @@ func NewRPMHandler(proxy *Proxy, proxyURL string) *RPMHandler {
 	}
 }
 
+// NewRPMHandlerWithUpstream creates an RPM handler with a custom upstream.
+func NewRPMHandlerWithUpstream(proxy *Proxy, proxyURL, upstreamURL string) *RPMHandler {
+	h := NewRPMHandler(proxy, proxyURL)
+	h.upstreamURL = configuredUpstreamURL(upstreamURL, defaultRPMUpstream)
+	return h
+}
+
 // Routes returns the HTTP handler for RPM requests.
 // Mount this at /rpm on your router.
 func (h *RPMHandler) Routes() http.Handler {

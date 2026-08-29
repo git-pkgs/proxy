@@ -22,7 +22,9 @@ func TestArtifactDownloadUpstreamNotFoundReturns404(t *testing.T) {
 		{"nuget", "/v3-flatcontainer/newtonsoft.json/13.0.3/newtonsoft.json.13.0.3.nupkg",
 			func(p *Proxy) http.Handler { return NewNuGetHandler(p, "http://localhost").Routes() }},
 		{"pypi", "/packages/packages/ab/cd/ef0123456789/requests-2.31.0-py3-none-any.whl",
-			func(p *Proxy) http.Handler { return NewPyPIHandler(p, "http://localhost").Routes() }},
+			func(p *Proxy) http.Handler {
+				return NewPyPIHandlerWithUpstreams(p, "http://localhost", "", "").Routes()
+			}},
 		{"cran", "/src/contrib/ggplot2_3.4.4.tar.gz",
 			func(p *Proxy) http.Handler { return NewCRANHandler(p, "http://localhost").Routes() }},
 		{"conda", "/conda-forge/linux-64/numpy-1.26.0-py311_0.tar.bz2",
