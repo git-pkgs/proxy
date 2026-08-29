@@ -11,13 +11,15 @@ import (
 )
 
 const (
-	nugetUpstream = "https://api.nuget.org"
+	nugetUpstream       = "https://api.nuget.org"
+	nugetSearchUpstream = "https://azuresearch-usnc.nuget.org"
 )
 
 // NuGetHandler handles NuGet V3 API protocol requests.
 type NuGetHandler struct {
 	proxy       *Proxy
 	upstreamURL string
+	searchURL   string
 	proxyURL    string
 }
 
@@ -26,8 +28,18 @@ func NewNuGetHandler(proxy *Proxy, proxyURL string) *NuGetHandler {
 	return &NuGetHandler{
 		proxy:       proxy,
 		upstreamURL: nugetUpstream,
+		searchURL:   nugetSearchUpstream,
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 	}
+}
+
+// NewNuGetHandlerWithUpstreams creates a NuGet handler with custom API and
+// search upstreams.
+func NewNuGetHandlerWithUpstreams(proxy *Proxy, proxyURL, upstreamURL, searchURL string) *NuGetHandler {
+	h := NewNuGetHandler(proxy, proxyURL)
+	h.upstreamURL = configuredUpstreamURL(upstreamURL, nugetUpstream)
+	h.searchURL = configuredUpstreamURL(searchURL, nugetSearchUpstream)
+	return h
 }
 
 // Routes returns the HTTP handler for NuGet requests.
@@ -103,55 +115,31 @@ func (h *NuGetHandler) rewriteServiceIndex(body []byte) ([]byte, error) {
 		id, _ := rmap["@id"].(string)
 		rtype, _ := rmap["@type"].(string)
 
-		// Rewrite URLs for services we proxy
-		if id != "" && h.shouldRewriteService(rtype) {
-			newURL := h.rewriteNuGetURL(id)
-			rmap["@id"] = newURL
+		// Rewrite URLs for services we proxy. The service type determines the
+		// local route because an upstream index may advertise a different host.
+		if id != "" {
+			rmap["@id"] = h.rewriteNuGetURL(id, rtype)
 		}
 	}
 
 	return json.Marshal(index)
 }
 
-// shouldRewriteService returns true if the service type should be rewritten.
-func (h *NuGetHandler) shouldRewriteService(serviceType string) bool {
-	// Rewrite package content and registration services
-	rewriteTypes := []string{
-		"PackageBaseAddress/3.0.0",
-		"RegistrationsBaseUrl/3.6.0",
-		"RegistrationsBaseUrl/Versioned",
-		"SearchQueryService",
-		"SearchQueryService/3.0.0-rc",
-		"SearchQueryService/3.5.0",
-		"SearchAutocompleteService",
-		"SearchAutocompleteService/3.5.0",
+// rewriteNuGetURL rewrites a NuGet service URL based on its advertised type.
+// Service types the proxy does not handle are returned unchanged.
+func (h *NuGetHandler) rewriteNuGetURL(origURL, serviceType string) string {
+	switch serviceType {
+	case "PackageBaseAddress/3.0.0":
+		return h.proxyURL + "/nuget/v3-flatcontainer/"
+	case "RegistrationsBaseUrl/3.6.0", "RegistrationsBaseUrl/Versioned":
+		return h.proxyURL + "/nuget/v3/registration5-gz-semver2/"
+	case "SearchQueryService", "SearchQueryService/3.0.0-rc", "SearchQueryService/3.5.0":
+		return h.proxyURL + "/nuget/query"
+	case "SearchAutocompleteService", "SearchAutocompleteService/3.5.0":
+		return h.proxyURL + "/nuget/autocomplete"
+	default:
+		return origURL
 	}
-
-	for _, t := range rewriteTypes {
-		if serviceType == t {
-			return true
-		}
-	}
-	return false
-}
-
-// rewriteNuGetURL rewrites a NuGet API URL to point at this proxy.
-func (h *NuGetHandler) rewriteNuGetURL(origURL string) string {
-	// Map known NuGet API endpoints to our proxy paths
-	replacements := map[string]string{
-		"https://api.nuget.org/v3-flatcontainer/":            h.proxyURL + "/nuget/v3-flatcontainer/",
-		"https://api.nuget.org/v3/registration5-gz-semver2/": h.proxyURL + "/nuget/v3/registration5-gz-semver2/",
-		"https://azuresearch-usnc.nuget.org/query":           h.proxyURL + "/nuget/query",
-		"https://azuresearch-usnc.nuget.org/autocomplete":    h.proxyURL + "/nuget/autocomplete",
-	}
-
-	for old, new := range replacements {
-		if strings.HasPrefix(origURL, old) {
-			return strings.Replace(origURL, old, new, 1)
-		}
-	}
-
-	return origURL
 }
 
 // handleRegistration proxies NuGet registration pages, applying cooldown filtering.
@@ -363,7 +351,7 @@ func (h *NuGetHandler) buildUpstreamURL(r *http.Request) string {
 
 	// Handle query and autocomplete which go to azuresearch
 	if strings.HasPrefix(path, "/query") || strings.HasPrefix(path, "/autocomplete") {
-		return "https://azuresearch-usnc.nuget.org" + path + "?" + r.URL.RawQuery
+		return h.searchURL + path + "?" + r.URL.RawQuery
 	}
 
 	return h.upstreamURL + path

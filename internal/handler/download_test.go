@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
@@ -203,16 +204,19 @@ func TestGemHandler_UpstreamProxy(t *testing.T) {
 
 func TestGemHandler_CacheMiss(t *testing.T) {
 	proxy, _, _, fetcher := setupTestProxy(t)
+	fetchesBefore := histogramSampleCount(t, metrics.UpstreamFetchDuration.WithLabelValues("gem"))
 	fetcher.artifact = &fetch.Artifact{
 		Body:        io.NopCloser(strings.NewReader("fetched gem")),
 		ContentType: "application/octet-stream",
 	}
 
-	h := NewGemHandler(proxy, "http://localhost")
+	upstreamURL := "https://packages.example.com/gem"
+	h := NewGemHandlerWithUpstream(proxy, "http://localhost", upstreamURL)
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/gems/sinatra-3.0.0.gem")
+	path := "/gems/sinatra-3.0.0.gem"
+	resp, err := http.Get(srv.URL + path)
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -220,6 +224,12 @@ func TestGemHandler_CacheMiss(t *testing.T) {
 
 	if !fetcher.fetchCalled {
 		t.Error("expected fetcher to be called on cache miss")
+	}
+	if want := upstreamURL + path; fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
+	}
+	if diff := histogramSampleCount(t, metrics.UpstreamFetchDuration.WithLabelValues("gem")) - fetchesBefore; diff != 1 {
+		t.Errorf("upstream fetch observations delta = %d, want 1", diff)
 	}
 }
 
@@ -342,11 +352,13 @@ func TestGoHandler_CacheMiss(t *testing.T) {
 		ContentType: "application/zip",
 	}
 
-	h := NewGoHandler(proxy, "http://localhost")
+	upstreamURL := "https://packages.example.com/go"
+	h := NewGoHandlerWithUpstream(proxy, "http://localhost", upstreamURL)
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/example.com/mod/@v/v1.0.0.zip")
+	path := "/example.com/mod/@v/v1.0.0.zip"
+	resp, err := http.Get(srv.URL + path)
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -354,6 +366,9 @@ func TestGoHandler_CacheMiss(t *testing.T) {
 
 	if !fetcher.fetchCalled {
 		t.Error("expected fetcher to be called on cache miss")
+	}
+	if want := upstreamURL + path; fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
 	}
 }
 
@@ -423,11 +438,13 @@ func TestHexHandler_CacheMiss(t *testing.T) {
 		ContentType: "application/x-tar",
 	}
 
-	h := NewHexHandler(proxy, "http://localhost")
+	upstreamURL := "https://packages.example.com/hex"
+	h := NewHexHandlerWithUpstreams(proxy, "http://localhost", upstreamURL, "https://packages.example.com/hex-api")
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/tarballs/plug-1.15.0.tar")
+	path := "/tarballs/plug-1.15.0.tar"
+	resp, err := http.Get(srv.URL + path)
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -435,6 +452,36 @@ func TestHexHandler_CacheMiss(t *testing.T) {
 
 	if !fetcher.fetchCalled {
 		t.Error("expected fetcher to be called on cache miss")
+	}
+	if want := upstreamURL + path; fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
+	}
+}
+
+func TestPubHandler_CacheMiss(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("fetched pub package")),
+		ContentType: "application/gzip",
+	}
+
+	upstreamURL := "https://packages.example.com/pub"
+	h := NewPubHandlerWithUpstream(proxy, "http://localhost", upstreamURL)
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	path := "/packages/flutter_bloc/versions/8.1.6.tar.gz"
+	resp, err := http.Get(srv.URL + path)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if !fetcher.fetchCalled {
+		t.Error("expected fetcher to be called on cache miss")
+	}
+	if want := upstreamURL + path; fetcher.fetchedURL != want {
+		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
 	}
 }
 

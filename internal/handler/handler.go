@@ -47,6 +47,13 @@ func hasDotDotSegment(path string) bool {
 	return false
 }
 
+func configuredUpstreamURL(value, defaultValue string) string {
+	if value == "" {
+		value = defaultValue
+	}
+	return strings.TrimRight(value, "/")
+}
+
 const defaultHTTPTimeout = 30 * time.Second
 
 const artifactCopyBufferSize = 32 << 10
@@ -880,8 +887,11 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 	p.Logger.Info("fetching from upstream",
 		"ecosystem", ecosystem, "name", name, "version", version, "url", downloadURL)
 
+	fetchStart := time.Now()
 	artifact, err := p.Fetcher.FetchWithHeaders(ctx, downloadURL, headers)
+	metrics.RecordUpstreamFetch(ecosystem, time.Since(fetchStart))
 	if err != nil {
+		metrics.RecordUpstreamError(ecosystem, "fetch_failed")
 		if errors.Is(err, fetch.ErrNotFound) {
 			return nil, ErrUpstreamNotFound
 		}
@@ -889,9 +899,12 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 	}
 
 	storagePath := storage.ArtifactPath(ecosystem, "", name, version, filename)
+	storeStart := time.Now()
 	size, hash, err := p.Storage.Store(ctx, storagePath, artifact.Body)
 	_ = artifact.Body.Close()
+	metrics.RecordStorageOperation("write", time.Since(storeStart))
 	if err != nil {
+		metrics.RecordStorageError("write")
 		return nil, fmt.Errorf("storing artifact: %w", err)
 	}
 
@@ -899,8 +912,11 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 		p.Logger.Warn("failed to update cache database", "error", err)
 	}
 
+	readStart := time.Now()
 	reader, err := p.Storage.Open(ctx, storagePath)
+	metrics.RecordStorageOperation("read", time.Since(readStart))
 	if err != nil {
+		metrics.RecordStorageError("read")
 		return nil, fmt.Errorf("opening cached artifact: %w", err)
 	}
 

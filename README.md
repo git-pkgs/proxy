@@ -506,6 +506,8 @@ cooldown:
   default: "3d"
 ```
 
+See the [configuration reference](docs/configuration.md#upstream-registries) for every upstream key, environment variable, and default URL.
+
 Run with config file:
 
 ```bash

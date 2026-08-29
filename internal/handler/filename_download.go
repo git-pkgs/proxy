@@ -6,11 +6,12 @@ import (
 )
 
 type filenameDownload struct {
-	ecosystem string
-	suffix    string
-	parseErr  string
-	fetchErr  string
-	parse     func(string) (name, version string)
+	ecosystem   string
+	upstreamURL string
+	suffix      string
+	parseErr    string
+	fetchErr    string
+	parse       func(string) (name, version string)
 }
 
 func (p *Proxy) handleFilenameDownload(w http.ResponseWriter, r *http.Request, d filenameDownload) {
@@ -29,7 +30,10 @@ func (p *Proxy) handleFilenameDownload(w http.ResponseWriter, r *http.Request, d
 	p.Logger.Info(d.ecosystem+" download request",
 		"name", name, "version", version, "filename", filename)
 
-	result, err := p.GetOrFetchArtifact(r.Context(), d.ecosystem, name, version, filename)
+	downloadURL := d.upstreamURL + r.URL.Path
+	result, err := p.GetOrFetchArtifactFromURL(
+		r.Context(), d.ecosystem, name, version, filename, downloadURL,
+	)
 	if err != nil {
 		p.serveArtifactError(w, err, d.fetchErr)
 		return

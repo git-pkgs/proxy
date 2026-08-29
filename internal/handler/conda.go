@@ -29,6 +29,13 @@ func NewCondaHandler(proxy *Proxy, proxyURL string) *CondaHandler {
 	}
 }
 
+// NewCondaHandlerWithUpstream creates a Conda handler with a custom upstream.
+func NewCondaHandlerWithUpstream(proxy *Proxy, proxyURL, upstreamURL string) *CondaHandler {
+	h := NewCondaHandler(proxy, proxyURL)
+	h.upstreamURL = configuredUpstreamURL(upstreamURL, condaUpstream)
+	return h
+}
+
 // Routes returns the HTTP handler for Conda requests.
 func (h *CondaHandler) Routes() http.Handler {
 	mux := http.NewServeMux()

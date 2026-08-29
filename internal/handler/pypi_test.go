@@ -39,7 +39,7 @@ func setupPyPIHandler(t testing.TB, transport pypiRoundTripFunc) (*PyPIHandler, 
 
 	proxy, _, _, _ := setupTestProxy(t)
 	proxy.HTTPClient = &http.Client{Transport: transport}
-	h := NewPyPIHandler(proxy, "http://proxy.test")
+	h := NewPyPIHandlerWithUpstreams(proxy, "http://proxy.test", "", "")
 	h.upstreamURL = "https://pypi.test"
 	return h, proxy
 }
@@ -430,7 +430,7 @@ func TestPyPIHandler_DownloadUpstreamURL(t *testing.T) {
 		ContentType: "application/octet-stream",
 	}
 
-	h := NewPyPIHandler(proxy, "http://localhost")
+	h := NewPyPIHandlerWithUpstreams(proxy, "http://localhost", "", "")
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
@@ -458,7 +458,7 @@ func TestPyPIHandler_DownloadCacheHit(t *testing.T) {
 	seedPackage(t, db, store, "pypi", "requests", "2.31.0",
 		"requests-2.31.0-py3-none-any.whl", "wheel binary data")
 
-	h := NewPyPIHandler(proxy, "http://localhost")
+	h := NewPyPIHandlerWithUpstreams(proxy, "http://localhost", "", "")
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
@@ -484,7 +484,7 @@ func TestPyPIHandler_DownloadCacheMiss(t *testing.T) {
 		ContentType: "application/octet-stream",
 	}
 
-	h := NewPyPIHandler(proxy, "http://localhost")
+	h := NewPyPIHandlerWithUpstreams(proxy, "http://localhost", "", "")
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 

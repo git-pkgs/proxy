@@ -30,6 +30,13 @@ func NewGoHandler(proxy *Proxy, proxyURL string) *GoHandler {
 	}
 }
 
+// NewGoHandlerWithUpstream creates a Go module handler with a custom upstream.
+func NewGoHandlerWithUpstream(proxy *Proxy, proxyURL, upstreamURL string) *GoHandler {
+	h := NewGoHandler(proxy, proxyURL)
+	h.upstreamURL = configuredUpstreamURL(upstreamURL, goUpstream)
+	return h
+}
+
 // Routes returns the HTTP handler for Go proxy requests.
 func (h *GoHandler) Routes() http.Handler {
 	// Go module paths can contain slashes, so just use the handler directly
@@ -101,7 +108,10 @@ func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, modul
 	h.proxy.Logger.Info("go module download request",
 		"module", decodedModule, "version", version)
 
-	result, err := h.proxy.GetOrFetchArtifact(r.Context(), "golang", decodedModule, version, filename)
+	downloadURL := h.upstreamURL + r.URL.Path
+	result, err := h.proxy.GetOrFetchArtifactFromURL(
+		r.Context(), "golang", decodedModule, version, filename, downloadURL,
+	)
 	if err != nil {
 		if errors.Is(err, fetch.ErrNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)

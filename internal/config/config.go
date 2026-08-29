@@ -289,12 +289,54 @@ type AccessLogConfig struct {
 	Path string `json:"path" yaml:"path"`
 }
 
-// UpstreamConfig configures upstream registry URLs and authentication.
+// UpstreamConfig configures upstream URLs for built-in routes and authentication.
 // Leave empty to use defaults.
 type UpstreamConfig struct {
+	// AllowPrivateHosts permits listed upstream hosts to resolve to private addresses.
+	AllowPrivateHosts []string `json:"allow_private_hosts" yaml:"allow_private_hosts"`
+
+	// AllowLoopback permits upstream requests and redirects to loopback addresses.
+	AllowLoopback bool `json:"allow_loopback" yaml:"allow_loopback"`
+
 	// NPM is the upstream npm registry URL.
 	// Default: https://registry.npmjs.org
 	NPM string `json:"npm" yaml:"npm"`
+
+	// Cargo is the upstream cargo index URL.
+	// Default: https://index.crates.io
+	Cargo string `json:"cargo" yaml:"cargo"`
+
+	// CargoDownload is the upstream cargo download URL.
+	// Default: https://static.crates.io/crates
+	CargoDownload string `json:"cargo_download" yaml:"cargo_download"`
+
+	// Gem is the upstream RubyGems registry URL.
+	// Default: https://rubygems.org
+	Gem string `json:"gem" yaml:"gem"`
+
+	// Go is the upstream Go module proxy URL.
+	// Default: https://proxy.golang.org
+	Go string `json:"go" yaml:"go"`
+
+	// Hex is the upstream Hex repository URL.
+	// Default: https://repo.hex.pm
+	Hex string `json:"hex" yaml:"hex"`
+
+	// HexAPI is the upstream Hex API URL used for package timestamps.
+	// Default: https://hex.pm
+	HexAPI string `json:"hex_api" yaml:"hex_api"`
+
+	// Pub is the upstream pub registry URL.
+	// Default: https://pub.dev
+	Pub string `json:"pub" yaml:"pub"`
+
+	// PyPI is the upstream PyPI index and API URL.
+	// Default: https://pypi.org
+	PyPI string `json:"pypi" yaml:"pypi"`
+
+	// PyPIDownload is the upstream PyPI package download URL.
+	// Default: https://files.pythonhosted.org
+	PyPIDownload string `json:"pypi_download" yaml:"pypi_download"`
 
 	// Maven is the upstream Maven repository URL.
 	// Default: https://repo1.maven.org/maven2
@@ -305,18 +347,50 @@ type UpstreamConfig struct {
 	// Default: https://plugins.gradle.org/m2
 	GradlePluginPortal string `json:"gradle_plugin_portal" yaml:"gradle_plugin_portal"`
 
-	// Cargo is the upstream cargo index URL.
-	// Default: https://index.crates.io
-	Cargo string `json:"cargo" yaml:"cargo"`
+	// NuGet is the upstream NuGet API URL.
+	// Default: https://api.nuget.org
+	NuGet string `json:"nuget" yaml:"nuget"`
 
-	// CargoDownload is the upstream cargo download URL.
-	// Default: https://static.crates.io/crates
-	CargoDownload string `json:"cargo_download" yaml:"cargo_download"`
+	// NuGetSearch is the upstream NuGet search API URL.
+	// Default: https://azuresearch-usnc.nuget.org
+	NuGetSearch string `json:"nuget_search" yaml:"nuget_search"`
+
+	// Composer is the upstream Packagist API URL.
+	// Default: https://packagist.org
+	Composer string `json:"composer" yaml:"composer"`
+
+	// ComposerRepository is the upstream Packagist repository URL.
+	// Default: https://repo.packagist.org
+	ComposerRepository string `json:"composer_repository" yaml:"composer_repository"`
+
+	// Conan is the upstream Conan registry URL.
+	// Default: https://center.conan.io
+	Conan string `json:"conan" yaml:"conan"`
+
+	// Conda is the upstream Conda channel base URL.
+	// Default: https://conda.anaconda.org
+	Conda string `json:"conda" yaml:"conda"`
+
+	// CRAN is the upstream CRAN mirror URL.
+	// Default: https://cloud.r-project.org
+	CRAN string `json:"cran" yaml:"cran"`
+
+	// Julia is the upstream Julia package server URL.
+	// Default: https://pkg.julialang.org
+	Julia string `json:"julia" yaml:"julia"`
+
+	// OCIDefault is the default upstream OCI registry URL.
+	// Default: https://registry-1.docker.io
+	OCIDefault string `json:"oci_default" yaml:"oci_default"`
 
 	// Debian is the upstream APT repository base URL.
 	// Example: http://archive.ubuntu.com/ubuntu would get Ubuntu.
 	// Default: http://deb.debian.org/debian
 	Debian string `json:"debian" yaml:"debian"`
+
+	// RPM is the upstream RPM repository base URL.
+	// Default: https://dl.fedoraproject.org/pub/fedora/linux
+	RPM string `json:"rpm" yaml:"rpm"`
 
 	// Helm maps repository names to HTTP Helm chart repository URLs.
 	// Requests use /helm/{name}/index.yaml and chart URLs in the index are
@@ -471,11 +545,28 @@ func Default() *Config {
 		},
 		Upstream: UpstreamConfig{
 			NPM:                "https://registry.npmjs.org",
-			Maven:              "https://repo1.maven.org/maven2",
-			GradlePluginPortal: "https://plugins.gradle.org/m2",
 			Cargo:              "https://index.crates.io",
 			CargoDownload:      "https://static.crates.io/crates",
+			Gem:                "https://rubygems.org",
+			Go:                 "https://proxy.golang.org",
+			Hex:                "https://repo.hex.pm",
+			HexAPI:             "https://hex.pm",
+			Pub:                "https://pub.dev",
+			PyPI:               "https://pypi.org",
+			PyPIDownload:       "https://files.pythonhosted.org",
+			Maven:              "https://repo1.maven.org/maven2",
+			GradlePluginPortal: "https://plugins.gradle.org/m2",
+			NuGet:              "https://api.nuget.org",
+			NuGetSearch:        "https://azuresearch-usnc.nuget.org",
+			Composer:           "https://packagist.org",
+			ComposerRepository: "https://repo.packagist.org",
+			Conan:              "https://center.conan.io",
+			Conda:              "https://conda.anaconda.org",
+			CRAN:               "https://cloud.r-project.org",
+			Julia:              "https://pkg.julialang.org",
+			OCIDefault:         "https://registry-1.docker.io",
 			Debian:             "http://deb.debian.org/debian",
+			RPM:                "https://dl.fedoraproject.org/pub/fedora/linux",
 		},
 		Gradle: GradleConfig{
 			BuildCache: GradleBuildCacheConfig{
@@ -535,6 +626,22 @@ func setEnvBool(dst *bool, key string) {
 	}
 }
 
+func setEnvStringSlice(dst *[]string, key string) {
+	value := os.Getenv(key)
+	if value == "" {
+		return
+	}
+	var items []string
+	for item := range strings.SplitSeq(value, ",") {
+		if item = strings.TrimSpace(item); item != "" {
+			items = append(items, item)
+		}
+	}
+	if len(items) > 0 {
+		*dst = items
+	}
+}
+
 // LoadFromEnv applies environment variable overrides to a Config.
 // Environment variables use the PROXY_ prefix:
 //   - PROXY_LISTEN
@@ -563,9 +670,31 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Log.Level, "PROXY_LOG_LEVEL")
 	setEnvString(&c.Log.Format, "PROXY_LOG_FORMAT")
 	setEnvString(&c.AccessLog.Path, "PROXY_ACCESS_LOG_PATH")
+	setEnvStringSlice(&c.Upstream.AllowPrivateHosts, "PROXY_UPSTREAM_ALLOW_PRIVATE_HOSTS")
+	setEnvBool(&c.Upstream.AllowLoopback, "PROXY_UPSTREAM_ALLOW_LOOPBACK")
+	setEnvString(&c.Upstream.NPM, "PROXY_UPSTREAM_NPM")
+	setEnvString(&c.Upstream.Cargo, "PROXY_UPSTREAM_CARGO")
+	setEnvString(&c.Upstream.CargoDownload, "PROXY_UPSTREAM_CARGO_DOWNLOAD")
+	setEnvString(&c.Upstream.Gem, "PROXY_UPSTREAM_GEM")
+	setEnvString(&c.Upstream.Go, "PROXY_UPSTREAM_GO")
+	setEnvString(&c.Upstream.Hex, "PROXY_UPSTREAM_HEX")
+	setEnvString(&c.Upstream.HexAPI, "PROXY_UPSTREAM_HEX_API")
+	setEnvString(&c.Upstream.Pub, "PROXY_UPSTREAM_PUB")
+	setEnvString(&c.Upstream.PyPI, "PROXY_UPSTREAM_PYPI")
+	setEnvString(&c.Upstream.PyPIDownload, "PROXY_UPSTREAM_PYPI_DOWNLOAD")
 	setEnvString(&c.Upstream.Maven, "PROXY_UPSTREAM_MAVEN")
 	setEnvString(&c.Upstream.GradlePluginPortal, "PROXY_UPSTREAM_GRADLE_PLUGIN_PORTAL")
+	setEnvString(&c.Upstream.NuGet, "PROXY_UPSTREAM_NUGET")
+	setEnvString(&c.Upstream.NuGetSearch, "PROXY_UPSTREAM_NUGET_SEARCH")
+	setEnvString(&c.Upstream.Composer, "PROXY_UPSTREAM_COMPOSER")
+	setEnvString(&c.Upstream.ComposerRepository, "PROXY_UPSTREAM_COMPOSER_REPOSITORY")
+	setEnvString(&c.Upstream.Conan, "PROXY_UPSTREAM_CONAN")
+	setEnvString(&c.Upstream.Conda, "PROXY_UPSTREAM_CONDA")
+	setEnvString(&c.Upstream.CRAN, "PROXY_UPSTREAM_CRAN")
+	setEnvString(&c.Upstream.Julia, "PROXY_UPSTREAM_JULIA")
+	setEnvString(&c.Upstream.OCIDefault, "PROXY_UPSTREAM_OCI_DEFAULT")
 	setEnvString(&c.Upstream.Debian, "PROXY_UPSTREAM_DEBIAN")
+	setEnvString(&c.Upstream.RPM, "PROXY_UPSTREAM_RPM")
 	setEnvString(&c.Cooldown.Default, "PROXY_COOLDOWN_DEFAULT")
 	setEnvBool(&c.CacheMetadata, "PROXY_CACHE_METADATA")
 	setEnvBool(&c.MirrorAPI, "PROXY_MIRROR_API")

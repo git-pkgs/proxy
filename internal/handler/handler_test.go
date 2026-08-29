@@ -19,7 +19,9 @@ import (
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
+	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
+	dto "github.com/prometheus/client_model/go"
 )
 
 // mockStorage implements storage.Storage for testing.
@@ -147,6 +149,19 @@ func setupTestProxy(t testing.TB) (*Proxy, *database.DB, *mockStorage, *mockFetc
 
 	proxy := NewProxy(db, store, fetcher, resolver, logger)
 	return proxy, db, store, fetcher
+}
+
+func histogramSampleCount(t testing.TB, observer prometheus.Observer) uint64 {
+	t.Helper()
+	metric, ok := observer.(prometheus.Metric)
+	if !ok {
+		t.Fatal("observer does not implement prometheus.Metric")
+	}
+	value := &dto.Metric{}
+	if err := metric.Write(value); err != nil {
+		t.Fatalf("writing Prometheus metric: %v", err)
+	}
+	return value.GetHistogram().GetSampleCount()
 }
 
 // seedPackage creates a package, version, and cached artifact in the test DB and storage.
@@ -636,6 +651,9 @@ func TestGetOrFetchArtifactFromURL_CacheHit(t *testing.T) {
 func TestGetOrFetchArtifactFromURL_CacheMiss(t *testing.T) {
 	proxy, _, store, fetcher := setupTestProxy(t)
 	missesBefore := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("pypi"))
+	fetchesBefore := histogramSampleCount(t, metrics.UpstreamFetchDuration.WithLabelValues("pypi"))
+	writesBefore := histogramSampleCount(t, metrics.StorageOperationDuration.WithLabelValues("write"))
+	readsBefore := histogramSampleCount(t, metrics.StorageOperationDuration.WithLabelValues("read"))
 
 	fetcher.artifact = &fetch.Artifact{
 		Body:        io.NopCloser(strings.NewReader("fetched content")),
@@ -672,11 +690,21 @@ func TestGetOrFetchArtifactFromURL_CacheMiss(t *testing.T) {
 	if diff := missesAfter - missesBefore; diff != 1 {
 		t.Errorf("cache misses delta = %.0f, want 1", diff)
 	}
+	if diff := histogramSampleCount(t, metrics.UpstreamFetchDuration.WithLabelValues("pypi")) - fetchesBefore; diff != 1 {
+		t.Errorf("upstream fetch observations delta = %d, want 1", diff)
+	}
+	if diff := histogramSampleCount(t, metrics.StorageOperationDuration.WithLabelValues("write")) - writesBefore; diff != 1 {
+		t.Errorf("storage write observations delta = %d, want 1", diff)
+	}
+	if diff := histogramSampleCount(t, metrics.StorageOperationDuration.WithLabelValues("read")) - readsBefore; diff != 1 {
+		t.Errorf("storage read observations delta = %d, want 1", diff)
+	}
 }
 
 func TestGetOrFetchArtifactFromURL_FetchError(t *testing.T) {
 	proxy, _, _, fetcher := setupTestProxy(t)
 	fetcher.fetchErr = errors.New("connection refused")
+	errorsBefore := testutil.ToFloat64(metrics.UpstreamErrors.WithLabelValues("pypi", "fetch_failed"))
 
 	_, err := proxy.GetOrFetchArtifactFromURL(context.Background(), "pypi", "fail", "1.0.0", "fail-1.0.0.tar.gz", "https://pypi.org/files/fail-1.0.0.tar.gz")
 	if err == nil {
@@ -685,11 +713,15 @@ func TestGetOrFetchArtifactFromURL_FetchError(t *testing.T) {
 	if !strings.Contains(err.Error(), "fetching from upstream") {
 		t.Errorf("expected upstream error, got: %v", err)
 	}
+	if diff := testutil.ToFloat64(metrics.UpstreamErrors.WithLabelValues("pypi", "fetch_failed")) - errorsBefore; diff != 1 {
+		t.Errorf("upstream errors delta = %.0f, want 1", diff)
+	}
 }
 
 func TestGetOrFetchArtifactFromURL_StoreError(t *testing.T) {
 	proxy, _, store, fetcher := setupTestProxy(t)
 	store.storeErr = errors.New("disk full")
+	errorsBefore := testutil.ToFloat64(metrics.StorageErrors.WithLabelValues("write"))
 	fetcher.artifact = &fetch.Artifact{
 		Body:        io.NopCloser(strings.NewReader("data")),
 		ContentType: "application/gzip",
@@ -701,6 +733,9 @@ func TestGetOrFetchArtifactFromURL_StoreError(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "storing artifact") {
 		t.Errorf("expected storage error, got: %v", err)
+	}
+	if diff := testutil.ToFloat64(metrics.StorageErrors.WithLabelValues("write")) - errorsBefore; diff != 1 {
+		t.Errorf("storage errors delta = %.0f, want 1", diff)
 	}
 }
 
