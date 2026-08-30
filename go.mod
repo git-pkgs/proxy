@@ -14,7 +14,7 @@ require (
 	github.com/git-pkgs/integrity v0.1.1
 	github.com/git-pkgs/magic v0.2.0
 	github.com/git-pkgs/purl v0.1.19
-	github.com/git-pkgs/registries v0.8.1
+	github.com/git-pkgs/registries v0.9.0
 	github.com/git-pkgs/spdx v0.3.1
 	github.com/git-pkgs/vers v0.6.0
 	github.com/git-pkgs/vulns v0.2.2
@@ -132,8 +132,9 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fzipp/gocyclo v0.6.0 // indirect
 	github.com/ghostiam/protogetter v0.3.21 // indirect
+	github.com/git-pkgs/artifacts v0.2.0 // indirect
 	github.com/git-pkgs/packageurl-go v0.3.1 // indirect
-	github.com/git-pkgs/pom v0.1.5 // indirect
+	github.com/git-pkgs/pom v0.1.7 // indirect
 	github.com/github/go-spdx/v2 v2.7.0 // indirect
 	github.com/go-critic/go-critic v0.14.4 // indirect
 	github.com/go-logr/logr v1.4.3 // indirect
@@ -227,6 +228,7 @@ require (
 	github.com/nunnatsa/ginkgolinter v0.24.0 // indirect
 	github.com/oapi-codegen/nullable v1.2.0 // indirect
 	github.com/oapi-codegen/runtime v1.6.0 // indirect
+	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/package-url/packageurl-go v0.1.7 // indirect
 	github.com/pandatix/go-cvss v0.6.2 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect

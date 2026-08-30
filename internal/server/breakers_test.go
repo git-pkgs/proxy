@@ -18,7 +18,9 @@ import (
 	dto "github.com/prometheus/client_model/go"
 )
 
-// cbThreshold in registries/fetch: consecutive failures needed to trip.
+// cbThreshold in registries/fetch: failures inside the breaker's rolling window
+// needed to trip it. The library counts the window, not a consecutive run, so
+// these fetches only have to land close together, which they do.
 const breakerTripFailures = 5
 
 // fakeBreakerSource reports breaker state without a real fetcher, so tests can

@@ -31,10 +31,12 @@ type HealthResponse struct {
 	Status string                 `json:"status"`
 	Checks map[string]HealthCheck `json:"checks"`
 	// CircuitBreakers reports the state ("open" or "closed") of each upstream
-	// registry's artifact-fetch circuit breaker, omitted when no breaker has
-	// been created yet. An open breaker fails every artifact fetch for that
-	// host without contacting it, but says nothing about this proxy's own
-	// health, so it does not change Status.
+	// registry's artifact-fetch circuit breaker, keyed by the host fetched from
+	// or, where the fetch URL has none to read, by an opaque placeholder
+	// standing in for it. It is omitted when no breaker has been created yet.
+	// An open breaker fails every artifact fetch it covers without contacting
+	// the upstream, but says nothing about this proxy's own health, so it does
+	// not change Status.
 	CircuitBreakers map[string]string `json:"circuit_breakers,omitempty"`
 }
 
