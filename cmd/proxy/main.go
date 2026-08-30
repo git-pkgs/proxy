@@ -428,7 +428,12 @@ func runMirror() {
 	var source mirror.Source
 	switch {
 	case *sbomPath != "":
-		source = &mirror.SBOMSource{Path: *sbomPath}
+		data, err := os.ReadFile(*sbomPath)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "error reading SBOM %s: %v\n", *sbomPath, err)
+			os.Exit(1)
+		}
+		source = &mirror.SBOMSource{Data: data}
 	case len(purls) > 0:
 		source = &mirror.PURLSource{PURLs: purls}
 	default:

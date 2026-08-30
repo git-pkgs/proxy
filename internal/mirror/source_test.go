@@ -3,8 +3,6 @@ package mirror
 import (
 	"context"
 	"encoding/json"
-	"os"
-	"path/filepath"
 	"testing"
 )
 
@@ -116,8 +114,7 @@ func TestSBOMSourceCycloneDXJSON(t *testing.T) {
 		},
 	}
 
-	path := writeTempJSON(t, bom)
-	source := &SBOMSource{Path: path}
+	source := &SBOMSource{Data: marshalJSON(t, bom)}
 
 	var items []PackageVersion
 	err := source.Enumerate(context.Background(), func(pv PackageVersion) error {
@@ -164,8 +161,7 @@ func TestSBOMSourceSPDXJSON(t *testing.T) {
 		},
 	}
 
-	path := writeTempJSON(t, doc)
-	source := &SBOMSource{Path: path}
+	source := &SBOMSource{Data: marshalJSON(t, doc)}
 
 	var items []PackageVersion
 	err := source.Enumerate(context.Background(), func(pv PackageVersion) error {
@@ -185,24 +181,19 @@ func TestSBOMSourceSPDXJSON(t *testing.T) {
 	}
 }
 
-func TestSBOMSourceNonexistentFile(t *testing.T) {
-	source := &SBOMSource{Path: "/nonexistent/sbom.json"}
+func TestSBOMSourceEmptyData(t *testing.T) {
+	source := &SBOMSource{}
 
 	err := source.Enumerate(context.Background(), func(pv PackageVersion) error {
 		return nil
 	})
 	if err == nil {
-		t.Fatal("expected error for nonexistent file")
+		t.Fatal("expected error for empty SBOM")
 	}
 }
 
 func TestSBOMSourceInvalidFormat(t *testing.T) {
-	path := filepath.Join(t.TempDir(), "invalid.txt")
-	if err := os.WriteFile(path, []byte("this is not an SBOM"), 0644); err != nil {
-		t.Fatal(err)
-	}
-
-	source := &SBOMSource{Path: path}
+	source := &SBOMSource{Data: []byte("this is not an SBOM")}
 	err := source.Enumerate(context.Background(), func(pv PackageVersion) error {
 		return nil
 	})
@@ -216,11 +207,9 @@ func TestSBOMSourceEmptyCycloneDX(t *testing.T) {
 		"bomFormat":   "CycloneDX",
 		"specVersion": "1.4",
 	}
-	path := writeTempJSON(t, bom)
-
 	// This should fall through to SPDX parsing, which will also fail,
 	// resulting in an error about not being able to parse
-	source := &SBOMSource{Path: path}
+	source := &SBOMSource{Data: marshalJSON(t, bom)}
 	err := source.Enumerate(context.Background(), func(pv PackageVersion) error {
 		return nil
 	})
@@ -229,15 +218,11 @@ func TestSBOMSourceEmptyCycloneDX(t *testing.T) {
 	}
 }
 
-func writeTempJSON(t *testing.T, v any) string {
+func marshalJSON(t *testing.T, v any) []byte {
 	t.Helper()
 	data, err := json.Marshal(v)
 	if err != nil {
 		t.Fatal(err)
 	}
-	path := filepath.Join(t.TempDir(), "sbom.json")
-	if err := os.WriteFile(path, data, 0644); err != nil {
-		t.Fatal(err)
-	}
-	return path
+	return data
 }

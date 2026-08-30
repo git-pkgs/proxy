@@ -71,6 +71,42 @@ func TestMirrorAPICreateJob(t *testing.T) {
 	}
 }
 
+func TestMirrorAPICreateJobFromInlineSBOM(t *testing.T) {
+	h := setupMirrorAPI(t)
+
+	body, err := json.Marshal(mirror.JobRequest{
+		SBOM: json.RawMessage(`{
+			"bomFormat":"CycloneDX",
+			"specVersion":"1.4",
+			"components":[{
+				"type":"library",
+				"name":"lodash",
+				"version":"4.17.21",
+				"purl":"pkg:npm/lodash@4.17.21"
+			}]
+		}`),
+	})
+	if err != nil {
+		t.Fatalf("marshaling request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/mirror", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.HandleCreate(w, req)
+
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want %d: %s", w.Code, http.StatusAccepted, w.Body.String())
+	}
+
+	var resp map[string]string
+	if err := json.NewDecoder(w.Body).Decode(&resp); err != nil {
+		t.Fatalf("decoding response: %v", err)
+	}
+	if resp["id"] == "" {
+		t.Error("expected non-empty job ID")
+	}
+}
+
 func TestMirrorAPICreateOversizedBody(t *testing.T) {
 	h := setupMirrorAPI(t)
 

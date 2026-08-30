@@ -3,6 +3,7 @@ package mirror
 import (
 	"context"
 	"crypto/rand"
+	"encoding/json"
 	"fmt"
 	"sync"
 	"time"
@@ -35,8 +36,9 @@ type Job struct {
 
 // JobRequest is the JSON body for starting a mirror job via the API.
 type JobRequest struct {
-	PURLs    []string `json:"purls,omitempty"`
-	Registry string   `json:"registry,omitempty"`
+	PURLs    []string        `json:"purls,omitempty"`
+	SBOM     json.RawMessage `json:"sbom,omitempty"`
+	Registry string          `json:"registry,omitempty"`
 }
 
 // JobStore manages in-memory mirror jobs.
@@ -192,10 +194,12 @@ func (js *JobStore) sourceFromRequest(req JobRequest) (Source, error) { //nolint
 	switch {
 	case len(req.PURLs) > 0:
 		return &PURLSource{PURLs: req.PURLs}, nil
+	case len(req.SBOM) > 0:
+		return &SBOMSource{Data: req.SBOM}, nil
 	case req.Registry != "":
 		return nil, fmt.Errorf("registry mirroring is not yet implemented; use purls instead")
 	default:
-		return nil, fmt.Errorf("request must include purls")
+		return nil, fmt.Errorf("request must include purls or sbom")
 	}
 }
 
