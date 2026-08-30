@@ -192,6 +192,8 @@ func (js *JobStore) runJob(ctx context.Context, cancel context.CancelFunc, job *
 
 func (js *JobStore) sourceFromRequest(req JobRequest) (Source, error) { //nolint:ireturn // interface return is the design
 	switch {
+	case len(req.PURLs) > 0 && len(req.SBOM) > 0:
+		return nil, fmt.Errorf("request must include only one of purls or sbom")
 	case len(req.PURLs) > 0:
 		return &PURLSource{PURLs: req.PURLs}, nil
 	case len(req.SBOM) > 0:

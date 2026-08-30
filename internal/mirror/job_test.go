@@ -119,6 +119,19 @@ func TestSourceFromRequestSBOM(t *testing.T) {
 	}
 }
 
+func TestSourceFromRequestRejectsPURLsAndSBOM(t *testing.T) {
+	m := setupTestMirror(t, 1)
+	js := NewJobStore(context.Background(), m)
+
+	_, err := js.sourceFromRequest(JobRequest{
+		PURLs: []string{"pkg:npm/lodash@4.17.21"},
+		SBOM:  json.RawMessage(`{"bomFormat":"CycloneDX","components":[]}`),
+	})
+	if err == nil {
+		t.Fatal("expected error when both purls and sbom are provided")
+	}
+}
+
 func TestSourceFromRequestRegistryRejected(t *testing.T) {
 	m := setupTestMirror(t, 1)
 	js := NewJobStore(context.Background(), m)

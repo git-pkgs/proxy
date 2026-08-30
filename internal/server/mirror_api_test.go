@@ -107,6 +107,26 @@ func TestMirrorAPICreateJobFromInlineSBOM(t *testing.T) {
 	}
 }
 
+func TestMirrorAPICreateJobRejectsPURLsAndSBOM(t *testing.T) {
+	h := setupMirrorAPI(t)
+
+	body, err := json.Marshal(mirror.JobRequest{
+		PURLs: []string{"pkg:npm/lodash@4.17.21"},
+		SBOM:  json.RawMessage(`{"bomFormat":"CycloneDX","components":[]}`),
+	})
+	if err != nil {
+		t.Fatalf("marshaling request: %v", err)
+	}
+
+	req := httptest.NewRequest(http.MethodPost, "/api/mirror", bytes.NewReader(body))
+	w := httptest.NewRecorder()
+	h.HandleCreate(w, req)
+
+	if w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadRequest)
+	}
+}
+
 func TestMirrorAPICreateOversizedBody(t *testing.T) {
 	h := setupMirrorAPI(t)
 

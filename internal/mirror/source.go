@@ -96,12 +96,16 @@ func (s *PURLSource) fetchVersions(ctx context.Context, client *registries.Clien
 // SBOMSource extracts package versions from CycloneDX or SPDX SBOM data.
 type SBOMSource struct {
 	Data      []byte
+	Name      string
 	RegClient *registries.Client
 }
 
 func (s *SBOMSource) Enumerate(ctx context.Context, fn func(PackageVersion) error) error {
 	purls, err := s.extractPURLs()
 	if err != nil {
+		if s.Name != "" {
+			return fmt.Errorf("parsing SBOM %s: %w", s.Name, err)
+		}
 		return fmt.Errorf("parsing SBOM: %w", err)
 	}
 

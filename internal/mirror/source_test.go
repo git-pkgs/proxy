@@ -3,6 +3,7 @@ package mirror
 import (
 	"context"
 	"encoding/json"
+	"strings"
 	"testing"
 )
 
@@ -193,12 +194,15 @@ func TestSBOMSourceEmptyData(t *testing.T) {
 }
 
 func TestSBOMSourceInvalidFormat(t *testing.T) {
-	source := &SBOMSource{Data: []byte("this is not an SBOM")}
+	source := &SBOMSource{Data: []byte("this is not an SBOM"), Name: "invalid.sbom"}
 	err := source.Enumerate(context.Background(), func(pv PackageVersion) error {
 		return nil
 	})
 	if err == nil {
 		t.Fatal("expected error for invalid SBOM")
+	}
+	if !strings.Contains(err.Error(), "invalid.sbom") {
+		t.Errorf("error = %q, want source name", err)
 	}
 }
 
