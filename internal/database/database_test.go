@@ -1099,3 +1099,56 @@ func BenchmarkMigrateSchemaFullyMigrated(b *testing.B) {
 		}
 	}
 }
+
+func TestVersionPublishedAtPreserved(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		publishedAt := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
+
+		if err := db.SetVersionPublishedAt("pkg:npm/leftpad@1.0.0", "pkg:npm/leftpad", publishedAt); err != nil {
+			t.Fatalf("SetVersionPublishedAt failed: %v", err)
+		}
+
+		got, err := db.GetVersionByPURL("pkg:npm/leftpad@1.0.0")
+		if err != nil || got == nil {
+			t.Fatalf("GetVersionByPURL failed: %v", err)
+		}
+		if !got.PublishedAt.Valid || !got.PublishedAt.Time.Equal(publishedAt) {
+			t.Fatalf("PublishedAt = %v, want %v", got.PublishedAt, publishedAt)
+		}
+
+		// An upsert that carries no publish time (the artifact cache path)
+		// must not erase the stored value.
+		if err := db.UpsertVersion(&Version{
+			PURL:        "pkg:npm/leftpad@1.0.0",
+			PackagePURL: "pkg:npm/leftpad",
+		}); err != nil {
+			t.Fatalf("UpsertVersion failed: %v", err)
+		}
+
+		got, err = db.GetVersionByPURL("pkg:npm/leftpad@1.0.0")
+		if err != nil || got == nil {
+			t.Fatalf("GetVersionByPURL after upsert failed: %v", err)
+		}
+		if !got.PublishedAt.Valid || !got.PublishedAt.Time.Equal(publishedAt) {
+			t.Fatalf("PublishedAt after null upsert = %v, want %v preserved", got.PublishedAt, publishedAt)
+		}
+
+		// An upsert that does carry a publish time still updates it.
+		later := publishedAt.Add(24 * time.Hour)
+		if err := db.UpsertVersion(&Version{
+			PURL:        "pkg:npm/leftpad@1.0.0",
+			PackagePURL: "pkg:npm/leftpad",
+			PublishedAt: sql.NullTime{Time: later, Valid: true},
+		}); err != nil {
+			t.Fatalf("UpsertVersion with publish time failed: %v", err)
+		}
+
+		got, err = db.GetVersionByPURL("pkg:npm/leftpad@1.0.0")
+		if err != nil || got == nil {
+			t.Fatalf("GetVersionByPURL after second upsert failed: %v", err)
+		}
+		if !got.PublishedAt.Valid || !got.PublishedAt.Time.Equal(later) {
+			t.Fatalf("PublishedAt after valued upsert = %v, want %v", got.PublishedAt, later)
+		}
+	})
+}

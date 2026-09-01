@@ -141,7 +141,7 @@ func (db *DB) UpsertVersion(v *Version) error {
 			ON CONFLICT(purl) DO UPDATE SET
 				license = EXCLUDED.license,
 				integrity = EXCLUDED.integrity,
-				published_at = EXCLUDED.published_at,
+				published_at = COALESCE(EXCLUDED.published_at, versions.published_at),
 				yanked = EXCLUDED.yanked,
 				enriched_at = EXCLUDED.enriched_at,
 				updated_at = EXCLUDED.updated_at
@@ -154,7 +154,7 @@ func (db *DB) UpsertVersion(v *Version) error {
 			ON CONFLICT(purl) DO UPDATE SET
 				license = excluded.license,
 				integrity = excluded.integrity,
-				published_at = excluded.published_at,
+				published_at = COALESCE(excluded.published_at, published_at),
 				yanked = excluded.yanked,
 				enriched_at = excluded.enriched_at,
 				updated_at = excluded.updated_at
@@ -167,6 +167,38 @@ func (db *DB) UpsertVersion(v *Version) error {
 	)
 	if err != nil {
 		return fmt.Errorf("upserting version: %w", err)
+	}
+	return nil
+}
+
+// SetVersionPublishedAt records a version's publish time, creating the
+// versions row if the proxy has not seen the version yet. It only writes
+// published_at, so it never disturbs enrichment data on an existing row.
+func (db *DB) SetVersionPublishedAt(versionPURL, packagePURL string, publishedAt time.Time) error {
+	now := time.Now()
+	var query string
+
+	if db.dialect == DialectPostgres {
+		query = `
+			INSERT INTO versions (purl, package_purl, published_at, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT(purl) DO UPDATE SET
+				published_at = EXCLUDED.published_at,
+				updated_at = EXCLUDED.updated_at
+		`
+	} else {
+		query = `
+			INSERT INTO versions (purl, package_purl, published_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(purl) DO UPDATE SET
+				published_at = excluded.published_at,
+				updated_at = excluded.updated_at
+		`
+	}
+
+	_, err := db.Exec(query, versionPURL, packagePURL, publishedAt, now, now)
+	if err != nil {
+		return fmt.Errorf("setting version publish time: %w", err)
 	}
 	return nil
 }
