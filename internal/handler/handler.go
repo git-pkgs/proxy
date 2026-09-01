@@ -112,8 +112,11 @@ type Proxy struct {
 	MetadataMaxSize     int64
 	GradleReadOnly      bool
 	GradleMaxUploadSize int64
-	DirectServe         bool
-	DirectServeTTL      time.Duration
+	// NPMFullMetadata requests full npm packuments from upstream even when
+	// cooldown is disabled, so served metadata carries publish times.
+	NPMFullMetadata bool
+	DirectServe     bool
+	DirectServeTTL  time.Duration
 	// DirectServeBaseURL, if set, replaces the scheme and host of presigned
 	// URLs so clients receive a public address even when the proxy reaches
 	// storage at an internal one.

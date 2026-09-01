@@ -316,6 +316,13 @@ type UpstreamConfig struct {
 	// Default: https://registry.npmjs.org
 	NPM string `json:"npm" yaml:"npm"`
 
+	// NPMFullMetadata always requests the full packument (application/json)
+	// from the npm upstream, so served metadata carries the "time" map even
+	// when cooldown is disabled. Clients that gate on publish age (for
+	// example Yarn's npmMinimalAgeGate) need this.
+	// Default: false (the abbreviated format is preferred).
+	NPMFullMetadata bool `json:"npm_full_metadata" yaml:"npm_full_metadata"`
+
 	// Cargo is the upstream cargo index URL.
 	// Default: https://index.crates.io
 	Cargo string `json:"cargo" yaml:"cargo"`
@@ -687,6 +694,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvStringSlice(&c.Upstream.AllowPrivateHosts, "PROXY_UPSTREAM_ALLOW_PRIVATE_HOSTS")
 	setEnvBool(&c.Upstream.AllowLoopback, "PROXY_UPSTREAM_ALLOW_LOOPBACK")
 	setEnvString(&c.Upstream.NPM, "PROXY_UPSTREAM_NPM")
+	setEnvBool(&c.Upstream.NPMFullMetadata, "PROXY_UPSTREAM_NPM_FULL_METADATA")
 	setEnvString(&c.Upstream.Cargo, "PROXY_UPSTREAM_CARGO")
 	setEnvString(&c.Upstream.CargoDownload, "PROXY_UPSTREAM_CARGO_DOWNLOAD")
 	setEnvString(&c.Upstream.Gem, "PROXY_UPSTREAM_GEM")

@@ -103,6 +103,10 @@ upstream:
 
   # npm registry URL
   npm: "https://registry.npmjs.org"
+  # Always request full npm packuments so served metadata carries publish
+  # times ("time" map) even when cooldown is disabled. Needed by clients that
+  # gate on publish age, e.g. Yarn's npmMinimalAgeGate. Default: false.
+  # npm_full_metadata: true
 
   # Cargo sparse index URL
   cargo: "https://index.crates.io"

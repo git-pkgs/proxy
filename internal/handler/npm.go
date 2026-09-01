@@ -76,8 +76,10 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 	// Artifactory, which returns 406) can still respond with full metadata.
 	// When cooldown is enabled we must use full metadata exclusively because the
 	// abbreviated format omits the "time" map required for version age filtering.
+	// Operators can also force full metadata so clients that gate on publish
+	// age (for example Yarn's npmMinimalAgeGate) keep working through the proxy.
 	accept := npmAcceptDefault
-	if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
+	if h.proxy.NPMFullMetadata || (h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled()) {
 		accept = contentTypeJSON
 	}
 
