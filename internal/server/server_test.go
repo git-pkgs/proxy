@@ -187,7 +187,6 @@ func testStartUsesConfiguredLoopbackUpstreams(t *testing.T) {
 			_, _ = io.WriteString(w, `{"meta":{"api-version":"1.4"},"name":"ruff","files":[]}`)
 		case "/v2/library/demo/manifests/latest":
 			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
-			w.Header().Set("Docker-Content-Digest", "sha256:aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa")
 			_, _ = io.WriteString(w, `{"schemaVersion":2}`)
 		default:
 			t.Errorf("unexpected upstream path: %q", r.URL.Path)

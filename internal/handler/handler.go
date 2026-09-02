@@ -97,6 +97,8 @@ const (
 	headerContentType     = "Content-Type"
 	headerContentLength   = "Content-Length"
 	headerContentEncoding = "Content-Encoding"
+	headerETag            = "ETag"
+	headerLastModified    = "Last-Modified"
 )
 
 // defaultMetadataMaxSize is used when Proxy.MetadataMaxSize is unset.
@@ -530,7 +532,7 @@ func ServeArtifact(w http.ResponseWriter, result *CacheResult) {
 func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
 	if result.RedirectURL != "" {
 		if result.Hash != "" {
-			w.Header().Set("ETag", `"`+result.Hash+`"`)
+			w.Header().Set(headerETag, `"`+result.Hash+`"`)
 		}
 		w.Header().Set("Location", result.RedirectURL)
 		w.WriteHeader(http.StatusFound)
@@ -548,7 +550,7 @@ func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
 		w.Header().Set(headerContentLength, strconv.FormatInt(result.Size, 10))
 	}
 	if result.Hash != "" {
-		w.Header().Set("ETag", `"`+result.Hash+`"`)
+		w.Header().Set(headerETag, `"`+result.Hash+`"`)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -840,12 +842,12 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		body:            body,
 		contentType:     resp.Header.Get(headerContentType),
 		contentEncoding: resp.Header.Get(headerContentEncoding),
-		etag:            resp.Header.Get("ETag"),
+		etag:            resp.Header.Get(headerETag),
 	}
 	if meta.contentType == "" {
 		meta.contentType = contentTypeJSON
 	}
-	if lm := resp.Header.Get("Last-Modified"); lm != "" {
+	if lm := resp.Header.Get(headerLastModified); lm != "" {
 		meta.lastModified, _ = http.ParseTime(lm)
 	}
 	return meta, nil
@@ -942,10 +944,10 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 	cm := p.lookupCachedMeta(ecosystem, cacheKey)
 
 	if cm.etag != "" {
-		w.Header().Set("ETag", cm.etag)
+		w.Header().Set(headerETag, cm.etag)
 	}
 	if !cm.lastModified.IsZero() {
-		w.Header().Set("Last-Modified", cm.lastModified.UTC().Format(http.TimeFormat))
+		w.Header().Set(headerLastModified, cm.lastModified.UTC().Format(http.TimeFormat))
 	}
 	if cm.etag != "" {
 		if match := r.Header.Get("If-None-Match"); match != "" && match == cm.etag {
@@ -968,10 +970,10 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 		w.Header().Set(headerContentEncoding, cm.contentEncoding)
 	}
 	if cm.etag != "" {
-		w.Header().Set("ETag", cm.etag)
+		w.Header().Set(headerETag, cm.etag)
 	}
 	if !cm.lastModified.IsZero() {
-		w.Header().Set("Last-Modified", cm.lastModified.UTC().Format(http.TimeFormat))
+		w.Header().Set(headerLastModified, cm.lastModified.UTC().Format(http.TimeFormat))
 	}
 	if cm.stale {
 		w.Header().Set("Warning", `110 - "Response is Stale"`)
@@ -1015,7 +1017,7 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for _, header := range []string{headerContentType, headerContentLength, headerContentEncoding, "Last-Modified", "ETag"} {
+	for _, header := range []string{headerContentType, headerContentLength, headerContentEncoding, headerLastModified, headerETag} {
 		if v := resp.Header.Get(header); v != "" {
 			w.Header().Set(header, v)
 		}

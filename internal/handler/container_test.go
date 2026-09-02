@@ -1005,8 +1005,8 @@ func TestContainerHandler_ManifestByTag_UsesStaleCacheOnUpstreamFailure(t *testi
 }
 
 func TestContainerHandler_ManifestVariantCacheNormalizesCompatibleAccept(t *testing.T) {
-	digest := "sha256:abababababababababababababababababababababababababababababababab"
 	manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json"}`
+	digest := sha256Digest([]byte(manifest))
 	upstreamAvailable := true
 	upstreamRequests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1108,8 +1108,8 @@ func TestContainerHandler_ManifestMigratesLegacyAcceptCacheKey(t *testing.T) {
 }
 
 func TestContainerHandler_ManifestDualWritesLegacyAcceptCacheKeys(t *testing.T) {
-	digest := "sha256:dededededededededededededededededededededededededededededededede"
 	manifest := `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.manifest.v1+json"}`
+	digest := sha256Digest([]byte(manifest))
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/v2/library/nginx/manifests/latest" {
 			http.NotFound(w, r)
@@ -1146,7 +1146,8 @@ func TestContainerHandler_ManifestDualWritesLegacyAcceptCacheKeys(t *testing.T) 
 }
 
 func TestContainerHandler_ManifestVariantCacheHonorsSpecificAcceptExclusions(t *testing.T) {
-	digest := "sha256:cdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcdcd"
+	manifest := `{"schemaVersion":2}`
+	digest := sha256Digest([]byte(manifest))
 	upstreamAvailable := true
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		if !upstreamAvailable {
@@ -1155,7 +1156,7 @@ func TestContainerHandler_ManifestVariantCacheHonorsSpecificAcceptExclusions(t *
 		}
 		w.Header().Set("Content-Type", "application/vnd.oci.image.index.v1+json")
 		w.Header().Set("Docker-Content-Digest", digest)
-		_, _ = io.WriteString(w, `{"schemaVersion":2}`)
+		_, _ = io.WriteString(w, manifest)
 	}))
 	defer upstream.Close()
 

@@ -274,7 +274,7 @@ func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request,
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for _, header := range []string{headerContentType, headerContentLength, "Docker-Content-Digest", "ETag", "Last-Modified"} {
+	for _, header := range []string{headerContentType, headerContentLength, "Docker-Content-Digest", headerETag, headerLastModified} {
 		if v := resp.Header.Get(header); v != "" {
 			w.Header().Set(header, v)
 		}

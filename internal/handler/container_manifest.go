@@ -112,9 +112,9 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 		body:          body,
 		contentType:   resp.Header.Get(headerContentType),
 		contentDigest: contentDigest,
-		etag:          resp.Header.Get("ETag"),
+		etag:          resp.Header.Get(headerETag),
 		size:          int64(len(body)),
-		lastModified:  parseHTTPTime(resp.Header.Get("Last-Modified")),
+		lastModified:  parseHTTPTime(resp.Header.Get(headerLastModified)),
 		fetchedAt:     time.Now(),
 	}
 	h.storeContainerManifestForAccept(r.Context(), registryURL, name, reference, accept, cacheAccept, manifest)
@@ -251,10 +251,10 @@ func writeContainerManifest(w http.ResponseWriter, r *http.Request, manifest *ca
 		w.Header().Set("Docker-Content-Digest", manifest.contentDigest)
 	}
 	if manifest.etag != "" {
-		w.Header().Set("ETag", manifest.etag)
+		w.Header().Set(headerETag, manifest.etag)
 	}
 	if !manifest.lastModified.IsZero() {
-		w.Header().Set("Last-Modified", manifest.lastModified.UTC().Format(http.TimeFormat))
+		w.Header().Set(headerLastModified, manifest.lastModified.UTC().Format(http.TimeFormat))
 	}
 	if stale {
 		w.Header().Set("Warning", containerStaleWarning)
@@ -412,7 +412,7 @@ func containerAcceptQuality(params map[string]string) float64 {
 }
 
 func copyContainerManifestHeaders(destination, source http.Header) {
-	for _, header := range []string{headerContentType, headerContentLength, "Docker-Content-Digest", "ETag", "Last-Modified", "WWW-Authenticate"} {
+	for _, header := range []string{headerContentType, headerContentLength, "Docker-Content-Digest", headerETag, headerLastModified, "WWW-Authenticate"} {
 		if value := source.Get(header); value != "" {
 			destination.Set(header, value)
 		}

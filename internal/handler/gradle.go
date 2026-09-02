@@ -172,7 +172,7 @@ func (h *GradleBuildCacheHandler) handlePut(w http.ResponseWriter, r *http.Reque
 	}
 
 	w.Header().Set(headerContentLength, "0")
-	w.Header().Set("ETag", `"`+hash+`"`)
+	w.Header().Set(headerETag, `"`+hash+`"`)
 
 	w.WriteHeader(http.StatusCreated)
 }
