@@ -136,7 +136,7 @@ func (h *HelmHandler) serveChart(w http.ResponseWriter, r *http.Request, reposit
 	}
 
 	if result.ContentType == "" {
-		w.Header().Set("Content-Type", "application/gzip")
+		w.Header().Set(headerContentType, "application/gzip")
 	}
 	ServeArtifact(w, result)
 }

@@ -80,7 +80,7 @@ func (h *CargoHandler) handleConfig(w http.ResponseWriter, r *http.Request) {
 		DL: h.proxyURL + "/cargo/crates/{crate}/{version}/download",
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, "application/json")
 	_ = json.NewEncoder(w).Encode(config)
 }
 
@@ -112,7 +112,7 @@ func (h *CargoHandler) handleIndex(w http.ResponseWriter, r *http.Request) {
 		contentType = "text/plain; charset=utf-8"
 	}
 
-	w.Header().Set("Content-Type", contentType)
+	w.Header().Set(headerContentType, contentType)
 	w.WriteHeader(http.StatusOK)
 	h.applyCooldownFiltering(w, body)
 }

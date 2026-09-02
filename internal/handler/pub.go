@@ -110,13 +110,13 @@ func (h *PubHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 	rewritten, err := h.rewriteMetadata(name, body)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to rewrite metadata, proxying original", "error", err)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(body)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, "application/json")
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(rewritten)
 }

@@ -85,12 +85,12 @@ func (h *NuGetHandler) handleServiceIndex(w http.ResponseWriter, r *http.Request
 	rewritten, err := h.rewriteServiceIndex(body)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to rewrite service index, proxying original", "error", err)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, "application/json")
 		_, _ = w.Write(body)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, "application/json")
 	_, _ = w.Write(rewritten)
 }
 
@@ -188,12 +188,12 @@ func (h *NuGetHandler) handleRegistration(w http.ResponseWriter, r *http.Request
 	filtered, err := h.applyCooldownFiltering(body)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to filter registration, proxying original", "error", err)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, "application/json")
 		_, _ = w.Write(body)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, "application/json")
 	_, _ = w.Write(filtered)
 }
 

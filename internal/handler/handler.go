@@ -91,7 +91,11 @@ func packagePURLStrings(ecosystem, name, version string) (string, string, error)
 
 const contentTypeJSON = "application/json"
 
-const headerAcceptEncoding = "Accept-Encoding"
+const (
+	headerAcceptEncoding = "Accept-Encoding"
+	headerContentType    = "Content-Type"
+	headerContentLength  = "Content-Length"
+)
 
 // defaultMetadataMaxSize is used when Proxy.MetadataMaxSize is unset.
 const defaultMetadataMaxSize = 100 << 20
@@ -453,10 +457,10 @@ func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
 	}
 
 	if result.ContentType != "" {
-		w.Header().Set("Content-Type", result.ContentType)
+		w.Header().Set(headerContentType, result.ContentType)
 	}
 	if result.Size > 0 || (method == http.MethodHead && result.Size == 0) {
-		w.Header().Set("Content-Length", strconv.FormatInt(result.Size, 10))
+		w.Header().Set(headerContentLength, strconv.FormatInt(result.Size, 10))
 	}
 	if result.Hash != "" {
 		w.Header().Set("ETag", `"`+result.Hash+`"`)
@@ -537,7 +541,7 @@ func (p *Proxy) ProxyFile(w http.ResponseWriter, r *http.Request, upstreamURL st
 
 // JSONError writes a JSON error response.
 func JSONError(w http.ResponseWriter, status int, message string) {
-	w.Header().Set("Content-Type", contentTypeJSON)
+	w.Header().Set(headerContentType, contentTypeJSON)
 	w.WriteHeader(status)
 	_, _ = fmt.Fprintf(w, `{"error":%q}`, message)
 }
@@ -711,7 +715,7 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		return nil, "", "", zeroTime, fmt.Errorf("reading response: %w", err)
 	}
 
-	contentType := resp.Header.Get("Content-Type")
+	contentType := resp.Header.Get(headerContentType)
 	if contentType == "" {
 		contentType = contentTypeJSON
 	}
@@ -826,8 +830,8 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 		}
 	}
 
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.Header().Set(headerContentType, contentType)
+	w.Header().Set(headerContentLength, strconv.Itoa(len(body)))
 	if cm.etag != "" {
 		w.Header().Set("ETag", cm.etag)
 	}
@@ -870,7 +874,7 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for _, header := range []string{"Content-Type", "Content-Length", "Last-Modified", "ETag"} {
+	for _, header := range []string{headerContentType, headerContentLength, "Last-Modified", "ETag"} {
 		if v := resp.Header.Get(header); v != "" {
 			w.Header().Set(header, v)
 		}

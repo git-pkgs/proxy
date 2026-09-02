@@ -135,7 +135,7 @@ func (h *HexHandler) handlePackages(w http.ResponseWriter, r *http.Request) {
 
 	if len(filteredVersions) == 0 {
 		// No versions to filter or couldn't get timestamps, pass through
-		w.Header().Set("Content-Type", protoResp.Header.Get("Content-Type"))
+		w.Header().Set(headerContentType, protoResp.Header.Get(headerContentType))
 		w.Header().Set("Content-Encoding", "gzip")
 		_, _ = w.Write(body)
 		return
@@ -144,13 +144,13 @@ func (h *HexHandler) handlePackages(w http.ResponseWriter, r *http.Request) {
 	filtered, err := h.filterSignedPackage(body, filteredVersions)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to filter hex package, proxying original", "error", err)
-		w.Header().Set("Content-Type", protoResp.Header.Get("Content-Type"))
+		w.Header().Set(headerContentType, protoResp.Header.Get(headerContentType))
 		w.Header().Set("Content-Encoding", "gzip")
 		_, _ = w.Write(body)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/octet-stream")
+	w.Header().Set(headerContentType, "application/octet-stream")
 	w.Header().Set("Content-Encoding", "gzip")
 	_, _ = w.Write(filtered)
 }

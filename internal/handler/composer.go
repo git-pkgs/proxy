@@ -77,7 +77,7 @@ func (h *ComposerHandler) handleServiceIndex(w http.ResponseWriter, r *http.Requ
 		"providers-lazy-url": h.proxyURL + "/composer/p2/%package%.json",
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, "application/json")
 	_ = json.NewEncoder(w).Encode(index)
 }
 
@@ -113,12 +113,12 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 	rewritten, err := h.rewriteMetadata(body)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to rewrite metadata, proxying original", "error", err)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, "application/json")
 		_, _ = w.Write(body)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, "application/json")
 	_, _ = w.Write(rewritten)
 }
 
