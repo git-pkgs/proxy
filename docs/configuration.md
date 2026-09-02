@@ -215,6 +215,22 @@ uses the `ghcr` registry with `owner/chart` as its repository.
 When the proxy uses plain HTTP (for example `localhost:8080`), pass
 `--plain-http` to Helm OCI commands.
 
+```yaml
+upstream:
+
+  # Named Alpine APK repositories, served at /apk/{name}/.
+  apk:
+    alpine: "https://dl-cdn.alpinelinux.org/alpine"
+```
+
+Alpine APK repositories are read-only. Requests to `/apk/{name}/…` mirror the
+upstream layout, e.g. `/apk/alpine/v3.22/main/x86_64/APKINDEX.tar.gz`. Indexes
+(v2 `APKINDEX.tar.gz`, v3 `Packages.adb`) and detached signatures are cached
+with the metadata TTL and served byte-for-byte unchanged so apk signature
+verification keeps working; `.apk` packages use the shared artifact cache.
+When `upstream.apk` is empty, a single repository named `alpine` pointing at
+the official mirror is available; configuring any entry replaces that default.
+
 ## Authentication
 
 Configure authentication for private upstream registries. The same authentication-aware client is used for metadata and artifact downloads, and credentials can reference environment variables using `${VAR_NAME}` syntax.
