@@ -304,12 +304,20 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 // predictable and lockfiles record them directly, so `npm ci` reaches the
 // download path without ever requesting metadata.
 //
-// The packument is served from the metadata cache, so this normally costs no
-// extra upstream request. A version with no usable publish time is allowed
-// through, matching how applyCooldownFiltering treats it.
+// A version's publish time is immutable, so the check reads the stored
+// versions row first and only falls back to the packument for a version the
+// proxy has never seen, persisting the parsed time so the packument is
+// fetched and parsed at most once per version. A version with no usable
+// publish time is allowed through, matching how applyCooldownFiltering
+// treats it.
 func (h *NPMHandler) versionInCooldown(r *http.Request, packageName, version string) bool {
 	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
 		return false
+	}
+
+	versionPURL := canonicalVersionPURL("npm", packageName, version)
+	if ver, err := h.proxy.DB.GetVersionByPURL(versionPURL); err == nil && ver != nil && ver.PublishedAt.Valid {
+		return !h.proxy.Cooldown.IsAllowed("npm", canonicalPackagePURL("npm", packageName), ver.PublishedAt.Time)
 	}
 
 	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, url.PathEscape(packageName))
@@ -338,6 +346,11 @@ func (h *NPMHandler) versionInCooldown(r *http.Request, packageName, version str
 	publishedAt, err := time.Parse(time.RFC3339, published)
 	if err != nil {
 		return false
+	}
+
+	if err := h.proxy.DB.SetVersionPublishedAt(versionPURL, canonicalPackagePURL("npm", packageName), publishedAt); err != nil {
+		h.proxy.Logger.Warn("cooldown: could not store npm publish time",
+			"package", packageName, "version", version, "error", err)
 	}
 
 	return !h.proxy.Cooldown.IsAllowed("npm", canonicalPackagePURL("npm", packageName), publishedAt)

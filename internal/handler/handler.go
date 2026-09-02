@@ -71,6 +71,12 @@ func canonicalPackagePURL(ecosystem, name string) string {
 	return purl.MakePURLString(ecosystem, name, "")
 }
 
+// canonicalVersionPURL returns a versioned PURL in canonical form, matching
+// the keys the artifact cache writes to the versions table.
+func canonicalVersionPURL(ecosystem, name, version string) string {
+	return purl.MakePURLString(ecosystem, name, version)
+}
+
 const contentTypeJSON = "application/json"
 
 const headerAcceptEncoding = "Accept-Encoding"
