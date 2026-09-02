@@ -16,6 +16,7 @@
 //   - /conda/*    - Conda/Anaconda protocol
 //   - /cran/*     - CRAN (R) protocol
 //   - /julia/*    - Julia Pkg server protocol
+//   - /swift/*    - Swift Package Registry protocol
 //   - /v2/*       - OCI/Docker container registry protocol
 //   - /apk/*      - Alpine APK repository protocol
 //   - /debian/*   - Debian/APT repository protocol
@@ -71,8 +72,8 @@ import (
 	upstreamhttp "github.com/git-pkgs/proxy/internal/httpclient"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/mirror"
+	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/proxy/internal/storage"
-	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
 	"github.com/git-pkgs/registries/safehttp"
 	"github.com/git-pkgs/spdx"
@@ -302,6 +303,7 @@ func (s *Server) serve(listener net.Listener) error {
 	condaHandler := handler.NewCondaHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Conda)
 	cranHandler := handler.NewCRANHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.CRAN)
 	juliaHandler := handler.NewJuliaHandlerWithUpstream(proxy, s.cfg.Upstream.Julia)
+	swiftHandler := handler.NewSwiftHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Swift)
 	containerHandler := handler.NewContainerHandlerWithRegistry(
 		proxy,
 		s.cfg.BaseURL,
@@ -328,6 +330,7 @@ func (s *Server) serve(listener net.Listener) error {
 	r.Mount("/conda", http.StripPrefix("/conda", condaHandler.Routes()))
 	r.Mount("/cran", http.StripPrefix("/cran", cranHandler.Routes()))
 	r.Mount("/julia", http.StripPrefix("/julia", juliaHandler.Routes()))
+	r.Mount("/swift", http.StripPrefix("/swift", swiftHandler.Routes()))
 	r.Mount("/v2", http.StripPrefix("/v2", containerHandler.Routes()))
 	r.Mount("/helm", http.StripPrefix("/helm", helmHandler.Routes()))
 	r.Mount("/apk", http.StripPrefix("/apk", apkHandler.Routes()))
@@ -882,7 +885,7 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 		return
 	}
 
-	versionPURL := purl.MakePURLString(ecosystem, name, version)
+	versionPURL := packageurl.WithVersionString(pkg.PURL, version)
 	ver, err := s.db.GetVersionByPURL(versionPURL)
 	if err != nil || ver == nil {
 		s.logger.Error("failed to get version", "error", err)
@@ -922,6 +925,14 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 	if err := s.templates.Render(w, "version_show", data); err != nil {
 		s.logger.Error("failed to render version show", "error", err)
 	}
+}
+
+func (s *Server) cachedVersionPURL(ecosystem, name, version string) string {
+	pkg, err := s.db.GetPackageByEcosystemName(ecosystem, name)
+	if err != nil || pkg == nil {
+		return ""
+	}
+	return packageurl.WithVersionString(pkg.PURL, version)
 }
 
 func (s *Server) showBrowseSource(w http.ResponseWriter, r *http.Request, ecosystem, name, version string) {

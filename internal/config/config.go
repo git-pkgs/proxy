@@ -75,6 +75,9 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
+// DefaultSwiftUpstream is the Swift Package Registry used when none is configured.
+const DefaultSwiftUpstream = "https://tuist.dev/api/registry/swift"
+
 // Config holds all configuration for the proxy server.
 type Config struct {
 	// Listen is the address to listen on (e.g., ":8080", "127.0.0.1:8080").
@@ -404,6 +407,10 @@ type UpstreamConfig struct {
 	// Default: https://registry-1.docker.io
 	OCIDefault string `json:"oci_default" yaml:"oci_default"`
 
+	// Swift is the upstream Swift Package Registry URL.
+	// Default: https://tuist.dev/api/registry/swift
+	Swift string `json:"swift" yaml:"swift"`
+
 	// Debian is the upstream APT repository base URL.
 	// Example: http://archive.ubuntu.com/ubuntu would get Ubuntu.
 	// Default: http://deb.debian.org/debian
@@ -599,6 +606,7 @@ func Default() *Config {
 			Conda:              "https://conda.anaconda.org",
 			CRAN:               "https://cloud.r-project.org",
 			Julia:              "https://pkg.julialang.org",
+			Swift:              DefaultSwiftUpstream,
 			OCIDefault:         "https://registry-1.docker.io",
 			Debian:             "http://deb.debian.org/debian",
 			RPM:                "https://dl.fedoraproject.org/pub/fedora/linux",
@@ -688,6 +696,7 @@ func setEnvStringSlice(dst *[]string, key string) {
 //   - PROXY_LOG_LEVEL
 //   - PROXY_LOG_FORMAT
 //   - PROXY_ACCESS_LOG_PATH
+//   - PROXY_UPSTREAM_SWIFT
 //   - PROXY_HEALTH_STORAGE_PROBE_INTERVAL
 func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Listen, "PROXY_LISTEN")
@@ -728,6 +737,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Upstream.Conda, "PROXY_UPSTREAM_CONDA")
 	setEnvString(&c.Upstream.CRAN, "PROXY_UPSTREAM_CRAN")
 	setEnvString(&c.Upstream.Julia, "PROXY_UPSTREAM_JULIA")
+	setEnvString(&c.Upstream.Swift, "PROXY_UPSTREAM_SWIFT")
 	setEnvString(&c.Upstream.OCIDefault, "PROXY_UPSTREAM_OCI_DEFAULT")
 	setEnvString(&c.Upstream.Debian, "PROXY_UPSTREAM_DEBIAN")
 	setEnvString(&c.Upstream.RPM, "PROXY_UPSTREAM_RPM")

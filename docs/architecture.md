@@ -269,6 +269,10 @@ HTTP protocol handlers for each registry type.
 - `handleIndex()` - Proxy sparse index
 - `handleDownload()` - Serve cached crate
 
+**SwiftHandler:**
+- Proxies the Swift Package Registry v1 read endpoints
+- Rewrites release URLs and caches source archives
+
 ### `internal/server`
 
 HTTP server setup, web UI, and API handlers.

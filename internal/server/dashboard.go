@@ -2,6 +2,7 @@ package server
 
 import (
 	"html/template"
+	"strings"
 
 	"github.com/git-pkgs/proxy/internal/database"
 )
@@ -141,6 +142,7 @@ func supportedEcosystems() []string {
 		"pub",
 		"pypi",
 		"rpm",
+		"swift",
 	}
 }
 
@@ -185,6 +187,8 @@ func ecosystemBadgeClasses(ecosystem string) string {
 		return base + " bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
 	case "julia":
 		return base + " bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
+	case "swift":
+		return base + " bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300"
 	case "oci":
 		return base + " bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300"
 	case "deb":
@@ -199,6 +203,11 @@ func ecosystemBadgeClasses(ecosystem string) string {
 }
 
 func getRegistryConfigs(baseURL string) []RegistryConfig {
+	swiftInsecureFlag := ""
+	if strings.HasPrefix(strings.ToLower(baseURL), "http://") {
+		swiftInsecureFlag = "--allow-insecure-http "
+	}
+
 	return []RegistryConfig{
 		{
 			ID:       "npm",
@@ -399,6 +408,15 @@ local({
 <p class="config-note">Or inside a running session:</p>
 <pre><code>ENV["JULIA_PKG_SERVER"] = "` + baseURL + `/julia"
 using Pkg; Pkg.update()</code></pre>`),
+		},
+		{
+			ID:       "swift",
+			Name:     "Swift Package Registry",
+			Language: "Swift",
+			Endpoint: "/swift/",
+			Instructions: template.HTML(`<p class="config-note">Configure SwiftPM to use the proxy for this project:</p>
+<pre><code>swift package-registry set ` + swiftInsecureFlag + baseURL + `/swift</code></pre>
+<p class="config-note">Use scoped package identifiers in Package.swift, for example <code>apple.swift-argument-parser</code>.</p>`),
 		},
 		{
 			ID:       "oci",

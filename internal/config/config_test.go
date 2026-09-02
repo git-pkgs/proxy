@@ -36,6 +36,7 @@ func upstreamConfigValues(upstream UpstreamConfig) map[string]string {
 		"conda":                upstream.Conda,
 		"cran":                 upstream.CRAN,
 		"julia":                upstream.Julia,
+		"swift":                upstream.Swift,
 		"oci_default":          upstream.OCIDefault,
 		"debian":               upstream.Debian,
 		"rpm":                  upstream.RPM,
@@ -64,6 +65,7 @@ func defaultUpstreamValues() map[string]string {
 		"conda":                "https://conda.anaconda.org",
 		"cran":                 "https://cloud.r-project.org",
 		"julia":                "https://pkg.julialang.org",
+		"swift":                "https://tuist.dev/api/registry/swift",
 		"oci_default":          "https://registry-1.docker.io",
 		"debian":               "http://deb.debian.org/debian",
 		"rpm":                  "https://dl.fedoraproject.org/pub/fedora/linux",
@@ -92,6 +94,7 @@ func upstreamEnvironmentVariables() map[string]string {
 		"conda":                "PROXY_UPSTREAM_CONDA",
 		"cran":                 "PROXY_UPSTREAM_CRAN",
 		"julia":                "PROXY_UPSTREAM_JULIA",
+		"swift":                "PROXY_UPSTREAM_SWIFT",
 		"oci_default":          "PROXY_UPSTREAM_OCI_DEFAULT",
 		"debian":               "PROXY_UPSTREAM_DEBIAN",
 		"rpm":                  "PROXY_UPSTREAM_RPM",
@@ -370,6 +373,7 @@ upstream:
   conda: "https://upstream.example.com/conda"
   cran: "https://upstream.example.com/cran"
   julia: "https://upstream.example.com/julia"
+  swift: "https://upstream.example.com/swift"
   oci_default: "https://upstream.example.com/oci_default"
   debian: "https://upstream.example.com/debian"
   rpm: "https://upstream.example.com/rpm"

@@ -227,6 +227,7 @@ func runServe() {
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_CONDA                Conda channel upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_CRAN                 CRAN mirror upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_JULIA                Julia package server upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_SWIFT                Swift Package Registry upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_OCI_DEFAULT          Default OCI registry upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_DEBIAN               Debian repository upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_RPM                  RPM repository upstream URL\n")
