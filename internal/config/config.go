@@ -436,6 +436,14 @@ type UpstreamConfig struct {
 	// oci://proxy.example.com/upstream/ghcr/owner/chart.
 	OCI map[string]string `json:"oci" yaml:"oci"`
 
+	// Generic maps names to plain HTTP upstream base URLs, served at
+	// /generic/{name}/. The remaining request path and query string are
+	// appended to the upstream URL. GitHub release asset paths
+	// ({owner}/{repo}/releases/download/{tag}/{asset}) are cached in the
+	// artifact cache; everything else goes through the metadata cache.
+	// Example: {"github": "https://github.com", "github-api": "https://api.github.com"}.
+	Generic map[string]string `json:"generic" yaml:"generic"`
+
 	// Auth configures authentication for upstream registries.
 	// Keys are absolute URL scopes matched by scheme, host, effective port,
 	// and path-segment prefix.
@@ -483,6 +491,9 @@ func (u *UpstreamConfig) Validate() error {
 		return err
 	}
 	if err := validateNamedUpstreams("upstream.oci", u.OCI); err != nil {
+		return err
+	}
+	if err := validateNamedUpstreams("upstream.generic", u.Generic); err != nil {
 		return err
 	}
 	return nil

@@ -314,6 +314,7 @@ func (s *Server) serve(listener net.Listener) error {
 	apkHandler := handler.NewAPKHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.APK)
 	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Debian)
 	rpmHandler := handler.NewRPMHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.RPM)
+	genericHandler := handler.NewGenericHandler(proxy, s.cfg.Upstream.Generic)
 
 	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))
 	r.Mount("/cargo", http.StripPrefix("/cargo", cargoHandler.Routes()))
@@ -336,6 +337,7 @@ func (s *Server) serve(listener net.Listener) error {
 	r.Mount("/apk", http.StripPrefix("/apk", apkHandler.Routes()))
 	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
+	r.Mount("/generic", http.StripPrefix("/generic", genericHandler.Routes()))
 
 	// Health, stats, and metrics endpoints
 	r.Get("/health", s.handleHealth)

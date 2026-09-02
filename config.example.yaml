@@ -193,6 +193,14 @@ upstream:
   #   alpine: "https://dl-cdn.alpinelinux.org/alpine"
   #   private: "https://apk.example.com"
 
+  # Named generic HTTP upstreams (used by /generic/{name}/). The remaining
+  # request path and query are appended to the upstream URL. GitHub release
+  # assets ({owner}/{repo}/releases/download/{tag}/{asset}) are cached
+  # immutably; other paths use the metadata cache with stale-on-error.
+  # generic:
+  #   github: "https://github.com"
+  #   github-api: "https://api.github.com"
+
   # Authentication for upstream registries
   # Keys are absolute URL scopes. Scheme, host, effective port, and path
   # segment boundaries must match; the longest matching scope wins.
