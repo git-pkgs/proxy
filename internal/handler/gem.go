@@ -182,7 +182,7 @@ func (h *GemHandler) fetchCompactIndex(r *http.Request, name string) (*http.Resp
 // writeFilteredIndex writes the compact index response with cooldown-filtered versions removed.
 func (h *GemHandler) writeFilteredIndex(w http.ResponseWriter, resp *http.Response, name string, filtered map[string]bool) {
 	for k, vv := range resp.Header {
-		if strings.EqualFold(k, "Content-Length") {
+		if strings.EqualFold(k, headerContentLength) {
 			continue // length will change after filtering
 		}
 		for _, v := range vv {

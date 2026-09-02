@@ -130,7 +130,7 @@ func (h *PyPIHandler) handleSimplePackage(w http.ResponseWriter, r *http.Request
 		rewritten = h.rewriteSimpleHTML(body, filteredVersions)
 	}
 
-	w.Header().Set("Content-Type", contentType)
+	w.Header().Set(headerContentType, contentType)
 	ensureVaryAccept(w.Header())
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(rewritten)
@@ -401,12 +401,12 @@ func (h *PyPIHandler) proxyAndRewriteJSON(w http.ResponseWriter, r *http.Request
 	rewritten, err := h.rewriteJSONMetadata(body)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to rewrite metadata, proxying original", "error", err)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, "application/json")
 		_, _ = w.Write(body)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, "application/json")
 	_, _ = w.Write(rewritten)
 }
 

@@ -93,7 +93,7 @@ func (h *GradleBuildCacheHandler) cacheStoragePath(key string) string {
 
 func (h *GradleBuildCacheHandler) handleGetOrHead(w http.ResponseWriter, r *http.Request, key string) {
 	storagePath := h.cacheStoragePath(key)
-	w.Header().Set("Content-Type", gradleBuildCacheContentType)
+	w.Header().Set(headerContentType, gradleBuildCacheContentType)
 
 	if r.Method == http.MethodHead {
 		existsStart := time.Now()
@@ -118,7 +118,7 @@ func (h *GradleBuildCacheHandler) handleGetOrHead(w http.ResponseWriter, r *http
 		if err != nil {
 			metrics.RecordStorageError("read")
 		} else if size >= 0 {
-			w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+			w.Header().Set(headerContentLength, strconv.FormatInt(size, 10))
 		}
 
 		w.WriteHeader(http.StatusOK)
@@ -171,7 +171,7 @@ func (h *GradleBuildCacheHandler) handlePut(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
-	w.Header().Set("Content-Length", "0")
+	w.Header().Set(headerContentLength, "0")
 	w.Header().Set("ETag", `"`+hash+`"`)
 
 	w.WriteHeader(http.StatusCreated)

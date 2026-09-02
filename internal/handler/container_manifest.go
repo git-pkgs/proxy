@@ -95,7 +95,7 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 	}
 	manifest := &cachedContainerManifest{
 		body:          body,
-		contentType:   resp.Header.Get("Content-Type"),
+		contentType:   resp.Header.Get(headerContentType),
 		contentDigest: resp.Header.Get("Docker-Content-Digest"),
 		etag:          resp.Header.Get("ETag"),
 		size:          int64(len(body)),
@@ -228,9 +228,9 @@ func (h *ContainerHandler) storeContainerManifest(ctx context.Context, cacheKey 
 
 func writeContainerManifest(w http.ResponseWriter, method string, manifest *cachedContainerManifest, stale bool) {
 	if manifest.contentType != "" {
-		w.Header().Set("Content-Type", manifest.contentType)
+		w.Header().Set(headerContentType, manifest.contentType)
 	}
-	w.Header().Set("Content-Length", strconv.FormatInt(manifest.size, 10))
+	w.Header().Set(headerContentLength, strconv.FormatInt(manifest.size, 10))
 	if manifest.contentDigest != "" {
 		w.Header().Set("Docker-Content-Digest", manifest.contentDigest)
 	}
@@ -383,7 +383,7 @@ func containerAcceptQuality(params map[string]string) float64 {
 }
 
 func copyContainerManifestHeaders(destination, source http.Header) {
-	for _, header := range []string{"Content-Type", "Content-Length", "Docker-Content-Digest", "ETag", "WWW-Authenticate"} {
+	for _, header := range []string{headerContentType, headerContentLength, "Docker-Content-Digest", "ETag", "WWW-Authenticate"} {
 		if value := source.Get(header); value != "" {
 			destination.Set(header, value)
 		}

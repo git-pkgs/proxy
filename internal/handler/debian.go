@@ -88,7 +88,7 @@ func (h *DebianHandler) handlePackageDownload(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/vnd.debian.binary-package")
+	w.Header().Set(headerContentType, "application/vnd.debian.binary-package")
 	ServeArtifact(w, result)
 }
 

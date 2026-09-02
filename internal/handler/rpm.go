@@ -94,7 +94,7 @@ func (h *RPMHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/x-rpm")
+	w.Header().Set(headerContentType, "application/x-rpm")
 	ServeArtifact(w, result)
 }
 

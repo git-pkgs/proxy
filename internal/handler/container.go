@@ -126,9 +126,9 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 	if cached != nil {
 		w.Header().Set("Docker-Content-Digest", digest)
 		if cached.ContentType != "" {
-			w.Header().Set("Content-Type", cached.ContentType)
+			w.Header().Set(headerContentType, cached.ContentType)
 		} else {
-			w.Header().Set("Content-Type", "application/octet-stream")
+			w.Header().Set(headerContentType, "application/octet-stream")
 		}
 		serveArtifact(w, r.Method, cached)
 		return
@@ -162,9 +162,9 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 
 	w.Header().Set("Docker-Content-Digest", digest)
 	if result.ContentType != "" {
-		w.Header().Set("Content-Type", result.ContentType)
+		w.Header().Set(headerContentType, result.ContentType)
 	} else {
-		w.Header().Set("Content-Type", "application/octet-stream")
+		w.Header().Set(headerContentType, "application/octet-stream")
 	}
 	ServeArtifact(w, result)
 }
@@ -232,7 +232,7 @@ func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request,
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for _, header := range []string{"Content-Type", "Content-Length", "Docker-Content-Digest"} {
+	for _, header := range []string{headerContentType, headerContentLength, "Docker-Content-Digest"} {
 		if v := resp.Header.Get(header); v != "" {
 			w.Header().Set(header, v)
 		}
@@ -261,7 +261,7 @@ func (h *ContainerHandler) registryForName(name string) (registryURL, upstreamNa
 
 // containerError writes an OCI-compliant error response.
 func (h *ContainerHandler) containerError(w http.ResponseWriter, status int, code, message string) {
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, "application/json")
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]any{
 		"errors": []map[string]string{

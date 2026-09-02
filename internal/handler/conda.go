@@ -174,12 +174,12 @@ func (h *CondaHandler) handleRepodata(w http.ResponseWriter, r *http.Request) {
 	filtered, err := h.applyCooldownFiltering(body)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to filter repodata, proxying original", "error", err)
-		w.Header().Set("Content-Type", "application/json")
+		w.Header().Set(headerContentType, "application/json")
 		_, _ = w.Write(body)
 		return
 	}
 
-	w.Header().Set("Content-Type", "application/json")
+	w.Header().Set(headerContentType, "application/json")
 	_, _ = w.Write(filtered)
 }
 

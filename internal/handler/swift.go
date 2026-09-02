@@ -219,9 +219,9 @@ func (h *SwiftHandler) handleSourceArchiveHead(
 		return
 	}
 	setSwiftArchiveHeaders(w.Header(), name, version, "", archiveInfo)
-	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set(headerContentType, "application/zip")
 	if size >= 0 {
-		w.Header().Set("Content-Length", strconv.FormatInt(size, 10))
+		w.Header().Set(headerContentLength, strconv.FormatInt(size, 10))
 	}
 	w.WriteHeader(http.StatusOK)
 }
@@ -260,7 +260,7 @@ func (h *SwiftHandler) probeSourceArchive(ctx context.Context, upstreamURL, acce
 	}
 
 	size := int64(-1)
-	if contentLength := resp.Header.Get("Content-Length"); contentLength != "" {
+	if contentLength := resp.Header.Get(headerContentLength); contentLength != "" {
 		if parsed, parseErr := strconv.ParseInt(contentLength, 10, 64); parseErr == nil {
 			size = parsed
 		}
@@ -296,7 +296,7 @@ func (h *SwiftHandler) fetchMetadataWithHeaders(
 	if err != nil {
 		return nil, "", nil, fmt.Errorf("reading upstream metadata: %w", err)
 	}
-	contentType := resp.Header.Get("Content-Type")
+	contentType := resp.Header.Get(headerContentType)
 	if contentType == "" {
 		contentType = contentTypeJSON
 	}
@@ -430,8 +430,8 @@ func (h *SwiftHandler) proxySwiftResource(w http.ResponseWriter, r *http.Request
 
 func copySwiftResponseHeaders(dst, src http.Header) {
 	for _, name := range []string{
-		"Cache-Control", "Content-Disposition", "Content-Language", "Content-Length",
-		"Content-Type", "Content-Version", "Digest", "ETag", "Last-Modified",
+		"Cache-Control", "Content-Disposition", "Content-Language", headerContentLength,
+		headerContentType, "Content-Version", "Digest", "ETag", "Last-Modified",
 		"Retry-After", "Vary", "Warning", "X-Swift-Package-Signature",
 		"X-Swift-Package-Signature-Format",
 	} {
@@ -564,14 +564,14 @@ func writeSwiftMetadata(w http.ResponseWriter, r *http.Request, body []byte, con
 	}
 	digest := sha256.Sum256(body)
 	etag := fmt.Sprintf(`"%x"`, digest)
-	w.Header().Set("Content-Type", contentType)
+	w.Header().Set(headerContentType, contentType)
 	w.Header().Set("Content-Version", swiftContentVersion)
 	w.Header().Set("ETag", etag)
 	if r.Header.Get("If-None-Match") == etag {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	w.Header().Set("Content-Length", strconv.Itoa(len(body)))
+	w.Header().Set(headerContentLength, strconv.Itoa(len(body)))
 	w.WriteHeader(http.StatusOK)
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(body)
@@ -597,7 +597,7 @@ func (h *SwiftHandler) writeArtifactError(w http.ResponseWriter, err error) {
 }
 
 func writeSwiftProblem(w http.ResponseWriter, status int, detail string) {
-	w.Header().Set("Content-Type", "application/problem+json")
+	w.Header().Set(headerContentType, "application/problem+json")
 	w.Header().Set("Content-Version", swiftContentVersion)
 	w.WriteHeader(status)
 	_ = json.NewEncoder(w).Encode(map[string]string{"detail": detail})
