@@ -1,25 +1,27 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"crypto/sha256"
-	"database/sql"
 	"encoding/hex"
 	"fmt"
 	"io"
+	"mime"
 	"net/http"
 	"regexp"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/git-pkgs/proxy/internal/database"
 )
 
 const (
 	containerManifestCacheEcosystem = "oci-manifest"
 	containerStaleWarning           = `110 - "Response is Stale"`
+
+	containerAcceptWildcardSpecificity = iota
+	containerAcceptTypeWildcardSpecificity
+	containerAcceptExactSpecificity
 )
 
 var manifestDigestReferencePattern = regexp.MustCompile(`^[a-z0-9]+:[a-f0-9]+$`)
@@ -35,12 +37,9 @@ type cachedContainerManifest struct {
 
 func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request, registryURL, name, reference string) {
 	accept := containerManifestAccept(r)
-	cacheKey := h.containerManifestCacheKey(registryURL, name, reference, accept)
-	cached, err := h.loadContainerManifest(r.Context(), cacheKey)
-	if err != nil {
-		h.proxy.Logger.Warn("failed to read cached container manifest", "error", err)
-		cached = nil
-	}
+	cacheAccept := normalizeContainerManifestAccept(accept)
+	cacheKey := h.containerManifestCacheKey(registryURL, name, reference, cacheAccept)
+	cached := h.loadContainerManifestForAccept(r.Context(), registryURL, name, reference, accept, cacheKey)
 
 	immutable := manifestDigestReferencePattern.MatchString(reference)
 	if cached != nil && (immutable || h.containerManifestFresh(cached)) {
@@ -68,9 +67,7 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 
 	if resp.StatusCode == http.StatusNotModified && cached != nil {
 		cached.fetchedAt = time.Now()
-		if err := h.storeContainerManifest(r.Context(), cacheKey, cached); err != nil {
-			h.proxy.Logger.Warn("failed to refresh cached container manifest", "error", err)
-		}
+		h.storeContainerManifestForAccept(r.Context(), registryURL, name, reference, accept, cacheAccept, cached)
 		writeContainerManifest(w, r.Method, cached, false)
 		return
 	}
@@ -107,14 +104,9 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 	if manifest.contentDigest == "" {
 		manifest.contentDigest = sha256Digest(body)
 	}
-	if err := h.storeContainerManifest(r.Context(), cacheKey, manifest); err != nil {
-		h.proxy.Logger.Warn("failed to cache container manifest", "error", err)
-	}
+	h.storeContainerManifestForAccept(r.Context(), registryURL, name, reference, accept, cacheAccept, manifest)
 	if manifest.contentDigest != reference && manifestDigestReferencePattern.MatchString(manifest.contentDigest) {
-		digestKey := h.containerManifestCacheKey(registryURL, name, manifest.contentDigest, accept)
-		if err := h.storeContainerManifest(r.Context(), digestKey, manifest); err != nil {
-			h.proxy.Logger.Warn("failed to cache container manifest by digest", "error", err)
-		}
+		h.storeContainerManifestForAccept(r.Context(), registryURL, name, manifest.contentDigest, accept, cacheAccept, manifest)
 	}
 	writeContainerManifest(w, r.Method, manifest, false)
 }
@@ -137,6 +129,52 @@ func (h *ContainerHandler) containerManifestCacheKey(registryURL, name, referenc
 	identity := strings.Join([]string{registryURL, name, reference, accept}, "\x00")
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
+}
+
+func (h *ContainerHandler) loadContainerManifestForAccept(ctx context.Context, registryURL, name, reference, accept, cacheKey string) *cachedContainerManifest {
+	cached, err := h.loadContainerManifest(ctx, cacheKey)
+	if err != nil {
+		h.proxy.Logger.Warn("failed to read cached container manifest", "error", err)
+		return nil
+	}
+	if cached != nil {
+		if containerManifestCacheCompatible(accept, cached) {
+			return cached
+		}
+		return nil
+	}
+
+	legacyCacheKey := h.containerManifestCacheKey(registryURL, name, reference, accept)
+	if legacyCacheKey == cacheKey {
+		return nil
+	}
+	cached, err = h.loadContainerManifest(ctx, legacyCacheKey)
+	if err != nil {
+		h.proxy.Logger.Warn("failed to read legacy cached container manifest", "error", err)
+		return nil
+	}
+	if cached == nil || !containerManifestCacheCompatible(accept, cached) {
+		return nil
+	}
+	if err := h.storeContainerManifest(ctx, cacheKey, cached); err != nil {
+		h.proxy.Logger.Warn("failed to migrate cached container manifest", "error", err)
+	}
+	return cached
+}
+
+func (h *ContainerHandler) storeContainerManifestForAccept(ctx context.Context, registryURL, name, reference, accept, cacheAccept string, manifest *cachedContainerManifest) {
+	cacheKey := h.containerManifestCacheKey(registryURL, name, reference, cacheAccept)
+	if err := h.storeContainerManifest(ctx, cacheKey, manifest); err != nil {
+		h.proxy.Logger.Warn("failed to cache container manifest", "error", err)
+	}
+
+	legacyCacheKey := h.containerManifestCacheKey(registryURL, name, reference, accept)
+	if legacyCacheKey == cacheKey {
+		return
+	}
+	if err := h.storeContainerManifest(ctx, legacyCacheKey, manifest); err != nil {
+		h.proxy.Logger.Warn("failed to cache legacy container manifest", "error", err)
+	}
 }
 
 func (h *ContainerHandler) loadContainerManifest(ctx context.Context, cacheKey string) (*cachedContainerManifest, error) {
@@ -179,25 +217,13 @@ func (h *ContainerHandler) loadContainerManifest(ctx context.Context, cacheKey s
 }
 
 func (h *ContainerHandler) storeContainerManifest(ctx context.Context, cacheKey string, manifest *cachedContainerManifest) error {
-	if h.proxy.DB == nil || h.proxy.Storage == nil {
-		return nil
-	}
-	storagePath := metadataStoragePath(containerManifestCacheEcosystem, cacheKey)
-	size, _, err := h.proxy.Storage.Store(ctx, storagePath, bytes.NewReader(manifest.body))
+	size, err := h.storeContainerMetadata(ctx, containerManifestCacheEcosystem, cacheKey, manifest.body,
+		manifest.etag, "", manifest.contentType, manifest.contentDigest, manifest.fetchedAt)
 	if err != nil {
 		return fmt.Errorf("storing manifest: %w", err)
 	}
 	manifest.size = size
-	return h.proxy.DB.UpsertMetadataCache(&database.MetadataCacheEntry{
-		Ecosystem:     containerManifestCacheEcosystem,
-		Name:          cacheKey,
-		StoragePath:   storagePath,
-		ETag:          sql.NullString{String: manifest.etag, Valid: manifest.etag != ""},
-		ContentType:   sql.NullString{String: manifest.contentType, Valid: manifest.contentType != ""},
-		ContentDigest: sql.NullString{String: manifest.contentDigest, Valid: manifest.contentDigest != ""},
-		Size:          sql.NullInt64{Int64: size, Valid: true},
-		FetchedAt:     sql.NullTime{Time: manifest.fetchedAt, Valid: !manifest.fetchedAt.IsZero()},
-	})
+	return nil
 }
 
 func writeContainerManifest(w http.ResponseWriter, method string, manifest *cachedContainerManifest, stale bool) {
@@ -231,6 +257,129 @@ func containerManifestAccept(r *http.Request) string {
 		"application/vnd.docker.distribution.manifest.list.v2+json",
 		"application/vnd.docker.distribution.manifest.v1+prettyjws",
 	}, ", ")
+}
+
+func normalizeContainerManifestAccept(accept string) string {
+	mediaTypes := make(map[string]struct{})
+	for _, value := range strings.Split(accept, ",") {
+		value = strings.TrimSpace(value)
+		if value == "" {
+			continue
+		}
+		mediaType, params, err := mime.ParseMediaType(value)
+		if err != nil {
+			mediaTypes[strings.ToLower(value)] = struct{}{}
+			continue
+		}
+		paramKeys := make([]string, 0, len(params))
+		for key := range params {
+			paramKeys = append(paramKeys, key)
+		}
+		sort.Strings(paramKeys)
+		canonical := strings.ToLower(mediaType)
+		for _, key := range paramKeys {
+			value := params[key]
+			if strings.EqualFold(key, "q") {
+				if quality, err := strconv.ParseFloat(value, 64); err == nil {
+					if quality == 1 {
+						continue
+					}
+					value = strconv.FormatFloat(quality, 'g', -1, 64)
+				}
+			}
+			canonical += ";" + strings.ToLower(key) + "=" + value
+		}
+		mediaTypes[canonical] = struct{}{}
+	}
+	canonicalMediaTypes := make([]string, 0, len(mediaTypes))
+	for mediaType := range mediaTypes {
+		canonicalMediaTypes = append(canonicalMediaTypes, mediaType)
+	}
+	sort.Strings(canonicalMediaTypes)
+	return strings.Join(canonicalMediaTypes, ",")
+}
+
+func containerManifestAccepts(accept, contentType string) bool {
+	contentType, contentParams, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		return false
+	}
+	contentType = strings.ToLower(contentType)
+	contentMajor, contentMinor, found := strings.Cut(contentType, "/")
+	if !found {
+		return false
+	}
+
+	bestMediaTypeSpecificity := -1
+	bestParameterSpecificity := 0
+	bestQuality := 0.0
+	for _, value := range strings.Split(accept, ",") {
+		mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(value))
+		if err != nil {
+			continue
+		}
+		mediaType = strings.ToLower(mediaType)
+		major, minor, found := strings.Cut(mediaType, "/")
+		if found && containerAcceptRangeMatches(major, minor, params, contentMajor, contentMinor, contentParams) {
+			mediaTypeSpecificity, parameterSpecificity := containerAcceptSpecificity(major, minor, params)
+			if mediaTypeSpecificity > bestMediaTypeSpecificity ||
+				(mediaTypeSpecificity == bestMediaTypeSpecificity && parameterSpecificity > bestParameterSpecificity) {
+				bestMediaTypeSpecificity = mediaTypeSpecificity
+				bestParameterSpecificity = parameterSpecificity
+				bestQuality = containerAcceptQuality(params)
+			}
+		}
+	}
+	return bestQuality > 0
+}
+
+func containerManifestCacheCompatible(accept string, manifest *cachedContainerManifest) bool {
+	return manifest.contentType == "" || containerManifestAccepts(accept, manifest.contentType)
+}
+
+func containerAcceptRangeMatches(major, minor string, params map[string]string, contentMajor, contentMinor string, contentParams map[string]string) bool {
+	if (major != "*" && major != contentMajor) || (minor != "*" && minor != contentMinor) {
+		return false
+	}
+	for key, value := range params {
+		if strings.EqualFold(key, "q") {
+			continue
+		}
+		if contentParams[key] != value {
+			return false
+		}
+	}
+	return true
+}
+
+func containerAcceptSpecificity(major, minor string, params map[string]string) (int, int) {
+	parameterSpecificity := 0
+	for key := range params {
+		if !strings.EqualFold(key, "q") {
+			parameterSpecificity++
+		}
+	}
+
+	switch {
+	case major == "*" && minor == "*":
+		return containerAcceptWildcardSpecificity, parameterSpecificity
+	case major == "*" || minor == "*":
+		return containerAcceptTypeWildcardSpecificity, parameterSpecificity
+	default:
+		return containerAcceptExactSpecificity, parameterSpecificity
+	}
+}
+
+func containerAcceptQuality(params map[string]string) float64 {
+	value, ok := params["q"]
+	if !ok {
+		return 1
+	}
+	quality, err := strconv.ParseFloat(value, 64)
+	if err != nil || quality < 0 || quality > 1 {
+		return 0
+	}
+	return quality
 }
 
 func copyContainerManifestHeaders(destination, source http.Header) {

@@ -938,7 +938,7 @@ func (db *DB) CountCachedPackages(ecosystem string) (int64, error) {
 func (db *DB) GetMetadataCache(ecosystem, name string) (*MetadataCacheEntry, error) {
 	var entry MetadataCacheEntry
 	query := db.Rebind(`
-		SELECT id, ecosystem, name, storage_path, etag, content_type,
+		SELECT id, ecosystem, name, storage_path, etag, link, content_type,
 		       content_digest, size, last_modified, fetched_at, created_at, updated_at
 		FROM metadata_cache WHERE ecosystem = ? AND name = ?
 	`)
@@ -958,12 +958,13 @@ func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 
 	if db.dialect == DialectPostgres {
 		query = `
-			INSERT INTO metadata_cache (ecosystem, name, storage_path, etag, content_type,
+			INSERT INTO metadata_cache (ecosystem, name, storage_path, etag, link, content_type,
 			                            content_digest, size, last_modified, fetched_at, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			ON CONFLICT(ecosystem, name) DO UPDATE SET
 				storage_path = EXCLUDED.storage_path,
 				etag = EXCLUDED.etag,
+				link = EXCLUDED.link,
 				content_type = EXCLUDED.content_type,
 				content_digest = EXCLUDED.content_digest,
 				size = EXCLUDED.size,
@@ -973,12 +974,13 @@ func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 		`
 	} else {
 		query = `
-			INSERT INTO metadata_cache (ecosystem, name, storage_path, etag, content_type,
+			INSERT INTO metadata_cache (ecosystem, name, storage_path, etag, link, content_type,
 			                            content_digest, size, last_modified, fetched_at, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(ecosystem, name) DO UPDATE SET
 				storage_path = excluded.storage_path,
 				etag = excluded.etag,
+				link = excluded.link,
 				content_type = excluded.content_type,
 				content_digest = excluded.content_digest,
 				size = excluded.size,
@@ -989,7 +991,7 @@ func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 	}
 
 	_, err := db.Exec(query,
-		entry.Ecosystem, entry.Name, entry.StoragePath, entry.ETag,
+		entry.Ecosystem, entry.Name, entry.StoragePath, entry.ETag, entry.Link,
 		entry.ContentType, entry.ContentDigest, entry.Size, entry.LastModified, entry.FetchedAt, now, now,
 	)
 	if err != nil {

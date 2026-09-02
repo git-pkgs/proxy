@@ -101,6 +101,7 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 	name TEXT NOT NULL,
 	storage_path TEXT NOT NULL,
 	etag TEXT,
+	link TEXT,
 	content_type TEXT,
 	content_digest TEXT,
 	size INTEGER,
@@ -202,6 +203,7 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 	name TEXT NOT NULL,
 	storage_path TEXT NOT NULL,
 	etag TEXT,
+	link TEXT,
 	content_type TEXT,
 	content_digest TEXT,
 	size BIGINT,
@@ -362,6 +364,7 @@ var migrations = []migration{
 	{"004_ensure_vulnerabilities_table", migrateEnsureVulnerabilitiesTable},
 	{"005_ensure_metadata_cache_table", migrateEnsureMetadataCacheTable},
 	{"006_add_metadata_content_digest", migrateAddMetadataContentDigest},
+	{"007_add_metadata_link", migrateAddMetadataLink},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -598,6 +601,20 @@ func migrateAddMetadataContentDigest(db *DB) error {
 	return nil
 }
 
+func migrateAddMetadataLink(db *DB) error {
+	hasColumn, err := db.HasColumn("metadata_cache", "link")
+	if err != nil {
+		return fmt.Errorf("checking metadata_cache link column: %w", err)
+	}
+	if hasColumn {
+		return nil
+	}
+	if _, err := db.Exec("ALTER TABLE metadata_cache ADD COLUMN link TEXT"); err != nil {
+		return fmt.Errorf("adding metadata_cache link column: %w", err)
+	}
+	return nil
+}
+
 // EnsureMetadataCacheTable creates the metadata_cache table if it doesn't exist.
 func (db *DB) EnsureMetadataCacheTable() error {
 	has, err := db.HasTable("metadata_cache")
@@ -616,8 +633,9 @@ func (db *DB) EnsureMetadataCacheTable() error {
 				ecosystem TEXT NOT NULL,
 				name TEXT NOT NULL,
 				storage_path TEXT NOT NULL,
-				etag TEXT,
-				content_type TEXT,
+			etag TEXT,
+			link TEXT,
+			content_type TEXT,
 				content_digest TEXT,
 				size BIGINT,
 				last_modified TIMESTAMP,
@@ -634,8 +652,9 @@ func (db *DB) EnsureMetadataCacheTable() error {
 				ecosystem TEXT NOT NULL,
 				name TEXT NOT NULL,
 				storage_path TEXT NOT NULL,
-				etag TEXT,
-				content_type TEXT,
+			etag TEXT,
+			link TEXT,
+			content_type TEXT,
 				content_digest TEXT,
 				size INTEGER,
 				last_modified DATETIME,

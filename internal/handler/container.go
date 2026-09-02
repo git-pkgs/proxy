@@ -4,7 +4,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"regexp"
 	"strings"
@@ -194,7 +193,7 @@ func (h *ContainerHandler) handleManifest(w http.ResponseWriter, r *http.Request
 	h.serveManifest(w, r, registryURL, upstreamName, reference)
 }
 
-// handleTagsList proxies tag list requests to upstream.
+// handleTagsList caches tag list responses for offline OCI pulls.
 func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request, path string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
@@ -213,27 +212,7 @@ func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	upstreamURL := fmt.Sprintf("%s/v2/%s/tags/list", registryURL, upstreamName)
-	if r.URL.RawQuery != "" {
-		upstreamURL += "?" + r.URL.RawQuery
-	}
-
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
-	if err != nil {
-		h.containerError(w, http.StatusInternalServerError, "INTERNAL_ERROR", "failed to create request")
-		return
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		h.containerError(w, http.StatusBadGateway, "INTERNAL_ERROR", "failed to fetch from upstream")
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	h.serveTagsList(w, r, registryURL, upstreamName)
 }
 
 // proxyBlobHead handles HEAD requests for blobs.
