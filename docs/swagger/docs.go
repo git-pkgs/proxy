@@ -538,6 +538,13 @@ const docTemplate = `{
                         "$ref": "#/definitions/server.HealthCheck"
                     }
                 },
+                "circuit_breakers": {
+                    "description": "CircuitBreakers reports the state (\"open\" or \"closed\") of each upstream\nregistry's artifact-fetch circuit breaker, keyed by the host fetched from\nor, where the fetch URL has none to read, by an opaque placeholder\nstanding in for it. It is omitted when no breaker has been created yet.\nAn open breaker fails every artifact fetch it covers without contacting\nthe upstream, but says nothing about this proxy's own health, so it does\nnot change Status.",
+                    "type": "object",
+                    "additionalProperties": {
+                        "type": "string"
+                    }
+                },
                 "status": {
                     "type": "string"
                 }

@@ -750,7 +750,7 @@ Recently cached:
 | Endpoint | Description |
 |----------|-------------|
 | `GET /` | Dashboard (web UI) |
-| `GET /health` | Health check (JSON; HTTP 200 healthy, 503 unhealthy) |
+| `GET /health` | Health check and upstream circuit breaker state (JSON; HTTP 200 healthy, 503 unhealthy) |
 | `GET /stats` | Cache statistics (JSON) |
 | `GET /metrics` | Prometheus metrics |
 | `GET /npm/*` | npm registry protocol |
@@ -994,8 +994,16 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 | `proxy_storage_errors_total` | counter | `operation` | Storage read/write failures |
 | `proxy_active_requests` | gauge | | In-flight requests |
 | `proxy_health_probe_failures_total` | counter | `step` | Storage health probe failures by failing step (`write`, `size`, `read`, `verify`, `delete`). |
+| `proxy_circuit_breaker_state` | gauge | `registry` | Artifact-fetch circuit breaker state per upstream registry (0 closed, 2 open). Published once that registry's breaker has tripped. |
+| `proxy_circuit_breaker_trips_total` | counter | `registry` | Circuit breaker trips per upstream registry. |
 
-Cache size and artifact count are refreshed every 60 seconds. The remaining metrics update on each request.
+Cache size and artifact count are refreshed every 60 seconds. Circuit breaker state is read from the fetcher on each scrape of `/metrics` and each `/health` request, so `proxy_circuit_breaker_trips_total` counts the trips visible between those reads — a breaker that opens and recovers entirely between two scrapes is not counted. The remaining metrics update on each request.
+
+The breaker metrics carry one series per upstream host, but only for hosts whose breaker has tripped at least once since startup. A breaker is created per host the proxy fetches artifacts from, and for some ecosystems that host comes from upstream metadata rather than from configuration (composer takes it from a package's `dist.url`, helm from the chart URLs in `index.yaml`), so publishing every host would let upstream content grow the series count for the lifetime of the process. Once a host has tripped it keeps reporting, so a recovery still shows up as a transition to 0 rather than as a series that vanishes. `/health` is not a persistent time series and lists every breaker, tripped or not.
+
+The `registry` label is the host of the URL the artifact was fetched from. Because that URL can come from upstream metadata, it is not always one a host can be read off — a signed `dist.url` that fails to parse, for instance — and such a breaker is labelled `hostless-url-<digest>` instead, where the digest is keyed by a value drawn fresh at startup. Neither `/metrics` nor `/health` requires authentication, so a fetch URL is never published as a label or a key; the digest identifies the breaker for as long as the process runs without revealing the URL behind it or letting a chosen URL be matched against it.
+
+Alert on `proxy_circuit_breaker_state == 2` sustained for more than a few minutes: while a breaker is open, artifact downloads for that upstream fail with HTTP 502 on every cache miss, and only a single probe request per backoff interval reaches the upstream. Cached artifacts keep serving, and so does metadata for the same ecosystem (metadata does not go through the circuit breaker), so installs fail in a way that looks like a partial upstream outage.
 
 ### Health Check
 
@@ -1007,11 +1015,19 @@ Cache size and artifact count are refreshed every 60 seconds. The remaining metr
   "checks": {
     "database": {"status": "ok"},
     "storage":  {"status": "ok"}
+  },
+  "circuit_breakers": {
+    "registry.npmjs.org": "closed",
+    "static.crates.io":   "open"
   }
 }
 ```
 
 Failing checks include an `"error"` field. Storage failures also include a `"step"` field identifying which probe step failed (`write`, `size`, `read`, `verify`, `delete`). When the database check fails, the storage entry reports `{"status": "skipped"}` so the response always carries the same key set.
+
+`circuit_breakers` reports the state of each upstream's artifact-fetch circuit breaker (`"open"` or `"closed"`), keyed by upstream host — or by the `hostless-url-<digest>` placeholder described under [Monitoring](#monitoring) where the fetch URL has no host to read. The key is omitted until the proxy has fetched an artifact from at least one upstream, and a host appears only once a breaker has been created for it. Breakers trip after repeated upstream failures and retry the upstream after an exponential backoff. While one is open, artifact downloads for that host return HTTP 502 on a cache miss without contacting the upstream; already-cached artifacts are still served from storage, since the cache is checked before the fetcher. A breaker is reported as `"open"` throughout its backoff, including the half-open window in which it admits one probe request to test recovery. Breaker state is per process and in memory, so a restart clears it, but a restart is not needed for recovery: the backoff keeps retrying for as long as the breaker is open, so it closes on its own once the upstream serves again.
+
+An open breaker does **not** set `status` to `"error"` or change the HTTP status code: it reports a specific upstream refusing to serve, not this proxy being unfit to receive traffic, and failing the readiness probe over one unhealthy upstream would pull the pod out of rotation for every other ecosystem too. Use `proxy_circuit_breaker_state` for alerting on it.
 
 Storage probe results are cached for `health.storage_probe_interval` (default 30s) to bound the cost of probing remote backends. A probe holds an internal mutex for up to 10 seconds (the hardcoded per-probe timeout), so `/health` is intended as a Kubernetes **readiness** probe rather than a liveness probe — a slow S3 round-trip should pull the pod from rotation, not restart it.
 
