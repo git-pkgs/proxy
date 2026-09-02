@@ -259,7 +259,7 @@ func writeContainerManifest(w http.ResponseWriter, r *http.Request, manifest *ca
 	if stale {
 		w.Header().Set("Warning", containerStaleWarning)
 	}
-	if manifest.etag != "" && r.Header.Get("If-None-Match") == manifest.etag {
+	if ifNoneMatchHits(r.Header.Get("If-None-Match"), manifest.etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}

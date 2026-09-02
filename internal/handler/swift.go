@@ -567,7 +567,7 @@ func writeSwiftMetadata(w http.ResponseWriter, r *http.Request, body []byte, con
 	w.Header().Set(headerContentType, contentType)
 	w.Header().Set("Content-Version", swiftContentVersion)
 	w.Header().Set(headerETag, etag)
-	if r.Header.Get("If-None-Match") == etag {
+	if ifNoneMatchHits(r.Header.Get("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}

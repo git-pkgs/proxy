@@ -101,6 +101,26 @@ const (
 	headerLastModified    = "Last-Modified"
 )
 
+// ifNoneMatchHits reports whether the given If-None-Match header value
+// matches the current entity tag using weak comparison, so "*" matches any
+// tag, W/ prefixes are ignored on both sides, and a comma-separated list is
+// scanned. An empty header or an empty stored tag never match.
+func ifNoneMatchHits(header, etag string) bool {
+	if etag == "" || header == "" {
+		return false
+	}
+	if header == "*" {
+		return true
+	}
+	etag = strings.TrimPrefix(etag, "W/")
+	for value := range strings.SplitSeq(header, ",") {
+		if strings.TrimPrefix(strings.TrimSpace(value), "W/") == etag {
+			return true
+		}
+	}
+	return false
+}
+
 // defaultMetadataMaxSize is used when Proxy.MetadataMaxSize is unset.
 const defaultMetadataMaxSize = 100 << 20
 
@@ -949,11 +969,9 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 	if !cm.lastModified.IsZero() {
 		w.Header().Set(headerLastModified, cm.lastModified.UTC().Format(http.TimeFormat))
 	}
-	if cm.etag != "" {
-		if match := r.Header.Get("If-None-Match"); match != "" && match == cm.etag {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
+	if ifNoneMatchHits(r.Header.Get("If-None-Match"), cm.etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
 	}
 	if !cm.lastModified.IsZero() {
 		if ims := r.Header.Get("If-Modified-Since"); ims != "" {
