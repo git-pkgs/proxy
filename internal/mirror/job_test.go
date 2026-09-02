@@ -2,6 +2,7 @@ package mirror
 
 import (
 	"context"
+	"encoding/json"
 	"testing"
 	"time"
 )
@@ -97,6 +98,37 @@ func TestSourceFromRequestPURLs(t *testing.T) {
 	}
 	if _, ok := source.(*PURLSource); !ok {
 		t.Errorf("expected *PURLSource, got %T", source)
+	}
+}
+
+func TestSourceFromRequestSBOM(t *testing.T) {
+	m := setupTestMirror(t, 1)
+	js := NewJobStore(context.Background(), m)
+	sbom := json.RawMessage(`{"bomFormat":"CycloneDX","components":[]}`)
+
+	source, err := js.sourceFromRequest(JobRequest{SBOM: sbom})
+	if err != nil {
+		t.Fatalf("sourceFromRequest() error = %v", err)
+	}
+	sbomSource, ok := source.(*SBOMSource)
+	if !ok {
+		t.Fatalf("expected *SBOMSource, got %T", source)
+	}
+	if got := string(sbomSource.Data); got != string(sbom) {
+		t.Errorf("SBOM data = %q, want %q", got, sbom)
+	}
+}
+
+func TestSourceFromRequestRejectsPURLsAndSBOM(t *testing.T) {
+	m := setupTestMirror(t, 1)
+	js := NewJobStore(context.Background(), m)
+
+	_, err := js.sourceFromRequest(JobRequest{
+		PURLs: []string{"pkg:npm/lodash@4.17.21"},
+		SBOM:  json.RawMessage(`{"bomFormat":"CycloneDX","components":[]}`),
+	})
+	if err == nil {
+		t.Fatal("expected error when both purls and sbom are provided")
 	}
 }
 

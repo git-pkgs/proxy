@@ -644,6 +644,11 @@ curl -X POST http://localhost:8080/api/mirror \
   -H "Content-Type: application/json" \
   -d '{"purls": ["pkg:npm/lodash@4.17.21"]}'
 
+# Start a mirror job from an inline CycloneDX or SPDX JSON SBOM
+curl -X POST http://localhost:8080/api/mirror \
+  -H "Content-Type: application/json" \
+  -d '{"sbom":{"bomFormat":"CycloneDX","components":[{"purl":"pkg:npm/lodash@4.17.21"}]}}'
+
 # Check job status
 curl http://localhost:8080/api/mirror/mirror-1
 
@@ -731,7 +736,7 @@ Recently cached:
 
 | Endpoint | Description |
 |----------|-------------|
-| `POST /api/mirror` | Start a mirror job (JSON body with `purls`) |
+| `POST /api/mirror` | Start a mirror job (JSON body with `purls` or an inline `sbom`) |
 | `GET /api/mirror/{id}` | Get job status and progress |
 | `DELETE /api/mirror/{id}` | Cancel a running job |
 

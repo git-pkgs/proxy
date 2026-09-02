@@ -400,6 +400,14 @@ Or via environment variable: `PROXY_MIRROR_API=true`.
 
 When disabled, the endpoints are not registered and return 404.
 
+Start a mirror job with either PURLs or an inline CycloneDX or SPDX JSON document:
+
+```bash
+curl -X POST http://localhost:8080/api/mirror \
+  -H "Content-Type: application/json" \
+  -d '{"sbom":{"bomFormat":"CycloneDX","components":[{"purl":"pkg:npm/lodash@4.17.21"}]}}'
+```
+
 ## Mirror Command
 
 The `proxy mirror` command pre-populates the cache from various sources. It accepts the same storage and database flags as `serve`.

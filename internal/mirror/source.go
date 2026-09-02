@@ -5,7 +5,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"os"
 
 	cdx "github.com/CycloneDX/cyclonedx-go"
 	"github.com/git-pkgs/purl"
@@ -94,16 +93,20 @@ func (s *PURLSource) fetchVersions(ctx context.Context, client *registries.Clien
 	return result, nil
 }
 
-// SBOMSource extracts package versions from a CycloneDX or SPDX SBOM file.
+// SBOMSource extracts package versions from CycloneDX or SPDX SBOM data.
 type SBOMSource struct {
-	Path      string
+	Data      []byte
+	Name      string
 	RegClient *registries.Client
 }
 
 func (s *SBOMSource) Enumerate(ctx context.Context, fn func(PackageVersion) error) error {
 	purls, err := s.extractPURLs()
 	if err != nil {
-		return fmt.Errorf("reading SBOM %s: %w", s.Path, err)
+		if s.Name != "" {
+			return fmt.Errorf("parsing SBOM %s: %w", s.Name, err)
+		}
+		return fmt.Errorf("parsing SBOM: %w", err)
 	}
 
 	inner := &PURLSource{PURLs: purls, RegClient: s.RegClient}
@@ -111,23 +114,18 @@ func (s *SBOMSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 }
 
 func (s *SBOMSource) extractPURLs() ([]string, error) {
-	data, err := os.ReadFile(s.Path)
-	if err != nil {
-		return nil, err
-	}
-
 	// Try CycloneDX first
-	if purls, err := extractCycloneDXPURLs(data); err == nil && len(purls) > 0 {
+	if purls, err := extractCycloneDXPURLs(s.Data); err == nil && len(purls) > 0 {
 		return purls, nil
 	}
 
 	// Try SPDX JSON
-	if purls, err := extractSPDXJSONPURLs(data); err == nil && len(purls) > 0 {
+	if purls, err := extractSPDXJSONPURLs(s.Data); err == nil && len(purls) > 0 {
 		return purls, nil
 	}
 
 	// Try SPDX tag-value
-	if purls, err := extractSPDXTVPURLs(data); err == nil && len(purls) > 0 {
+	if purls, err := extractSPDXTVPURLs(s.Data); err == nil && len(purls) > 0 {
 		return purls, nil
 	}
 
