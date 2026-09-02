@@ -20,6 +20,26 @@ A 3-day cooldown means that when `lodash` publishes version `4.18.0`, your build
 
 Resolution order: package override, then ecosystem override, then global default. This lets you set a conservative default and carve out exceptions for packages where you need faster updates. See [docs/configuration.md](docs/configuration.md) for the full config reference.
 
+## Artifact Scanning
+
+Cooldown only looks at a version's publish timestamp — it never inspects the actual bytes. Artifact scanning closes that gap: when enabled, every artifact is staged into storage and scanned by one or more external services (trivy, ClamAV, Wiz, or anything else that speaks a small HTTP/JSON contract) before it's committed to the cache and served to clients.
+
+```yaml
+scanning:
+  enabled: true
+  signing_key: ${PROXY_SCANNING_SIGNING_KEY}
+  scanners:
+    - name: clamav
+      url: http://clamav-adapter:8080/scan
+      mode: block             # a block verdict deletes the artifact and returns 403
+    - name: trivy
+      url: http://trivy-adapter:8081/scan
+      mode: monitor            # findings are logged, never gate caching
+      ecosystems: [npm, pypi]
+```
+
+The proxy never uploads artifact bytes to a scanner. Each scanner is notified with package metadata plus a short-lived signed URL; the scanner pulls the bytes itself from the proxy's own storage. Scanners run concurrently, and the first `block`-mode scanner to report a verdict of not-allowed wins immediately, canceling the rest. See [docs/configuration.md](docs/configuration.md) for the full config reference and the scanner HTTP contract.
+
 ## Supported Registries
 
 | Registry | Language/Platform | Cooldown | Completed |

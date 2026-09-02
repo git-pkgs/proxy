@@ -117,6 +117,10 @@ func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, modul
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
+		if errors.Is(err, ErrArtifactBlocked) {
+			http.Error(w, err.Error(), http.StatusForbidden)
+			return
+		}
 		h.proxy.Logger.Error("failed to get artifact", "error", err)
 		http.Error(w, "failed to fetch module", http.StatusBadGateway)
 		return

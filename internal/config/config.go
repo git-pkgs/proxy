@@ -115,6 +115,10 @@ type Config struct {
 	// Cooldown configures version age filtering to mitigate supply chain attacks.
 	Cooldown CooldownConfig `json:"cooldown" yaml:"cooldown"`
 
+	// Scanning configures pre-cache artifact scanning (trivy, ClamAV, Wiz,
+	// or a custom service) to mitigate supply chain attacks.
+	Scanning ScanningConfig `json:"scanning" yaml:"scanning"`
+
 	// CacheMetadata enables caching of upstream metadata responses for offline fallback.
 	// When enabled, metadata is stored in the database and storage backend.
 	// The mirror command always enables this regardless of this setting.
@@ -187,6 +191,140 @@ func (c *CooldownConfig) NormalizedPackages() map[string]string {
 		normalized[canonical] = c.Packages[key]
 	}
 	return normalized
+}
+
+// ScanningConfig configures pre-cache artifact scanning (e.g. trivy,
+// ClamAV, Wiz, or a custom service) to mitigate supply chain attacks.
+// Unlike Cooldown, which only looks at a version's publish timestamp,
+// scanning inspects the actual artifact bytes before they become
+// servable from cache.
+type ScanningConfig struct {
+	// Enabled turns on the scan gate. When false (default), artifacts are
+	// cached exactly as if scanning didn't exist.
+	Enabled bool `json:"enabled" yaml:"enabled"`
+
+	// FailOpen treats scanner errors and timeouts as an allow verdict
+	// instead of a block. Default is fail-closed, since the default
+	// posture for a security gate should block on infrastructure failure.
+	FailOpen bool `json:"fail_open" yaml:"fail_open"`
+
+	// Timeout bounds each scan call. Uses Go duration syntax (e.g. "30s").
+	// Default: "30s".
+	Timeout string `json:"timeout" yaml:"timeout"`
+
+	// SigningKey authenticates pull requests to the internal scan-fetch
+	// route used by every storage backend. Required whenever Enabled is
+	// true. Supports ${VAR_NAME} expansion like AuthConfig fields.
+	SigningKey string `json:"signing_key" yaml:"signing_key"`
+
+	// FetchBaseURL is the address scanners use to reach this proxy to pull
+	// staged artifacts. Defaults to BaseURL. Set this separately when
+	// scanners reach the proxy over an internal address different from the
+	// public-facing BaseURL (mirrors DirectServeBaseURL/UIBaseURL).
+	FetchBaseURL string `json:"fetch_base_url" yaml:"fetch_base_url"`
+
+	// Scanners is the list of external scanning services to call.
+	Scanners []ScannerConfig `json:"scanners" yaml:"scanners"`
+}
+
+// ScannerConfig configures a single external scanning service.
+type ScannerConfig struct {
+	// Name identifies this scanner in logs and metrics.
+	Name string `json:"name" yaml:"name"`
+
+	// URL is the endpoint the proxy POSTs scan notifications to.
+	URL string `json:"url" yaml:"url"`
+
+	// Mode is "block" (default) or "monitor". A "block" scanner's verdict
+	// can prevent caching; a "monitor" scanner's findings are logged but
+	// never gate caching.
+	Mode string `json:"mode" yaml:"mode"`
+
+	// Ecosystems restricts this scanner to specific ecosystems (e.g.
+	// "npm", "pypi"). Empty means all ecosystems.
+	Ecosystems []string `json:"ecosystems" yaml:"ecosystems"`
+
+	// Headers are additional HTTP headers sent with every scan request
+	// (e.g. for authenticating to the scanner service). Values support
+	// ${VAR_NAME} expansion like AuthConfig fields.
+	Headers map[string]string `json:"headers" yaml:"headers"`
+}
+
+// SigningKeyExpanded returns SigningKey with ${VAR_NAME} references expanded.
+func (s *ScanningConfig) SigningKeyExpanded() string {
+	return expandEnv(s.SigningKey)
+}
+
+// HeadersExpanded returns Headers with ${VAR_NAME} references expanded in
+// each value.
+func (s *ScannerConfig) HeadersExpanded() map[string]string {
+	if len(s.Headers) == 0 {
+		return nil
+	}
+	expanded := make(map[string]string, len(s.Headers))
+	for k, v := range s.Headers {
+		expanded[k] = expandEnv(v)
+	}
+	return expanded
+}
+
+// Validate checks the scanning configuration for errors, applying the
+// default timeout if unset.
+func (s *ScanningConfig) Validate() error {
+	if !s.Enabled {
+		return nil
+	}
+
+	if s.SigningKeyExpanded() == "" {
+		return fmt.Errorf("scanning.signing_key is required when scanning.enabled is true")
+	}
+
+	if len(s.Scanners) == 0 {
+		return fmt.Errorf("scanning.scanners must not be empty when scanning.enabled is true")
+	}
+
+	if s.FetchBaseURL != "" {
+		if err := validateAbsoluteURL("scanning.fetch_base_url", s.FetchBaseURL); err != nil {
+			return err
+		}
+	}
+
+	if s.Timeout == "" {
+		s.Timeout = defaultScanningTimeoutStr
+	}
+	if d, err := time.ParseDuration(s.Timeout); err != nil {
+		return fmt.Errorf("invalid scanning.timeout %q: %w", s.Timeout, err)
+	} else if d <= 0 {
+		return fmt.Errorf("invalid scanning.timeout %q: must be > 0", s.Timeout)
+	}
+
+	for i := range s.Scanners {
+		if err := s.Scanners[i].Validate(); err != nil {
+			return fmt.Errorf("scanning.scanners[%d]: %w", i, err)
+		}
+	}
+
+	return nil
+}
+
+// Validate checks a single scanner's configuration, applying the default
+// mode ("block") if unset.
+func (s *ScannerConfig) Validate() error {
+	if s.Name == "" {
+		return fmt.Errorf("name is required")
+	}
+	if err := validateAbsoluteURL("url", s.URL); err != nil {
+		return err
+	}
+	if s.Mode == "" {
+		s.Mode = "block"
+	}
+	switch s.Mode {
+	case "block", "monitor":
+	default:
+		return fmt.Errorf("invalid mode %q (must be block or monitor)", s.Mode)
+	}
+	return nil
 }
 
 // StorageConfig configures artifact storage.
@@ -742,6 +880,11 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Upstream.Debian, "PROXY_UPSTREAM_DEBIAN")
 	setEnvString(&c.Upstream.RPM, "PROXY_UPSTREAM_RPM")
 	setEnvString(&c.Cooldown.Default, "PROXY_COOLDOWN_DEFAULT")
+	setEnvBool(&c.Scanning.Enabled, "PROXY_SCANNING_ENABLED")
+	setEnvBool(&c.Scanning.FailOpen, "PROXY_SCANNING_FAIL_OPEN")
+	setEnvString(&c.Scanning.Timeout, "PROXY_SCANNING_TIMEOUT")
+	setEnvString(&c.Scanning.SigningKey, "PROXY_SCANNING_SIGNING_KEY")
+	setEnvString(&c.Scanning.FetchBaseURL, "PROXY_SCANNING_FETCH_BASE_URL")
 	setEnvBool(&c.CacheMetadata, "PROXY_CACHE_METADATA")
 	setEnvBool(&c.MirrorAPI, "PROXY_MIRROR_API")
 	setEnvString(&c.MetadataTTL, "PROXY_METADATA_TTL")
@@ -858,6 +1001,10 @@ func (c *Config) validateComponents() error {
 		return err
 	}
 
+	if err := c.Scanning.Validate(); err != nil {
+		return err
+	}
+
 	return c.Gradle.BuildCache.Validate()
 }
 
@@ -925,6 +1072,7 @@ const (
 	defaultGradleBuildCacheSweepInterval = 10 * time.Minute
 	defaultGradleMaxUploadSizeStr        = "100MB"
 	defaultGradleSweepIntervalStr        = "10m"
+	defaultScanningTimeoutStr            = "30s"
 )
 
 // ParseMaxSize returns the maximum cache size in bytes.

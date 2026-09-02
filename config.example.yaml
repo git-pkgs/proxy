@@ -280,3 +280,32 @@ cooldown:
   # packages:
   #   "pkg:npm/lodash": "0"
   #   "pkg:npm/@babel/core": "14d"
+
+# Pre-cache artifact scanning. When enabled, every artifact is staged into
+# storage and scanned by the configured scanners before it is committed to
+# the cache and served to clients. Scanners never receive artifact bytes
+# directly — each notify call includes a short-lived signed URL that the
+# scanner fetches itself, so the proxy stays agnostic to trivy/ClamAV/Wiz/
+# any custom service. Scanners run concurrently; the first "block" verdict
+# wins and cancels the rest.
+# scanning:
+#   enabled: true
+#   fail_open: false
+#   timeout: 30s
+#
+#   # Authenticates pull requests to the internal scan-fetch route.
+#   # Required whenever enabled is true. Supports ${VAR_NAME} expansion.
+#   signing_key: ${PROXY_SCANNING_SIGNING_KEY}
+#
+#   # Address scanners use to reach this proxy to pull staged artifacts.
+#   # Defaults to base_url.
+#   # fetch_base_url: http://proxy.internal:8080
+#
+#   scanners:
+#     - name: clamav
+#       url: http://clamav-adapter:8080/scan
+#       mode: block
+#     - name: trivy
+#       url: http://trivy-adapter:8081/scan
+#       mode: monitor
+#       ecosystems: [npm, pypi]
