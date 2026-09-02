@@ -100,6 +100,7 @@ type Server struct {
 	cancel      context.CancelFunc
 	healthCache *healthCache
 	accessLog   *accesslog.Logger
+	ecr         *ecrTokens
 }
 
 // New creates a new Server with the given configuration.
@@ -176,6 +177,7 @@ func New(cfg *config.Config, logger *slog.Logger, buildInfo BuildInfo) (*Server,
 		templates:   &Templates{},
 		healthCache: hc,
 		accessLog:   activityLog,
+		ecr:         newECRTokens(logger),
 	}
 	closeAccessLog = false
 	return server, nil
@@ -478,6 +480,13 @@ func (s *Server) authForURL(url string) (headerName, headerValue string) {
 	auth := s.cfg.Upstream.AuthForURL(url)
 	if auth == nil {
 		return "", ""
+	}
+	if strings.EqualFold(auth.Type, "ecr") {
+		region := auth.Region
+		if region == "" {
+			region = ecrRegion(url)
+		}
+		return s.ecr.header(region)
 	}
 	return auth.Header()
 }

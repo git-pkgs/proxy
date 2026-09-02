@@ -282,6 +282,21 @@ upstream:
       header_value: "${MAVEN_TOKEN}"
 ```
 
+### AWS ECR
+
+Private ECR registries issue authorization tokens that expire after 12 hours. The `ecr` auth type calls `ecr:GetAuthorizationToken` on demand, caches the result, and refreshes it shortly before expiry, so no static credential appears in the config file:
+
+```yaml
+upstream:
+  oci:
+    ecr: "https://123456789012.dkr.ecr.eu-west-1.amazonaws.com"
+  auth:
+    "https://123456789012.dkr.ecr.eu-west-1.amazonaws.com":
+      type: ecr
+```
+
+AWS credentials are resolved by the SDK's default chain, which covers EKS IAM Roles for Service Accounts (IRSA), EC2/ECS instance profiles, `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` environment variables, and `~/.aws/credentials`. The IAM identity needs the `ecr:GetAuthorizationToken` action plus the usual `ecr:BatchGetImage` / `ecr:GetDownloadUrlForLayer` permissions on the target repositories. The region is inferred from private ECR IPv4, dual-stack, and FIPS hostnames. For other endpoint formats, set `region` explicitly or configure a default region for the SDK.
+
 ### URL Matching
 
 Auth keys must be absolute URLs. Matching compares the scheme, host, effective port, and path-segment prefix, preventing credentials for `registry.example.com` from being sent to a lookalike host such as `registry.example.com.evil.test`. The longest matching scope wins, so you can configure different credentials for different paths:

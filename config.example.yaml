@@ -199,6 +199,7 @@ upstream:
   #   - bearer: Authorization header with Bearer token
   #   - basic: Authorization header with Basic auth (username:password)
   #   - header: Custom header name and value
+  #   - ecr: AWS ECR auto-refreshing token via the AWS SDK credential chain
   auth:
     # Example: npm with bearer token
     # "https://registry.npmjs.org":
@@ -221,6 +222,13 @@ upstream:
     #   type: header
     #   header_name: "X-Auth-Token"
     #   header_value: "${MAVEN_TOKEN}"
+
+    # Example: private AWS ECR registry (12h tokens auto-refreshed via
+    # ecr:GetAuthorizationToken; credentials come from the AWS SDK default
+    # chain, so IRSA / instance profiles / AWS_* env vars all work; the region
+    # is inferred from the private ECR hostname)
+    # "https://123456789012.dkr.ecr.eu-west-1.amazonaws.com":
+    #   type: ecr
 
 # Gradle HttpBuildCache configuration
 gradle:
