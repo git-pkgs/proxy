@@ -230,7 +230,6 @@ verification keeps working; `.apk` packages use the shared artifact cache.
 When `upstream.apk` is empty, a single repository named `alpine` pointing at
 the official mirror is available; configuring any entry replaces that default.
 
-
 ## Authentication
 
 Configure authentication for private upstream registries. The same authentication-aware client is used for metadata and artifact downloads, and credentials can reference environment variables using `${VAR_NAME}` syntax.
