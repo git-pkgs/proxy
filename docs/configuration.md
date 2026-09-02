@@ -141,6 +141,7 @@ Each upstream used by a built-in package route can be set in YAML or JSON under 
 | `upstream.allow_private_hosts` | `PROXY_UPSTREAM_ALLOW_PRIVATE_HOSTS` | `[]` |
 | `upstream.allow_loopback` | `PROXY_UPSTREAM_ALLOW_LOOPBACK` | `false` |
 | `upstream.npm` | `PROXY_UPSTREAM_NPM` | `https://registry.npmjs.org` |
+| `upstream.npm_full_metadata` | `PROXY_UPSTREAM_NPM_FULL_METADATA` | `false` |
 | `upstream.cargo` | `PROXY_UPSTREAM_CARGO` | `https://index.crates.io` |
 | `upstream.cargo_download` | `PROXY_UPSTREAM_CARGO_DOWNLOAD` | `https://static.crates.io/crates` |
 | `upstream.gem` | `PROXY_UPSTREAM_GEM` | `https://rubygems.org` |

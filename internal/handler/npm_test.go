@@ -430,6 +430,25 @@ func TestNPMHandlerUsesAbbreviatedMetadata(t *testing.T) {
 			t.Errorf("Accept = %q, want %q (cooldown requires full metadata)", gotAccept, contentTypeJSON)
 		}
 	})
+
+	t.Run("full metadata option uses full metadata without cooldown", func(t *testing.T) {
+		proxy := testProxy()
+		proxy.NPMFullMetadata = true
+
+		h := &NPMHandler{
+			proxy:       proxy,
+			upstreamURL: upstream.URL,
+			proxyURL:    "http://proxy.local",
+		}
+
+		req := httptest.NewRequest(http.MethodGet, "/testpkg", nil)
+		w := httptest.NewRecorder()
+		h.handlePackageMetadata(w, req)
+
+		if gotAccept != contentTypeJSON {
+			t.Errorf("Accept = %q, want %q (npm_full_metadata requires full metadata)", gotAccept, contentTypeJSON)
+		}
+	})
 }
 
 func TestNPMHandlerMetadataNotFound(t *testing.T) {

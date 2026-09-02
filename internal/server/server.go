@@ -227,6 +227,7 @@ func (s *Server) serve(listener net.Listener) error {
 	proxy.MetadataTTL = s.cfg.ParseMetadataTTL()
 	proxy.MetadataMaxSize = s.cfg.ParseMetadataMaxSize()
 	proxy.GradleReadOnly = s.cfg.Gradle.BuildCache.ReadOnly
+	proxy.NPMFullMetadata = s.cfg.Upstream.NPMFullMetadata
 	proxy.GradleMaxUploadSize = s.cfg.ParseGradleBuildCacheMaxUploadSize()
 	proxy.DirectServe = s.cfg.Storage.DirectServe
 	proxy.DirectServeTTL = s.cfg.ParseDirectServeTTL()
