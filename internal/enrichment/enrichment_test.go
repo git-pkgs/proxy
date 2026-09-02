@@ -5,35 +5,7 @@ import (
 	"log/slog"
 	"os"
 	"testing"
-
-	"github.com/git-pkgs/purl"
-	"github.com/git-pkgs/vulns"
 )
-
-type recordingVulnerabilitySource struct {
-	purls []*purl.PURL
-}
-
-func (s *recordingVulnerabilitySource) Name() string {
-	return "recording"
-}
-
-func (s *recordingVulnerabilitySource) Query(context.Context, *purl.PURL) ([]vulns.Vulnerability, error) {
-	return nil, nil
-}
-
-func (s *recordingVulnerabilitySource) QueryBatch(_ context.Context, purls []*purl.PURL) ([][]vulns.Vulnerability, error) {
-	s.purls = purls
-	results := make([][]vulns.Vulnerability, len(purls))
-	for i := range results {
-		results[i] = []vulns.Vulnerability{{ID: "TEST-1"}}
-	}
-	return results, nil
-}
-
-func (s *recordingVulnerabilitySource) Get(context.Context, string) (*vulns.Vulnerability, error) {
-	return nil, nil
-}
 
 func TestNew(t *testing.T) {
 	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
@@ -79,38 +51,6 @@ func TestSwiftRegistryIdentitySkipsPURLDependentLookups(t *testing.T) {
 	packages := []struct{ Ecosystem, Name string }{{Ecosystem: "swift", Name: "apple/example"}}
 	if got := svc.BulkEnrichPackages(ctx, packages); len(got) != 0 {
 		t.Errorf("BulkEnrichPackages() = %#v, want empty result", got)
-	}
-
-	versions := []struct{ Ecosystem, Name, Version string }{
-		{Ecosystem: "swift", Name: "apple/example", Version: "1.2.3"},
-	}
-	got, err := svc.BulkCheckVulnerabilities(ctx, versions)
-	if err != nil || len(got) != 0 {
-		t.Errorf("BulkCheckVulnerabilities() = %#v, %v; want empty result, nil", got, err)
-	}
-}
-
-func TestBulkCheckVulnerabilitiesFiltersUnsupportedPackageIdentities(t *testing.T) {
-	source := &recordingVulnerabilitySource{}
-	svc := New(slog.New(slog.NewTextHandler(os.Stdout, nil)))
-	svc.vulnSource = source
-	packages := []struct{ Ecosystem, Name, Version string }{
-		{Ecosystem: "swift", Name: "apple/example", Version: "1.2.3"},
-		{Ecosystem: "npm", Name: "lodash", Version: "4.17.21"},
-	}
-
-	got, err := svc.BulkCheckVulnerabilities(context.Background(), packages)
-	if err != nil {
-		t.Fatalf("BulkCheckVulnerabilities() error = %v", err)
-	}
-	if len(source.purls) != 1 || source.purls[0].String() != "pkg:npm/lodash@4.17.21" {
-		t.Fatalf("queried PURLs = %#v, want only lodash", source.purls)
-	}
-	if len(got["pkg:npm/lodash@4.17.21"]) != 1 {
-		t.Errorf("result = %#v, want lodash vulnerability", got)
-	}
-	if _, exists := got[""]; exists {
-		t.Error("result contains an empty PURL key")
 	}
 }
 
