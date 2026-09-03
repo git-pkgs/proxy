@@ -10,8 +10,8 @@ import (
 
 const (
 	genericEcosystem = "generic"
-	// genericAcceptAny is sent upstream when the client did not send an
-	// Accept header, so generic upstreams are not asked for JSON by default.
+	// genericAcceptAny is always sent for metadata so every client shares the
+	// same cached representation, regardless of its Accept header.
 	genericAcceptAny = "*/*"
 	// githubReleaseAssetMatchCount is the full match plus owner, repository,
 	// tag and asset filename.
@@ -137,22 +137,16 @@ func (h *GenericHandler) handleReleaseAsset(w http.ResponseWriter, r *http.Reque
 }
 
 // handleMetadata serves any other path through the metadata cache. The query
-// string is forwarded and is part of the cache identity, and the client's
-// Accept header is replayed so content-negotiated upstreams (the GitHub API)
-// cache the representation the client asked for.
+// string is forwarded and is part of the cache identity. A fixed Accept header
+// keeps all clients on one cached representation.
 func (h *GenericHandler) handleMetadata(w http.ResponseWriter, r *http.Request, repository, upstreamURL, path string) {
 	target := upstreamURL + "/" + path
 	if r.URL.RawQuery != "" {
 		target += "?" + r.URL.RawQuery
 	}
 
-	accept := r.Header.Get("Accept")
-	if accept == "" {
-		accept = genericAcceptAny
-	}
-
 	h.proxy.ProxyCached(w, r, target, genericEcosystem,
-		h.metadataCacheKey(repository, upstreamURL, path, r.URL.RawQuery), accept)
+		h.metadataCacheKey(repository, upstreamURL, path, r.URL.RawQuery), genericAcceptAny)
 }
 
 // metadataCacheKey derives the metadata cache key from the upstream name, its

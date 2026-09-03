@@ -160,18 +160,17 @@ func TestGenericHandler_ReleaseAssetNotFoundIsNotCached(t *testing.T) {
 	}
 }
 
-func TestGenericHandler_MetadataForwardsAcceptAndQueryAndServesStaleOnThrottle(t *testing.T) {
+func TestGenericHandler_MetadataForwardsQueryAndServesStaleOnThrottle(t *testing.T) {
 	const apiPath = "/repos/jqlang/jq/releases/tags/jq-1.7.1"
 	body := `{"tag_name":"jq-1.7.1"}`
 	var throttled atomic.Bool
-	var gotAccept, gotQuery string
+	var gotQuery string
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != apiPath {
 			http.NotFound(w, r)
 			return
 		}
-		gotAccept = r.Header.Get("Accept")
 		gotQuery = r.URL.RawQuery
 		if throttled.Load() {
 			w.Header().Set("Retry-After", "60")
@@ -194,7 +193,6 @@ func TestGenericHandler_MetadataForwardsAcceptAndQueryAndServesStaleOnThrottle(t
 	h := NewGenericHandler(proxy, map[string]string{"github-api": upstream.URL})
 
 	req := httptest.NewRequest(http.MethodGet, "/github-api"+apiPath+"?per_page=1", nil)
-	req.Header.Set("Accept", "application/vnd.github+json")
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 	if w.Code != http.StatusOK {
@@ -202,9 +200,6 @@ func TestGenericHandler_MetadataForwardsAcceptAndQueryAndServesStaleOnThrottle(t
 	}
 	if got := w.Body.String(); got != body {
 		t.Errorf("body = %q, want %q", got, body)
-	}
-	if gotAccept != "application/vnd.github+json" {
-		t.Errorf("upstream Accept = %q, want the client's header replayed", gotAccept)
 	}
 	if gotQuery != "per_page=1" {
 		t.Errorf("upstream query = %q, want %q", gotQuery, "per_page=1")
@@ -227,29 +222,6 @@ func TestGenericHandler_MetadataForwardsAcceptAndQueryAndServesStaleOnThrottle(t
 	}
 	if warning := w.Header().Get("Warning"); !strings.Contains(warning, "110") {
 		t.Errorf("throttled: Warning = %q, want a 110 stale warning", warning)
-	}
-}
-
-func TestGenericHandler_MetadataWithoutAcceptAsksForAnything(t *testing.T) {
-	var gotAccept string
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		gotAccept = r.Header.Get("Accept")
-		_, _ = w.Write([]byte("checksums"))
-	}))
-	defer upstream.Close()
-
-	proxy, _, _, _ := setupTestProxy(t)
-	proxy.HTTPClient = upstream.Client()
-	proxy.CacheMetadata = true
-	proxy.MetadataTTL = time.Hour
-
-	h := NewGenericHandler(proxy, map[string]string{"github": upstream.URL})
-	w := serveGenericRequest(h, "/github/jqlang/jq/releases/latest/download/sha256sum.txt")
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
-	}
-	if gotAccept != genericAcceptAny {
-		t.Errorf("upstream Accept = %q, want %q", gotAccept, genericAcceptAny)
 	}
 }
 
