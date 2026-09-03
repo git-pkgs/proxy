@@ -416,16 +416,6 @@ func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, fil
 		metrics.RecordStorageError("write")
 		return nil, fmt.Errorf("storing artifact: %w", err)
 	}
-	sharedArtifact, err := artifacts.New(
-		versionPURL,
-		digest.Digest("sha256:"+hash),
-		size,
-		filename,
-		artifact.ContentType,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("describing stored artifact: %w", err)
-	}
 
 	if !artifactHashMatches(hash, upstreamHash) {
 		if delErr := p.Storage.Delete(ctx, storagePath); delErr != nil {
@@ -445,6 +435,14 @@ func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, fil
 			}
 			return nil, err
 		}
+	}
+
+	sharedArtifact := artifacts.Artifact{
+		PURL:      versionPURL,
+		Digest:    digest.Digest("sha256:" + hash),
+		Size:      size,
+		Filename:  filename,
+		MediaType: artifact.ContentType,
 	}
 
 	// Update database

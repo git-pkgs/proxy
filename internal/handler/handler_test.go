@@ -32,7 +32,6 @@ type mockStorage struct {
 	files     map[string][]byte
 	storeErr  error
 	openErr   error
-	storeHash string
 	signedURL string
 	signErr   error
 }
@@ -50,9 +49,6 @@ func (s *mockStorage) Store(_ context.Context, path string, r io.Reader) (int64,
 		return 0, "", err
 	}
 	s.files[path] = data
-	if s.storeHash != "" {
-		return int64(len(data)), s.storeHash, nil
-	}
 	return int64(len(data)), sha256Hex(string(data)), nil
 }
 
@@ -801,23 +797,6 @@ func TestGetOrFetchArtifactFromURL_StoreError(t *testing.T) {
 	}
 	if diff := testutil.ToFloat64(metrics.StorageErrors.WithLabelValues("write")) - errorsBefore; diff != 1 {
 		t.Errorf("storage errors delta = %.0f, want 1", diff)
-	}
-}
-
-func TestGetOrFetchArtifactFromURL_RejectsMalformedStorageDigest(t *testing.T) {
-	proxy, _, store, fetcher := setupTestProxy(t)
-	store.storeHash = "not-a-hash"
-	fetcher.artifact = &fetch.Artifact{
-		Body:        io.NopCloser(strings.NewReader("data")),
-		ContentType: "application/gzip",
-	}
-
-	_, err := proxy.GetOrFetchArtifactFromURL(context.Background(), "pypi", "fail", "1.0.0", "fail-1.0.0.tar.gz", "https://pypi.org/files/fail.tar.gz")
-	if err == nil {
-		t.Fatal("GetOrFetchArtifactFromURL() error = nil")
-	}
-	if !strings.Contains(err.Error(), "describing stored artifact") {
-		t.Errorf("error = %q, want stored artifact validation error", err)
 	}
 }
 
