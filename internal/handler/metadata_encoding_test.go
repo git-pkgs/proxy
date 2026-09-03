@@ -5,6 +5,7 @@ import (
 	"compress/gzip"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -118,12 +119,16 @@ func TestProxyCached_NoEncodingHeaderForIdentityResponses(t *testing.T) {
 	}
 }
 
-// TestProxyMetadataStream_ForwardsContentEncoding pins the uncached streaming
-// path: a Content-Encoding header from upstream must reach the client along
-// with the raw bytes.
-func TestProxyMetadataStream_ForwardsContentEncoding(t *testing.T) {
+// TestProxyMetadataStream_PreservesSignedBytesWithoutClientEncoding pins the
+// uncached streaming path (the default, since cache_metadata is off) for the
+// realistic client that sends no Accept-Encoding: the proxy must request
+// identity upstream so Go does not transparently decompress a signed index,
+// and the raw bytes plus the Content-Encoding header must reach the client.
+func TestProxyMetadataStream_PreservesSignedBytesWithoutClientEncoding(t *testing.T) {
 	raw := gzipPayload(t, []byte("streamed index payload"))
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+	var sawAcceptEncoding string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawAcceptEncoding = r.Header.Get(headerAcceptEncoding)
 		w.Header().Set(headerContentType, "application/octet-stream")
 		w.Header().Set(headerContentEncoding, "gzip")
 		_, _ = w.Write(raw)
@@ -135,17 +140,61 @@ func TestProxyMetadataStream_ForwardsContentEncoding(t *testing.T) {
 	proxy.HTTPClient = upstream.Client()
 
 	w := httptest.NewRecorder()
+	// No Accept-Encoding on the client request -- the apk/apt/dnf case.
 	r := httptest.NewRequest(http.MethodGet, "/index", nil)
-	r.Header.Set(headerAcceptEncoding, "gzip")
 	proxy.ProxyCached(w, r, upstream.URL+"/index", "apk", "stream-key", "*/*")
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
 	}
+	if sawAcceptEncoding != "identity" {
+		t.Errorf("upstream saw Accept-Encoding %q, want %q", sawAcceptEncoding, "identity")
+	}
 	if !bytes.Equal(w.Body.Bytes(), raw) {
-		t.Errorf("streamed response altered the upstream bytes")
+		t.Errorf("streamed response altered the upstream bytes: got %d bytes, want %d", w.Body.Len(), len(raw))
 	}
 	if got := w.Header().Get(headerContentEncoding); got != "gzip" {
 		t.Errorf("Content-Encoding = %q, want %q", got, "gzip")
+	}
+}
+
+// TestFetchOrCacheMetadata_DirectCallersKeepTransparentCompression pins that
+// the parsing/rewriting ecosystems (npm, pypi, cargo, helm, ...) that call
+// FetchOrCacheMetadata directly are NOT forced to identity: they keep Go's
+// transparent transfer compression and receive decoded bytes, so a gzip-only
+// upstream does not regress them (no wire-size blowup, no parse failures).
+func TestFetchOrCacheMetadata_DirectCallersKeepTransparentCompression(t *testing.T) {
+	plaintext := []byte(`{"name":"demo","versions":{"1.0.0":{}}}`)
+	var sawAcceptEncoding string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawAcceptEncoding = r.Header.Get(headerAcceptEncoding)
+		// Serve gzip only when the client accepts it, like a real CDN.
+		if strings.Contains(r.Header.Get(headerAcceptEncoding), "gzip") {
+			w.Header().Set(headerContentType, contentTypeJSON)
+			w.Header().Set(headerContentEncoding, "gzip")
+			_, _ = w.Write(gzipPayload(t, plaintext))
+			return
+		}
+		w.Header().Set(headerContentType, contentTypeJSON)
+		_, _ = w.Write(plaintext)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	proxy.HTTPClient = upstream.Client()
+
+	body, _, err := proxy.FetchOrCacheMetadata(t.Context(), "npm", "demo", upstream.URL+"/demo", contentTypeJSON)
+	if err != nil {
+		t.Fatalf("FetchOrCacheMetadata() error = %v", err)
+	}
+	// The default transport adds Accept-Encoding: gzip and transparently
+	// decompresses, so the caller sees decoded JSON regardless of the wire form.
+	if sawAcceptEncoding == "identity" {
+		t.Errorf("direct caller forced identity; want transparent compression")
+	}
+	if !bytes.Equal(body, plaintext) {
+		t.Errorf("direct caller got %q, want decoded %q", body, plaintext)
 	}
 }

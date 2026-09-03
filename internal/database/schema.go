@@ -629,6 +629,14 @@ func migrateAddMetadataContentEncoding(db *DB) error {
 	if _, err := db.Exec("ALTER TABLE metadata_cache ADD COLUMN content_encoding TEXT"); err != nil {
 		return fmt.Errorf("adding metadata_cache content_encoding column: %w", err)
 	}
+	// Rows cached before this column existed hold transport-decompressed bytes
+	// with no recorded encoding and the upstream ETag captured under Go's
+	// auto-added Accept-Encoding: gzip. Clearing the validators forces one fresh
+	// fetch per key so the encoding is recorded and verbatim bytes are restored,
+	// instead of an If-None-Match 304 re-serving the stale decompressed copy.
+	if _, err := db.Exec("UPDATE metadata_cache SET etag = NULL, fetched_at = NULL"); err != nil {
+		return fmt.Errorf("invalidating metadata_cache validators: %w", err)
+	}
 	return nil
 }
 

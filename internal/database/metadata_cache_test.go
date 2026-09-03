@@ -296,9 +296,9 @@ func TestMetadataCacheContentEncodingMigrationPreservesExistingRows(t *testing.T
 		t.Fatalf("resetting content_encoding migration: %v", err)
 	}
 	if _, err := db.Exec(`
-		INSERT INTO metadata_cache (ecosystem, name, storage_path, content_type, size, fetched_at, created_at, updated_at)
-		VALUES (?, ?, ?, ?, ?, ?, ?, ?)
-	`, "apk", "cache-key", "_metadata/apk/cache-key/metadata", "application/octet-stream", 2, time.Now(), time.Now(), time.Now()); err != nil {
+		INSERT INTO metadata_cache (ecosystem, name, storage_path, etag, content_type, size, fetched_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "apk", "cache-key", "_metadata/apk/cache-key/metadata", "\"legacy-etag\"", "application/octet-stream", 2, time.Now(), time.Now(), time.Now()); err != nil {
 		t.Fatalf("inserting legacy cache row: %v", err)
 	}
 
@@ -322,6 +322,14 @@ func TestMetadataCacheContentEncodingMigrationPreservesExistingRows(t *testing.T
 	}
 	if entry.ContentEncoding.Valid {
 		t.Errorf("legacy content encoding = %q, want NULL", entry.ContentEncoding.String)
+	}
+	// The migration must clear the pre-fix validators so the row is refetched
+	// once with identity instead of a 304 re-serving the decompressed copy.
+	if entry.ETag.Valid {
+		t.Errorf("legacy etag = %q, want cleared", entry.ETag.String)
+	}
+	if entry.FetchedAt.Valid {
+		t.Errorf("legacy fetched_at = %v, want cleared", entry.FetchedAt.Time)
 	}
 }
 

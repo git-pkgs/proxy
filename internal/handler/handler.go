@@ -575,6 +575,15 @@ func metadataStoragePath(ecosystem, cacheKey string) string {
 // cacheKey is typically the package name but can include subpath components.
 // Optional acceptHeaders specify the Accept header(s) to send; defaults to application/json.
 func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL string, acceptHeaders ...string) ([]byte, string, error) {
+	return p.fetchOrCacheMetadata(ctx, ecosystem, cacheKey, upstreamURL, false, acceptHeaders...)
+}
+
+// fetchOrCacheMetadata implements FetchOrCacheMetadata. When verbatim is true
+// (the ProxyCached path, which serves upstream bytes through unchanged) the
+// upstream is fetched with Accept-Encoding: identity so signed and hash-pinned
+// index files are cached exactly as sent. Direct callers that parse or rewrite
+// the body pass verbatim=false and keep transparent transfer compression.
+func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL string, verbatim bool, acceptHeaders ...string) ([]byte, string, error) {
 	if containsPathTraversal(cacheKey) {
 		return nil, "", fmt.Errorf("invalid cache key: %q", cacheKey)
 	}
@@ -614,10 +623,10 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 	}
 
 	// Try upstream
-	meta, err := p.fetchUpstreamMetadata(ctx, upstreamURL, entry, accept)
+	meta, err := p.fetchUpstreamMetadata(ctx, upstreamURL, entry, accept, verbatim)
 	if errors.Is(err, errStale304) {
 		// 304 but cached file is gone; retry without ETag
-		meta, err = p.fetchUpstreamMetadata(ctx, upstreamURL, nil, accept)
+		meta, err = p.fetchUpstreamMetadata(ctx, upstreamURL, nil, accept, verbatim)
 	}
 	if err == nil {
 		if p.CacheMetadata {
@@ -673,16 +682,18 @@ type upstreamMetadata struct {
 // It requests the identity encoding and never transparently decompresses, so the returned
 // bytes are exactly what the upstream sent; any Content-Encoding the upstream applied
 // anyway is reported alongside so callers can store and replay it.
-func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept string) (*upstreamMetadata, error) {
+func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept string, verbatim bool) (*upstreamMetadata, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Accept", accept)
-	// Setting Accept-Encoding explicitly disables Go's transparent gzip
-	// decompression (it only applies when the transport adds the header
-	// itself), so signed index files are cached byte-for-byte as sent.
-	req.Header.Set(headerAcceptEncoding, "identity")
+	if verbatim {
+		// Setting Accept-Encoding explicitly disables Go's transparent gzip
+		// decompression (it only applies when the transport adds the header
+		// itself), so signed index files are cached byte-for-byte as sent.
+		req.Header.Set(headerAcceptEncoding, "identity")
+	}
 	p.applyUpstreamAuth(req)
 
 	if entry != nil && entry.ETag.Valid {
@@ -817,7 +828,7 @@ func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL,
 		return
 	}
 
-	body, contentType, err := p.FetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, acceptHeaders...)
+	body, contentType, err := p.fetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, true, acceptHeaders...)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -883,9 +894,13 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 		accept = acceptHeaders[0]
 	}
 	req.Header.Set("Accept", accept)
+	// ProxyCached serves bytes through verbatim, so request identity to keep
+	// Go from transparently decompressing (and stripping the Content-Encoding
+	// of) signed index files, regardless of what the client negotiated.
+	req.Header.Set(headerAcceptEncoding, "identity")
 	p.applyUpstreamAuth(req)
 
-	for _, header := range []string{headerAcceptEncoding, "If-Modified-Since", "If-None-Match"} {
+	for _, header := range []string{"If-Modified-Since", "If-None-Match"} {
 		if v := r.Header.Get(header); v != "" {
 			req.Header.Set(header, v)
 		}
