@@ -169,6 +169,7 @@ metadata_cache (
     storage_path  TEXT NOT NULL,
     etag          TEXT,
     content_type  TEXT,
+    content_encoding TEXT,           -- replayed on serve so signed bytes stay verbatim
     size          INTEGER,           -- BIGINT on Postgres
     fetched_at    DATETIME,
     created_at    DATETIME,

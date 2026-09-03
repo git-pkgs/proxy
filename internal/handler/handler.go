@@ -92,9 +92,10 @@ func packagePURLStrings(ecosystem, name, version string) (string, string, error)
 const contentTypeJSON = "application/json"
 
 const (
-	headerAcceptEncoding = "Accept-Encoding"
-	headerContentType    = "Content-Type"
-	headerContentLength  = "Content-Length"
+	headerAcceptEncoding  = "Accept-Encoding"
+	headerContentType     = "Content-Type"
+	headerContentLength   = "Content-Length"
+	headerContentEncoding = "Content-Encoding"
 )
 
 // defaultMetadataMaxSize is used when Proxy.MetadataMaxSize is unset.
@@ -574,6 +575,15 @@ func metadataStoragePath(ecosystem, cacheKey string) string {
 // cacheKey is typically the package name but can include subpath components.
 // Optional acceptHeaders specify the Accept header(s) to send; defaults to application/json.
 func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL string, acceptHeaders ...string) ([]byte, string, error) {
+	return p.fetchOrCacheMetadata(ctx, ecosystem, cacheKey, upstreamURL, false, acceptHeaders...)
+}
+
+// fetchOrCacheMetadata implements FetchOrCacheMetadata. When verbatim is true
+// (the ProxyCached path, which serves upstream bytes through unchanged) the
+// upstream is fetched with Accept-Encoding: identity so signed and hash-pinned
+// index files are cached exactly as sent. Direct callers that parse or rewrite
+// the body pass verbatim=false and keep transparent transfer compression.
+func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL string, verbatim bool, acceptHeaders ...string) ([]byte, string, error) {
 	if containsPathTraversal(cacheKey) {
 		return nil, "", fmt.Errorf("invalid cache key: %q", cacheKey)
 	}
@@ -613,16 +623,16 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 	}
 
 	// Try upstream
-	body, contentType, etag, lastModified, err := p.fetchUpstreamMetadata(ctx, upstreamURL, entry, accept)
+	meta, err := p.fetchUpstreamMetadata(ctx, upstreamURL, entry, accept, verbatim)
 	if errors.Is(err, errStale304) {
 		// 304 but cached file is gone; retry without ETag
-		body, contentType, etag, lastModified, err = p.fetchUpstreamMetadata(ctx, upstreamURL, nil, accept)
+		meta, err = p.fetchUpstreamMetadata(ctx, upstreamURL, nil, accept, verbatim)
 	}
 	if err == nil {
 		if p.CacheMetadata {
-			p.cacheMetadataBlob(ctx, ecosystem, cacheKey, storagePath, body, contentType, etag, lastModified)
+			p.cacheMetadataBlob(ctx, ecosystem, cacheKey, storagePath, meta)
 		}
-		return body, contentType, nil
+		return meta.body, meta.contentType, nil
 	}
 
 	// Upstream failed -- fall back to cache if available
@@ -659,16 +669,31 @@ func (p *Proxy) recordMetadataCacheMiss(ecosystem string) {
 	}
 }
 
-// fetchUpstreamMetadata fetches metadata from upstream, using ETag for conditional revalidation.
-// Returns the body, content type, ETag, upstream Last-Modified time, and any error.
-func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept string) ([]byte, string, string, time.Time, error) {
-	var zeroTime time.Time
+// upstreamMetadata holds a fetched metadata response in upstream byte form.
+type upstreamMetadata struct {
+	body            []byte
+	contentType     string
+	contentEncoding string
+	etag            string
+	lastModified    time.Time
+}
 
+// fetchUpstreamMetadata fetches metadata from upstream, using ETag for conditional revalidation.
+// It requests the identity encoding and never transparently decompresses, so the returned
+// bytes are exactly what the upstream sent; any Content-Encoding the upstream applied
+// anyway is reported alongside so callers can store and replay it.
+func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept string, verbatim bool) (*upstreamMetadata, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL, nil)
 	if err != nil {
-		return nil, "", "", zeroTime, fmt.Errorf("creating request: %w", err)
+		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Accept", accept)
+	if verbatim {
+		// Setting Accept-Encoding explicitly disables Go's transparent gzip
+		// decompression (it only applies when the transport adds the header
+		// itself), so signed index files are cached byte-for-byte as sent.
+		req.Header.Set(headerAcceptEncoding, "identity")
+	}
 	p.applyUpstreamAuth(req)
 
 	if entry != nil && entry.ETag.Valid {
@@ -677,7 +702,7 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 
 	resp, err := p.HTTPClient.Do(req)
 	if err != nil {
-		return nil, "", "", zeroTime, fmt.Errorf("fetching metadata: %w", err)
+		return nil, fmt.Errorf("fetching metadata: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -685,80 +710,84 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 	if resp.StatusCode == http.StatusNotModified && entry != nil {
 		cached, readErr := p.Storage.Open(ctx, entry.StoragePath)
 		if readErr != nil {
-			return nil, "", "", zeroTime, errStale304
+			return nil, errStale304
 		}
 		defer func() { _ = cached.Close() }()
 		data, readErr := p.ReadMetadata(cached)
 		if readErr != nil {
-			return nil, "", "", zeroTime, errStale304
+			return nil, errStale304
 		}
-		ct := contentTypeJSON
+		meta := &upstreamMetadata{body: data, contentType: contentTypeJSON, etag: entry.ETag.String}
 		if entry.ContentType.Valid {
-			ct = entry.ContentType.String
+			meta.contentType = entry.ContentType.String
 		}
-		lm := zeroTime
+		if entry.ContentEncoding.Valid {
+			meta.contentEncoding = entry.ContentEncoding.String
+		}
 		if entry.LastModified.Valid {
-			lm = entry.LastModified.Time
+			meta.lastModified = entry.LastModified.Time
 		}
-		return data, ct, entry.ETag.String, lm, nil
+		return meta, nil
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, "", "", zeroTime, ErrUpstreamNotFound
+		return nil, ErrUpstreamNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", "", zeroTime, fmt.Errorf("upstream returned %d", resp.StatusCode)
+		return nil, fmt.Errorf("upstream returned %d", resp.StatusCode)
 	}
 
 	body, err := p.ReadMetadata(resp.Body)
 	if err != nil {
-		return nil, "", "", zeroTime, fmt.Errorf("reading response: %w", err)
+		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
-	contentType := resp.Header.Get(headerContentType)
-	if contentType == "" {
-		contentType = contentTypeJSON
+	meta := &upstreamMetadata{
+		body:            body,
+		contentType:     resp.Header.Get(headerContentType),
+		contentEncoding: resp.Header.Get(headerContentEncoding),
+		etag:            resp.Header.Get("ETag"),
 	}
-
-	etag := resp.Header.Get("ETag")
-
-	var lastModified time.Time
+	if meta.contentType == "" {
+		meta.contentType = contentTypeJSON
+	}
 	if lm := resp.Header.Get("Last-Modified"); lm != "" {
-		lastModified, _ = http.ParseTime(lm)
+		meta.lastModified, _ = http.ParseTime(lm)
 	}
-
-	return body, contentType, etag, lastModified, nil
+	return meta, nil
 }
 
 // cacheMetadataBlob stores metadata bytes in storage and updates the database.
-func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, storagePath string, data []byte, contentType, etag string, lastModified time.Time) {
+func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, storagePath string, meta *upstreamMetadata) {
 	if p.DB == nil || p.Storage == nil {
 		return
 	}
 
-	size, _, err := p.Storage.Store(ctx, storagePath, bytes.NewReader(data))
+	size, _, err := p.Storage.Store(ctx, storagePath, bytes.NewReader(meta.body))
 	if err != nil {
 		p.Logger.Warn("failed to cache metadata", "ecosystem", ecosystem, "key", cacheKey, "error", err)
 		return
 	}
 
 	_ = p.DB.UpsertMetadataCache(&database.MetadataCacheEntry{
-		Ecosystem:    ecosystem,
-		Name:         cacheKey,
-		StoragePath:  storagePath,
-		ETag:         sql.NullString{String: etag, Valid: etag != ""},
-		ContentType:  sql.NullString{String: contentType, Valid: contentType != ""},
-		Size:         sql.NullInt64{Int64: size, Valid: true},
-		LastModified: sql.NullTime{Time: lastModified, Valid: !lastModified.IsZero()},
-		FetchedAt:    sql.NullTime{Time: time.Now(), Valid: true},
+		Ecosystem:       ecosystem,
+		Name:            cacheKey,
+		StoragePath:     storagePath,
+		ETag:            sql.NullString{String: meta.etag, Valid: meta.etag != ""},
+		ContentType:     sql.NullString{String: meta.contentType, Valid: meta.contentType != ""},
+		ContentEncoding: sql.NullString{String: meta.contentEncoding, Valid: meta.contentEncoding != ""},
+		Size:            sql.NullInt64{Int64: size, Valid: true},
+		LastModified:    sql.NullTime{Time: meta.lastModified, Valid: !meta.lastModified.IsZero()},
+		FetchedAt:       sql.NullTime{Time: time.Now(), Valid: true},
 	})
 }
 
 // cachedMeta holds cache validators and freshness state from a metadata cache entry.
 type cachedMeta struct {
-	etag         string
-	lastModified time.Time
-	stale        bool
+	etag            string
+	lastModified    time.Time
+	contentEncoding string
+	stale           bool
 }
 
 // lookupCachedMeta retrieves cache validators for a metadata entry.
@@ -776,6 +805,9 @@ func (p *Proxy) lookupCachedMeta(ecosystem, cacheKey string) cachedMeta {
 	}
 	if entry.LastModified.Valid {
 		cm.lastModified = entry.LastModified.Time
+	}
+	if entry.ContentEncoding.Valid {
+		cm.contentEncoding = entry.ContentEncoding.String
 	}
 	// If FetchedAt is older than TTL, upstream must have failed and
 	// we served from stale cache (successful fetches update FetchedAt).
@@ -796,7 +828,7 @@ func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL,
 		return
 	}
 
-	body, contentType, err := p.FetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, acceptHeaders...)
+	body, contentType, err := p.fetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, true, acceptHeaders...)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -832,6 +864,9 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set(headerContentType, contentType)
 	w.Header().Set(headerContentLength, strconv.Itoa(len(body)))
+	if cm.contentEncoding != "" {
+		w.Header().Set(headerContentEncoding, cm.contentEncoding)
+	}
 	if cm.etag != "" {
 		w.Header().Set("ETag", cm.etag)
 	}
@@ -859,9 +894,13 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 		accept = acceptHeaders[0]
 	}
 	req.Header.Set("Accept", accept)
+	// ProxyCached serves bytes through verbatim, so request identity to keep
+	// Go from transparently decompressing (and stripping the Content-Encoding
+	// of) signed index files, regardless of what the client negotiated.
+	req.Header.Set(headerAcceptEncoding, "identity")
 	p.applyUpstreamAuth(req)
 
-	for _, header := range []string{headerAcceptEncoding, "If-Modified-Since", "If-None-Match"} {
+	for _, header := range []string{"If-Modified-Since", "If-None-Match"} {
 		if v := r.Header.Get(header); v != "" {
 			req.Header.Set(header, v)
 		}
@@ -874,7 +913,7 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for _, header := range []string{headerContentType, headerContentLength, "Last-Modified", "ETag"} {
+	for _, header := range []string{headerContentType, headerContentLength, headerContentEncoding, "Last-Modified", "ETag"} {
 		if v := resp.Header.Get(header); v != "" {
 			w.Header().Set(header, v)
 		}
