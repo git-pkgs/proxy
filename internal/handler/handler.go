@@ -667,7 +667,8 @@ func metadataStoragePath(ecosystem, cacheKey string) string {
 // cacheKey is typically the package name but can include subpath components.
 // Optional acceptHeaders specify the Accept header(s) to send; defaults to application/json.
 func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL string, acceptHeaders ...string) ([]byte, string, error) {
-	return p.fetchOrCacheMetadata(ctx, ecosystem, cacheKey, upstreamURL, "", acceptHeaders...)
+	body, contentType, _, err := p.fetchOrCacheMetadata(ctx, ecosystem, cacheKey, upstreamURL, "", acceptHeaders...)
+	return body, contentType, err
 }
 
 // fetchOrCacheMetadata implements FetchOrCacheMetadata. acceptEncoding controls
@@ -677,9 +678,9 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 // decompression so the wire bytes and their Content-Encoding are stored and
 // replayed as sent. The ProxyCached path uses "identity" for signed indexes and
 // "gzip" where both hops should stay compressed.
-func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, acceptEncoding string, acceptHeaders ...string) ([]byte, string, error) {
+func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, acceptEncoding string, acceptHeaders ...string) ([]byte, string, string, error) {
 	if containsPathTraversal(cacheKey) {
-		return nil, "", fmt.Errorf("invalid cache key: %q", cacheKey)
+		return nil, "", "", fmt.Errorf("invalid cache key: %q", cacheKey)
 	}
 
 	storagePath := metadataStoragePath(ecosystem, cacheKey)
@@ -703,7 +704,7 @@ func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 						ct = entry.ContentType.String
 					}
 					metrics.RecordCacheHit(ecosystem)
-					return data, ct, nil
+					return data, ct, entry.ContentEncoding.String, nil
 				}
 			}
 			// Cache file missing/unreadable, fall through to upstream
@@ -726,12 +727,12 @@ func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 		if p.CacheMetadata {
 			p.cacheMetadataBlob(ctx, ecosystem, cacheKey, storagePath, meta)
 		}
-		return meta.body, meta.contentType, nil
+		return meta.body, meta.contentType, meta.contentEncoding, nil
 	}
 
 	// Upstream failed -- fall back to cache if available
 	if !p.CacheMetadata || entry == nil {
-		return nil, "", fmt.Errorf("upstream failed and no cached metadata: %w", err)
+		return nil, "", "", fmt.Errorf("upstream failed and no cached metadata: %w", err)
 	}
 
 	p.Logger.Warn("upstream metadata fetch failed, checking cache",
@@ -739,13 +740,13 @@ func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 
 	cached, readErr := p.Storage.Open(ctx, entry.StoragePath)
 	if readErr != nil {
-		return nil, "", fmt.Errorf("upstream failed and cached file missing: %w", err)
+		return nil, "", "", fmt.Errorf("upstream failed and cached file missing: %w", err)
 	}
 	defer func() { _ = cached.Close() }()
 
 	data, readErr := p.ReadMetadata(cached)
 	if readErr != nil {
-		return nil, "", fmt.Errorf("upstream failed and cached read error: %w", err)
+		return nil, "", "", fmt.Errorf("upstream failed and cached read error: %w", err)
 	}
 
 	ct := contentTypeJSON
@@ -754,7 +755,7 @@ func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 	}
 	p.Logger.Info("serving metadata from cache",
 		"ecosystem", ecosystem, "key", cacheKey)
-	return data, ct, nil
+	return data, ct, entry.ContentEncoding.String, nil
 }
 
 func (p *Proxy) recordMetadataCacheMiss(ecosystem string) {
@@ -877,10 +878,9 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 
 // cachedMeta holds cache validators and freshness state from a metadata cache entry.
 type cachedMeta struct {
-	etag            string
-	lastModified    time.Time
-	contentEncoding string
-	stale           bool
+	etag         string
+	lastModified time.Time
+	stale        bool
 }
 
 // lookupCachedMeta retrieves cache validators for a metadata entry.
@@ -898,9 +898,6 @@ func (p *Proxy) lookupCachedMeta(ecosystem, cacheKey string) cachedMeta {
 	}
 	if entry.LastModified.Valid {
 		cm.lastModified = entry.LastModified.Time
-	}
-	if entry.ContentEncoding.Valid {
-		cm.contentEncoding = entry.ContentEncoding.String
 	}
 	// If FetchedAt is older than TTL, upstream must have failed and
 	// we served from stale cache (successful fetches update FetchedAt).
@@ -930,7 +927,7 @@ func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	body, contentType, err := p.fetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, acceptEncoding, acceptHeaders...)
+	body, contentType, contentEncoding, err := p.fetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, acceptEncoding, acceptHeaders...)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -941,12 +938,15 @@ func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	p.writeMetadataCachedResponse(w, r, ecosystem, cacheKey, body, contentType)
+	p.writeMetadataCachedResponse(w, r, ecosystem, cacheKey, body, contentType, contentEncoding)
 }
 
 // writeMetadataCachedResponse writes a cached metadata response and handles
-// conditional request headers using metadata cache validators.
-func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, body []byte, contentType string) {
+// conditional request headers using metadata cache validators. contentEncoding
+// must describe the body being written; it is passed in rather than re-read
+// from the cache row, which is missing or stale when the metadata cache write
+// failed and would otherwise mislabel the bytes.
+func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, body []byte, contentType, contentEncoding string) {
 	cm := p.lookupCachedMeta(ecosystem, cacheKey)
 
 	if cm.etag != "" {
@@ -966,8 +966,8 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set(headerContentType, contentType)
 	w.Header().Set(headerContentLength, strconv.Itoa(len(body)))
-	if cm.contentEncoding != "" {
-		w.Header().Set(headerContentEncoding, cm.contentEncoding)
+	if contentEncoding != "" {
+		w.Header().Set(headerContentEncoding, contentEncoding)
 	}
 	if cm.etag != "" {
 		w.Header().Set("ETag", cm.etag)

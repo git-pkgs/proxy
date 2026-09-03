@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"errors"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -324,12 +325,14 @@ func TestCondaRepodataRequestsGzip(t *testing.T) {
 
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sawAcceptEncoding.Store(r.URL.Path, r.Header.Get(headerAcceptEncoding))
+		if strings.HasSuffix(r.URL.Path, ".json") {
+			jsonUpstreamReqs.Add(1)
+		}
 		if !available.Load() {
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 			return
 		}
 		if strings.HasSuffix(r.URL.Path, ".json") {
-			jsonUpstreamReqs.Add(1)
 			if strings.Contains(r.Header.Get(headerAcceptEncoding), "gzip") {
 				w.Header().Set(headerContentType, contentTypeJSON)
 				w.Header().Set(headerContentEncoding, "gzip")
@@ -451,5 +454,52 @@ func TestCondaRepodataStreamPathRequestsGzip(t *testing.T) {
 	}
 	if got := w.Header().Get(headerContentEncoding); got != "gzip" {
 		t.Errorf("stream path Content-Encoding = %q, want %q", got, "gzip")
+	}
+}
+
+// TestCondaRepodataGzipSurvivesCacheWriteFailure covers the failure the gzip
+// route makes reachable: when the metadata cache write fails the freshly
+// fetched body is still served, so its Content-Encoding must come from the
+// fetch and not from the (unwritten) cache row -- otherwise gzip bytes go out
+// labelled application/json with no Content-Encoding and every conda client
+// fails to parse them.
+func TestCondaRepodataGzipSurvivesCacheWriteFailure(t *testing.T) {
+	plain := []byte(`{"packages":{},"repodata_version":1}`)
+	compressed := gzipPayload(t, plain)
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.Header.Get(headerAcceptEncoding), "gzip") {
+			w.Header().Set(headerContentType, contentTypeJSON)
+			w.Header().Set(headerContentEncoding, "gzip")
+			_, _ = w.Write(compressed)
+			return
+		}
+		w.Header().Set(headerContentType, contentTypeJSON)
+		_, _ = w.Write(plain)
+	}))
+	defer upstream.Close()
+
+	proxy, _, store, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	proxy.HTTPClient = upstream.Client()
+	store.storeErr = errors.New("disk full")
+
+	routes := NewCondaHandlerWithUpstream(proxy, "http://proxy.local", upstream.URL).Routes()
+	w := httptest.NewRecorder()
+	routes.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/conda-forge/linux-64/repodata.json", nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if !bytes.Equal(w.Body.Bytes(), compressed) {
+		t.Fatalf("body is not the fetched compressed bytes (got %d, want %d)", w.Body.Len(), len(compressed))
+	}
+	// The cache row was never written, so the header must come from the fetch.
+	if got := w.Header().Get(headerContentEncoding); got != "gzip" {
+		t.Errorf("Content-Encoding = %q, want %q (gzip body would be unparseable without it)", got, "gzip")
+	}
+	if got := w.Header().Get(headerContentLength); got != strconv.Itoa(len(compressed)) {
+		t.Errorf("Content-Length = %q, want %d", got, len(compressed))
 	}
 }

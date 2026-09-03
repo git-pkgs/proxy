@@ -69,7 +69,7 @@ func (h *HelmHandler) handleIndex(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	h.proxy.writeMetadataCachedResponse(w, r, helmMetadataEcosystem, h.indexCacheKey(repository, upstreamURL), rewritten, contentType)
+	h.proxy.writeMetadataCachedResponse(w, r, helmMetadataEcosystem, h.indexCacheKey(repository, upstreamURL), rewritten, contentType, "")
 }
 
 func (h *HelmHandler) handleChart(w http.ResponseWriter, r *http.Request) {
