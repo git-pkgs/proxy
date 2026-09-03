@@ -66,7 +66,7 @@ The proxy never uploads artifact bytes to a scanner. Each scanner is notified wi
 | Alpine | Alpine Linux | | ✓ |
 | Arch | Arch Linux | | ✗ |
 | Chef | Chef | | ✗ |
-| Generic | Any | | ✗ |
+| Generic | Any | | ✓ |
 | Helm | Kubernetes | | ✗ |
 | Vagrant | Vagrant | | ✗ |
 
@@ -514,6 +514,32 @@ http://localhost:8080/apk/private
 apk appends the architecture and index filename to each repository line
 itself.
 
+### GitHub Releases / mise (aqua backend)
+
+Configure named generic upstreams:
+
+```yaml
+upstream:
+  generic:
+    github: "https://github.com"
+    github-api: "https://api.github.com"
+```
+
+Then rewrite GitHub URLs in mise's settings (`~/.config/mise/config.toml`, mise ≥ 2025.9.3):
+
+```toml
+[settings.url_replacements]
+"regex:^https://github\\.com/([^/]+)/([^/]+)/releases/download/(.+)" = "http://localhost:8080/generic/github/$1/$2/releases/download/$3"
+"regex:^https://api\\.github\\.com/(.*)" = "http://localhost:8080/generic/github-api/$1"
+```
+
+Release assets are cached permanently after the first download and keep
+installing while GitHub is down. Tag lookups through `api.github.com` are
+cached for `metadata_ttl` and served stale during an outage or rate limit.
+Commit a `mise.lock` and install with `mise install --locked` so pinned
+installs need no API call at all. Add a bearer token for `https://api.github.com`
+under `upstream.auth` if the fleet exceeds GitHub's anonymous rate limit.
+
 ## Configuration
 
 The proxy can be configured via:
@@ -812,6 +838,7 @@ Recently cached:
 | `GET /helm/{repository}/*` | HTTP Helm chart repository protocol |
 | `GET /v2/*` | OCI/Docker registry protocol |
 | `GET /apk/{repository}/*` | Alpine APK repository protocol |
+| `GET /generic/{name}/*` | Generic HTTP download proxy (GitHub release assets, mise/aqua) |
 | `GET /debian/*` | Debian/APT repository protocol |
 | `GET /rpm/*` | RPM/Yum repository protocol |
 

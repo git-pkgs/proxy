@@ -209,6 +209,37 @@ repository's `index.yaml` so chart archives are downloaded through the proxy.
 Chart archives are retained only when their SHA-256 digest matches the digest
 listed in the index. Relative and absolute chart URLs are both supported.
 
+Generic HTTP upstreams proxy plain downloads from fixed base URLs:
+
+```yaml
+upstream:
+  # Named HTTP upstreams, served at /generic/{name}/. The rest of the
+  # request path and the query string are appended to the upstream URL.
+  generic:
+    github: "https://github.com"
+    github-api: "https://api.github.com"
+  auth:
+    # Optional: raise the GitHub API rate limit. Scoped to this host only,
+    # so the token is never sent to the object store GitHub redirects to.
+    "https://api.github.com":
+      type: bearer
+      token: "${GITHUB_TOKEN}"
+```
+
+Only configured upstreams are reachable, so this is not an open HTTP proxy.
+Paths shaped like `{owner}/{repo}/releases/download/{tag}/{asset}` are
+version-pinned GitHub release assets: they are stored in the artifact cache
+and served from it without revalidation, including while the upstream is
+down. Every other path is served through the metadata cache (`cache_metadata`
+must be enabled for offline fallback): fresh within `metadata_ttl`, then
+revalidated with the upstream's `ETag`/`Last-Modified`, and served stale with
+a `Warning: 110` header when the upstream fails, refuses or rate-limits the
+request. Metadata responses are buffered up to `metadata_max_size`, so keep
+large mutable downloads (`releases/latest/download/...`) off this route.
+
+This is the cache behind [mise](https://mise.jdx.dev)'s aqua backend; see the
+mise section in the README for the client-side `url_replacements`.
+
 `upstream.oci_default` sets the registry used by unprefixed `/v2` requests,
 while `upstream.oci` selects named registries through the `upstream/{name}/`
 repository prefix. For example, `oci://proxy.example.com/upstream/ghcr/owner/chart`

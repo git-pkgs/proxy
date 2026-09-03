@@ -1173,12 +1173,30 @@ func TestValidateNamedUpstreams(t *testing.T) {
 		wantErr bool
 	}{
 		{
-			name: "valid Helm, OCI, and APK upstreams",
+			name: "valid Helm, OCI, APK, and generic upstreams",
 			modify: func(cfg *Config) {
 				cfg.Upstream.Helm = map[string]string{"bitnami": "https://charts.bitnami.com/bitnami"}
 				cfg.Upstream.OCI = map[string]string{"ghcr": "https://ghcr.io"}
 				cfg.Upstream.APK = map[string]string{"alpine": "https://dl-cdn.alpinelinux.org/alpine"}
+				cfg.Upstream.Generic = map[string]string{
+					"github":     "https://github.com",
+					"github-api": "https://api.github.com",
+				}
 			},
+		},
+		{
+			name: "generic upstream name contains path separator",
+			modify: func(cfg *Config) {
+				cfg.Upstream.Generic = map[string]string{"github/releases": "https://github.com"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "generic upstream URL is not absolute",
+			modify: func(cfg *Config) {
+				cfg.Upstream.Generic = map[string]string{"github": "github.com"}
+			},
+			wantErr: true,
 		},
 		{
 			name: "Helm upstream name contains path separator",
