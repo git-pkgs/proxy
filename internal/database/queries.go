@@ -245,7 +245,7 @@ func (db *DB) GetCachedArtifact(packagePURL, versionPURL, filename string) (*Cac
 	if err != nil {
 		return nil, err
 	}
-	return row.artifact(versionPURL, filename)
+	return row.artifact(versionPURL, filename), nil
 }
 
 type cachedArtifactRow struct {
@@ -257,35 +257,23 @@ type cachedArtifactRow struct {
 	Integrity   sql.NullString `db:"integrity"`
 }
 
-func (row cachedArtifactRow) artifact(versionPURL, filename string) (*CachedArtifact, error) {
-	if !row.ContentHash.Valid || row.ContentHash.String == "" {
-		return nil, fmt.Errorf("cached artifact for %q, filename %q: content hash is missing", versionPURL, filename)
-	}
-	if !row.Size.Valid {
-		return nil, fmt.Errorf("cached artifact for %q, filename %q: size is missing", versionPURL, filename)
-	}
-
-	mediaType := ""
-	if row.ContentType.Valid {
-		mediaType = row.ContentType.String
-	}
-	sharedArtifact, err := artifacts.New(
-		versionPURL,
-		digest.Digest("sha256:"+row.ContentHash.String),
-		row.Size.Int64,
-		filename,
-		mediaType,
-	)
-	if err != nil {
-		return nil, fmt.Errorf("invalid cached artifact for %q, filename %q: %w", versionPURL, filename, err)
-	}
-
+// artifact converts a cached artifact row to a CachedArtifact without
+// validation. A malformed hash or integrity value is handled by
+// checkCache, which clears the record and treats the request as a cache
+// miss so the client is served a fresh fetch instead of an error.
+func (row cachedArtifactRow) artifact(versionPURL, filename string) *CachedArtifact {
 	return &CachedArtifact{
 		Ecosystem:   row.Ecosystem,
 		StoragePath: row.StoragePath,
-		Artifact:    sharedArtifact,
 		Integrity:   row.Integrity,
-	}, nil
+		Artifact: artifacts.Artifact{
+			PURL:      versionPURL,
+			Digest:    digest.Digest("sha256:" + row.ContentHash.String),
+			Size:      row.Size.Int64,
+			Filename:  filename,
+			MediaType: row.ContentType.String,
+		},
+	}
 }
 
 func (db *DB) GetArtifactByPath(storagePath string) (*Artifact, error) {
