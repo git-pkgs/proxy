@@ -878,9 +878,10 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 
 // cachedMeta holds cache validators and freshness state from a metadata cache entry.
 type cachedMeta struct {
-	etag         string
-	lastModified time.Time
-	stale        bool
+	etag            string
+	lastModified    time.Time
+	contentEncoding string
+	stale           bool
 }
 
 // lookupCachedMeta retrieves cache validators for a metadata entry.
@@ -898,6 +899,9 @@ func (p *Proxy) lookupCachedMeta(ecosystem, cacheKey string) cachedMeta {
 	}
 	if entry.LastModified.Valid {
 		cm.lastModified = entry.LastModified.Time
+	}
+	if entry.ContentEncoding.Valid {
+		cm.contentEncoding = entry.ContentEncoding.String
 	}
 	// If FetchedAt is older than TTL, upstream must have failed and
 	// we served from stale cache (successful fetches update FetchedAt).
