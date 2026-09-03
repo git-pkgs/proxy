@@ -20,6 +20,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/packageurl"
+	"github.com/git-pkgs/proxy/internal/scanner"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
@@ -146,6 +147,19 @@ type Proxy struct {
 	DirectServeBaseURL string
 	HTTPClient         *http.Client
 	AuthForURL         func(string) (headerName, headerValue string)
+
+	// Scanners runs pre-cache artifact scanning (e.g. trivy, ClamAV, Wiz).
+	// Nil or disabled means artifacts are cached without scanning.
+	Scanners *scanner.Group
+
+	// ScanSigningKey authenticates pull requests to the internal
+	// /_internal/scan-fetch route used by scanners to retrieve staged
+	// artifacts, for every storage backend.
+	ScanSigningKey []byte
+
+	// ScanFetchBaseURL is the address scanners use to reach this proxy to
+	// pull staged artifacts.
+	ScanFetchBaseURL string
 }
 
 // NewProxy creates a new Proxy with the given dependencies.
@@ -358,20 +372,53 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 	}
 	metrics.RecordUpstreamFetch(ecosystem, fetchDuration)
 
-	// Store in cache
+	return p.storeArtifact(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, info.URL, "", artifact)
+}
+
+// storeArtifact writes a fetched artifact to storage, verifies it against
+// upstreamHash if non-empty, runs it through the scan gate if scanning is
+// enabled, and commits it to the cache database.
+//
+// The scan gate sits between Storage.Store and updateCacheDB: updateCacheDB
+// is the only thing that makes an artifact visible to clients (checkCache
+// looks up its row before touching Storage), so deferring it until after a
+// verdict means a blocked artifact was never reachable by any client. On
+// block, the just-stored bytes are deleted and ErrArtifactBlocked is
+// returned; updateCacheDB is never called.
+func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, upstreamURL, upstreamHash string, artifact *fetch.Artifact) (*CacheResult, error) {
 	storagePath := storage.ArtifactPath(ecosystem, "", name, version, filename)
+
 	storeStart := time.Now()
 	size, hash, err := p.Storage.Store(ctx, storagePath, artifact.Body)
 	_ = artifact.Body.Close()
 	metrics.RecordStorageOperation("write", time.Since(storeStart))
-
 	if err != nil {
 		metrics.RecordStorageError("write")
 		return nil, fmt.Errorf("storing artifact: %w", err)
 	}
 
+	if !artifactHashMatches(hash, upstreamHash) {
+		if delErr := p.Storage.Delete(ctx, storagePath); delErr != nil {
+			p.Logger.Warn("failed to discard artifact with mismatched checksum", "path", storagePath, "error", delErr)
+		}
+		return nil, fmt.Errorf("artifact checksum mismatch: upstream declared %s, got %s", upstreamHash, hash)
+	}
+
+	if p.Scanners != nil && p.Scanners.Enabled() {
+		if err := p.runScan(ctx, ecosystem, name, version, filename, versionPURL, storagePath, size, artifact.ContentType); err != nil {
+			// Detached from ctx: a client disconnecting must not abort
+			// cleanup of a genuinely blocked artifact and leave its bytes
+			// orphaned in storage with no DB row pointing at them.
+			if delErr := p.Storage.Delete(context.WithoutCancel(ctx), storagePath); delErr != nil {
+				p.Logger.Warn("failed to delete blocked artifact from storage",
+					"path", storagePath, "error", delErr)
+			}
+			return nil, err
+		}
+	}
+
 	// Update database
-	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, info.URL, storagePath, hash, size, artifact.ContentType); err != nil {
+	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, upstreamURL, storagePath, hash, size, artifact.ContentType); err != nil {
 		p.Logger.Warn("failed to update cache database", "error", err)
 		// Continue anyway - we have the file
 	}
@@ -393,6 +440,43 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 		Hash:        hash,
 		Cached:      false,
 	}, nil
+}
+
+// runScan generates a signed fetch URL for the just-staged artifact and
+// asks the configured scanners for a verdict. Returns a wrapped
+// ErrArtifactBlocked if any scanner blocks, or a scan-infrastructure error.
+//
+// The scan call runs on a context detached from ctx's cancellation
+// (context.WithoutCancel): ctx is the original client request's context, and
+// a client disconnecting mid-scan must not be indistinguishable from a real
+// scanner verdict. Group.Scan still bounds the call with its own configured
+// timeout, so a detached context cannot hang forever.
+func (p *Proxy) runScan(ctx context.Context, ecosystem, name, version, filename, purlStr, storagePath string, size int64, contentType string) error {
+	fetchURL := p.scanFetchURL(storagePath, p.Scanners.Timeout())
+	result := p.Scanners.Scan(context.WithoutCancel(ctx), scanner.Request{
+		Ecosystem:   ecosystem,
+		Name:        name,
+		Version:     version,
+		Filename:    filename,
+		PURL:        purlStr,
+		FetchURL:    fetchURL,
+		Size:        size,
+		ContentType: contentType,
+	})
+	if !result.Allowed {
+		p.Logger.Warn("artifact blocked by security scan",
+			"ecosystem", ecosystem, "name", name, "version", version, "filename", filename,
+			"scanner", result.ScannerName, "reason", result.Reason, "infra_error", result.InfraError)
+		reason := result.Reason
+		if result.InfraError {
+			// result.Reason may contain raw scanner-infrastructure details
+			// (internal hostnames, ports, connection errors) that must not
+			// reach an untrusted client via the 403 response body.
+			reason = "scan could not be completed"
+		}
+		return fmt.Errorf("%w: %s", ErrArtifactBlocked, reason)
+	}
+	return nil
 }
 
 func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, upstreamURL, storagePath, hash string, size int64, contentType string) error {
@@ -550,11 +634,19 @@ func JSONError(w http.ResponseWriter, status int, message string) {
 // ErrUpstreamNotFound indicates the upstream returned 404.
 var ErrUpstreamNotFound = fmt.Errorf("upstream: %w", fetch.ErrNotFound)
 
+// ErrArtifactBlocked indicates a pre-cache security scan blocked the artifact.
+var ErrArtifactBlocked = errors.New("artifact blocked by security scan")
+
 // serveArtifactError writes response for a failed fetch:
-// 404 when upstream reports artifact missing, 502 otherwise.
+// 404 when upstream reports artifact missing, 403 when a security scan
+// blocked the artifact, 502 otherwise.
 func (p *Proxy) serveArtifactError(w http.ResponseWriter, err error, clientMsg string) {
 	if errors.Is(err, ErrUpstreamNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, ErrArtifactBlocked) {
+		JSONError(w, http.StatusForbidden, err.Error())
 		return
 	}
 	p.Logger.Error("failed to get artifact", "error", err)
@@ -1006,41 +1098,7 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 		return nil, fmt.Errorf("fetching from upstream: %w", err)
 	}
 
-	storagePath := storage.ArtifactPath(ecosystem, "", name, version, filename)
-	storeStart := time.Now()
-	size, hash, err := p.Storage.Store(ctx, storagePath, artifact.Body)
-	_ = artifact.Body.Close()
-	metrics.RecordStorageOperation("write", time.Since(storeStart))
-	if err != nil {
-		metrics.RecordStorageError("write")
-		return nil, fmt.Errorf("storing artifact: %w", err)
-	}
-	if !artifactHashMatches(hash, upstreamHash) {
-		if err := p.Storage.Delete(ctx, storagePath); err != nil {
-			p.Logger.Warn("failed to discard artifact with mismatched checksum", "path", storagePath, "error", err)
-		}
-		return nil, fmt.Errorf("artifact checksum mismatch: upstream declared %s, got %s", upstreamHash, hash)
-	}
-
-	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, downloadURL, storagePath, hash, size, artifact.ContentType); err != nil {
-		p.Logger.Warn("failed to update cache database", "error", err)
-	}
-
-	readStart := time.Now()
-	reader, err := p.Storage.Open(ctx, storagePath)
-	metrics.RecordStorageOperation("read", time.Since(readStart))
-	if err != nil {
-		metrics.RecordStorageError("read")
-		return nil, fmt.Errorf("opening cached artifact: %w", err)
-	}
-
-	return &CacheResult{
-		Reader:      reader,
-		Size:        size,
-		ContentType: artifact.ContentType,
-		Hash:        hash,
-		Cached:      false,
-	}, nil
+	return p.storeArtifact(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, upstreamHash, artifact)
 }
 
 func artifactHashMatches(got, expected string) bool {

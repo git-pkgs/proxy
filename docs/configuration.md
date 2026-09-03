@@ -370,6 +370,103 @@ Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyG
 
 Note: Hex cooldown requires disabling registry signature verification since the proxy re-encodes the protobuf payload without the original signature. Set `HEX_NO_VERIFY_REPO_ORIGIN=1` or configure your repo with `no_verify: true`.
 
+## Artifact Scanning
+
+Cooldown only ever looks at a version's *publish timestamp* — it never inspects the actual bytes of an artifact. Artifact scanning runs after a fetched artifact is staged into storage but before it becomes visible from cache, so an external scanner (trivy, ClamAV, Wiz, or any custom service) can block a bad verdict from ever reaching a client.
+
+```yaml
+scanning:
+  enabled: true
+  fail_open: false
+  timeout: 30s
+  signing_key: ${PROXY_SCANNING_SIGNING_KEY}
+  fetch_base_url: http://proxy.internal:8080
+  scanners:
+    - name: clamav
+      url: http://clamav-adapter:8080/scan
+      mode: block
+    - name: trivy
+      url: http://trivy-adapter:8081/scan
+      mode: monitor
+      ecosystems: [npm, pypi]
+```
+
+| Config | Environment | Description |
+|--------|-------------|-------------|
+| `scanning.enabled` | `PROXY_SCANNING_ENABLED` | Turn on the scan gate. When false (default), artifacts are cached exactly as if scanning didn't exist |
+| `scanning.fail_open` | `PROXY_SCANNING_FAIL_OPEN` | Treat scanner errors/timeouts as allow instead of block. Default is fail-closed |
+| `scanning.timeout` | `PROXY_SCANNING_TIMEOUT` | Per-scan-call timeout, Go duration syntax (default `30s`) |
+| `scanning.signing_key` | `PROXY_SCANNING_SIGNING_KEY` | Signs pull requests to the internal scan-fetch route. Required whenever `enabled` is true |
+| `scanning.fetch_base_url` | `PROXY_SCANNING_FETCH_BASE_URL` | Address scanners use to reach this proxy to pull staged artifacts. Defaults to `base_url` |
+| `scanning.scanners` | - | List of external scanning services (YAML only) |
+| `scanning.scanners[].name` | - | Identifies this scanner in logs and metrics |
+| `scanning.scanners[].url` | - | Endpoint the proxy POSTs scan notifications to |
+| `scanning.scanners[].mode` | - | `block` (default) or `monitor` |
+| `scanning.scanners[].ecosystems` | - | Restricts this scanner to specific ecosystems (e.g. `npm`, `pypi`). Empty means all ecosystems |
+| `scanning.scanners[].headers` | - | Extra HTTP headers sent with every scan request (e.g. for authenticating to the scanner service). Values support `${VAR_NAME}` expansion |
+
+### How caching defers to a scan verdict
+
+The proxy never uploads artifact bytes to a scanner. When an artifact is fetched from upstream, it's stored to the configured storage backend first, exactly as without scanning. If scanning is enabled for the artifact's ecosystem, the proxy then notifies each applicable scanner with package metadata and a short-lived, HMAC-signed URL pointing at the internal `/_internal/scan-fetch` route; each scanner GETs that URL itself to pull the exact bytes staged in storage and runs its own scan against them.
+
+Scanners configured for the same ecosystem all run concurrently, never sequentially. The moment any `block`-mode scanner reports a not-allowed verdict (or errors, unless `fail_open` is set), the proxy cancels the in-flight calls to the other scanners and deletes the staged artifact — it's never committed to the cache database, so it was never visible to a client. If nothing blocks, the proxy waits for every `block`-mode scanner to finish before caching the artifact and serving it. A `monitor`-mode scanner's findings are logged and never gate the wait or the caching decision, even when it reports not-allowed.
+
+A blocked download surfaces to the client as `403 Forbidden` with the scanner's reason, across every ecosystem handler.
+
+### Scanner HTTP contract
+
+Any external service that implements this contract can act as a scanner — a trivy wrapper, a clamav-rest bridge, a Wiz connector, or an in-house service. The proxy POSTs a notify request to `scanning.scanners[].url` and waits for a JSON verdict.
+
+**Request**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `ecosystem` | string | e.g. `npm`, `pypi`, `cargo` |
+| `name` | string | Package name |
+| `version` | string | Package version |
+| `filename` | string | Artifact filename |
+| `purl` | string | Package URL (PURL) identifying this exact version |
+| `content_type` | string | Artifact content type |
+| `size` | integer | Artifact size in bytes |
+| `fetch_url` | string | Short-lived signed URL; GET this to retrieve the exact staged bytes |
+
+```json
+{
+  "ecosystem": "npm", "name": "left-pad", "version": "1.0.0",
+  "filename": "left-pad-1.0.0.tgz", "purl": "pkg:npm/left-pad@1.0.0",
+  "content_type": "application/octet-stream", "size": 1234,
+  "fetch_url": "https://proxy.internal/_internal/scan-fetch?path=...&exp=...&sig=..."
+}
+```
+
+**Response**
+
+| Field | Type | Description |
+|-------|------|-------------|
+| `allowed` | boolean | Whether the artifact may be cached and served |
+| `reason` | string | Human-readable reason, surfaced to the client when `allowed` is false |
+| `findings` | array | Optional list of `{"severity", "title", "description"}` objects |
+
+```json
+{
+  "allowed": false,
+  "reason": "malware detected",
+  "findings": [
+    {"severity": "critical", "title": "Trojan.GenericKD", "description": "..."}
+  ]
+}
+```
+
+The scanner must respond within `scanning.timeout` (default `30s`); a timeout is treated the same as a `block` verdict unless `fail_open` is set.
+
+### The `/_internal/scan-fetch` route
+
+`fetch_url` points at an internal route, `/_internal/scan-fetch`, that streams a staged object straight from the proxy's storage backend via a short-lived HMAC-signed token (`path`, `exp`, `sig` query parameters). This works identically across every storage backend — local filesystem, S3, GCS, Azure — since it never depends on a backend-specific presigned URL, only on the one storage operation every backend already implements.
+
+This route is not part of the public API. It's meant only for scanners to pull artifacts they've been notified about, and should be restricted to internal-network access at the ingress/network-policy layer — the HMAC scoping (one object, a short TTL) limits what a leaked token can do, but isn't a substitute for network restriction. Its query parameters are also documented in the generated [OpenAPI spec](../README.md#openapi-swagger).
+
+The route only exists when scanning is actually configured: it's not mounted at all unless at least one scanner is enabled and `scanning.signing_key` is set, and it also refuses every request with `404` if either condition somehow isn't met at request time. There is no way to reach it, even with a forged token, when scanning is disabled.
+
 ## Metadata Caching
 
 By default the proxy fetches metadata fresh from upstream on every request. Enable `cache_metadata` to store metadata responses in the database and storage backend for offline fallback. When upstream is unreachable, the proxy serves the last cached copy. ETag-based revalidation avoids re-downloading unchanged metadata.

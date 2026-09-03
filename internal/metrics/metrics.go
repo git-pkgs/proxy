@@ -137,6 +137,32 @@ var (
 		},
 		[]string{"step"},
 	)
+
+	// Scanning metrics
+	ScanDuration = prometheus.NewHistogramVec(
+		prometheus.HistogramOpts{
+			Name:    "proxy_scan_duration_seconds",
+			Help:    "Pre-cache artifact scan duration in seconds, by ecosystem and scanner",
+			Buckets: prometheus.DefBuckets,
+		},
+		[]string{"ecosystem", "scanner"},
+	)
+
+	ScanBlocked = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_scan_blocked_total",
+			Help: "Total number of artifacts blocked by a pre-cache scan, by ecosystem and scanner",
+		},
+		[]string{"ecosystem", "scanner"},
+	)
+
+	ScanErrors = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_scan_errors_total",
+			Help: "Total number of pre-cache scan errors, by ecosystem, scanner, and error type",
+		},
+		[]string{"ecosystem", "scanner", "error_type"},
+	)
 )
 
 func init() {
@@ -157,6 +183,9 @@ func init() {
 		ActiveRequests,
 		IntegrityFailures,
 		HealthProbeFailures,
+		ScanDuration,
+		ScanBlocked,
+		ScanErrors,
 	)
 }
 
@@ -211,6 +240,21 @@ func RecordHealthProbeFailure(step string) {
 // RecordStorageError increments storage error counter.
 func RecordStorageError(operation string) {
 	StorageErrors.WithLabelValues(operation).Inc()
+}
+
+// RecordScanResult tracks a completed pre-cache scan call.
+func RecordScanResult(ecosystem, scannerName string, allowed bool, duration time.Duration) {
+	ecosystem = purl.NormalizeEcosystem(ecosystem)
+	ScanDuration.WithLabelValues(ecosystem, scannerName).Observe(duration.Seconds())
+	if !allowed {
+		ScanBlocked.WithLabelValues(ecosystem, scannerName).Inc()
+	}
+}
+
+// RecordScanError increments the scan error counter.
+// errorType is one of: "error" (scanner call failed), "timeout", "cancelled".
+func RecordScanError(ecosystem, scannerName, errorType string) {
+	ScanErrors.WithLabelValues(purl.NormalizeEcosystem(ecosystem), scannerName, errorType).Inc()
 }
 
 // UpdateCacheStats updates cache size and artifact count gauges.

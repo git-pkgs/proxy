@@ -284,6 +284,69 @@ func testStartUsesConfiguredLoopbackUpstreams(t *testing.T) {
 	}
 }
 
+// TestScanFetchRouteNotMountedWhenScanningDisabled verifies the internal
+// scan-fetch route is absent (404), not merely unauthenticated, when
+// scanning is disabled: mounting it unconditionally would expose an
+// unauthenticated way to pull arbitrary storage objects by path.
+func TestScanFetchRouteNotMountedWhenScanningDisabled(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatalf("reserving proxy address: %v", err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+	listenAddress := listener.Addr().String()
+
+	tempDir := t.TempDir()
+	cfg := config.Default()
+	cfg.Listen = listenAddress
+	cfg.BaseURL = "http://" + listenAddress
+	cfg.Database.Path = filepath.Join(tempDir, "proxy.db")
+	cfg.Storage.URL = "file://" + filepath.Join(tempDir, "artifacts")
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("validating config: %v", err)
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	proxyServer, err := New(cfg, logger, BuildInfo{Version: "test", Commit: "test"})
+	if err != nil {
+		t.Fatalf("creating server: %v", err)
+	}
+	startErr := make(chan error, 1)
+	go func() {
+		startErr <- proxyServer.Start(listener)
+	}()
+	defer func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := proxyServer.Shutdown(ctx); err != nil {
+			t.Errorf("shutting down server: %v", err)
+		}
+		if err := <-startErr; !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("Start() error = %v, want %v", err, http.ErrServerClosed)
+		}
+	}()
+
+	client := &http.Client{Timeout: 250 * time.Millisecond}
+	deadline := time.Now().Add(5 * time.Second)
+	var resp *http.Response
+	for {
+		var requestErr error
+		resp, requestErr = client.Get(cfg.BaseURL + "/_internal/scan-fetch")
+		if requestErr == nil {
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("proxy did not start: %v", requestErr)
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	defer func() { _ = resp.Body.Close() }()
+
+	if resp.StatusCode != http.StatusNotFound {
+		t.Errorf("scan-fetch status = %d, want 404 when scanning is disabled", resp.StatusCode)
+	}
+}
+
 // seedTestPackage creates a package, version, and artifact in the database for testing
 // page rendering. The package is created under the npm ecosystem with version 1.0.0.
 func seedTestPackage(t *testing.T, db *database.DB, name string) {

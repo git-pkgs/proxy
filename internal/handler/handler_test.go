@@ -65,7 +65,13 @@ func (s *mockStorage) Exists(_ context.Context, path string) (bool, error) {
 	return ok, nil
 }
 
-func (s *mockStorage) Delete(_ context.Context, path string) error {
+func (s *mockStorage) Delete(ctx context.Context, path string) error {
+	// Real backends (S3/GCS SDKs) fail fast on an already-cancelled
+	// context; mirror that here so tests can catch cleanup calls that
+	// forgot to detach from a cancelled client context.
+	if err := ctx.Err(); err != nil {
+		return err
+	}
 	delete(s.files, path)
 	return nil
 }
