@@ -352,9 +352,6 @@ func (s *Server) serve(listener net.Listener) error {
 	return s.http.ListenAndServe()
 }
 
-// configureScanning builds the scanner group from cfg and wires it into
-// proxy, returning the group so the caller can decide whether to mount the
-// internal scan-fetch route.
 // mountProtocolHandlers constructs every ecosystem handler and mounts it on
 // r under its protocol prefix.
 func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
@@ -441,6 +438,9 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 }
 
+// configureScanning builds the scanner group from cfg and wires it into
+// proxy, returning the group so the caller can decide whether to mount the
+// internal scan-fetch route.
 func configureScanning(proxy *handler.Proxy, cfg config.ScanningConfig, baseURL string, logger *slog.Logger) (*scanner.Group, error) {
 	scanGroup, err := scanner.NewGroup(cfg, logger)
 	if err != nil {

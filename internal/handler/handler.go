@@ -987,12 +987,6 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 	if cm.contentEncoding != "" {
 		w.Header().Set(headerContentEncoding, cm.contentEncoding)
 	}
-	if cm.etag != "" {
-		w.Header().Set(headerETag, cm.etag)
-	}
-	if !cm.lastModified.IsZero() {
-		w.Header().Set(headerLastModified, cm.lastModified.UTC().Format(http.TimeFormat))
-	}
 	if cm.stale {
 		w.Header().Set("Warning", `110 - "Response is Stale"`)
 	}
