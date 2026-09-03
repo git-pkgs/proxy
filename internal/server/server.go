@@ -49,6 +49,7 @@
 package server
 
 import (
+	"cmp"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -73,6 +74,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/mirror"
 	"github.com/git-pkgs/proxy/internal/packageurl"
+	"github.com/git-pkgs/proxy/internal/scanner"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/registries/fetch"
 	"github.com/git-pkgs/registries/safehttp"
@@ -229,6 +231,10 @@ func (s *Server) serve(listener net.Listener) error {
 	proxy.HTTPClient = &metadataClient
 	proxy.AuthForURL = s.authForURL
 	proxy.Cooldown = cd
+	scanGroup, err := configureScanning(proxy, s.cfg.Scanning, s.cfg.BaseURL, s.logger)
+	if err != nil {
+		return fmt.Errorf("configuring scanners: %w", err)
+	}
 	proxy.CacheMetadata = s.cfg.CacheMetadata
 	proxy.MetadataTTL = s.cfg.ParseMetadataTTL()
 	proxy.MetadataMaxSize = s.cfg.ParseMetadataMaxSize()
@@ -258,6 +264,100 @@ func (s *Server) serve(listener net.Listener) error {
 	})
 
 	// Mount protocol handlers
+	s.mountProtocolHandlers(r, proxy)
+
+	// Health, stats, and metrics endpoints
+	r.Get("/health", s.handleHealth)
+	r.Get("/stats", s.handleStats)
+	r.Get("/openapi.json", s.handleOpenAPIJSON)
+	r.Get("/metrics", func(w http.ResponseWriter, r *http.Request) {
+		// Breaker state is only held in the fetcher, so publish it on scrape.
+		s.breakers.snapshot()
+		metrics.Handler().ServeHTTP(w, r)
+	})
+
+	// Internal route used by external scanners to pull staged artifact
+	// bytes before they're committed to the cache. Only wired up when
+	// scanning is actually configured, so there's no unauthenticated path
+	// to storage objects sitting in the router when the feature is unused.
+	// Restrict this to internal-network access only at the
+	// ingress/network-policy layer.
+	if scanGroup.Enabled() && len(proxy.ScanSigningKey) > 0 {
+		r.Get("/_internal/scan-fetch", proxy.ServeScanFetch)
+	}
+
+	// Web UI. Mounted under /ui so a reverse proxy can apply different
+	// access rules to it than to the package endpoints above (#123).
+	r.Route("/ui", func(ui chi.Router) {
+		ui.Mount("/static", http.StripPrefix("/ui/static/", staticHandler()))
+		ui.Get("/", s.handleRoot)
+		ui.Get("/install", s.handleInstall)
+		ui.Get("/search", s.handleSearch)
+		ui.Get("/packages", s.handlePackagesList)
+		ui.Get("/package/{ecosystem}/*", s.handlePackagePath)
+		ui.Get("/api/browse/{ecosystem}/*", s.handleBrowsePath)
+		ui.Get("/api/compare/{ecosystem}/*", s.handleComparePath)
+	})
+	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, "/ui/", http.StatusFound)
+	})
+
+	// API endpoints for enrichment data
+	enrichSvc := enrichment.New(s.logger)
+	apiHandler := NewAPIHandler(enrichSvc, s.db)
+
+	r.Get("/api/package/{ecosystem}/*", apiHandler.HandlePackagePath)
+	r.Get("/api/vulns/{ecosystem}/*", apiHandler.HandleVulnsPath)
+	r.Post("/api/outdated", apiHandler.HandleOutdated)
+	r.Post("/api/bulk", apiHandler.HandleBulkLookup)
+	r.Get("/api/search", apiHandler.HandleSearch)
+	r.Get("/api/packages", apiHandler.HandlePackagesList)
+
+	// Start background context (used by mirror jobs and cleanup)
+	bgCtx, bgCancel := context.WithCancel(context.Background())
+	s.cancel = bgCancel
+	s.startGradleBuildCacheEviction(bgCtx)
+
+	// Mirror API endpoints (opt-in via mirror_api config or PROXY_MIRROR_API env)
+	if s.cfg.MirrorAPI {
+		mirrorSvc := mirror.New(proxy, s.db, s.storage, s.logger, 4) //nolint:mnd // default concurrency
+		jobStore := mirror.NewJobStore(bgCtx, mirrorSvc)
+		mirrorAPI := NewMirrorAPIHandler(jobStore)
+		r.Post("/api/mirror", mirrorAPI.HandleCreate)
+		r.Get("/api/mirror/{id}", mirrorAPI.HandleGet)
+		r.Delete("/api/mirror/{id}", mirrorAPI.HandleCancel)
+		go jobStore.StartCleanup(bgCtx)
+	}
+
+	s.http = &http.Server{
+		Addr:         s.cfg.Listen,
+		Handler:      r,
+		ReadTimeout:  serverReadTimeout,
+		WriteTimeout: serverWriteTimeout, // Large artifacts need time
+		IdleTimeout:  serverIdleTimeout,
+	}
+
+	s.logger.Info("starting server",
+		"listen", s.cfg.Listen,
+		"base_url", s.cfg.BaseURL,
+		"ui_url", s.cfg.UIBaseURL,
+		"storage", s.storage.URL(),
+		"database", s.cfg.Database.String())
+	go s.updateCacheStatsMetrics()
+	go s.startEvictionLoop(bgCtx)
+
+	if listener != nil {
+		return s.http.Serve(listener)
+	}
+	return s.http.ListenAndServe()
+}
+
+// configureScanning builds the scanner group from cfg and wires it into
+// proxy, returning the group so the caller can decide whether to mount the
+// internal scan-fetch route.
+// mountProtocolHandlers constructs every ecosystem handler and mounts it on
+// r under its protocol prefix.
+func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	npmHandler := handler.NewNPMHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.NPM)
 	cargoHandler := handler.NewCargoHandler(
 		proxy,
@@ -338,81 +438,17 @@ func (s *Server) serve(listener net.Listener) error {
 	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 	r.Mount("/generic", http.StripPrefix("/generic", genericHandler.Routes()))
+}
 
-	// Health, stats, and metrics endpoints
-	r.Get("/health", s.handleHealth)
-	r.Get("/stats", s.handleStats)
-	r.Get("/openapi.json", s.handleOpenAPIJSON)
-	r.Get("/metrics", func(w http.ResponseWriter, r *http.Request) {
-		// Breaker state is only held in the fetcher, so publish it on scrape.
-		s.breakers.snapshot()
-		metrics.Handler().ServeHTTP(w, r)
-	})
-
-	// Web UI. Mounted under /ui so a reverse proxy can apply different
-	// access rules to it than to the package endpoints above (#123).
-	r.Route("/ui", func(ui chi.Router) {
-		ui.Mount("/static", http.StripPrefix("/ui/static/", staticHandler()))
-		ui.Get("/", s.handleRoot)
-		ui.Get("/install", s.handleInstall)
-		ui.Get("/search", s.handleSearch)
-		ui.Get("/packages", s.handlePackagesList)
-		ui.Get("/package/{ecosystem}/*", s.handlePackagePath)
-		ui.Get("/api/browse/{ecosystem}/*", s.handleBrowsePath)
-		ui.Get("/api/compare/{ecosystem}/*", s.handleComparePath)
-	})
-	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
-		http.Redirect(w, r, "/ui/", http.StatusFound)
-	})
-
-	// API endpoints for enrichment data
-	enrichSvc := enrichment.New(s.logger)
-	apiHandler := NewAPIHandler(enrichSvc, s.db)
-
-	r.Get("/api/package/{ecosystem}/*", apiHandler.HandlePackagePath)
-	r.Get("/api/vulns/{ecosystem}/*", apiHandler.HandleVulnsPath)
-	r.Post("/api/outdated", apiHandler.HandleOutdated)
-	r.Post("/api/bulk", apiHandler.HandleBulkLookup)
-	r.Get("/api/search", apiHandler.HandleSearch)
-	r.Get("/api/packages", apiHandler.HandlePackagesList)
-
-	// Start background context (used by mirror jobs and cleanup)
-	bgCtx, bgCancel := context.WithCancel(context.Background())
-	s.cancel = bgCancel
-	s.startGradleBuildCacheEviction(bgCtx)
-
-	// Mirror API endpoints (opt-in via mirror_api config or PROXY_MIRROR_API env)
-	if s.cfg.MirrorAPI {
-		mirrorSvc := mirror.New(proxy, s.db, s.storage, s.logger, 4) //nolint:mnd // default concurrency
-		jobStore := mirror.NewJobStore(bgCtx, mirrorSvc)
-		mirrorAPI := NewMirrorAPIHandler(jobStore)
-		r.Post("/api/mirror", mirrorAPI.HandleCreate)
-		r.Get("/api/mirror/{id}", mirrorAPI.HandleGet)
-		r.Delete("/api/mirror/{id}", mirrorAPI.HandleCancel)
-		go jobStore.StartCleanup(bgCtx)
+func configureScanning(proxy *handler.Proxy, cfg config.ScanningConfig, baseURL string, logger *slog.Logger) (*scanner.Group, error) {
+	scanGroup, err := scanner.NewGroup(cfg, logger)
+	if err != nil {
+		return nil, err
 	}
-
-	s.http = &http.Server{
-		Addr:         s.cfg.Listen,
-		Handler:      r,
-		ReadTimeout:  serverReadTimeout,
-		WriteTimeout: serverWriteTimeout, // Large artifacts need time
-		IdleTimeout:  serverIdleTimeout,
-	}
-
-	s.logger.Info("starting server",
-		"listen", s.cfg.Listen,
-		"base_url", s.cfg.BaseURL,
-		"ui_url", s.cfg.UIBaseURL,
-		"storage", s.storage.URL(),
-		"database", s.cfg.Database.String())
-	go s.updateCacheStatsMetrics()
-	go s.startEvictionLoop(bgCtx)
-
-	if listener != nil {
-		return s.http.Serve(listener)
-	}
-	return s.http.ListenAndServe()
+	proxy.Scanners = scanGroup
+	proxy.ScanSigningKey = []byte(cfg.SigningKeyExpanded())
+	proxy.ScanFetchBaseURL = cmp.Or(cfg.FetchBaseURL, baseURL)
+	return scanGroup, nil
 }
 
 func upstreamSafeHTTPOptions(upstream config.UpstreamConfig) safehttp.Options {

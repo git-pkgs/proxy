@@ -20,6 +20,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/packageurl"
+	"github.com/git-pkgs/proxy/internal/scanner"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
@@ -92,9 +93,10 @@ func packagePURLStrings(ecosystem, name, version string) (string, string, error)
 const contentTypeJSON = "application/json"
 
 const (
-	headerAcceptEncoding = "Accept-Encoding"
-	headerContentType    = "Content-Type"
-	headerContentLength  = "Content-Length"
+	headerAcceptEncoding  = "Accept-Encoding"
+	headerContentType     = "Content-Type"
+	headerContentLength   = "Content-Length"
+	headerContentEncoding = "Content-Encoding"
 )
 
 // defaultMetadataMaxSize is used when Proxy.MetadataMaxSize is unset.
@@ -145,6 +147,19 @@ type Proxy struct {
 	DirectServeBaseURL string
 	HTTPClient         *http.Client
 	AuthForURL         func(string) (headerName, headerValue string)
+
+	// Scanners runs pre-cache artifact scanning (e.g. trivy, ClamAV, Wiz).
+	// Nil or disabled means artifacts are cached without scanning.
+	Scanners *scanner.Group
+
+	// ScanSigningKey authenticates pull requests to the internal
+	// /_internal/scan-fetch route used by scanners to retrieve staged
+	// artifacts, for every storage backend.
+	ScanSigningKey []byte
+
+	// ScanFetchBaseURL is the address scanners use to reach this proxy to
+	// pull staged artifacts.
+	ScanFetchBaseURL string
 }
 
 // NewProxy creates a new Proxy with the given dependencies.
@@ -357,20 +372,53 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 	}
 	metrics.RecordUpstreamFetch(ecosystem, fetchDuration)
 
-	// Store in cache
+	return p.storeArtifact(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, info.URL, "", artifact)
+}
+
+// storeArtifact writes a fetched artifact to storage, verifies it against
+// upstreamHash if non-empty, runs it through the scan gate if scanning is
+// enabled, and commits it to the cache database.
+//
+// The scan gate sits between Storage.Store and updateCacheDB: updateCacheDB
+// is the only thing that makes an artifact visible to clients (checkCache
+// looks up its row before touching Storage), so deferring it until after a
+// verdict means a blocked artifact was never reachable by any client. On
+// block, the just-stored bytes are deleted and ErrArtifactBlocked is
+// returned; updateCacheDB is never called.
+func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, upstreamURL, upstreamHash string, artifact *fetch.Artifact) (*CacheResult, error) {
 	storagePath := storage.ArtifactPath(ecosystem, "", name, version, filename)
+
 	storeStart := time.Now()
 	size, hash, err := p.Storage.Store(ctx, storagePath, artifact.Body)
 	_ = artifact.Body.Close()
 	metrics.RecordStorageOperation("write", time.Since(storeStart))
-
 	if err != nil {
 		metrics.RecordStorageError("write")
 		return nil, fmt.Errorf("storing artifact: %w", err)
 	}
 
+	if !artifactHashMatches(hash, upstreamHash) {
+		if delErr := p.Storage.Delete(ctx, storagePath); delErr != nil {
+			p.Logger.Warn("failed to discard artifact with mismatched checksum", "path", storagePath, "error", delErr)
+		}
+		return nil, fmt.Errorf("artifact checksum mismatch: upstream declared %s, got %s", upstreamHash, hash)
+	}
+
+	if p.Scanners != nil && p.Scanners.Enabled() {
+		if err := p.runScan(ctx, ecosystem, name, version, filename, versionPURL, storagePath, size, artifact.ContentType); err != nil {
+			// Detached from ctx: a client disconnecting must not abort
+			// cleanup of a genuinely blocked artifact and leave its bytes
+			// orphaned in storage with no DB row pointing at them.
+			if delErr := p.Storage.Delete(context.WithoutCancel(ctx), storagePath); delErr != nil {
+				p.Logger.Warn("failed to delete blocked artifact from storage",
+					"path", storagePath, "error", delErr)
+			}
+			return nil, err
+		}
+	}
+
 	// Update database
-	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, info.URL, storagePath, hash, size, artifact.ContentType); err != nil {
+	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, upstreamURL, storagePath, hash, size, artifact.ContentType); err != nil {
 		p.Logger.Warn("failed to update cache database", "error", err)
 		// Continue anyway - we have the file
 	}
@@ -392,6 +440,43 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 		Hash:        hash,
 		Cached:      false,
 	}, nil
+}
+
+// runScan generates a signed fetch URL for the just-staged artifact and
+// asks the configured scanners for a verdict. Returns a wrapped
+// ErrArtifactBlocked if any scanner blocks, or a scan-infrastructure error.
+//
+// The scan call runs on a context detached from ctx's cancellation
+// (context.WithoutCancel): ctx is the original client request's context, and
+// a client disconnecting mid-scan must not be indistinguishable from a real
+// scanner verdict. Group.Scan still bounds the call with its own configured
+// timeout, so a detached context cannot hang forever.
+func (p *Proxy) runScan(ctx context.Context, ecosystem, name, version, filename, purlStr, storagePath string, size int64, contentType string) error {
+	fetchURL := p.scanFetchURL(storagePath, p.Scanners.Timeout())
+	result := p.Scanners.Scan(context.WithoutCancel(ctx), scanner.Request{
+		Ecosystem:   ecosystem,
+		Name:        name,
+		Version:     version,
+		Filename:    filename,
+		PURL:        purlStr,
+		FetchURL:    fetchURL,
+		Size:        size,
+		ContentType: contentType,
+	})
+	if !result.Allowed {
+		p.Logger.Warn("artifact blocked by security scan",
+			"ecosystem", ecosystem, "name", name, "version", version, "filename", filename,
+			"scanner", result.ScannerName, "reason", result.Reason, "infra_error", result.InfraError)
+		reason := result.Reason
+		if result.InfraError {
+			// result.Reason may contain raw scanner-infrastructure details
+			// (internal hostnames, ports, connection errors) that must not
+			// reach an untrusted client via the 403 response body.
+			reason = "scan could not be completed"
+		}
+		return fmt.Errorf("%w: %s", ErrArtifactBlocked, reason)
+	}
+	return nil
 }
 
 func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, upstreamURL, storagePath, hash string, size int64, contentType string) error {
@@ -549,11 +634,19 @@ func JSONError(w http.ResponseWriter, status int, message string) {
 // ErrUpstreamNotFound indicates the upstream returned 404.
 var ErrUpstreamNotFound = fmt.Errorf("upstream: %w", fetch.ErrNotFound)
 
+// ErrArtifactBlocked indicates a pre-cache security scan blocked the artifact.
+var ErrArtifactBlocked = errors.New("artifact blocked by security scan")
+
 // serveArtifactError writes response for a failed fetch:
-// 404 when upstream reports artifact missing, 502 otherwise.
+// 404 when upstream reports artifact missing, 403 when a security scan
+// blocked the artifact, 502 otherwise.
 func (p *Proxy) serveArtifactError(w http.ResponseWriter, err error, clientMsg string) {
 	if errors.Is(err, ErrUpstreamNotFound) {
 		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
+	if errors.Is(err, ErrArtifactBlocked) {
+		JSONError(w, http.StatusForbidden, err.Error())
 		return
 	}
 	p.Logger.Error("failed to get artifact", "error", err)
@@ -574,6 +667,15 @@ func metadataStoragePath(ecosystem, cacheKey string) string {
 // cacheKey is typically the package name but can include subpath components.
 // Optional acceptHeaders specify the Accept header(s) to send; defaults to application/json.
 func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL string, acceptHeaders ...string) ([]byte, string, error) {
+	return p.fetchOrCacheMetadata(ctx, ecosystem, cacheKey, upstreamURL, false, acceptHeaders...)
+}
+
+// fetchOrCacheMetadata implements FetchOrCacheMetadata. When verbatim is true
+// (the ProxyCached path, which serves upstream bytes through unchanged) the
+// upstream is fetched with Accept-Encoding: identity so signed and hash-pinned
+// index files are cached exactly as sent. Direct callers that parse or rewrite
+// the body pass verbatim=false and keep transparent transfer compression.
+func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL string, verbatim bool, acceptHeaders ...string) ([]byte, string, error) {
 	if containsPathTraversal(cacheKey) {
 		return nil, "", fmt.Errorf("invalid cache key: %q", cacheKey)
 	}
@@ -613,16 +715,16 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 	}
 
 	// Try upstream
-	body, contentType, etag, lastModified, err := p.fetchUpstreamMetadata(ctx, upstreamURL, entry, accept)
+	meta, err := p.fetchUpstreamMetadata(ctx, upstreamURL, entry, accept, verbatim)
 	if errors.Is(err, errStale304) {
 		// 304 but cached file is gone; retry without ETag
-		body, contentType, etag, lastModified, err = p.fetchUpstreamMetadata(ctx, upstreamURL, nil, accept)
+		meta, err = p.fetchUpstreamMetadata(ctx, upstreamURL, nil, accept, verbatim)
 	}
 	if err == nil {
 		if p.CacheMetadata {
-			p.cacheMetadataBlob(ctx, ecosystem, cacheKey, storagePath, body, contentType, etag, lastModified)
+			p.cacheMetadataBlob(ctx, ecosystem, cacheKey, storagePath, meta)
 		}
-		return body, contentType, nil
+		return meta.body, meta.contentType, nil
 	}
 
 	// Upstream failed -- fall back to cache if available
@@ -659,16 +761,31 @@ func (p *Proxy) recordMetadataCacheMiss(ecosystem string) {
 	}
 }
 
-// fetchUpstreamMetadata fetches metadata from upstream, using ETag for conditional revalidation.
-// Returns the body, content type, ETag, upstream Last-Modified time, and any error.
-func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept string) ([]byte, string, string, time.Time, error) {
-	var zeroTime time.Time
+// upstreamMetadata holds a fetched metadata response in upstream byte form.
+type upstreamMetadata struct {
+	body            []byte
+	contentType     string
+	contentEncoding string
+	etag            string
+	lastModified    time.Time
+}
 
+// fetchUpstreamMetadata fetches metadata from upstream, using ETag for conditional revalidation.
+// It requests the identity encoding and never transparently decompresses, so the returned
+// bytes are exactly what the upstream sent; any Content-Encoding the upstream applied
+// anyway is reported alongside so callers can store and replay it.
+func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept string, verbatim bool) (*upstreamMetadata, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL, nil)
 	if err != nil {
-		return nil, "", "", zeroTime, fmt.Errorf("creating request: %w", err)
+		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Accept", accept)
+	if verbatim {
+		// Setting Accept-Encoding explicitly disables Go's transparent gzip
+		// decompression (it only applies when the transport adds the header
+		// itself), so signed index files are cached byte-for-byte as sent.
+		req.Header.Set(headerAcceptEncoding, "identity")
+	}
 	p.applyUpstreamAuth(req)
 
 	if entry != nil && entry.ETag.Valid {
@@ -677,7 +794,7 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 
 	resp, err := p.HTTPClient.Do(req)
 	if err != nil {
-		return nil, "", "", zeroTime, fmt.Errorf("fetching metadata: %w", err)
+		return nil, fmt.Errorf("fetching metadata: %w", err)
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -685,80 +802,84 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 	if resp.StatusCode == http.StatusNotModified && entry != nil {
 		cached, readErr := p.Storage.Open(ctx, entry.StoragePath)
 		if readErr != nil {
-			return nil, "", "", zeroTime, errStale304
+			return nil, errStale304
 		}
 		defer func() { _ = cached.Close() }()
 		data, readErr := p.ReadMetadata(cached)
 		if readErr != nil {
-			return nil, "", "", zeroTime, errStale304
+			return nil, errStale304
 		}
-		ct := contentTypeJSON
+		meta := &upstreamMetadata{body: data, contentType: contentTypeJSON, etag: entry.ETag.String}
 		if entry.ContentType.Valid {
-			ct = entry.ContentType.String
+			meta.contentType = entry.ContentType.String
 		}
-		lm := zeroTime
+		if entry.ContentEncoding.Valid {
+			meta.contentEncoding = entry.ContentEncoding.String
+		}
 		if entry.LastModified.Valid {
-			lm = entry.LastModified.Time
+			meta.lastModified = entry.LastModified.Time
 		}
-		return data, ct, entry.ETag.String, lm, nil
+		return meta, nil
 	}
 
 	if resp.StatusCode == http.StatusNotFound {
-		return nil, "", "", zeroTime, ErrUpstreamNotFound
+		return nil, ErrUpstreamNotFound
 	}
 	if resp.StatusCode != http.StatusOK {
-		return nil, "", "", zeroTime, fmt.Errorf("upstream returned %d", resp.StatusCode)
+		return nil, fmt.Errorf("upstream returned %d", resp.StatusCode)
 	}
 
 	body, err := p.ReadMetadata(resp.Body)
 	if err != nil {
-		return nil, "", "", zeroTime, fmt.Errorf("reading response: %w", err)
+		return nil, fmt.Errorf("reading response: %w", err)
 	}
 
-	contentType := resp.Header.Get(headerContentType)
-	if contentType == "" {
-		contentType = contentTypeJSON
+	meta := &upstreamMetadata{
+		body:            body,
+		contentType:     resp.Header.Get(headerContentType),
+		contentEncoding: resp.Header.Get(headerContentEncoding),
+		etag:            resp.Header.Get("ETag"),
 	}
-
-	etag := resp.Header.Get("ETag")
-
-	var lastModified time.Time
+	if meta.contentType == "" {
+		meta.contentType = contentTypeJSON
+	}
 	if lm := resp.Header.Get("Last-Modified"); lm != "" {
-		lastModified, _ = http.ParseTime(lm)
+		meta.lastModified, _ = http.ParseTime(lm)
 	}
-
-	return body, contentType, etag, lastModified, nil
+	return meta, nil
 }
 
 // cacheMetadataBlob stores metadata bytes in storage and updates the database.
-func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, storagePath string, data []byte, contentType, etag string, lastModified time.Time) {
+func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, storagePath string, meta *upstreamMetadata) {
 	if p.DB == nil || p.Storage == nil {
 		return
 	}
 
-	size, _, err := p.Storage.Store(ctx, storagePath, bytes.NewReader(data))
+	size, _, err := p.Storage.Store(ctx, storagePath, bytes.NewReader(meta.body))
 	if err != nil {
 		p.Logger.Warn("failed to cache metadata", "ecosystem", ecosystem, "key", cacheKey, "error", err)
 		return
 	}
 
 	_ = p.DB.UpsertMetadataCache(&database.MetadataCacheEntry{
-		Ecosystem:    ecosystem,
-		Name:         cacheKey,
-		StoragePath:  storagePath,
-		ETag:         sql.NullString{String: etag, Valid: etag != ""},
-		ContentType:  sql.NullString{String: contentType, Valid: contentType != ""},
-		Size:         sql.NullInt64{Int64: size, Valid: true},
-		LastModified: sql.NullTime{Time: lastModified, Valid: !lastModified.IsZero()},
-		FetchedAt:    sql.NullTime{Time: time.Now(), Valid: true},
+		Ecosystem:       ecosystem,
+		Name:            cacheKey,
+		StoragePath:     storagePath,
+		ETag:            sql.NullString{String: meta.etag, Valid: meta.etag != ""},
+		ContentType:     sql.NullString{String: meta.contentType, Valid: meta.contentType != ""},
+		ContentEncoding: sql.NullString{String: meta.contentEncoding, Valid: meta.contentEncoding != ""},
+		Size:            sql.NullInt64{Int64: size, Valid: true},
+		LastModified:    sql.NullTime{Time: meta.lastModified, Valid: !meta.lastModified.IsZero()},
+		FetchedAt:       sql.NullTime{Time: time.Now(), Valid: true},
 	})
 }
 
 // cachedMeta holds cache validators and freshness state from a metadata cache entry.
 type cachedMeta struct {
-	etag         string
-	lastModified time.Time
-	stale        bool
+	etag            string
+	lastModified    time.Time
+	contentEncoding string
+	stale           bool
 }
 
 // lookupCachedMeta retrieves cache validators for a metadata entry.
@@ -776,6 +897,9 @@ func (p *Proxy) lookupCachedMeta(ecosystem, cacheKey string) cachedMeta {
 	}
 	if entry.LastModified.Valid {
 		cm.lastModified = entry.LastModified.Time
+	}
+	if entry.ContentEncoding.Valid {
+		cm.contentEncoding = entry.ContentEncoding.String
 	}
 	// If FetchedAt is older than TTL, upstream must have failed and
 	// we served from stale cache (successful fetches update FetchedAt).
@@ -796,7 +920,7 @@ func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL,
 		return
 	}
 
-	body, contentType, err := p.FetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, acceptHeaders...)
+	body, contentType, err := p.fetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, true, acceptHeaders...)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -832,6 +956,9 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 
 	w.Header().Set(headerContentType, contentType)
 	w.Header().Set(headerContentLength, strconv.Itoa(len(body)))
+	if cm.contentEncoding != "" {
+		w.Header().Set(headerContentEncoding, cm.contentEncoding)
+	}
 	if cm.etag != "" {
 		w.Header().Set("ETag", cm.etag)
 	}
@@ -859,9 +986,13 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 		accept = acceptHeaders[0]
 	}
 	req.Header.Set("Accept", accept)
+	// ProxyCached serves bytes through verbatim, so request identity to keep
+	// Go from transparently decompressing (and stripping the Content-Encoding
+	// of) signed index files, regardless of what the client negotiated.
+	req.Header.Set(headerAcceptEncoding, "identity")
 	p.applyUpstreamAuth(req)
 
-	for _, header := range []string{headerAcceptEncoding, "If-Modified-Since", "If-None-Match"} {
+	for _, header := range []string{"If-Modified-Since", "If-None-Match"} {
 		if v := r.Header.Get(header); v != "" {
 			req.Header.Set(header, v)
 		}
@@ -874,7 +1005,7 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for _, header := range []string{headerContentType, headerContentLength, "Last-Modified", "ETag"} {
+	for _, header := range []string{headerContentType, headerContentLength, headerContentEncoding, "Last-Modified", "ETag"} {
 		if v := resp.Header.Get(header); v != "" {
 			w.Header().Set(header, v)
 		}
@@ -967,41 +1098,7 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 		return nil, fmt.Errorf("fetching from upstream: %w", err)
 	}
 
-	storagePath := storage.ArtifactPath(ecosystem, "", name, version, filename)
-	storeStart := time.Now()
-	size, hash, err := p.Storage.Store(ctx, storagePath, artifact.Body)
-	_ = artifact.Body.Close()
-	metrics.RecordStorageOperation("write", time.Since(storeStart))
-	if err != nil {
-		metrics.RecordStorageError("write")
-		return nil, fmt.Errorf("storing artifact: %w", err)
-	}
-	if !artifactHashMatches(hash, upstreamHash) {
-		if err := p.Storage.Delete(ctx, storagePath); err != nil {
-			p.Logger.Warn("failed to discard artifact with mismatched checksum", "path", storagePath, "error", err)
-		}
-		return nil, fmt.Errorf("artifact checksum mismatch: upstream declared %s, got %s", upstreamHash, hash)
-	}
-
-	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, downloadURL, storagePath, hash, size, artifact.ContentType); err != nil {
-		p.Logger.Warn("failed to update cache database", "error", err)
-	}
-
-	readStart := time.Now()
-	reader, err := p.Storage.Open(ctx, storagePath)
-	metrics.RecordStorageOperation("read", time.Since(readStart))
-	if err != nil {
-		metrics.RecordStorageError("read")
-		return nil, fmt.Errorf("opening cached artifact: %w", err)
-	}
-
-	return &CacheResult{
-		Reader:      reader,
-		Size:        size,
-		ContentType: artifact.ContentType,
-		Hash:        hash,
-		Cached:      false,
-	}, nil
+	return p.storeArtifact(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, upstreamHash, artifact)
 }
 
 func artifactHashMatches(got, expected string) bool {

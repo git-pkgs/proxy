@@ -748,6 +748,117 @@ func TestValidateHealthStorageProbeInterval(t *testing.T) {
 	}
 }
 
+func TestScanningConfigValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		cfg     ScanningConfig
+		wantErr bool
+	}{
+		{
+			name: "disabled skips validation entirely",
+			cfg:  ScanningConfig{Enabled: false, Timeout: "not-a-duration"},
+		},
+		{
+			name:    "enabled without signing key fails",
+			cfg:     ScanningConfig{Enabled: true},
+			wantErr: true,
+		},
+		{
+			name:    "enabled with signing key and no scanners fails",
+			cfg:     ScanningConfig{Enabled: true, SigningKey: "s3cret"},
+			wantErr: true,
+		},
+		{
+			name: "invalid fetch_base_url fails",
+			cfg: ScanningConfig{
+				Enabled:      true,
+				SigningKey:   "s3cret",
+				FetchBaseURL: "not-a-url",
+				Scanners:     []ScannerConfig{{Name: "clamav", URL: "http://scanner.invalid/scan"}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "invalid timeout fails",
+			cfg: ScanningConfig{
+				Enabled:    true,
+				SigningKey: "s3cret",
+				Timeout:    "not-a-duration",
+				Scanners:   []ScannerConfig{{Name: "clamav", URL: "http://scanner.invalid/scan"}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "zero timeout fails",
+			cfg: ScanningConfig{
+				Enabled:    true,
+				SigningKey: "s3cret",
+				Timeout:    "0",
+				Scanners:   []ScannerConfig{{Name: "clamav", URL: "http://scanner.invalid/scan"}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "empty timeout defaults and is valid",
+			cfg: ScanningConfig{
+				Enabled:    true,
+				SigningKey: "s3cret",
+				Timeout:    "",
+				Scanners:   []ScannerConfig{{Name: "clamav", URL: "http://scanner.invalid/scan"}},
+			},
+		},
+		{
+			name: "scanner missing name fails",
+			cfg: ScanningConfig{
+				Enabled:    true,
+				SigningKey: "s3cret",
+				Scanners:   []ScannerConfig{{URL: "http://scanner.invalid/scan"}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "scanner with invalid url fails",
+			cfg: ScanningConfig{
+				Enabled:    true,
+				SigningKey: "s3cret",
+				Scanners:   []ScannerConfig{{Name: "clamav", URL: "not-a-url"}},
+			},
+			wantErr: true,
+		},
+		{
+			name: "scanner with invalid mode fails",
+			cfg: ScanningConfig{
+				Enabled:    true,
+				SigningKey: "s3cret",
+				Scanners: []ScannerConfig{
+					{Name: "clamav", URL: "http://scanner.invalid/scan", Mode: "quarantine"},
+				},
+			},
+			wantErr: true,
+		},
+		{
+			name: "scanner with default mode is valid",
+			cfg: ScanningConfig{
+				Enabled:    true,
+				SigningKey: "s3cret",
+				Scanners:   []ScannerConfig{{Name: "clamav", URL: "http://scanner.invalid/scan"}},
+			},
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.cfg.Validate()
+			if tt.wantErr && err == nil {
+				t.Error("Validate() error = nil, want error")
+			}
+			if !tt.wantErr && err != nil {
+				t.Errorf("Validate() unexpected error: %v", err)
+			}
+		})
+	}
+}
+
 func TestParseHTTPTimeout(t *testing.T) {
 	tests := []struct {
 		name    string

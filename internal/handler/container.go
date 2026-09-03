@@ -155,6 +155,10 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 			h.containerError(w, http.StatusNotFound, "BLOB_UNKNOWN", "blob unknown to registry")
 			return
 		}
+		if errors.Is(err, ErrArtifactBlocked) {
+			h.containerError(w, http.StatusForbidden, "DENIED", err.Error())
+			return
+		}
 		h.proxy.Logger.Error("failed to fetch blob", "error", err)
 		h.containerError(w, http.StatusBadGateway, "INTERNAL_ERROR", "failed to fetch blob")
 		return

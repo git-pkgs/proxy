@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"errors"
 	"io"
 	"log/slog"
 	"net/http"
@@ -649,5 +650,62 @@ func TestNPMDownloadCooldownFetchesMetadataOnce(t *testing.T) {
 
 	if got := metadataRequests.Load(); got != 1 {
 		t.Errorf("metadata requests = %d, want 1", got)
+	}
+}
+
+// TestNPMDownloadErrorResponsesAreJSON guards against a regression where
+// routing handleDownload's error path through the shared serveArtifactError
+// helper silently switched npm's 404/502 tarball error bodies from JSON to
+// plain text; npm clients expect a JSON {"error": "..."} body on every
+// download failure, including the newer scan-blocked (403) case.
+func TestNPMDownloadErrorResponsesAreJSON(t *testing.T) {
+	tests := []struct {
+		name       string
+		fetchErr   error
+		blocked    bool
+		wantStatus int
+	}{
+		{"upstream not found", fetch.ErrNotFound, false, http.StatusNotFound},
+		{"upstream failure", errors.New("connection refused"), false, http.StatusBadGateway},
+		{"blocked by scan", nil, true, http.StatusForbidden},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxy, _, _, fetcher := setupTestProxy(t)
+			proxy.ScanSigningKey = []byte("test-signing-key")
+			if tt.blocked {
+				proxy.Scanners = newTestScanGroup(t, newTestScanServer(t, false, "malware detected").URL, false)
+			}
+			fetcher.fetchErr = tt.fetchErr
+			fetcher.artifact = &fetch.Artifact{
+				Body:        io.NopCloser(strings.NewReader("tarball data")),
+				ContentType: "application/octet-stream",
+			}
+
+			h := NewNPMHandler(proxy, "http://proxy.test", "http://upstream.invalid")
+			srv := httptest.NewServer(h.Routes())
+			defer srv.Close()
+
+			resp, err := http.Get(srv.URL + "/leftpad/-/leftpad-1.0.0.tgz")
+			if err != nil {
+				t.Fatalf("request failed: %v", err)
+			}
+			defer func() { _ = resp.Body.Close() }()
+
+			if resp.StatusCode != tt.wantStatus {
+				t.Errorf("status = %d, want %d", resp.StatusCode, tt.wantStatus)
+			}
+			if ct := resp.Header.Get("Content-Type"); ct != contentTypeJSON {
+				t.Errorf("Content-Type = %q, want %q", ct, contentTypeJSON)
+			}
+			var body map[string]any
+			if err := json.NewDecoder(resp.Body).Decode(&body); err != nil {
+				t.Fatalf("response body is not valid JSON: %v", err)
+			}
+			if _, ok := body["error"]; !ok {
+				t.Errorf("response body %v missing \"error\" key", body)
+			}
+		})
 	}
 }

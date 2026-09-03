@@ -103,6 +103,7 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 	etag TEXT,
 	link TEXT,
 	content_type TEXT,
+	content_encoding TEXT,
 	content_digest TEXT,
 	size INTEGER,
 	last_modified DATETIME,
@@ -205,6 +206,7 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 	etag TEXT,
 	link TEXT,
 	content_type TEXT,
+	content_encoding TEXT,
 	content_digest TEXT,
 	size BIGINT,
 	last_modified TIMESTAMP,
@@ -365,6 +367,7 @@ var migrations = []migration{
 	{"005_ensure_metadata_cache_table", migrateEnsureMetadataCacheTable},
 	{"006_add_metadata_content_digest", migrateAddMetadataContentDigest},
 	{"007_add_metadata_link", migrateAddMetadataLink},
+	{"008_add_metadata_content_encoding", migrateAddMetadataContentEncoding},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -615,6 +618,28 @@ func migrateAddMetadataLink(db *DB) error {
 	return nil
 }
 
+func migrateAddMetadataContentEncoding(db *DB) error {
+	hasColumn, err := db.HasColumn("metadata_cache", "content_encoding")
+	if err != nil {
+		return fmt.Errorf("checking metadata_cache content_encoding column: %w", err)
+	}
+	if hasColumn {
+		return nil
+	}
+	if _, err := db.Exec("ALTER TABLE metadata_cache ADD COLUMN content_encoding TEXT"); err != nil {
+		return fmt.Errorf("adding metadata_cache content_encoding column: %w", err)
+	}
+	// Rows cached before this column existed hold transport-decompressed bytes
+	// with no recorded encoding and the upstream ETag captured under Go's
+	// auto-added Accept-Encoding: gzip. Clearing the validators forces one fresh
+	// fetch per key so the encoding is recorded and verbatim bytes are restored,
+	// instead of an If-None-Match 304 re-serving the stale decompressed copy.
+	if _, err := db.Exec("UPDATE metadata_cache SET etag = NULL, fetched_at = NULL"); err != nil {
+		return fmt.Errorf("invalidating metadata_cache validators: %w", err)
+	}
+	return nil
+}
+
 // EnsureMetadataCacheTable creates the metadata_cache table if it doesn't exist.
 func (db *DB) EnsureMetadataCacheTable() error {
 	has, err := db.HasTable("metadata_cache")
@@ -636,6 +661,7 @@ func (db *DB) EnsureMetadataCacheTable() error {
 			etag TEXT,
 			link TEXT,
 			content_type TEXT,
+			content_encoding TEXT,
 				content_digest TEXT,
 				size BIGINT,
 				last_modified TIMESTAMP,
@@ -655,6 +681,7 @@ func (db *DB) EnsureMetadataCacheTable() error {
 			etag TEXT,
 			link TEXT,
 			content_type TEXT,
+			content_encoding TEXT,
 				content_digest TEXT,
 				size INTEGER,
 				last_modified DATETIME,

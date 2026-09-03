@@ -280,3 +280,85 @@ func TestMetadataCacheLinkMigrationPreservesExistingRows(t *testing.T) {
 		t.Errorf("legacy link = %q, want NULL", entry.Link.String)
 	}
 }
+
+func TestMetadataCacheContentEncodingMigrationPreservesExistingRows(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := Create(dbPath)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	if _, err := db.Exec("ALTER TABLE metadata_cache DROP COLUMN content_encoding"); err != nil {
+		t.Fatalf("dropping content_encoding: %v", err)
+	}
+	if _, err := db.Exec("DELETE FROM migrations WHERE name = ?", "008_add_metadata_content_encoding"); err != nil {
+		t.Fatalf("resetting content_encoding migration: %v", err)
+	}
+	if _, err := db.Exec(`
+		INSERT INTO metadata_cache (ecosystem, name, storage_path, etag, content_type, size, fetched_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+	`, "apk", "cache-key", "_metadata/apk/cache-key/metadata", "\"legacy-etag\"", "application/octet-stream", 2, time.Now(), time.Now(), time.Now()); err != nil {
+		t.Fatalf("inserting legacy cache row: %v", err)
+	}
+
+	if err := db.MigrateSchema(); err != nil {
+		t.Fatalf("MigrateSchema() error = %v", err)
+	}
+	hasEncoding, err := db.HasColumn("metadata_cache", "content_encoding")
+	if err != nil {
+		t.Fatalf("HasColumn() error = %v", err)
+	}
+	if !hasEncoding {
+		t.Fatal("metadata_cache.content_encoding was not added")
+	}
+
+	entry, err := db.GetMetadataCache("apk", "cache-key")
+	if err != nil {
+		t.Fatalf("GetMetadataCache() error = %v", err)
+	}
+	if entry == nil || entry.StoragePath != "_metadata/apk/cache-key/metadata" {
+		t.Fatalf("existing metadata cache row was not preserved: %#v", entry)
+	}
+	if entry.ContentEncoding.Valid {
+		t.Errorf("legacy content encoding = %q, want NULL", entry.ContentEncoding.String)
+	}
+	// The migration must clear the pre-fix validators so the row is refetched
+	// once with identity instead of a 304 re-serving the decompressed copy.
+	if entry.ETag.Valid {
+		t.Errorf("legacy etag = %q, want cleared", entry.ETag.String)
+	}
+	if entry.FetchedAt.Valid {
+		t.Errorf("legacy fetched_at = %v, want cleared", entry.FetchedAt.Time)
+	}
+}
+
+func TestMetadataCacheRoundTripsContentEncoding(t *testing.T) {
+	dbPath := filepath.Join(t.TempDir(), "test.db")
+	db, err := Create(dbPath)
+	if err != nil {
+		t.Fatalf("Create failed: %v", err)
+	}
+	defer func() { _ = db.Close() }()
+
+	entry := &MetadataCacheEntry{
+		Ecosystem:       "apk",
+		Name:            "index-key",
+		StoragePath:     "_metadata/apk/index-key/metadata",
+		ContentType:     sql.NullString{String: "application/octet-stream", Valid: true},
+		ContentEncoding: sql.NullString{String: "gzip", Valid: true},
+		Size:            sql.NullInt64{Int64: 10, Valid: true},
+		FetchedAt:       sql.NullTime{Time: time.Now(), Valid: true},
+	}
+	if err := db.UpsertMetadataCache(entry); err != nil {
+		t.Fatalf("UpsertMetadataCache() error = %v", err)
+	}
+
+	got, err := db.GetMetadataCache("apk", "index-key")
+	if err != nil {
+		t.Fatalf("GetMetadataCache() error = %v", err)
+	}
+	if got == nil || !got.ContentEncoding.Valid || got.ContentEncoding.String != "gzip" {
+		t.Fatalf("content encoding round-trip failed: %#v", got)
+	}
+}

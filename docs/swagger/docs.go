@@ -15,6 +15,61 @@ const docTemplate = `{
     "host": "{{.Host}}",
     "basePath": "{{.BasePath}}",
     "paths": {
+        "/_internal/scan-fetch": {
+            "get": {
+                "description": "Streams the exact bytes staged in storage for a pre-cache security scan.\nRequires a short-lived HMAC-signed token minted by the proxy itself and\ndelivered via the fetch_url field of the scan notify request (see the\nArtifact Scanning section of docs/configuration.md). Not part of the\npublic API; restrict access to the scanner network at the ingress layer.",
+                "produces": [
+                    "application/octet-stream"
+                ],
+                "tags": [
+                    "scanning"
+                ],
+                "summary": "Fetch a staged artifact for scanning",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Storage path of the staged artifact",
+                        "name": "path",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "integer",
+                        "description": "Token expiry, Unix seconds",
+                        "name": "exp",
+                        "in": "query",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "HMAC-SHA256 signature over the string path|exp",
+                        "name": "sig",
+                        "in": "query",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "type": "file"
+                        }
+                    },
+                    "403": {
+                        "description": "invalid, expired, or tampered token",
+                        "schema": {
+                            "type": "string"
+                        }
+                    },
+                    "404": {
+                        "description": "object not found in storage, or scanning is not configured",
+                        "schema": {
+                            "type": "string"
+                        }
+                    }
+                }
+            }
+        },
         "/api/bulk": {
             "post": {
                 "consumes": [
