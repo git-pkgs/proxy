@@ -503,3 +503,57 @@ func TestCondaRepodataGzipSurvivesCacheWriteFailure(t *testing.T) {
 		t.Errorf("Content-Length = %q, want %d", got, len(compressed))
 	}
 }
+
+// TestCondaRepodataGzipStaleFallbackKeepsEncoding pins the stale-fallback
+// return of fetchOrCacheMetadata: when the upstream fails after the entry has
+// expired, the stored gzip blob must be served with its Content-Encoding taken
+// from the cache row, not dropped.
+func TestCondaRepodataGzipStaleFallbackKeepsEncoding(t *testing.T) {
+	plain := []byte(`{"packages":{},"repodata_version":1}`)
+	compressed := gzipPayload(t, plain)
+
+	var available atomic.Bool
+	available.Store(true)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !available.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if strings.Contains(r.Header.Get(headerAcceptEncoding), "gzip") {
+			w.Header().Set(headerContentType, contentTypeJSON)
+			w.Header().Set(headerContentEncoding, "gzip")
+			_, _ = w.Write(compressed)
+			return
+		}
+		w.Header().Set(headerContentType, contentTypeJSON)
+		_, _ = w.Write(plain)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = 0 // every request revalidates; an upstream failure falls back to the stale row
+	proxy.HTTPClient = upstream.Client()
+	routes := NewCondaHandlerWithUpstream(proxy, "http://proxy.local", upstream.URL).Routes()
+
+	get := func() *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		routes.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/conda-forge/linux-64/repodata.json", nil))
+		return w
+	}
+
+	if first := get(); first.Code != http.StatusOK {
+		t.Fatalf("first status = %d, want 200: %s", first.Code, first.Body.String())
+	}
+	available.Store(false)
+	stale := get()
+	if stale.Code != http.StatusOK {
+		t.Fatalf("stale status = %d, want 200: %s", stale.Code, stale.Body.String())
+	}
+	if !bytes.Equal(stale.Body.Bytes(), compressed) {
+		t.Errorf("stale body is not the stored compressed bytes")
+	}
+	if got := stale.Header().Get(headerContentEncoding); got != "gzip" {
+		t.Errorf("stale Content-Encoding = %q, want %q", got, "gzip")
+	}
+}
