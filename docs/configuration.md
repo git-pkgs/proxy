@@ -165,6 +165,8 @@ Each upstream used by a built-in package route can be set in YAML or JSON under 
 | `upstream.oci_default` | `PROXY_UPSTREAM_OCI_DEFAULT` | `https://registry-1.docker.io` |
 | `upstream.debian` | `PROXY_UPSTREAM_DEBIAN` | `http://deb.debian.org/debian` |
 | `upstream.rpm` | `PROXY_UPSTREAM_RPM` | `https://dl.fedoraproject.org/pub/fedora/linux` |
+| `upstream.homebrew_api` | `PROXY_UPSTREAM_HOMEBREW_API` | `https://formulae.brew.sh/api` |
+| `upstream.homebrew_artifact` | `PROXY_UPSTREAM_HOMEBREW_ARTIFACT` | `https://ghcr.io` |
 
 Private, ULA, CGNAT, and loopback addresses are rejected by default. Add each private upstream hostname or IP address to `upstream.allow_private_hosts`. The matching environment variable accepts a comma-separated list. Loopback upstreams also require `upstream.allow_loopback: true`. That setting permits upstream requests and redirects to reach any loopback address.
 

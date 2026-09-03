@@ -87,7 +87,7 @@ func (h *ContainerHandler) serveTagsList(w http.ResponseWriter, r *http.Request,
 	tags := &cachedContainerTags{
 		body:        body,
 		contentType: resp.Header.Get(headerContentType),
-		etag:        resp.Header.Get("ETag"),
+		etag:        resp.Header.Get(headerETag),
 		link:        h.rewriteContainerTagsLink(strings.Join(resp.Header.Values("Link"), ", "), registryURL, r.URL.Path),
 		size:        int64(len(body)),
 		fetchedAt:   time.Now(),
@@ -160,7 +160,7 @@ func (h *ContainerHandler) loadContainerTags(ctx context.Context, cacheKey strin
 
 func (h *ContainerHandler) storeContainerTags(ctx context.Context, cacheKey string, tags *cachedContainerTags) error {
 	size, err := h.storeContainerMetadata(ctx, containerTagsCacheEcosystem, cacheKey, tags.body,
-		tags.etag, tags.link, tags.contentType, "", tags.fetchedAt)
+		tags.etag, tags.link, tags.contentType, "", time.Time{}, tags.fetchedAt)
 	if err != nil {
 		return fmt.Errorf("storing tag list: %w", err)
 	}
@@ -172,7 +172,7 @@ func writeContainerTags(w http.ResponseWriter, tags *cachedContainerTags, stale 
 	w.Header().Set(headerContentType, tags.contentType)
 	w.Header().Set(headerContentLength, strconv.FormatInt(tags.size, 10))
 	if tags.etag != "" {
-		w.Header().Set("ETag", tags.etag)
+		w.Header().Set(headerETag, tags.etag)
 	}
 	if tags.link != "" {
 		w.Header().Set("Link", tags.link)
@@ -185,7 +185,7 @@ func writeContainerTags(w http.ResponseWriter, tags *cachedContainerTags, stale 
 }
 
 func copyContainerTagsHeaders(destination, source http.Header) {
-	for _, header := range []string{headerContentType, headerContentLength, "ETag", "Link", "WWW-Authenticate"} {
+	for _, header := range []string{headerContentType, headerContentLength, headerETag, "Link", "WWW-Authenticate"} {
 		if value := source.Get(header); value != "" {
 			destination.Set(header, value)
 		}

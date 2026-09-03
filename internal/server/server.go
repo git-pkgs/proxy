@@ -352,9 +352,6 @@ func (s *Server) serve(listener net.Listener) error {
 	return s.http.ListenAndServe()
 }
 
-// configureScanning builds the scanner group from cfg and wires it into
-// proxy, returning the group so the caller can decide whether to mount the
-// internal scan-fetch route.
 // mountProtocolHandlers constructs every ecosystem handler and mounts it on
 // r under its protocol prefix.
 func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
@@ -404,12 +401,14 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	cranHandler := handler.NewCRANHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.CRAN)
 	juliaHandler := handler.NewJuliaHandlerWithUpstream(proxy, s.cfg.Upstream.Julia)
 	swiftHandler := handler.NewSwiftHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Swift)
+	homebrewHandler := handler.NewHomebrewHandler(proxy, s.cfg.Upstream.HomebrewAPI)
 	containerHandler := handler.NewContainerHandlerWithRegistry(
 		proxy,
 		s.cfg.BaseURL,
 		s.cfg.Upstream.OCIDefault,
 		s.cfg.Upstream.OCI,
 	)
+	handler.RegisterHomebrewArtifacts(containerHandler, s.cfg.Upstream.HomebrewArtifact)
 	helmHandler := handler.NewHelmHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm)
 	apkHandler := handler.NewAPKHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.APK)
 	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Debian)
@@ -432,6 +431,7 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	r.Mount("/cran", http.StripPrefix("/cran", cranHandler.Routes()))
 	r.Mount("/julia", http.StripPrefix("/julia", juliaHandler.Routes()))
 	r.Mount("/swift", http.StripPrefix("/swift", swiftHandler.Routes()))
+	r.Mount("/homebrew", http.StripPrefix("/homebrew", homebrewHandler.Routes()))
 	r.Mount("/v2", http.StripPrefix("/v2", containerHandler.Routes()))
 	r.Mount("/helm", http.StripPrefix("/helm", helmHandler.Routes()))
 	r.Mount("/apk", http.StripPrefix("/apk", apkHandler.Routes()))
@@ -440,6 +440,9 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	r.Mount("/generic", http.StripPrefix("/generic", genericHandler.Routes()))
 }
 
+// configureScanning builds the scanner group from cfg and wires it into
+// proxy, returning the group so the caller can decide whether to mount the
+// internal scan-fetch route.
 func configureScanning(proxy *handler.Proxy, cfg config.ScanningConfig, baseURL string, logger *slog.Logger) (*scanner.Group, error) {
 	scanGroup, err := scanner.NewGroup(cfg, logger)
 	if err != nil {
