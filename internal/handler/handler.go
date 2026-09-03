@@ -667,15 +667,17 @@ func metadataStoragePath(ecosystem, cacheKey string) string {
 // cacheKey is typically the package name but can include subpath components.
 // Optional acceptHeaders specify the Accept header(s) to send; defaults to application/json.
 func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL string, acceptHeaders ...string) ([]byte, string, error) {
-	return p.fetchOrCacheMetadata(ctx, ecosystem, cacheKey, upstreamURL, false, acceptHeaders...)
+	return p.fetchOrCacheMetadata(ctx, ecosystem, cacheKey, upstreamURL, "", acceptHeaders...)
 }
 
-// fetchOrCacheMetadata implements FetchOrCacheMetadata. When verbatim is true
-// (the ProxyCached path, which serves upstream bytes through unchanged) the
-// upstream is fetched with Accept-Encoding: identity so signed and hash-pinned
-// index files are cached exactly as sent. Direct callers that parse or rewrite
-// the body pass verbatim=false and keep transparent transfer compression.
-func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL string, verbatim bool, acceptHeaders ...string) ([]byte, string, error) {
+// fetchOrCacheMetadata implements FetchOrCacheMetadata. acceptEncoding controls
+// the upstream Accept-Encoding: an empty string leaves it unset so Go
+// transparently decompresses (for direct callers that parse or rewrite the
+// body); any non-empty value is sent verbatim, which disables Go's
+// decompression so the wire bytes and their Content-Encoding are stored and
+// replayed as sent. The ProxyCached path uses "identity" for signed indexes and
+// "gzip" where both hops should stay compressed.
+func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, acceptEncoding string, acceptHeaders ...string) ([]byte, string, error) {
 	if containsPathTraversal(cacheKey) {
 		return nil, "", fmt.Errorf("invalid cache key: %q", cacheKey)
 	}
@@ -715,10 +717,10 @@ func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 	}
 
 	// Try upstream
-	meta, err := p.fetchUpstreamMetadata(ctx, upstreamURL, entry, accept, verbatim)
+	meta, err := p.fetchUpstreamMetadata(ctx, upstreamURL, entry, accept, acceptEncoding)
 	if errors.Is(err, errStale304) {
 		// 304 but cached file is gone; retry without ETag
-		meta, err = p.fetchUpstreamMetadata(ctx, upstreamURL, nil, accept, verbatim)
+		meta, err = p.fetchUpstreamMetadata(ctx, upstreamURL, nil, accept, acceptEncoding)
 	}
 	if err == nil {
 		if p.CacheMetadata {
@@ -771,20 +773,19 @@ type upstreamMetadata struct {
 }
 
 // fetchUpstreamMetadata fetches metadata from upstream, using ETag for conditional revalidation.
-// It requests the identity encoding and never transparently decompresses, so the returned
-// bytes are exactly what the upstream sent; any Content-Encoding the upstream applied
-// anyway is reported alongside so callers can store and replay it.
-func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept string, verbatim bool) (*upstreamMetadata, error) {
+// When acceptEncoding is non-empty it is sent as the Accept-Encoding header, which disables Go's
+// transparent decompression (it only applies when the transport adds the header itself), so the
+// returned bytes are exactly what the upstream sent and any Content-Encoding it applied is reported
+// alongside for the caller to store and replay. An empty acceptEncoding leaves Go to negotiate and
+// decompress transparently.
+func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept, acceptEncoding string) (*upstreamMetadata, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL, nil)
 	if err != nil {
 		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Accept", accept)
-	if verbatim {
-		// Setting Accept-Encoding explicitly disables Go's transparent gzip
-		// decompression (it only applies when the transport adds the header
-		// itself), so signed index files are cached byte-for-byte as sent.
-		req.Header.Set(headerAcceptEncoding, "identity")
+	if acceptEncoding != "" {
+		req.Header.Set(headerAcceptEncoding, acceptEncoding)
 	}
 	p.applyUpstreamAuth(req)
 
@@ -914,13 +915,22 @@ func (p *Proxy) lookupCachedMeta(ecosystem, cacheKey string) cachedMeta {
 // When metadata caching is disabled, the response is streamed directly to avoid buffering
 // large metadata responses (e.g. npm packages with many versions) in memory.
 func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL, ecosystem, cacheKey string, acceptHeaders ...string) {
+	p.proxyCachedWithEncoding(w, r, upstreamURL, ecosystem, cacheKey, "identity", acceptHeaders...)
+}
+
+// proxyCachedWithEncoding is ProxyCached with an explicit upstream Accept-Encoding.
+// "identity" preserves signed index bytes (the default); "gzip" keeps both hops
+// compressed for large, non-hash-pinned metadata whose clients decode gzip
+// (conda repodata). The stored bytes and Content-Encoding are replayed verbatim
+// either way.
+func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, upstreamURL, ecosystem, cacheKey, acceptEncoding string, acceptHeaders ...string) {
 	if !p.CacheMetadata {
 		// Stream directly without buffering when caching is off.
-		p.proxyMetadataStream(w, r, upstreamURL, acceptHeaders...)
+		p.proxyMetadataStream(w, r, upstreamURL, acceptEncoding, acceptHeaders...)
 		return
 	}
 
-	body, contentType, err := p.fetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, true, acceptHeaders...)
+	body, contentType, err := p.fetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, acceptEncoding, acceptHeaders...)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -974,7 +984,7 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 
 // proxyMetadataStream forwards an upstream metadata response by streaming it to the client
 // without buffering the full body in memory.
-func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upstreamURL string, acceptHeaders ...string) {
+func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upstreamURL, acceptEncoding string, acceptHeaders ...string) {
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
 	if err != nil {
 		http.Error(w, "failed to create request", http.StatusInternalServerError)
@@ -986,10 +996,13 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 		accept = acceptHeaders[0]
 	}
 	req.Header.Set("Accept", accept)
-	// ProxyCached serves bytes through verbatim, so request identity to keep
-	// Go from transparently decompressing (and stripping the Content-Encoding
-	// of) signed index files, regardless of what the client negotiated.
-	req.Header.Set(headerAcceptEncoding, "identity")
+	// Set Accept-Encoding explicitly (identity, or gzip for compressible
+	// verbatim metadata) so Go does not transparently decompress and strip the
+	// Content-Encoding of the bytes we forward, regardless of what the client
+	// negotiated.
+	if acceptEncoding != "" {
+		req.Header.Set(headerAcceptEncoding, acceptEncoding)
+	}
 	p.applyUpstreamAuth(req)
 
 	for _, header := range []string{"If-Modified-Since", "If-None-Match"} {

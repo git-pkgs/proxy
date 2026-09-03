@@ -1,10 +1,15 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
+	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -301,5 +306,150 @@ func TestCondaHandleRepodataWithoutCooldown(t *testing.T) {
 	// Without cooldown, should proxy directly (response comes from upstream)
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+// TestCondaRepodataRequestsGzip covers issue #305: the large *.json repodata
+// routes must fetch, cache and serve gzip-compressed (Content-Encoding: gzip)
+// so neither hop pays the uncompressed size, while repodata.json.bz2 (already
+// compressed) stays identity. conda/mamba/pixi solicit and decode gzip on .json.
+func TestCondaRepodataRequestsGzip(t *testing.T) {
+	plain := []byte(`{"packages":{},"repodata_version":1}`)
+	compressed := gzipPayload(t, plain)
+
+	var available atomic.Bool
+	available.Store(true)
+	var jsonUpstreamReqs atomic.Int32
+	var sawAcceptEncoding sync.Map // path -> last Accept-Encoding seen
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawAcceptEncoding.Store(r.URL.Path, r.Header.Get(headerAcceptEncoding))
+		if !available.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		if strings.HasSuffix(r.URL.Path, ".json") {
+			jsonUpstreamReqs.Add(1)
+			if strings.Contains(r.Header.Get(headerAcceptEncoding), "gzip") {
+				w.Header().Set(headerContentType, contentTypeJSON)
+				w.Header().Set(headerContentEncoding, "gzip")
+				_, _ = w.Write(compressed)
+				return
+			}
+			w.Header().Set(headerContentType, contentTypeJSON)
+			_, _ = w.Write(plain)
+			return
+		}
+		// .bz2: already compressed, upstream sends no Content-Encoding.
+		w.Header().Set(headerContentType, "application/octet-stream")
+		_, _ = w.Write([]byte("bz2-bytes"))
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	proxy.HTTPClient = upstream.Client()
+	routes := NewCondaHandlerWithUpstream(proxy, "http://proxy.local", upstream.URL).Routes()
+
+	get := func(path string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		routes.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		return w
+	}
+	lastAE := func(path string) string {
+		v, _ := sawAcceptEncoding.Load(path)
+		s, _ := v.(string)
+		return s
+	}
+
+	for _, name := range []string{"repodata.json", "current_repodata.json"} {
+		path := "/conda-forge/linux-64/" + name
+		w := get(path)
+		if w.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200: %s", name, w.Code, w.Body.String())
+		}
+		if got := lastAE(path); got != "gzip" {
+			t.Errorf("%s: upstream Accept-Encoding = %q, want %q", name, got, "gzip")
+		}
+		if !bytes.Equal(w.Body.Bytes(), compressed) {
+			t.Errorf("%s: body not the compressed bytes (got %d, want %d)", name, w.Body.Len(), len(compressed))
+		}
+		if got := w.Header().Get(headerContentEncoding); got != "gzip" {
+			t.Errorf("%s: Content-Encoding = %q, want %q", name, got, "gzip")
+		}
+		if got := w.Header().Get(headerContentLength); got != strconv.Itoa(len(compressed)) {
+			t.Errorf("%s: Content-Length = %q, want %d", name, got, len(compressed))
+		}
+	}
+
+	// .bz2 stays identity.
+	wbz := get("/conda-forge/linux-64/repodata.json.bz2")
+	if wbz.Code != http.StatusOK {
+		t.Fatalf("bz2: status = %d, want 200", wbz.Code)
+	}
+	if got := lastAE("/conda-forge/linux-64/repodata.json.bz2"); got != "identity" {
+		t.Errorf("bz2: upstream Accept-Encoding = %q, want %q", got, "identity")
+	}
+	if got := wbz.Header().Get(headerContentEncoding); got != "" {
+		t.Errorf("bz2: Content-Encoding = %q, want empty", got)
+	}
+
+	// Cached replay with the upstream down: same compressed bytes + header, no new .json fetch.
+	reqsBefore := jsonUpstreamReqs.Load()
+	available.Store(false)
+	wc := get("/conda-forge/linux-64/repodata.json")
+	if wc.Code != http.StatusOK {
+		t.Fatalf("cached repodata.json: status = %d, want 200: %s", wc.Code, wc.Body.String())
+	}
+	if !bytes.Equal(wc.Body.Bytes(), compressed) {
+		t.Errorf("cached repodata.json: body not the compressed bytes")
+	}
+	if got := wc.Header().Get(headerContentEncoding); got != "gzip" {
+		t.Errorf("cached repodata.json: Content-Encoding = %q, want %q", got, "gzip")
+	}
+	if jsonUpstreamReqs.Load() != reqsBefore {
+		t.Errorf("cached repodata.json hit upstream: reqs %d -> %d", reqsBefore, jsonUpstreamReqs.Load())
+	}
+}
+
+// TestCondaRepodataStreamPathRequestsGzip covers the default cache_metadata=off
+// branch: the streaming path must also request gzip for repodata.json and
+// forward the Content-Encoding header.
+func TestCondaRepodataStreamPathRequestsGzip(t *testing.T) {
+	plain := []byte(`{"packages":{}}`)
+	compressed := gzipPayload(t, plain)
+	var sawAcceptEncoding string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		sawAcceptEncoding = r.Header.Get(headerAcceptEncoding)
+		if strings.Contains(sawAcceptEncoding, "gzip") {
+			w.Header().Set(headerContentType, contentTypeJSON)
+			w.Header().Set(headerContentEncoding, "gzip")
+			_, _ = w.Write(compressed)
+			return
+		}
+		w.Header().Set(headerContentType, contentTypeJSON)
+		_, _ = w.Write(plain)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = false
+	proxy.HTTPClient = upstream.Client()
+	routes := NewCondaHandlerWithUpstream(proxy, "http://proxy.local", upstream.URL).Routes()
+
+	w := httptest.NewRecorder()
+	routes.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/conda-forge/linux-64/repodata.json", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	if sawAcceptEncoding != "gzip" {
+		t.Errorf("stream path upstream Accept-Encoding = %q, want %q", sawAcceptEncoding, "gzip")
+	}
+	if !bytes.Equal(w.Body.Bytes(), compressed) {
+		t.Errorf("stream path body not the compressed bytes")
+	}
+	if got := w.Header().Get(headerContentEncoding); got != "gzip" {
+		t.Errorf("stream path Content-Encoding = %q, want %q", got, "gzip")
 	}
 }

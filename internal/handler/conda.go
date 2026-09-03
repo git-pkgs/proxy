@@ -42,7 +42,11 @@ func (h *CondaHandler) Routes() http.Handler {
 
 	// Channel index (repodata)
 	mux.HandleFunc("GET /{channel}/{arch}/repodata.json", h.handleRepodata)
-	mux.HandleFunc("GET /{channel}/{arch}/repodata.json.bz2", h.proxyCached)
+	// .bz2 is already compressed and libmamba only decodes Content-Encoding on
+	// .json URLs, so keep it identity.
+	mux.HandleFunc("GET /{channel}/{arch}/repodata.json.bz2", func(w http.ResponseWriter, r *http.Request) {
+		h.proxyCached(w, r, "identity")
+	})
 	mux.HandleFunc("GET /{channel}/{arch}/current_repodata.json", h.handleRepodata)
 
 	// Package downloads (cache these)
@@ -131,7 +135,12 @@ func (h *CondaHandler) parseFilename(filename string) (name, version string) {
 // handleRepodata proxies repodata.json, applying cooldown filtering when enabled.
 func (h *CondaHandler) handleRepodata(w http.ResponseWriter, r *http.Request) {
 	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		h.proxyCached(w, r)
+		// repodata.json / current_repodata.json are large plain JSON (linux-64
+		// repodata.json is ~441 MB uncompressed, over the metadata_max_size cap,
+		// vs ~34 MB gzip). Request gzip so both hops stay compressed and the
+		// cache stores the small blob; conda/mamba/pixi decode Content-Encoding
+		// on .json URLs. See issue #305.
+		h.proxyCached(w, r, "gzip")
 		return
 	}
 
@@ -236,11 +245,13 @@ func (h *CondaHandler) applyCooldownFiltering(body []byte) ([]byte, error) {
 	return json.Marshal(repodata)
 }
 
-// proxyCached forwards a metadata request with caching.
-func (h *CondaHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
+// proxyCached forwards a metadata request with caching, sending the given
+// upstream Accept-Encoding ("identity" for verbatim bytes, "gzip" to keep both
+// hops compressed for the large .json repodata).
+func (h *CondaHandler) proxyCached(w http.ResponseWriter, r *http.Request, acceptEncoding string) {
 	cacheKey := strings.TrimPrefix(r.URL.Path, "/")
 	cacheKey = strings.ReplaceAll(cacheKey, "/", "_")
-	h.proxy.ProxyCached(w, r, h.upstreamURL+r.URL.Path, "conda", cacheKey, "*/*")
+	h.proxy.proxyCachedWithEncoding(w, r, h.upstreamURL+r.URL.Path, "conda", cacheKey, acceptEncoding, "*/*")
 }
 
 // proxyUpstream forwards a request to Anaconda without caching.
