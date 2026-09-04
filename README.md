@@ -68,7 +68,7 @@ The proxy never uploads artifact bytes to a scanner. Each scanner is notified wi
 | Arch | Arch Linux | | ✗ |
 | Chef | Chef | | ✗ |
 | Generic | Any | | ✓ |
-| Helm | Kubernetes | | ✗ |
+| Helm | Kubernetes | | ✓ |
 | Vagrant | Vagrant | | ✗ |
 
 Cooldown requires publish timestamps in metadata. Registries without a "Yes" in the cooldown column either don't expose timestamps or haven't been wired up yet.
