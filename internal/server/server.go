@@ -798,15 +798,26 @@ func (s *Server) handlePackagesList(w http.ResponseWriter, r *http.Request) {
 
 	totalPages := int((total + int64(limit) - 1) / int64(limit))
 
+	var ecosystemFilters []EcosystemFilter
+	var totalPackages int64
+	if stats, err := s.db.GetCacheStats(); err != nil {
+		s.logger.Error("failed to get cache stats for ecosystem filters", "error", err)
+	} else {
+		totalPackages = stats.TotalPackages
+		ecosystemFilters = buildEcosystemFilters(stats.EcosystemCounts)
+	}
+
 	data := PackagesListPageData{
-		Layout:     s.layoutFor(r),
-		Ecosystem:  ecosystem,
-		SortBy:     sortBy,
-		Results:    items,
-		Count:      int(total),
-		Page:       page,
-		PerPage:    limit,
-		TotalPages: totalPages,
+		Layout:           s.layoutFor(r),
+		Ecosystem:        ecosystem,
+		SortBy:           sortBy,
+		Results:          items,
+		Count:            int(total),
+		TotalPackages:    totalPackages,
+		EcosystemFilters: ecosystemFilters,
+		Page:             page,
+		PerPage:          limit,
+		TotalPages:       totalPages,
 	}
 
 	if err := s.templates.Render(w, "packages_list", data); err != nil {
