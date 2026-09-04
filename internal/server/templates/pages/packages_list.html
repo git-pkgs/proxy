@@ -4,23 +4,31 @@
 <div class="mb-8">
     <h1 class="text-3xl font-bold mb-2">Cached Packages</h1>
     <p class="text-gray-600 dark:text-gray-400">
-        {{.Count}} packages{{if .Ecosystem}} in {{.Ecosystem}}{{end}}
+        {{.Count}} packages{{if .Ecosystem}} in {{ecosystemBadgeLabel .Ecosystem}}{{end}}
     </p>
 </div>
 
-<div class="mb-6 flex items-center gap-4">
-    <div class="flex-1">
-        <label for="ecosystem-filter" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Filter by ecosystem</label>
-        <select id="ecosystem-filter" class="w-full max-w-xs px-4 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400">
-            <option value="">All ecosystems</option>
-            {{range supportedEcosystems}}
-            <option value="{{.}}"{{if eq $.Ecosystem .}} selected{{end}}>{{ecosystemBadgeLabel .}}</option>
+<div class="mb-6 flex flex-col sm:flex-row sm:items-start gap-4">
+    <div class="flex-1 min-w-0">
+        <div class="text-sm font-medium text-gray-700 dark:text-gray-300 mb-2">Filter by ecosystem</div>
+        <div class="flex flex-wrap gap-2">
+            <a href="/ui/packages{{if .SortBy}}?sort={{.SortBy}}{{end}}"
+               class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300 hover:opacity-90{{if not .Ecosystem}} ring-2 ring-gray-400 dark:ring-gray-500 ring-offset-1 dark:ring-offset-gray-900{{end}}">
+                All
+                <span class="opacity-70 tabular-nums">{{.TotalPackages}}</span>
+            </a>
+            {{range .EcosystemFilters}}
+            <a href="/ui/packages?ecosystem={{.Ecosystem}}{{if $.SortBy}}&sort={{$.SortBy}}{{end}}"
+               class="{{ecosystemPillClass .Ecosystem}}{{if eq $.Ecosystem .Ecosystem}} ring-2 ring-current ring-offset-1 dark:ring-offset-gray-900{{end}}">
+                {{ecosystemBadgeLabel .Ecosystem}}
+                <span class="opacity-70 tabular-nums">{{.Count}}</span>
+            </a>
             {{end}}
-        </select>
+        </div>
     </div>
-    <div class="flex-1">
+    <div class="shrink-0 w-full sm:w-48">
         <label for="sort-by" class="block text-sm font-medium text-gray-700 dark:text-gray-300 mb-1">Sort by</label>
-        <select id="sort-by" class="w-full max-w-xs px-4 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400">
+        <select id="sort-by" class="w-full px-4 py-2 text-sm bg-white dark:bg-gray-800 border border-gray-300 dark:border-gray-700 rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 dark:focus:ring-blue-400">
             <option value="hits"{{if eq .SortBy "hits"}} selected{{end}}>Cache hits</option>
             <option value="name"{{if eq .SortBy "name"}} selected{{end}}>Name</option>
             <option value="size"{{if eq .SortBy "size"}} selected{{end}}>Size</option>
@@ -53,11 +61,14 @@
                     {{end}}
                 </div>
             </div>
-            <div class="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
-                <span>{{.Hits}} hits</span>
-                <span>{{.SizeFormatted}}</span>
+            <div class="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400 shrink-0">
+                <span class="inline-grid grid-cols-[minmax(4ch,auto)_auto] gap-x-1 tabular-nums">
+                    <span class="text-right">{{.Hits}}</span>
+                    <span>hits</span>
+                </span>
+                <span class="w-16 text-right">{{.SizeFormatted}}</span>
                 {{if .CachedAt}}
-                <span>{{.CachedAt}}</span>
+                <span class="w-20 text-right">{{.CachedAt}}</span>
                 {{end}}
             </div>
         </div>
@@ -66,7 +77,7 @@
 </div>
 {{else}}
 <div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-12 text-center">
-    <p class="text-gray-500 dark:text-gray-400">No cached packages found{{if .Ecosystem}} in {{.Ecosystem}}{{end}}</p>
+    <p class="text-gray-500 dark:text-gray-400">No cached packages found{{if .Ecosystem}} in {{ecosystemBadgeLabel .Ecosystem}}{{end}}</p>
     <a href="/ui/" class="mt-4 inline-block text-sm text-blue-600 dark:text-blue-400 hover:underline">Return to dashboard</a>
 </div>
 {{end}}
@@ -94,21 +105,10 @@
 {{end}}
 
 <script>
-document.getElementById('ecosystem-filter').addEventListener('change', function(e) {
-    const ecosystem = e.target.value;
-    const sortBy = document.getElementById('sort-by').value;
-    const params = new URLSearchParams();
-    if (ecosystem) params.set('ecosystem', ecosystem);
-    if (sortBy) params.set('sort', sortBy);
-    window.location.href = '/ui/packages?' + params.toString();
-});
-
 document.getElementById('sort-by').addEventListener('change', function(e) {
-    const sortBy = e.target.value;
-    const ecosystem = document.getElementById('ecosystem-filter').value;
-    const params = new URLSearchParams();
-    if (ecosystem) params.set('ecosystem', ecosystem);
-    if (sortBy) params.set('sort', sortBy);
+    const params = new URLSearchParams(window.location.search);
+    params.set('sort', e.target.value);
+    params.delete('page');
     window.location.href = '/ui/packages?' + params.toString();
 });
 </script>
