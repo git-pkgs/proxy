@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.32.40
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.61.0
 	github.com/git-pkgs/archives v0.5.1
+	github.com/git-pkgs/artifacts v0.2.0
 	github.com/git-pkgs/cooldown v0.2.0
 	github.com/git-pkgs/enrichment v0.7.0
 	github.com/git-pkgs/gcs v0.1.0
@@ -21,6 +22,7 @@ require (
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.3
+	github.com/opencontainers/go-digest v1.0.0
 	github.com/prometheus/client_golang v1.24.1
 	github.com/prometheus/client_model v0.6.2
 	github.com/spdx/tools-golang v0.5.7
@@ -132,7 +134,6 @@ require (
 	github.com/fsnotify/fsnotify v1.9.0 // indirect
 	github.com/fzipp/gocyclo v0.6.0 // indirect
 	github.com/ghostiam/protogetter v0.3.21 // indirect
-	github.com/git-pkgs/artifacts v0.2.0 // indirect
 	github.com/git-pkgs/packageurl-go v0.3.1 // indirect
 	github.com/git-pkgs/pom v0.1.7 // indirect
 	github.com/github/go-spdx/v2 v2.7.0 // indirect
@@ -228,7 +229,6 @@ require (
 	github.com/nunnatsa/ginkgolinter v0.24.0 // indirect
 	github.com/oapi-codegen/nullable v1.2.0 // indirect
 	github.com/oapi-codegen/runtime v1.6.0 // indirect
-	github.com/opencontainers/go-digest v1.0.0 // indirect
 	github.com/package-url/packageurl-go v0.1.7 // indirect
 	github.com/pandatix/go-cvss v0.6.2 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect

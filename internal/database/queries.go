@@ -4,6 +4,9 @@ import (
 	"database/sql"
 	"fmt"
 	"time"
+
+	"github.com/git-pkgs/artifacts"
+	"github.com/opencontainers/go-digest"
 )
 
 // Package queries
@@ -225,7 +228,7 @@ func (db *DB) GetArtifact(versionPURL, filename string) (*Artifact, error) {
 
 // GetCachedArtifact returns the fields needed to serve a cached artifact.
 func (db *DB) GetCachedArtifact(packagePURL, versionPURL, filename string) (*CachedArtifact, error) {
-	var artifact CachedArtifact
+	var row cachedArtifactRow
 	query := db.Rebind(`
 		SELECT packages.ecosystem, artifacts.storage_path, artifacts.content_hash, artifacts.size,
 		       artifacts.content_type, versions.integrity
@@ -235,14 +238,42 @@ func (db *DB) GetCachedArtifact(packagePURL, versionPURL, filename string) (*Cac
 		WHERE packages.purl = ? AND artifacts.version_purl = ? AND artifacts.filename = ?
 		  AND artifacts.storage_path IS NOT NULL AND artifacts.fetched_at IS NOT NULL
 	`)
-	err := db.Get(&artifact, query, packagePURL, versionPURL, filename)
+	err := db.Get(&row, query, packagePURL, versionPURL, filename)
 	if err == sql.ErrNoRows {
 		return nil, nil
 	}
 	if err != nil {
 		return nil, err
 	}
-	return &artifact, nil
+	return row.artifact(versionPURL, filename), nil
+}
+
+type cachedArtifactRow struct {
+	Ecosystem   string         `db:"ecosystem"`
+	StoragePath string         `db:"storage_path"`
+	ContentHash sql.NullString `db:"content_hash"`
+	Size        sql.NullInt64  `db:"size"`
+	ContentType sql.NullString `db:"content_type"`
+	Integrity   sql.NullString `db:"integrity"`
+}
+
+// artifact converts a cached artifact row to a CachedArtifact without
+// validation. A malformed hash or integrity value is handled by
+// checkCache, which clears the record and treats the request as a cache
+// miss so the client is served a fresh fetch instead of an error.
+func (row cachedArtifactRow) artifact(versionPURL, filename string) *CachedArtifact {
+	return &CachedArtifact{
+		Ecosystem:   row.Ecosystem,
+		StoragePath: row.StoragePath,
+		Integrity:   row.Integrity,
+		Artifact: artifacts.Artifact{
+			PURL:      versionPURL,
+			Digest:    digest.Digest("sha256:" + row.ContentHash.String),
+			Size:      row.Size.Int64,
+			Filename:  filename,
+			MediaType: row.ContentType.String,
+		},
+	}
 }
 
 func (db *DB) GetArtifactByPath(storagePath string) (*Artifact, error) {

@@ -161,8 +161,8 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 	}
 	if cached != nil {
 		w.Header().Set("Docker-Content-Digest", digest)
-		if cached.ContentType == "" {
-			cached.ContentType = "application/octet-stream"
+		if cached.Artifact.MediaType == "" {
+			cached.Artifact.MediaType = "application/octet-stream"
 		}
 		serveArtifact(w, r.Method, cached)
 		return
@@ -205,8 +205,8 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 	}
 
 	w.Header().Set("Docker-Content-Digest", digest)
-	if result.ContentType == "" {
-		result.ContentType = "application/octet-stream"
+	if result.Artifact.MediaType == "" {
+		result.Artifact.MediaType = "application/octet-stream"
 	}
 	ServeArtifact(w, result)
 }

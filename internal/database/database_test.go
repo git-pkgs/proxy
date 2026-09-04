@@ -279,14 +279,20 @@ func TestGetCachedArtifact(t *testing.T) {
 		if cached.StoragePath != "/cache/npm/"+filename {
 			t.Errorf("expected cached storage path, got %q", cached.StoragePath)
 		}
-		if cached.ContentHash.String != testContentHash {
-			t.Errorf("expected cached content hash, got %q", cached.ContentHash.String)
+		if cached.Artifact.PURL != versionPURL {
+			t.Errorf("expected cached PURL %q, got %q", versionPURL, cached.Artifact.PURL)
 		}
-		if cached.Size.Int64 != 12345 {
-			t.Errorf("expected cached size 12345, got %d", cached.Size.Int64)
+		if cached.Artifact.Digest.String() != "sha256:"+testContentHash {
+			t.Errorf("expected cached digest, got %q", cached.Artifact.Digest)
 		}
-		if cached.ContentType.String != "application/gzip" {
-			t.Errorf("expected cached content type, got %q", cached.ContentType.String)
+		if cached.Artifact.Size != 12345 {
+			t.Errorf("expected cached size 12345, got %d", cached.Artifact.Size)
+		}
+		if cached.Artifact.Filename != filename {
+			t.Errorf("expected cached filename %q, got %q", filename, cached.Artifact.Filename)
+		}
+		if cached.Artifact.MediaType != "application/gzip" {
+			t.Errorf("expected cached content type, got %q", cached.Artifact.MediaType)
 		}
 		if cached.Integrity.String != testIntegrity {
 			t.Errorf("expected cached integrity, got %q", cached.Integrity.String)
