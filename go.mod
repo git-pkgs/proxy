@@ -7,18 +7,18 @@ require (
 	github.com/CycloneDX/cyclonedx-go v0.12.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.40
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.61.0
-	github.com/git-pkgs/archives v0.5.1
-	github.com/git-pkgs/artifacts v0.2.0
+	github.com/git-pkgs/archives v0.7.0
+	github.com/git-pkgs/artifacts v0.2.1
 	github.com/git-pkgs/cooldown v0.2.0
-	github.com/git-pkgs/enrichment v0.7.0
+	github.com/git-pkgs/enrichment v0.7.1
 	github.com/git-pkgs/gcs v0.1.0
 	github.com/git-pkgs/integrity v0.1.1
-	github.com/git-pkgs/magic v0.2.0
-	github.com/git-pkgs/purl v0.1.19
-	github.com/git-pkgs/registries v0.9.0
+	github.com/git-pkgs/magic v0.3.1
+	github.com/git-pkgs/purl v0.1.20
+	github.com/git-pkgs/registries v0.9.1
 	github.com/git-pkgs/spdx v0.3.1
-	github.com/git-pkgs/vers v0.6.0
-	github.com/git-pkgs/vulns v0.2.2
+	github.com/git-pkgs/vers v0.7.0
+	github.com/git-pkgs/vulns v0.2.3
 	github.com/go-chi/chi/v5 v5.3.2
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/lib/pq v1.12.3
@@ -193,6 +193,7 @@ require (
 	github.com/karamaru-alpha/copyloopvar v1.2.2 // indirect
 	github.com/kisielk/errcheck v1.20.0 // indirect
 	github.com/kkHAIKE/contextcheck v1.1.6 // indirect
+	github.com/klauspost/compress v1.19.2 // indirect
 	github.com/kulti/thelper v0.7.1 // indirect
 	github.com/kunwardeep/paralleltest v1.0.15 // indirect
 	github.com/kylelemons/godebug v1.1.0 // indirect
@@ -230,7 +231,7 @@ require (
 	github.com/oapi-codegen/nullable v1.2.0 // indirect
 	github.com/oapi-codegen/runtime v1.6.0 // indirect
 	github.com/package-url/packageurl-go v0.1.7 // indirect
-	github.com/pandatix/go-cvss v0.6.2 // indirect
+	github.com/pandatix/go-cvss v0.6.4 // indirect
 	github.com/pelletier/go-toml v1.9.5 // indirect
 	github.com/pelletier/go-toml/v2 v2.4.3 // indirect
 	github.com/pkg/browser v0.0.0-20240102092130-5ac0b6a4141c // indirect
