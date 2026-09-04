@@ -83,6 +83,21 @@ brew install git-pkgs/git-pkgs/proxy
 
 Or download a binary from the [releases page](https://github.com/git-pkgs/proxy/releases).
 
+### Helm
+
+Install the chart from GHCR, setting the public URL that package-manager clients
+will use to reach the proxy:
+
+```bash
+helm install proxy oci://ghcr.io/git-pkgs/charts/proxy \
+  --set config.data.base_url=https://proxy.example.com
+```
+
+The default chart deploys one replica backed by a 10 GiB persistent volume,
+using SQLite and filesystem artifact storage under `/data`. See
+[`deploy/charts/proxy/values.yaml`](deploy/charts/proxy/values.yaml) for ingress,
+external database and object-storage configuration options.
+
 ## Quick Start
 
 ```bash

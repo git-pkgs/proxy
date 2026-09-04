@@ -1,0 +1,11 @@
+apiVersion: v2
+name: proxy
+description: A caching proxy for package registries
+type: application
+version: 0.0.0
+appVersion: "0.0.0"
+home: https://github.com/git-pkgs/proxy
+sources:
+  - https://github.com/git-pkgs/proxy
+annotations:
+  artifacthub.io/license: MIT
