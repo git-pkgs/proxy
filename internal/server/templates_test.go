@@ -519,6 +519,21 @@ func TestEcosystemBadgeLabel(t *testing.T) {
 	}
 }
 
+func TestOCIRegistryInstructionsDockerPull(t *testing.T) {
+	registries := getRegistryConfigs("http://package-proxy:8080")
+	for _, registry := range registries {
+		if registry.ID != "oci" {
+			continue
+		}
+		want := "docker pull package-proxy:8080/library/nginx:latest"
+		if !strings.Contains(string(registry.Instructions), want) {
+			t.Errorf("OCI instructions = %q, want substring %q", registry.Instructions, want)
+		}
+		return
+	}
+	t.Fatal("OCI registry instructions not found")
+}
+
 func TestSwiftRegistryInstructionsAllowLocalHTTP(t *testing.T) {
 	registries := getRegistryConfigs("http://localhost:8080")
 	for _, registry := range registries {
