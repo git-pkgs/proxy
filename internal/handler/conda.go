@@ -131,15 +131,7 @@ func (h *CondaHandler) parseFilename(filename string) (name, version string) {
 // handleRepodata proxies repodata.json, applying cooldown filtering when enabled.
 func (h *CondaHandler) handleRepodata(w http.ResponseWriter, r *http.Request) {
 	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		// repodata.json / current_repodata.json are large plain JSON (linux-64
-		// repodata.json is ~441 MB uncompressed, over the metadata_max_size cap,
-		// vs ~34 MB gzip). Request gzip so both hops stay compressed and the
-		// cache stores the small blob; conda/mamba/pixi decode Content-Encoding
-		// on .json URLs. repodata.json.bz2 keeps going through proxyCached
-		// (identity): it is already compressed and libmamba only decodes
-		// Content-Encoding on .json URLs. See issue #305.
-		cacheKey := strings.ReplaceAll(strings.TrimPrefix(r.URL.Path, "/"), "/", "_")
-		h.proxy.proxyCachedWithEncoding(w, r, h.upstreamURL+r.URL.Path, "conda", cacheKey, "gzip", "*/*")
+		h.proxyCached(w, r)
 		return
 	}
 
