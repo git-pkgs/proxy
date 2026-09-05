@@ -942,15 +942,21 @@ func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	p.writeMetadataCachedResponse(w, r, ecosystem, cacheKey, body, contentType, contentEncoding)
+	p.writeMetadataCachedResponseWithEncoding(w, r, ecosystem, cacheKey, body, contentType, contentEncoding)
 }
 
 // writeMetadataCachedResponse writes a cached metadata response and handles
-// conditional request headers using metadata cache validators. contentEncoding
-// must describe the body being written; it is passed in rather than re-read
-// from the cache row, which is missing or stale when the metadata cache write
-// failed and would otherwise mislabel the bytes.
-func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, body []byte, contentType, contentEncoding string) {
+// conditional request headers using metadata cache validators.
+func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, body []byte, contentType string) {
+	p.writeMetadataCachedResponseWithEncoding(w, r, ecosystem, cacheKey, body, contentType, "")
+}
+
+// writeMetadataCachedResponseWithEncoding is writeMetadataCachedResponse with
+// an explicit Content-Encoding. contentEncoding must describe the body being
+// written; it is passed in rather than re-read from the cache row, which is
+// missing or stale when the metadata cache write failed and would otherwise
+// mislabel the bytes.
+func (p *Proxy) writeMetadataCachedResponseWithEncoding(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, body []byte, contentType, contentEncoding string) {
 	cm := p.lookupCachedMeta(ecosystem, cacheKey)
 
 	if cm.etag != "" {

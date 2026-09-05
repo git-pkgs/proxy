@@ -99,7 +99,7 @@ func (h *MavenHandler) handleMetadata(w http.ResponseWriter, r *http.Request, ur
 		return
 	}
 
-	h.proxy.writeMetadataCachedResponse(w, r, "maven", cacheKey, body, contentType, "")
+	h.proxy.writeMetadataCachedResponse(w, r, "maven", cacheKey, body, contentType)
 }
 
 // handleDownload serves an artifact file, fetching and caching from upstream if needed.
