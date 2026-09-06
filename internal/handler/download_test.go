@@ -44,13 +44,14 @@ func seedPackageWithPURL(t *testing.T, db *database.DB, store *mockStorage, ecos
 
 	storagePath := storage.ArtifactPath(ecosystem, "", name, version, filename)
 	store.files[storagePath] = []byte(content)
+	sharedArtifact := testArtifact(content, versionPURL, filename, "application/octet-stream")
 
 	art := &database.Artifact{
 		VersionPURL: versionPURL,
 		Filename:    filename,
 		UpstreamURL: "https://example.com/" + filename,
 		StoragePath: sql.NullString{String: storagePath, Valid: true},
-		ContentHash: sql.NullString{String: sha256Hex(content), Valid: true},
+		ContentHash: sql.NullString{String: sharedArtifact.Digest.Encoded(), Valid: true},
 		Size:        sql.NullInt64{Int64: int64(len(content)), Valid: true},
 		ContentType: sql.NullString{String: "application/octet-stream", Valid: true},
 		FetchedAt:   sql.NullTime{Time: time.Now(), Valid: true},

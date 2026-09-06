@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
 	"errors"
 	"io"
@@ -13,12 +14,14 @@ import (
 	"testing"
 	"time"
 
+	"github.com/git-pkgs/artifacts"
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
+	"github.com/opencontainers/go-digest"
 	"github.com/prometheus/client_golang/prometheus"
 	"github.com/prometheus/client_golang/prometheus/testutil"
 	dto "github.com/prometheus/client_model/go"
@@ -172,6 +175,16 @@ func histogramSampleCount(t testing.TB, observer prometheus.Observer) uint64 {
 	return value.GetHistogram().GetSampleCount()
 }
 
+func testArtifact(content, packageURL, filename, mediaType string) artifacts.Artifact {
+	return artifacts.Artifact{
+		PURL:      packageURL,
+		Digest:    digest.Digest("sha256:" + sha256Hex(content)),
+		Size:      int64(len(content)),
+		Filename:  filename,
+		MediaType: mediaType,
+	}
+}
+
 // seedPackage creates a package, version, and cached artifact in the test DB and storage.
 func seedPackage(t testing.TB, db *database.DB, store *mockStorage, ecosystem, name, version, filename, content string) {
 	t.Helper()
@@ -196,13 +209,14 @@ func seedPackage(t testing.TB, db *database.DB, store *mockStorage, ecosystem, n
 
 	storagePath := storage.ArtifactPath(ecosystem, "", name, version, filename)
 	store.files[storagePath] = []byte(content)
+	sharedArtifact := testArtifact(content, versionPURL, filename, "application/octet-stream")
 
 	art := &database.Artifact{
 		VersionPURL: versionPURL,
 		Filename:    filename,
 		UpstreamURL: "https://example.com/" + filename,
 		StoragePath: sql.NullString{String: storagePath, Valid: true},
-		ContentHash: sql.NullString{String: sha256Hex(content), Valid: true},
+		ContentHash: sql.NullString{String: sharedArtifact.Digest.Encoded(), Valid: true},
 		Size:        sql.NullInt64{Int64: int64(len(content)), Valid: true},
 		ContentType: sql.NullString{String: "application/octet-stream", Valid: true},
 		FetchedAt:   sql.NullTime{Time: time.Now(), Valid: true},
@@ -288,11 +302,11 @@ func TestGetOrFetchArtifact_CacheHit(t *testing.T) {
 	if string(body) != "cached content" {
 		t.Errorf("got body %q, want %q", body, "cached content")
 	}
-	if result.ContentType != "application/octet-stream" {
-		t.Errorf("got content type %q, want %q", result.ContentType, "application/octet-stream")
+	if result.Artifact.MediaType != "application/octet-stream" {
+		t.Errorf("got content type %q, want %q", result.Artifact.MediaType, "application/octet-stream")
 	}
-	if result.Hash != sha256Hex("cached content") {
-		t.Errorf("got hash %q, want %q", result.Hash, sha256Hex("cached content"))
+	if result.Artifact.Digest.Encoded() != sha256Hex("cached content") {
+		t.Errorf("got digest %q, want %q", result.Artifact.Digest.Encoded(), sha256Hex("cached content"))
 	}
 }
 
@@ -617,8 +631,10 @@ func TestServeArtifact_Redirect(t *testing.T) {
 	w := httptest.NewRecorder()
 	ServeArtifact(w, &CacheResult{
 		RedirectURL: "https://bucket.s3.amazonaws.com/file?sig=abc",
-		Hash:        "abc123",
-		Cached:      true,
+		Artifact: artifacts.Artifact{
+			Digest: digest.Digest("sha256:" + strings.Repeat("a", sha256.Size*2)),
+		},
+		Cached: true,
 	})
 
 	if w.Code != http.StatusFound {
@@ -627,8 +643,8 @@ func TestServeArtifact_Redirect(t *testing.T) {
 	if loc := w.Header().Get("Location"); loc != "https://bucket.s3.amazonaws.com/file?sig=abc" {
 		t.Errorf("Location = %q", loc)
 	}
-	if etag := w.Header().Get("ETag"); etag != `"abc123"` {
-		t.Errorf("ETag = %q, want %q", etag, `"abc123"`)
+	if etag := w.Header().Get("ETag"); etag != `"`+strings.Repeat("a", sha256.Size*2)+`"` {
+		t.Errorf("ETag = %q", etag)
 	}
 	if cl := w.Header().Get("Content-Length"); cl != "" {
 		t.Errorf("Content-Length should not be set on redirect, got %q", cl)
@@ -638,10 +654,13 @@ func TestServeArtifact_Redirect(t *testing.T) {
 func TestServeArtifact_Stream(t *testing.T) {
 	w := httptest.NewRecorder()
 	ServeArtifact(w, &CacheResult{
-		Reader:      io.NopCloser(strings.NewReader("payload")),
-		Size:        7,
-		ContentType: "application/octet-stream",
-		Hash:        "abc123",
+		Reader: io.NopCloser(strings.NewReader("payload")),
+		Artifact: testArtifact(
+			"payload",
+			"pkg:npm/example@1.0.0",
+			"example.tgz",
+			"application/octet-stream",
+		),
 	})
 
 	if w.Code != http.StatusOK {
@@ -710,6 +729,18 @@ func TestGetOrFetchArtifactFromURL_CacheMiss(t *testing.T) {
 	if string(body) != "fetched content" {
 		t.Errorf("got body %q, want %q", body, "fetched content")
 	}
+	if err := result.Artifact.Validate(); err != nil {
+		t.Errorf("Artifact.Validate() error = %v", err)
+	}
+	if result.Artifact.PURL != "pkg:pypi/newpkg@1.0.0" {
+		t.Errorf("PURL = %q", result.Artifact.PURL)
+	}
+	if result.Artifact.Size != int64(len("fetched content")) {
+		t.Errorf("Size = %d", result.Artifact.Size)
+	}
+	if result.Artifact.MediaType != "application/gzip" {
+		t.Errorf("MediaType = %q", result.Artifact.MediaType)
+	}
 
 	// Verify it was stored
 	storagePath := storage.ArtifactPath("pypi", "", "newpkg", "1.0.0", "newpkg-1.0.0.tar.gz")
@@ -771,11 +802,9 @@ func TestGetOrFetchArtifactFromURL_StoreError(t *testing.T) {
 
 func TestServeArtifact(t *testing.T) {
 	result := &CacheResult{
-		Reader:      io.NopCloser(strings.NewReader("file contents")),
-		Size:        13,
-		ContentType: "application/gzip",
-		Hash:        "sha256abc",
-		Cached:      true,
+		Reader:   io.NopCloser(strings.NewReader("file contents")),
+		Artifact: testArtifact("file contents", "pkg:npm/example@1.0.0", "example.tgz", "application/gzip"),
+		Cached:   true,
 	}
 
 	w := httptest.NewRecorder()
@@ -790,8 +819,9 @@ func TestServeArtifact(t *testing.T) {
 	if w.Header().Get("Content-Length") != "13" {
 		t.Errorf("Content-Length = %q, want %q", w.Header().Get("Content-Length"), "13")
 	}
-	if w.Header().Get("ETag") != `"sha256abc"` {
-		t.Errorf("ETag = %q, want %q", w.Header().Get("ETag"), `"sha256abc"`)
+	wantETag := `"` + result.Artifact.Digest.Encoded() + `"`
+	if w.Header().Get("ETag") != wantETag {
+		t.Errorf("ETag = %q, want %q", w.Header().Get("ETag"), wantETag)
 	}
 	if w.Body.String() != "file contents" {
 		t.Errorf("body = %q, want %q", w.Body.String(), "file contents")

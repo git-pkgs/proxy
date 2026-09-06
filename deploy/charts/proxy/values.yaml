@@ -1,0 +1,138 @@
+# More than one replica requires config.data.database on Postgres,
+# config.data.storage on object storage, deploymentStrategy: RollingUpdate,
+# and a PVC access mode other than ReadWriteOnce (or persistence disabled).
+replicaCount: 1
+
+nameOverride: ""
+fullnameOverride: ""
+
+image:
+  repository: ghcr.io/git-pkgs/proxy
+  # An empty tag uses the chart appVersion.
+  tag: ""
+  # When set, digest takes precedence over tag.
+  digest: ""
+  pullPolicy: IfNotPresent
+
+imagePullSecrets: []
+
+service:
+  type: ClusterIP
+  port: 8080
+  # Keep this aligned with config.data.listen (or the listen address in an
+  # existing ConfigMap).
+  containerPort: 8080
+
+# The generated configuration is ignored when existingConfigMap is set.
+config:
+  existingConfigMap: ""
+  existingConfigMapKey: config.yaml
+  data:
+    listen: ":8080"
+    # Set this to the URL package-manager clients use to reach the proxy.
+    base_url: "http://localhost:8080"
+    storage:
+      url: "file:///data/artifacts"
+    database:
+      driver: sqlite
+      path: "/data/proxy.db"
+    log:
+      level: info
+      format: json
+
+# Environment variables override values from the configuration file. This is
+# also the recommended way to supply secret values such as database passwords
+# and object-storage credentials.
+extraEnv: []
+#  - name: PROXY_DATABASE_URL
+#    valueFrom:
+#      secretKeyRef:
+#        name: proxy-database
+#        key: url
+
+extraEnvFrom: []
+#  - secretRef:
+#      name: proxy-object-storage
+
+persistence:
+  enabled: true
+  # Keep this aligned with config.data.storage.url and config.data.database.path
+  # (or the equivalent paths in an existing ConfigMap).
+  mountPath: /data
+  existingClaim: ""
+  annotations: {}
+  accessModes:
+    - ReadWriteOnce
+  size: 10Gi
+  storageClass: ""
+
+deploymentStrategy:
+  type: Recreate
+
+ingress:
+  enabled: false
+  className: ""
+  annotations: {}
+  hosts: []
+  #  - host: proxy.example.com
+  #    paths:
+  #      - path: /
+  #        pathType: Prefix
+  tls: []
+  #  - secretName: proxy-tls
+  #    hosts:
+  #      - proxy.example.com
+
+podAnnotations: {}
+podLabels: {}
+
+podSecurityContext:
+  runAsNonRoot: true
+  runAsUser: 1000
+  runAsGroup: 1000
+  fsGroup: 1000
+  seccompProfile:
+    type: RuntimeDefault
+
+containerSecurityContext:
+  allowPrivilegeEscalation: false
+  readOnlyRootFilesystem: true
+  capabilities:
+    drop:
+      - ALL
+
+resources: {}
+#  requests:
+#    cpu: 100m
+#    memory: 128Mi
+#  limits:
+#    memory: 512Mi
+
+startupProbe:
+  tcpSocket:
+    port: http
+  failureThreshold: 30
+  periodSeconds: 2
+
+# /health checks both the database and storage backends and can take up to ten
+# seconds. It is intentionally a readiness check rather than a liveness check.
+readinessProbe:
+  httpGet:
+    path: /health
+    port: http
+  timeoutSeconds: 11
+  periodSeconds: 15
+  failureThreshold: 2
+
+livenessProbe:
+  tcpSocket:
+    port: http
+  periodSeconds: 20
+  failureThreshold: 3
+
+terminationGracePeriodSeconds: 30
+
+nodeSelector: {}
+tolerations: []
+affinity: {}
+topologySpreadConstraints: []

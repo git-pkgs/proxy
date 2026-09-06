@@ -188,8 +188,8 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	result.ContentType = "application/zip"
-	setSwiftArchiveHeaders(w.Header(), name, version, result.Hash, archiveInfo)
+	result.Artifact.MediaType = "application/zip"
+	setSwiftArchiveHeaders(w.Header(), name, version, result.Artifact.Digest.Encoded(), archiveInfo)
 	serveArtifact(w, r.Method, result)
 }
 
@@ -207,8 +207,8 @@ func (h *SwiftHandler) handleSourceArchiveHead(
 		return
 	}
 	if result != nil {
-		result.ContentType = "application/zip"
-		setSwiftArchiveHeaders(w.Header(), name, version, result.Hash, archiveInfo)
+		result.Artifact.MediaType = "application/zip"
+		setSwiftArchiveHeaders(w.Header(), name, version, result.Artifact.Digest.Encoded(), archiveInfo)
 		serveArtifact(w, r.Method, result)
 		return
 	}
@@ -431,7 +431,7 @@ func (h *SwiftHandler) proxySwiftResource(w http.ResponseWriter, r *http.Request
 func copySwiftResponseHeaders(dst, src http.Header) {
 	for _, name := range []string{
 		"Cache-Control", "Content-Disposition", "Content-Language", headerContentLength,
-		headerContentType, "Content-Version", "Digest", "ETag", "Last-Modified",
+		headerContentType, "Content-Version", "Digest", headerETag, headerLastModified,
 		"Retry-After", "Vary", "Warning", "X-Swift-Package-Signature",
 		"X-Swift-Package-Signature-Format",
 	} {
@@ -566,8 +566,8 @@ func writeSwiftMetadata(w http.ResponseWriter, r *http.Request, body []byte, con
 	etag := fmt.Sprintf(`"%x"`, digest)
 	w.Header().Set(headerContentType, contentType)
 	w.Header().Set("Content-Version", swiftContentVersion)
-	w.Header().Set("ETag", etag)
-	if r.Header.Get("If-None-Match") == etag {
+	w.Header().Set(headerETag, etag)
+	if ifNoneMatchHits(r.Header.Get("If-None-Match"), etag) {
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}

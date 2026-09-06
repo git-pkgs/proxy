@@ -558,6 +558,14 @@ type UpstreamConfig struct {
 	// Default: https://dl.fedoraproject.org/pub/fedora/linux
 	RPM string `json:"rpm" yaml:"rpm"`
 
+	// HomebrewAPI is the upstream Homebrew JSON API URL.
+	// Default: https://formulae.brew.sh/api
+	HomebrewAPI string `json:"homebrew_api" yaml:"homebrew_api"`
+
+	// HomebrewArtifact is the upstream registry URL for Homebrew artifacts.
+	// Default: https://ghcr.io
+	HomebrewArtifact string `json:"homebrew_artifact" yaml:"homebrew_artifact"`
+
 	// Helm maps repository names to HTTP Helm chart repository URLs.
 	// Requests use /helm/{name}/index.yaml and chart URLs in the index are
 	// rewritten to the same named proxy endpoint.
@@ -573,6 +581,14 @@ type UpstreamConfig struct {
 	// the repository prefix upstream/{name}/, for example
 	// oci://proxy.example.com/upstream/ghcr/owner/chart.
 	OCI map[string]string `json:"oci" yaml:"oci"`
+
+	// Generic maps names to plain HTTP upstream base URLs, served at
+	// /generic/{name}/. The remaining request path and query string are
+	// appended to the upstream URL. GitHub release asset paths
+	// ({owner}/{repo}/releases/download/{tag}/{asset}) are cached in the
+	// artifact cache; everything else goes through the metadata cache.
+	// Example: {"github": "https://github.com", "github-api": "https://api.github.com"}.
+	Generic map[string]string `json:"generic" yaml:"generic"`
 
 	// Auth configures authentication for upstream registries.
 	// Keys are absolute URL scopes matched by scheme, host, effective port,
@@ -621,6 +637,9 @@ func (u *UpstreamConfig) Validate() error {
 		return err
 	}
 	if err := validateNamedUpstreams("upstream.oci", u.OCI); err != nil {
+		return err
+	}
+	if err := validateNamedUpstreams("upstream.generic", u.Generic); err != nil {
 		return err
 	}
 	return nil
@@ -748,6 +767,8 @@ func Default() *Config {
 			OCIDefault:         "https://registry-1.docker.io",
 			Debian:             "http://deb.debian.org/debian",
 			RPM:                "https://dl.fedoraproject.org/pub/fedora/linux",
+			HomebrewAPI:        "https://formulae.brew.sh/api",
+			HomebrewArtifact:   "https://ghcr.io",
 		},
 		Gradle: GradleConfig{
 			BuildCache: GradleBuildCacheConfig{
@@ -879,6 +900,8 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Upstream.OCIDefault, "PROXY_UPSTREAM_OCI_DEFAULT")
 	setEnvString(&c.Upstream.Debian, "PROXY_UPSTREAM_DEBIAN")
 	setEnvString(&c.Upstream.RPM, "PROXY_UPSTREAM_RPM")
+	setEnvString(&c.Upstream.HomebrewAPI, "PROXY_UPSTREAM_HOMEBREW_API")
+	setEnvString(&c.Upstream.HomebrewArtifact, "PROXY_UPSTREAM_HOMEBREW_ARTIFACT")
 	setEnvString(&c.Cooldown.Default, "PROXY_COOLDOWN_DEFAULT")
 	setEnvBool(&c.Scanning.Enabled, "PROXY_SCANNING_ENABLED")
 	setEnvBool(&c.Scanning.FailOpen, "PROXY_SCANNING_FAIL_OPEN")

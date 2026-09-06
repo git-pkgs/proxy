@@ -61,13 +61,14 @@ The proxy never uploads artifact bytes to a scanner. Each scanner is notified wi
 | Julia | Julia | | ✓ |
 | Swift | Swift | | ✓ |
 | Container | Docker/OCI | | ✓ |
+| Homebrew | macOS/Linux | | ✓ |
 | Debian | Debian/Ubuntu | | ✓ |
 | RPM | RHEL/Fedora | | ✓ |
 | Alpine | Alpine Linux | | ✓ |
 | Arch | Arch Linux | | ✗ |
 | Chef | Chef | | ✗ |
-| Generic | Any | | ✗ |
-| Helm | Kubernetes | | ✗ |
+| Generic | Any | | ✓ |
+| Helm | Kubernetes | | ✓ |
 | Vagrant | Vagrant | | ✗ |
 
 Cooldown requires publish timestamps in metadata. Registries without a "Yes" in the cooldown column either don't expose timestamps or haven't been wired up yet.
@@ -81,6 +82,21 @@ brew install git-pkgs/git-pkgs/proxy
 ```
 
 Or download a binary from the [releases page](https://github.com/git-pkgs/proxy/releases).
+
+### Helm
+
+Install the chart from GHCR, setting the public URL that package-manager clients
+will use to reach the proxy:
+
+```bash
+helm install proxy oci://ghcr.io/git-pkgs/charts/proxy \
+  --set config.data.base_url=https://proxy.example.com
+```
+
+The default chart deploys one replica backed by a 10 GiB persistent volume,
+using SQLite and filesystem artifact storage under `/data`. See
+[`deploy/charts/proxy/values.yaml`](deploy/charts/proxy/values.yaml) for ingress,
+external database and object-storage configuration options.
 
 ## Quick Start
 
@@ -176,6 +192,29 @@ export GOPROXY=http://localhost:8080/go,direct
 ```
 
 Or in your shell profile for persistence.
+
+### Homebrew
+
+Point Homebrew's JSON API and artifact domain at the proxy:
+
+```bash
+export HOMEBREW_API_DOMAIN=http://localhost:8080/homebrew
+export HOMEBREW_ARTIFACT_DOMAIN=http://localhost:8080
+```
+
+The artifact domain proxies manifests and bottle blobs under `/v2/homebrew/core/`. GHCR routing is limited to that repository. Source archives, cask application downloads, custom tap artifacts, and legacy flat-file bottle mirrors use Homebrew's normal fallback URLs. Keep fallback enabled by leaving `HOMEBREW_ARTIFACT_DOMAIN_NO_FALLBACK` unset.
+
+Enable `cache_metadata` or set `PROXY_CACHE_METADATA=true` to retain Homebrew JSON API responses for offline fallback. Bottle blobs and their OCI manifests are cached without this setting.
+
+The upstreams default to `https://formulae.brew.sh/api` for the JSON API and `https://ghcr.io` for artifacts. To chain this proxy to another proxy, configure its Homebrew endpoints as the upstreams:
+
+```yaml
+upstream:
+  homebrew_api: "https://upstream-proxy.example.com/homebrew"
+  homebrew_artifact: "https://upstream-proxy.example.com"
+```
+
+The equivalent environment variables are `PROXY_UPSTREAM_HOMEBREW_API` and `PROXY_UPSTREAM_HOMEBREW_ARTIFACT`.
 
 ### Hex (Elixir)
 
@@ -514,6 +553,32 @@ http://localhost:8080/apk/private
 apk appends the architecture and index filename to each repository line
 itself.
 
+### GitHub Releases / mise (aqua backend)
+
+Configure named generic upstreams:
+
+```yaml
+upstream:
+  generic:
+    github: "https://github.com"
+    github-api: "https://api.github.com"
+```
+
+Then rewrite GitHub URLs in mise's settings (`~/.config/mise/config.toml`, mise ≥ 2025.9.3):
+
+```toml
+[settings.url_replacements]
+"regex:^https://github\\.com/([^/]+)/([^/]+)/releases/download/(.+)" = "http://localhost:8080/generic/github/$1/$2/releases/download/$3"
+"regex:^https://api\\.github\\.com/(.*)" = "http://localhost:8080/generic/github-api/$1"
+```
+
+Release assets are cached permanently after the first download and keep
+installing while GitHub is down. Tag lookups through `api.github.com` are
+cached for `metadata_ttl` and served stale during an outage or rate limit.
+Commit a `mise.lock` and install with `mise install --locked` so pinned
+installs need no API call at all. Add a bearer token for `https://api.github.com`
+under `upstream.auth` if the fleet exceeds GitHub's anonymous rate limit.
+
 ## Configuration
 
 The proxy can be configured via:
@@ -810,8 +875,11 @@ Recently cached:
 | `GET /julia/*` | Julia Pkg server protocol |
 | `GET /swift/*` | Swift Package Registry v1 protocol |
 | `GET /helm/{repository}/*` | HTTP Helm chart repository protocol |
+| `GET /homebrew/*` | Homebrew JSON API |
 | `GET /v2/*` | OCI/Docker registry protocol |
+| `GET /v2/homebrew/core/*` | Homebrew core bottle manifests and blobs from GHCR |
 | `GET /apk/{repository}/*` | Alpine APK repository protocol |
+| `GET /generic/{name}/*` | Generic HTTP download proxy (GitHub release assets, mise/aqua) |
 | `GET /debian/*` | Debian/APT repository protocol |
 | `GET /rpm/*` | RPM/Yum repository protocol |
 

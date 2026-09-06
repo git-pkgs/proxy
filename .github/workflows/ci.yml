@@ -45,3 +45,31 @@ jobs:
 
       - name: golangci-lint
         run: go tool golangci-lint run ./...
+
+  helm:
+    name: Helm chart
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4.3.1
+        with:
+          version: v3.18.6
+
+      - name: Lint chart
+        run: helm lint deploy/charts/proxy
+
+      - name: Render chart variants
+        run: |
+          set -euo pipefail
+          helm template proxy deploy/charts/proxy >/dev/null
+          helm template proxy deploy/charts/proxy \
+            --set persistence.enabled=false \
+            --set config.existingConfigMap=proxy-config \
+            --set ingress.enabled=true \
+            --set 'ingress.hosts[0].host=proxy.example.com' \
+            --set 'ingress.hosts[0].paths[0].path=/' \
+            --set 'ingress.hosts[0].paths[0].pathType=Prefix' \
+            >/dev/null

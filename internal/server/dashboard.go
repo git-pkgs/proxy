@@ -207,6 +207,7 @@ func getRegistryConfigs(baseURL string) []RegistryConfig {
 	if strings.HasPrefix(strings.ToLower(baseURL), "http://") {
 		swiftInsecureFlag = "--allow-insecure-http "
 	}
+	dockerHost := strings.TrimPrefix(strings.TrimPrefix(baseURL, "https://"), "http://")
 
 	return []RegistryConfig{
 		{
@@ -433,7 +434,7 @@ using Pkg; Pkg.update()</code></pre>`),
 sudo systemctl restart docker
 
 # Or pull directly
-docker pull ` + baseURL[8:] + `/library/nginx:latest</code></pre>`),
+docker pull ` + dockerHost + `/library/nginx:latest</code></pre>`),
 		},
 		{
 			ID:       "deb",

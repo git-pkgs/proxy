@@ -129,8 +129,8 @@ func (h *APKHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	if result.ContentType == "" {
-		result.ContentType = "application/octet-stream"
+	if result.Artifact.MediaType == "" {
+		result.Artifact.MediaType = "application/octet-stream"
 	}
 	serveArtifact(w, r.Method, result)
 }

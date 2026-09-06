@@ -16,6 +16,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/git-pkgs/artifacts"
 	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
@@ -24,6 +25,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
+	"github.com/opencontainers/go-digest"
 )
 
 // containsPathTraversal returns true if the path contains ".." segments
@@ -97,7 +99,29 @@ const (
 	headerContentType     = "Content-Type"
 	headerContentLength   = "Content-Length"
 	headerContentEncoding = "Content-Encoding"
+	headerETag            = "ETag"
+	headerLastModified    = "Last-Modified"
 )
+
+// ifNoneMatchHits reports whether the given If-None-Match header value
+// matches the current entity tag using weak comparison, so "*" matches any
+// tag, W/ prefixes are ignored on both sides, and a comma-separated list is
+// scanned. An empty header or an empty stored tag never match.
+func ifNoneMatchHits(header, etag string) bool {
+	if etag == "" || header == "" {
+		return false
+	}
+	if header == "*" {
+		return true
+	}
+	etag = strings.TrimPrefix(etag, "W/")
+	for value := range strings.SplitSeq(header, ",") {
+		if strings.TrimPrefix(strings.TrimSpace(value), "W/") == etag {
+			return true
+		}
+	}
+	return false
+}
 
 // defaultMetadataMaxSize is used when Proxy.MetadataMaxSize is unset.
 const defaultMetadataMaxSize = 100 << 20
@@ -183,9 +207,7 @@ func NewProxy(db *database.DB, store storage.Storage, fetcher fetch.FetcherInter
 type CacheResult struct {
 	Reader      io.ReadCloser
 	RedirectURL string
-	Size        int64
-	ContentType string
-	Hash        string
+	Artifact    artifacts.Artifact
 	Cached      bool
 	storagePath string
 }
@@ -248,16 +270,14 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 	if artifact == nil {
 		return nil, nil
 	}
-	checks, err := newIntegrityChecks(artifact.ContentHash.String, artifact.Integrity.String)
+	checks, err := newIntegrityChecks(artifact.Artifact.Digest.Encoded(), artifact.Integrity.String)
 	if err != nil {
 		p.rejectUnusableCacheRecord(artifact, versionPURL, filename, err)
 		return nil, nil
 	}
 
 	result := &CacheResult{
-		Size:        artifact.Size.Int64,
-		ContentType: artifact.ContentType.String,
-		Hash:        artifact.ContentHash.String,
+		Artifact:    artifact.Artifact,
 		Cached:      true,
 		storagePath: artifact.StoragePath,
 	}
@@ -401,7 +421,7 @@ func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, fil
 		if delErr := p.Storage.Delete(ctx, storagePath); delErr != nil {
 			p.Logger.Warn("failed to discard artifact with mismatched checksum", "path", storagePath, "error", delErr)
 		}
-		return nil, fmt.Errorf("artifact checksum mismatch: upstream declared %s, got %s", upstreamHash, hash)
+		return nil, fmt.Errorf("%w: upstream declared %s, got %s", ErrArtifactDigestMismatch, upstreamHash, hash)
 	}
 
 	if p.Scanners != nil && p.Scanners.Enabled() {
@@ -417,8 +437,16 @@ func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, fil
 		}
 	}
 
+	sharedArtifact := artifacts.Artifact{
+		PURL:      versionPURL,
+		Digest:    digest.Digest("sha256:" + hash),
+		Size:      size,
+		Filename:  filename,
+		MediaType: artifact.ContentType,
+	}
+
 	// Update database
-	if err := p.updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, upstreamURL, storagePath, hash, size, artifact.ContentType); err != nil {
+	if err := p.updateCacheDB(ecosystem, name, pkgPURL, upstreamURL, storagePath, sharedArtifact); err != nil {
 		p.Logger.Warn("failed to update cache database", "error", err)
 		// Continue anyway - we have the file
 	}
@@ -434,11 +462,9 @@ func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, fil
 	}
 
 	return &CacheResult{
-		Reader:      reader,
-		Size:        size,
-		ContentType: artifact.ContentType,
-		Hash:        hash,
-		Cached:      false,
+		Reader:   reader,
+		Artifact: sharedArtifact,
+		Cached:   false,
 	}, nil
 }
 
@@ -479,7 +505,7 @@ func (p *Proxy) runScan(ctx context.Context, ecosystem, name, version, filename,
 	return nil
 }
 
-func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, upstreamURL, storagePath, hash string, size int64, contentType string) error {
+func (p *Proxy) updateCacheDB(ecosystem, name, pkgPURL, upstreamURL, storagePath string, artifact artifacts.Artifact) error {
 	now := time.Now()
 
 	// Upsert package
@@ -496,7 +522,7 @@ func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, u
 
 	// Upsert version
 	ver := &database.Version{
-		PURL:        versionPURL,
+		PURL:        artifact.PURL,
 		PackagePURL: pkgPURL,
 		EnrichedAt:  sql.NullTime{Time: now, Valid: true},
 	}
@@ -506,13 +532,13 @@ func (p *Proxy) updateCacheDB(ecosystem, name, filename, pkgPURL, versionPURL, u
 
 	// Upsert artifact
 	art := &database.Artifact{
-		VersionPURL: versionPURL,
-		Filename:    filename,
+		VersionPURL: artifact.PURL,
+		Filename:    artifact.Filename,
 		UpstreamURL: upstreamURL,
 		StoragePath: sql.NullString{String: storagePath, Valid: true},
-		ContentHash: sql.NullString{String: hash, Valid: true},
-		Size:        sql.NullInt64{Int64: size, Valid: true},
-		ContentType: sql.NullString{String: contentType, Valid: true},
+		ContentHash: sql.NullString{String: artifact.Digest.Encoded(), Valid: true},
+		Size:        sql.NullInt64{Int64: artifact.Size, Valid: true},
+		ContentType: sql.NullString{String: artifact.MediaType, Valid: true},
 		FetchedAt:   sql.NullTime{Time: now, Valid: true},
 	}
 	if err := p.DB.UpsertArtifact(art); err != nil {
@@ -528,9 +554,13 @@ func ServeArtifact(w http.ResponseWriter, result *CacheResult) {
 }
 
 func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
+	contentHash := ""
+	if result.Artifact.Digest != "" {
+		contentHash = result.Artifact.Digest.Encoded()
+	}
 	if result.RedirectURL != "" {
-		if result.Hash != "" {
-			w.Header().Set("ETag", `"`+result.Hash+`"`)
+		if contentHash != "" {
+			w.Header().Set(headerETag, `"`+contentHash+`"`)
 		}
 		w.Header().Set("Location", result.RedirectURL)
 		w.WriteHeader(http.StatusFound)
@@ -541,14 +571,14 @@ func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
 		defer func() { _ = result.Reader.Close() }()
 	}
 
-	if result.ContentType != "" {
-		w.Header().Set(headerContentType, result.ContentType)
+	if result.Artifact.MediaType != "" {
+		w.Header().Set(headerContentType, result.Artifact.MediaType)
 	}
-	if result.Size > 0 || (method == http.MethodHead && result.Size == 0) {
-		w.Header().Set(headerContentLength, strconv.FormatInt(result.Size, 10))
+	if result.Artifact.Size > 0 || (method == http.MethodHead && result.Artifact.Size == 0) {
+		w.Header().Set(headerContentLength, strconv.FormatInt(result.Artifact.Size, 10))
 	}
-	if result.Hash != "" {
-		w.Header().Set("ETag", `"`+result.Hash+`"`)
+	if contentHash != "" {
+		w.Header().Set(headerETag, `"`+contentHash+`"`)
 	}
 
 	w.WriteHeader(http.StatusOK)
@@ -792,6 +822,8 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 
 	if entry != nil && entry.ETag.Valid {
 		req.Header.Set("If-None-Match", entry.ETag.String)
+	} else if entry != nil && entry.LastModified.Valid {
+		req.Header.Set("If-Modified-Since", entry.LastModified.Time.UTC().Format(http.TimeFormat))
 	}
 
 	resp, err := p.HTTPClient.Do(req)
@@ -840,12 +872,12 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		body:            body,
 		contentType:     resp.Header.Get(headerContentType),
 		contentEncoding: resp.Header.Get(headerContentEncoding),
-		etag:            resp.Header.Get("ETag"),
+		etag:            resp.Header.Get(headerETag),
 	}
 	if meta.contentType == "" {
 		meta.contentType = contentTypeJSON
 	}
-	if lm := resp.Header.Get("Last-Modified"); lm != "" {
+	if lm := resp.Header.Get(headerLastModified); lm != "" {
 		meta.lastModified, _ = http.ParseTime(lm)
 	}
 	return meta, nil
@@ -960,10 +992,14 @@ func (p *Proxy) writeMetadataCachedResponseWithEncoding(w http.ResponseWriter, r
 	cm := p.lookupCachedMeta(ecosystem, cacheKey)
 
 	if cm.etag != "" {
-		if match := r.Header.Get("If-None-Match"); match != "" && match == cm.etag {
-			w.WriteHeader(http.StatusNotModified)
-			return
-		}
+		w.Header().Set(headerETag, cm.etag)
+	}
+	if !cm.lastModified.IsZero() {
+		w.Header().Set(headerLastModified, cm.lastModified.UTC().Format(http.TimeFormat))
+	}
+	if ifNoneMatchHits(r.Header.Get("If-None-Match"), cm.etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return
 	}
 	if !cm.lastModified.IsZero() {
 		if ims := r.Header.Get("If-Modified-Since"); ims != "" {
@@ -979,23 +1015,19 @@ func (p *Proxy) writeMetadataCachedResponseWithEncoding(w http.ResponseWriter, r
 	if contentEncoding != "" {
 		w.Header().Set(headerContentEncoding, contentEncoding)
 	}
-	if cm.etag != "" {
-		w.Header().Set("ETag", cm.etag)
-	}
-	if !cm.lastModified.IsZero() {
-		w.Header().Set("Last-Modified", cm.lastModified.UTC().Format(http.TimeFormat))
-	}
 	if cm.stale {
 		w.Header().Set("Warning", `110 - "Response is Stale"`)
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	if r.Method != http.MethodHead {
+		_, _ = w.Write(body)
+	}
 }
 
 // proxyMetadataStream forwards an upstream metadata response by streaming it to the client
 // without buffering the full body in memory.
 func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upstreamURL, acceptEncoding string, acceptHeaders ...string) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
 	if err != nil {
 		http.Error(w, "failed to create request", http.StatusInternalServerError)
 		return
@@ -1026,14 +1058,16 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for _, header := range []string{headerContentType, headerContentLength, headerContentEncoding, "Last-Modified", "ETag"} {
+	for _, header := range []string{headerContentType, headerContentLength, headerContentEncoding, headerLastModified, headerETag} {
 		if v := resp.Header.Get(header); v != "" {
 			w.Header().Set(header, v)
 		}
 	}
 
 	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	if r.Method != http.MethodHead {
+		_, _ = io.Copy(w, resp.Body)
+	}
 }
 
 func (p *Proxy) applyUpstreamAuth(req *http.Request) {
@@ -1050,13 +1084,24 @@ func (p *Proxy) applyUpstreamAuth(req *http.Request) {
 // GetOrFetchArtifactFromURL retrieves an artifact from cache or fetches from a specific URL.
 // This is useful for registries where download URLs are determined from metadata.
 func (p *Proxy) GetOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, version, filename, downloadURL string) (*CacheResult, error) {
-	return p.GetOrFetchArtifactFromURLWithHeaders(ctx, ecosystem, name, version, filename, downloadURL, nil)
+	return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, nil, "")
 }
 
 // GetOrFetchArtifactFromURLWithHeaders retrieves an artifact from cache or fetches from a URL
 // with additional request-specific HTTP headers.
 func (p *Proxy) GetOrFetchArtifactFromURLWithHeaders(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header) (*CacheResult, error) {
 	return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, headers, "")
+}
+
+// GetOrFetchArtifactFromURLWithDigest retrieves an artifact and verifies its
+// SHA-256 digest before adding a newly fetched response to the cache.
+// Non-sha256 digests are proxied without verification.
+func (p *Proxy) GetOrFetchArtifactFromURLWithDigest(ctx context.Context, ecosystem, name, version, filename, downloadURL, digest string) (*CacheResult, error) {
+	upstreamHash, _ := strings.CutPrefix(digest, "sha256:")
+	if upstreamHash == digest {
+		upstreamHash = ""
+	}
+	return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, nil, upstreamHash)
 }
 
 func (p *Proxy) getOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header, upstreamHash string) (*CacheResult, error) {
@@ -1091,7 +1136,7 @@ func (p *Proxy) getCachedArtifactWithUpstreamHash(ctx context.Context, pkgPURL, 
 	if err != nil || cached == nil {
 		return cached, err
 	}
-	if artifactHashMatches(cached.Hash, upstreamHash) {
+	if artifactHashMatches(cached.Artifact.Digest.Encoded(), upstreamHash) {
 		return cached, nil
 	}
 
@@ -1099,7 +1144,7 @@ func (p *Proxy) getCachedArtifactWithUpstreamHash(ctx context.Context, pkgPURL, 
 		_ = cached.Reader.Close()
 	}
 	p.Logger.Warn("cached artifact hash disagrees with upstream metadata, discarding",
-		"purl", versionPURL, "filename", filename, "cached", cached.Hash, "upstream", upstreamHash)
+		"purl", versionPURL, "filename", filename, "cached", cached.Artifact.Digest.Encoded(), "upstream", upstreamHash)
 	p.discardCachedArtifact(ctx, versionPURL, filename, cached.storagePath)
 	return nil, nil
 }
@@ -1121,6 +1166,10 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 
 	return p.storeArtifact(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, upstreamHash, artifact)
 }
+
+// ErrArtifactDigestMismatch indicates that fetched bytes did not match the
+// checksum the upstream declared and were not recorded in the cache database.
+var ErrArtifactDigestMismatch = errors.New("artifact digest mismatch")
 
 func artifactHashMatches(got, expected string) bool {
 	return expected == "" || strings.EqualFold(got, expected)

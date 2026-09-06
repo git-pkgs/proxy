@@ -177,6 +177,12 @@ upstream:
   # RPM repository URL (used by /rpm endpoint)
   rpm: "https://dl.fedoraproject.org/pub/fedora/linux"
 
+  # Homebrew JSON API URL (used by /homebrew endpoint)
+  homebrew_api: "https://formulae.brew.sh/api"
+
+  # Homebrew artifact registry URL (used for /v2/homebrew/core requests)
+  homebrew_artifact: "https://ghcr.io"
+
   # Named HTTP Helm chart repositories (used by /helm/{name}/)
   # helm:
   #   bitnami: "https://charts.bitnami.com/bitnami"
@@ -192,6 +198,14 @@ upstream:
   # apk:
   #   alpine: "https://dl-cdn.alpinelinux.org/alpine"
   #   private: "https://apk.example.com"
+
+  # Named generic HTTP upstreams (used by /generic/{name}/). The remaining
+  # request path and query are appended to the upstream URL. GitHub release
+  # assets ({owner}/{repo}/releases/download/{tag}/{asset}) are cached
+  # immutably; other paths use the metadata cache with stale-on-error.
+  # generic:
+  #   github: "https://github.com"
+  #   github-api: "https://api.github.com"
 
   # Authentication for upstream registries
   # Keys are absolute URL scopes. Scheme, host, effective port, and path
