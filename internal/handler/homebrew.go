@@ -55,7 +55,16 @@ func (h *HomebrewHandler) Routes() http.Handler {
 			upstreamURL += "?" + r.URL.RawQuery
 		}
 
-		h.proxy.ProxyCached(w, r, upstreamURL, homebrewMetadataEcosystem, homebrewMetadataCacheKey(requestPath, r.URL.RawQuery), "*/*")
+		// brew fetches every JSON API download with `curl --compressed` and
+		// decodes Content-Encoding itself, and formula.jws.json is ~33 MB plain
+		// versus ~5 MB gzip, so keep both hops compressed. The analytics
+		// endpoints are the one consumer brew fetches without --compressed;
+		// they stay identity.
+		acceptEncoding := "gzip"
+		if strings.HasPrefix(requestPath, "analytics/") {
+			acceptEncoding = "identity"
+		}
+		h.proxy.proxyCachedWithEncoding(w, r, upstreamURL, homebrewMetadataEcosystem, homebrewMetadataCacheKey(requestPath, r.URL.RawQuery), acceptEncoding, "*/*")
 	})
 }
 

@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"bytes"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -359,5 +361,98 @@ func TestRegisterHomebrewArtifactsRejectsOtherHomebrewRoutes(t *testing.T) {
 	}
 	if upstreamRequests != 0 {
 		t.Errorf("blocked Homebrew routes made %d upstream requests, want 0", upstreamRequests)
+	}
+}
+
+// TestHomebrewHandler_RequestsGzipForAPIPaths covers #305's motivating case:
+// the JSON API files are fetched, cached and served gzip-compressed with
+// Content-Encoding: gzip (brew fetches them with --compressed), while the
+// analytics endpoints, which brew fetches without --compressed, stay identity.
+func TestHomebrewHandler_RequestsGzipForAPIPaths(t *testing.T) {
+	plain := []byte(`{"payload":"signed bytes","signatures":[]}`)
+	compressed := gzipPayload(t, plain)
+
+	var available atomic.Bool
+	available.Store(true)
+	var requests atomic.Int32
+	var sawAcceptEncoding atomic.Value // string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		sawAcceptEncoding.Store(r.Header.Get(headerAcceptEncoding))
+		if !available.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		w.Header().Set(headerContentType, "application/json")
+		if strings.Contains(r.Header.Get(headerAcceptEncoding), "gzip") {
+			w.Header().Set(headerContentEncoding, "gzip")
+			_, _ = w.Write(compressed)
+			return
+		}
+		_, _ = w.Write(plain)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	proxy.HTTPClient = upstream.Client()
+	h := NewHomebrewHandler(proxy, upstream.URL+"/api").Routes()
+
+	get := func(path string) *httptest.ResponseRecorder {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, path, nil))
+		return w
+	}
+	lastAE := func() string {
+		s, _ := sawAcceptEncoding.Load().(string)
+		return s
+	}
+
+	first := get("/formula.jws.json")
+	if first.Code != http.StatusOK {
+		t.Fatalf("formula.jws.json: status = %d, want 200: %s", first.Code, first.Body.String())
+	}
+	if got := lastAE(); got != "gzip" {
+		t.Errorf("formula.jws.json: upstream Accept-Encoding = %q, want %q", got, "gzip")
+	}
+	if !bytes.Equal(first.Body.Bytes(), compressed) {
+		t.Errorf("formula.jws.json: body is not the compressed bytes (got %d, want %d)", first.Body.Len(), len(compressed))
+	}
+	if got := first.Header().Get(headerContentEncoding); got != "gzip" {
+		t.Errorf("formula.jws.json: Content-Encoding = %q, want %q", got, "gzip")
+	}
+	if got := first.Header().Get(headerContentLength); got != strconv.Itoa(len(compressed)) {
+		t.Errorf("formula.jws.json: Content-Length = %q, want %d", got, len(compressed))
+	}
+
+	// Replay from cache with the upstream down: same bytes and header, no refetch.
+	before := requests.Load()
+	available.Store(false)
+	cached := get("/formula.jws.json")
+	if cached.Code != http.StatusOK {
+		t.Fatalf("cached formula.jws.json: status = %d, want 200: %s", cached.Code, cached.Body.String())
+	}
+	if !bytes.Equal(cached.Body.Bytes(), compressed) || cached.Header().Get(headerContentEncoding) != "gzip" {
+		t.Errorf("cached formula.jws.json: body/header not replayed verbatim")
+	}
+	if requests.Load() != before {
+		t.Errorf("cached formula.jws.json hit upstream: requests %d -> %d", before, requests.Load())
+	}
+	available.Store(true)
+
+	// Analytics is fetched by brew without --compressed: stays identity, no header.
+	analytics := get("/analytics/install/30d.json")
+	if analytics.Code != http.StatusOK {
+		t.Fatalf("analytics: status = %d, want 200: %s", analytics.Code, analytics.Body.String())
+	}
+	if got := lastAE(); got != "identity" {
+		t.Errorf("analytics: upstream Accept-Encoding = %q, want %q", got, "identity")
+	}
+	if !bytes.Equal(analytics.Body.Bytes(), plain) {
+		t.Errorf("analytics: body = %q, want plain %q", analytics.Body.Bytes(), plain)
+	}
+	if got := analytics.Header().Get(headerContentEncoding); got != "" {
+		t.Errorf("analytics: Content-Encoding = %q, want empty", got)
 	}
 }
