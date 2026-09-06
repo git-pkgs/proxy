@@ -54,7 +54,7 @@
 {{end}}
 
 <!-- Two Column Layout -->
-<div class="grid md:grid-cols-2 gap-8 mb-8">
+<div class="grid md:grid-cols-2 gap-8 mb-8 items-start">
     <!-- Popular Packages -->
     <div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
         <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800">
@@ -74,9 +74,9 @@
                         {{if .VulnCount}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">{{.VulnCount}} vulns</span>{{end}}
                     </div>
                 </div>
-                <div class="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
-                    <span>{{.Hits}} cache hits</span>
-                    <span>{{.Size}}</span>
+                <div class="grid shrink-0 grid-cols-[6.5rem_3.5rem] gap-x-3 text-sm text-gray-500 dark:text-gray-400">
+                    <span class="text-left tabular-nums whitespace-nowrap">{{.Hits}} cache hits</span>
+                    <span class="text-right tabular-nums whitespace-nowrap">{{.Size}}</span>
                 </div>
             </div>
             {{end}}
@@ -97,12 +97,12 @@
         <div class="divide-y divide-gray-200 dark:divide-gray-800">
             {{if .RecentPackages}}
             {{range .RecentPackages}}
-            <div class="px-6 py-4 flex items-center justify-between">
+            <div class="px-6 py-4 flex items-center justify-between gap-4">
                 <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2 min-w-0 overflow-hidden">
                         {{template "ecosystem_badge" .Ecosystem}}
-                        <a href="/ui/package/{{.Ecosystem}}/{{.Name}}" class="font-medium truncate hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
-                        <span class="text-gray-500 dark:text-gray-400">@{{.Version}}</span>
+                        <a href="/ui/package/{{.Ecosystem}}/{{.Name}}" class="font-medium truncate min-w-0 hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
+                        <span class="shrink-0 text-gray-500 dark:text-gray-400 whitespace-nowrap">@{{.Version}}</span>
                     </div>
                     <div class="flex items-center gap-2 mt-1">
                         {{if .License}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-100 text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-700 dark:bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-900 dark:text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-300">{{.License}}</span>{{end}}
@@ -110,9 +110,9 @@
                         {{if .VulnCount}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">{{.VulnCount}} vulns</span>{{end}}
                     </div>
                 </div>
-                <div class="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
-                    <span>{{.CachedAt}}</span>
-                    <span>{{.Size}}</span>
+                <div class="grid shrink-0 grid-cols-[5.5rem_3.5rem] gap-x-3 text-sm text-gray-500 dark:text-gray-400">
+                    <span class="text-left tabular-nums whitespace-nowrap">{{.CachedAt}}</span>
+                    <span class="text-right tabular-nums whitespace-nowrap">{{.Size}}</span>
                 </div>
             </div>
             {{end}}
