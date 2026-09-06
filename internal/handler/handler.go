@@ -1041,8 +1041,11 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 	// Set Accept-Encoding explicitly (identity, or gzip for compressible
 	// verbatim metadata) so Go does not transparently decompress and strip the
 	// Content-Encoding of the bytes we forward, regardless of what the client
-	// negotiated.
-	req.Header.Set(headerAcceptEncoding, acceptEncoding)
+	// negotiated. An empty value leaves the header unset, as in
+	// fetchUpstreamMetadata.
+	if acceptEncoding != "" {
+		req.Header.Set(headerAcceptEncoding, acceptEncoding)
+	}
 	p.applyUpstreamAuth(req)
 
 	for _, header := range []string{"If-Modified-Since", "If-None-Match"} {
