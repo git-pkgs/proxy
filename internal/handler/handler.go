@@ -768,6 +768,11 @@ func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 	p.Logger.Warn("upstream metadata fetch failed, checking cache",
 		"ecosystem", ecosystem, "key", cacheKey, "error", err)
 
+	// Re-read the row so the encoding describes the blob as it is now: a
+	// concurrent refetch may have replaced both since entry was read above
+	// (an identity blob swapped for a gzip one during rollout).
+	entry = p.currentMetadataEntry(ecosystem, cacheKey, entry)
+
 	cached, readErr := p.Storage.Open(ctx, entry.StoragePath)
 	if readErr != nil {
 		return nil, "", "", fmt.Errorf("upstream failed and cached file missing: %w", err)
@@ -895,7 +900,7 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 		return
 	}
 
-	_ = p.DB.UpsertMetadataCache(&database.MetadataCacheEntry{
+	err = p.DB.UpsertMetadataCache(&database.MetadataCacheEntry{
 		Ecosystem:       ecosystem,
 		Name:            cacheKey,
 		StoragePath:     storagePath,
@@ -906,6 +911,27 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 		LastModified:    sql.NullTime{Time: meta.lastModified, Valid: !meta.lastModified.IsZero()},
 		FetchedAt:       sql.NullTime{Time: time.Now(), Valid: true},
 	})
+	if err != nil {
+		// The blob is written but the row describing it is not, so a later
+		// TTL hit or stale fallback would serve these bytes with the previous
+		// row's encoding. Drop the blob so row and bytes can never disagree;
+		// the next request refetches instead.
+		p.Logger.Warn("failed to record cached metadata, discarding blob", "ecosystem", ecosystem, "key", cacheKey, "error", err)
+		if delErr := p.Storage.Delete(ctx, storagePath); delErr != nil {
+			p.Logger.Warn("failed to discard metadata blob", "ecosystem", ecosystem, "key", cacheKey, "error", delErr)
+		}
+	}
+}
+
+// currentMetadataEntry re-reads the metadata cache row and returns it, or
+// fallback when the row cannot be read. Used before serving a stored blob so
+// its encoding comes from the row as it is now rather than from a snapshot
+// taken before the upstream fetch.
+func (p *Proxy) currentMetadataEntry(ecosystem, cacheKey string, fallback *database.MetadataCacheEntry) *database.MetadataCacheEntry {
+	if fresh, err := p.DB.GetMetadataCache(ecosystem, cacheKey); err == nil && fresh != nil {
+		return fresh
+	}
+	return fallback
 }
 
 // cachedMeta holds cache validators and freshness state from a metadata cache entry.
