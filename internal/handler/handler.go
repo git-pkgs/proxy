@@ -225,7 +225,11 @@ func (p *Proxy) GetOrFetchArtifact(ctx context.Context, ecosystem, name, version
 	}
 	metrics.RecordCacheMiss(ecosystem)
 
-	return p.fetchAndCache(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL)
+	stored, storagePath, err := p.fetchAndCache(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL)
+	if err != nil {
+		return nil, err
+	}
+	return p.openStoredArtifact(ctx, stored, storagePath)
 }
 
 // GetCachedArtifact retrieves an artifact from cache without contacting an upstream.
@@ -359,14 +363,14 @@ func (p *Proxy) rejectUnusableCacheRecord(artifact *database.CachedArtifact, ver
 	}
 }
 
-func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL string) (*CacheResult, error) {
+func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL string) (artifacts.Artifact, string, error) {
 	// Resolve download URL
 	info, err := p.Resolver.Resolve(ctx, ecosystem, name, version)
 	if err != nil {
 		if errors.Is(err, fetch.ErrNotFound) {
-			return nil, ErrUpstreamNotFound
+			return artifacts.Artifact{}, "", ErrUpstreamNotFound
 		}
-		return nil, fmt.Errorf("resolving download URL: %w", err)
+		return artifacts.Artifact{}, "", fmt.Errorf("resolving download URL: %w", err)
 	}
 
 	// Use resolved filename if provided filename is empty
@@ -386,9 +390,9 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 		metrics.RecordUpstreamFetch(ecosystem, fetchDuration)
 		metrics.RecordUpstreamError(ecosystem, "fetch_failed")
 		if errors.Is(err, fetch.ErrNotFound) {
-			return nil, ErrUpstreamNotFound
+			return artifacts.Artifact{}, "", ErrUpstreamNotFound
 		}
-		return nil, fmt.Errorf("fetching from upstream: %w", err)
+		return artifacts.Artifact{}, "", fmt.Errorf("fetching from upstream: %w", err)
 	}
 	metrics.RecordUpstreamFetch(ecosystem, fetchDuration)
 
@@ -405,7 +409,10 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 // verdict means a blocked artifact was never reachable by any client. On
 // block, the just-stored bytes are deleted and ErrArtifactBlocked is
 // returned; updateCacheDB is never called.
-func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, upstreamURL, upstreamHash string, artifact *fetch.Artifact) (*CacheResult, error) {
+//
+// It returns the artifact and its storage path, not a reader; callers get one
+// from openStoredArtifact.
+func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, upstreamURL, upstreamHash string, artifact *fetch.Artifact) (artifacts.Artifact, string, error) {
 	storagePath := storage.ArtifactPath(ecosystem, "", name, version, filename)
 
 	storeStart := time.Now()
@@ -414,14 +421,14 @@ func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, fil
 	metrics.RecordStorageOperation("write", time.Since(storeStart))
 	if err != nil {
 		metrics.RecordStorageError("write")
-		return nil, fmt.Errorf("storing artifact: %w", err)
+		return artifacts.Artifact{}, "", fmt.Errorf("storing artifact: %w", err)
 	}
 
 	if !artifactHashMatches(hash, upstreamHash) {
 		if delErr := p.Storage.Delete(ctx, storagePath); delErr != nil {
 			p.Logger.Warn("failed to discard artifact with mismatched checksum", "path", storagePath, "error", delErr)
 		}
-		return nil, fmt.Errorf("%w: upstream declared %s, got %s", ErrArtifactDigestMismatch, upstreamHash, hash)
+		return artifacts.Artifact{}, "", fmt.Errorf("%w: upstream declared %s, got %s", ErrArtifactDigestMismatch, upstreamHash, hash)
 	}
 
 	if p.Scanners != nil && p.Scanners.Enabled() {
@@ -433,7 +440,7 @@ func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, fil
 				p.Logger.Warn("failed to delete blocked artifact from storage",
 					"path", storagePath, "error", delErr)
 			}
-			return nil, err
+			return artifacts.Artifact{}, "", err
 		}
 	}
 
@@ -451,7 +458,13 @@ func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, fil
 		// Continue anyway - we have the file
 	}
 
-	// Open the stored file to return
+	return sharedArtifact, storagePath, nil
+}
+
+// openStoredArtifact gives one caller its own reader over just-committed
+// bytes. A handle cannot be shared: it has one read position, so callers would
+// consume each other's bytes and the first Close would break the rest.
+func (p *Proxy) openStoredArtifact(ctx context.Context, artifact artifacts.Artifact, storagePath string) (*CacheResult, error) {
 	readStart := time.Now()
 	reader, err := p.Storage.Open(ctx, storagePath)
 	metrics.RecordStorageOperation("read", time.Since(readStart))
@@ -463,7 +476,7 @@ func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, fil
 
 	return &CacheResult{
 		Reader:   reader,
-		Artifact: sharedArtifact,
+		Artifact: artifact,
 		Cached:   false,
 	}, nil
 }
@@ -1101,7 +1114,11 @@ func (p *Proxy) getOrFetchArtifactFromURLWithCachePURLs(ctx context.Context, eco
 	}
 	metrics.RecordCacheMiss(ecosystem)
 
-	return p.fetchAndCacheFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, upstreamHash)
+	stored, storagePath, err := p.fetchAndCacheFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, upstreamHash)
+	if err != nil {
+		return nil, err
+	}
+	return p.openStoredArtifact(ctx, stored, storagePath)
 }
 
 // getCachedArtifactWithUpstreamHash returns a cached artifact whose recorded
@@ -1128,7 +1145,7 @@ func (p *Proxy) getCachedArtifactWithUpstreamHash(ctx context.Context, pkgPURL, 
 	return nil, nil
 }
 
-func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, upstreamHash string) (*CacheResult, error) {
+func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, upstreamHash string) (artifacts.Artifact, string, error) {
 	p.Logger.Info("fetching from upstream",
 		"ecosystem", ecosystem, "name", name, "version", version, "url", downloadURL)
 
@@ -1138,9 +1155,9 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 	if err != nil {
 		metrics.RecordUpstreamError(ecosystem, "fetch_failed")
 		if errors.Is(err, fetch.ErrNotFound) {
-			return nil, ErrUpstreamNotFound
+			return artifacts.Artifact{}, "", ErrUpstreamNotFound
 		}
-		return nil, fmt.Errorf("fetching from upstream: %w", err)
+		return artifacts.Artifact{}, "", fmt.Errorf("fetching from upstream: %w", err)
 	}
 
 	return p.storeArtifact(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, upstreamHash, artifact)
