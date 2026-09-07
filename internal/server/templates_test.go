@@ -63,13 +63,15 @@ func TestTemplatesRenderAllPages(t *testing.T) {
 			TotalPages: 0,
 		}},
 		{"packages_list", PackagesListPageData{
-			Ecosystem:  "",
-			SortBy:     defaultSortBy,
-			Results:    []SearchResultItem{{Ecosystem: "npm", Name: "express", Hits: 200, SizeFormatted: "2 MB"}},
-			Count:      1,
-			Page:       1,
-			PerPage:    50,
-			TotalPages: 1,
+			Ecosystem:        "",
+			SortBy:           defaultSortBy,
+			Results:          []SearchResultItem{{Ecosystem: "npm", Name: "express", Hits: 200, SizeFormatted: "2 MB"}},
+			Count:            1,
+			TotalPackages:    1,
+			EcosystemFilters: []EcosystemFilter{{Ecosystem: "npm", Count: 1}},
+			Page:             1,
+			PerPage:          50,
+			TotalPages:       1,
 		}},
 		{"package_show", PackageShowData{
 			Package: &database.Package{
@@ -565,6 +567,39 @@ func TestEcosystemBadgeClasses(t *testing.T) {
 	classes := ecosystemBadgeClasses("unknown")
 	if !strings.Contains(classes, "gray") {
 		t.Error("unknown ecosystem should use gray classes")
+	}
+}
+
+func TestBuildEcosystemFilters(t *testing.T) {
+	filters := buildEcosystemFilters(map[string]int64{
+		"npm":   3,
+		"cargo": 2,
+		"empty": 0,
+	})
+
+	if len(filters) != 2 {
+		t.Fatalf("expected 2 filters, got %d", len(filters))
+	}
+	if filters[0].Ecosystem != "cargo" || filters[0].Count != 2 {
+		t.Errorf("first filter = %#v, want cargo with count 2", filters[0])
+	}
+	if filters[1].Ecosystem != "npm" || filters[1].Count != 3 {
+		t.Errorf("second filter = %#v, want npm with count 3", filters[1])
+	}
+
+	extra := buildEcosystemFilters(map[string]int64{"custom": 1})
+	if len(extra) != 1 || extra[0].Ecosystem != "custom" {
+		t.Errorf("unexpected extra filters: %#v", extra)
+	}
+}
+
+func TestEcosystemPillClasses(t *testing.T) {
+	classes := ecosystemPillClasses("npm")
+	if !strings.Contains(classes, "rounded-full") {
+		t.Error("pill classes should use rounded-full")
+	}
+	if !strings.Contains(classes, "bg-red-100") {
+		t.Error("npm pill should use npm colors")
 	}
 }
 
