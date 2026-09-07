@@ -11,6 +11,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -29,6 +30,7 @@ import (
 
 // mockStorage implements storage.Storage for testing.
 type mockStorage struct {
+	mu        sync.Mutex
 	files     map[string][]byte
 	storeErr  error
 	openErr   error
@@ -41,6 +43,8 @@ func newMockStorage() *mockStorage {
 }
 
 func (s *mockStorage) Store(_ context.Context, path string, r io.Reader) (int64, string, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.storeErr != nil {
 		return 0, "", s.storeErr
 	}
@@ -53,6 +57,8 @@ func (s *mockStorage) Store(_ context.Context, path string, r io.Reader) (int64,
 }
 
 func (s *mockStorage) Open(_ context.Context, path string) (io.ReadCloser, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	if s.openErr != nil {
 		return nil, s.openErr
 	}
@@ -64,6 +70,8 @@ func (s *mockStorage) Open(_ context.Context, path string) (io.ReadCloser, error
 }
 
 func (s *mockStorage) Exists(_ context.Context, path string) (bool, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	_, ok := s.files[path]
 	return ok, nil
 }
@@ -75,11 +83,15 @@ func (s *mockStorage) Delete(ctx context.Context, path string) error {
 	if err := ctx.Err(); err != nil {
 		return err
 	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	delete(s.files, path)
 	return nil
 }
 
 func (s *mockStorage) Size(_ context.Context, path string) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	data, ok := s.files[path]
 	if !ok {
 		return 0, storage.ErrNotFound
@@ -88,6 +100,8 @@ func (s *mockStorage) Size(_ context.Context, path string) (int64, error) {
 }
 
 func (s *mockStorage) UsedSpace(_ context.Context) (int64, error) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
 	var total int64
 	for _, data := range s.files {
 		total += int64(len(data))
