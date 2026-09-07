@@ -9,6 +9,8 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 )
@@ -292,4 +294,95 @@ func fileURLFromPath(path string) string {
 		return "file:///" + path
 	}
 	return "file://" + path
+}
+
+func TestOpenBucketWritesNoAttrsSidecar(t *testing.T) {
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	b, err := OpenBucket(ctx, fileURLFromPath(dir))
+	if err != nil {
+		t.Fatalf("OpenBucket failed: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	if _, _, err := b.Store(ctx, "pkg/thing-1.0.0.tgz", strings.NewReader("content")); err != nil {
+		t.Fatalf("Store failed: %v", err)
+	}
+
+	sidecars, err := filepath.Glob(filepath.Join(dir, "*", "*.attrs"))
+	if err != nil {
+		t.Fatalf("Glob failed: %v", err)
+	}
+	if len(sidecars) != 0 {
+		t.Errorf("got sidecar files %v, want none: a truncated sidecar fails reads that overlap a write", sidecars)
+	}
+}
+
+// A read overlapping a write to the same key must not fail. fileblob rewrote
+// its ".attrs" sidecar in place, so a reader decoding it mid-write saw a
+// partial file, which the proxy served as a 502 on an artifact it held.
+func TestConcurrentReadsSurviveWritesToSameKey(t *testing.T) {
+	const (
+		key          = "pkg/thing-1.0.0.tgz"
+		readers      = 4
+		readsPerRead = 500
+	)
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	b, err := OpenBucket(ctx, fileURLFromPath(dir))
+	if err != nil {
+		t.Fatalf("OpenBucket failed: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	payload := strings.Repeat("x", 4096)
+	if _, _, err := b.Store(ctx, key, strings.NewReader(payload)); err != nil {
+		t.Fatalf("seeding Store failed: %v", err)
+	}
+
+	done := make(chan struct{})
+	var writers sync.WaitGroup
+	writers.Add(1)
+	go func() {
+		defer writers.Done()
+		for {
+			select {
+			case <-done:
+				return
+			default:
+			}
+			if _, _, err := b.Store(ctx, key, strings.NewReader(payload)); err != nil {
+				return
+			}
+		}
+	}()
+
+	var failures atomic.Int64
+	var reading sync.WaitGroup
+	for range readers {
+		reading.Add(1)
+		go func() {
+			defer reading.Done()
+			for range readsPerRead {
+				r, err := b.Open(ctx, key)
+				if err != nil {
+					failures.Add(1)
+					continue
+				}
+				if _, err := io.Copy(io.Discard, r); err != nil {
+					failures.Add(1)
+				}
+				_ = r.Close()
+			}
+		}()
+	}
+	reading.Wait()
+	close(done)
+	writers.Wait()
+
+	if got := failures.Load(); got != 0 {
+		t.Errorf("%d of %d reads failed while one writer rewrote the same key, want 0", got, readers*readsPerRead)
+	}
 }

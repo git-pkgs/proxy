@@ -87,7 +87,14 @@ func OpenBucket(ctx context.Context, urlStr string) (Storage, error) {
 		// This avoids "invalid cross-device link" errors from os.Rename when
 		// the bucket directory and os.TempDir are on different filesystems
 		// (e.g. Docker volume mounts).
-		urlStr += "?no_tmp_dir=true"
+		//
+		// Do not write fileblob's ".attrs" sidecar. It is rewritten with
+		// os.Create, truncating in place outside the atomic rename that
+		// protects the blob, so a read overlapping a write can decode a
+		// partial file; a missing one defaults cleanly, a truncated one does
+		// not. Nothing in the proxy needs it: Store sets no ContentType, and
+		// Size reads os.Stat via Attributes.
+		urlStr += "?no_tmp_dir=true&metadata=skip"
 	}
 
 	bucket, err := blob.OpenBucket(ctx, urlStr)
