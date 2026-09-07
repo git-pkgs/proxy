@@ -22,11 +22,19 @@ import (
 
 const osWindows = "windows"
 
+// attrsExt is fileblob's sidecar suffix, kept only to clear sidecars an
+// earlier version wrote.
+const attrsExt = ".attrs"
+
 // Blob implements Storage using gocloud.dev/blob.
 // Supports local filesystem (file://) and S3 (s3://) URLs.
 type Blob struct {
 	bucket *blob.Bucket
 	url    string
+
+	// fileRoot is the directory backing a file:// bucket, empty for cloud
+	// backends. Used only to clear sidecars an earlier version wrote.
+	fileRoot string
 }
 
 // OpenBucket opens a blob bucket from a URL.
@@ -46,6 +54,8 @@ func OpenBucket(ctx context.Context, urlStr string) (Storage, error) {
 	if strings.HasPrefix(urlStr, "gs://") {
 		return OpenGCS(ctx, urlStr)
 	}
+
+	var fileRoot string
 
 	// Handle file:// URLs specially to create the directory
 	if strings.HasPrefix(urlStr, "file://") {
@@ -73,6 +83,8 @@ func OpenBucket(ctx context.Context, urlStr string) (Storage, error) {
 		if err != nil {
 			return nil, fmt.Errorf("resolving path: %w", err)
 		}
+
+		fileRoot = absPath
 
 		// Convert back to URL format with forward slashes
 		urlPath := filepath.ToSlash(absPath)
@@ -102,10 +114,38 @@ func OpenBucket(ctx context.Context, urlStr string) (Storage, error) {
 		return nil, fmt.Errorf("opening bucket: %w", err)
 	}
 
-	return &Blob{bucket: bucket, url: urlStr}, nil
+	return &Blob{bucket: bucket, url: urlStr, fileRoot: fileRoot}, nil
+}
+
+// legacySidecarPath gives the ".attrs" path an earlier version wrote for key,
+// or "" when the mapping is not certain.
+//
+// fileblob maps keys with an unexported escapeKey, so this derives it.
+// escapeKey is the identity for a plain key and parts from one only for keys
+// that are not valid local paths, which is what filepath.Localize rejects.
+// Declining those keeps the removal inside fileRoot too: a key holding ".."
+// would otherwise resolve outside the cache. A control character is the one
+// case Localize accepts and escapeKey does not, where removal simply misses.
+func (b *Blob) legacySidecarPath(key string) string {
+	if b.fileRoot == "" {
+		return ""
+	}
+	rel, err := filepath.Localize(key)
+	if err != nil {
+		return ""
+	}
+	return filepath.Join(b.fileRoot, rel) + attrsExt
 }
 
 func (b *Blob) Store(ctx context.Context, path string, r io.Reader) (int64, string, error) {
+	// Drop any sidecar an earlier version left for this key. Nothing rewrites
+	// one now, so a partial sidecar from an interrupted write would fail every
+	// read of the key for good. Removal is atomic where the rewrite was not,
+	// so a concurrent reader gets the whole old file or nothing.
+	if sidecar := b.legacySidecarPath(path); sidecar != "" {
+		_ = os.Remove(sidecar)
+	}
+
 	// Compute hash while writing
 	h := sha256.New()
 	tee := io.TeeReader(r, h)
