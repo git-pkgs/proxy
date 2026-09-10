@@ -6,7 +6,7 @@ require (
 	github.com/BurntSushi/toml v1.6.0
 	github.com/CycloneDX/cyclonedx-go v0.12.0
 	github.com/aws/aws-sdk-go-v2/config v1.32.40
-	github.com/aws/aws-sdk-go-v2/service/ecr v1.61.0
+	github.com/aws/aws-sdk-go-v2/service/ecr v1.63.0
 	github.com/git-pkgs/archives v0.7.0
 	github.com/git-pkgs/artifacts v0.2.1
 	github.com/git-pkgs/cooldown v0.2.0
@@ -77,13 +77,13 @@ require (
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/ashanbrown/forbidigo/v2 v2.3.1 // indirect
 	github.com/ashanbrown/makezero/v2 v2.2.1 // indirect
-	github.com/aws/aws-sdk-go-v2 v1.44.0 // indirect
+	github.com/aws/aws-sdk-go-v2 v1.45.1 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.11 // indirect
 	github.com/aws/aws-sdk-go-v2/credentials v1.19.39 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/ec2/imds v1.18.40 // indirect
 	github.com/aws/aws-sdk-go-v2/feature/s3/transfermanager v0.2.3 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/configsources v1.4.40 // indirect
-	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.7.40 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/configsources v1.5.1 // indirect
+	github.com/aws/aws-sdk-go-v2/internal/endpoints/v2 v2.8.1 // indirect
 	github.com/aws/aws-sdk-go-v2/internal/v4a v1.4.41 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/accept-encoding v1.13.19 // indirect
 	github.com/aws/aws-sdk-go-v2/service/internal/checksum v1.9.18 // indirect
