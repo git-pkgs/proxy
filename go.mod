@@ -24,7 +24,7 @@ require (
 	github.com/lib/pq v1.12.3
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/prometheus/client_golang v1.24.1
-	github.com/prometheus/client_model v0.6.2
+	github.com/prometheus/client_model v0.6.3
 	github.com/spdx/tools-golang v0.5.7
 	github.com/swaggo/swag v1.16.6
 	gocloud.dev v0.46.0
