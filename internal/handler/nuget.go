@@ -7,7 +7,6 @@ import (
 	"io"
 	"net/http"
 	"strings"
-	"time"
 )
 
 const (
@@ -51,10 +50,12 @@ func (h *NuGetHandler) Routes() http.Handler {
 
 	// Package content (downloads)
 	mux.HandleFunc("GET /v3-flatcontainer/{id}/{version}/{filename}", h.handleDownload)
-	mux.HandleFunc("GET /v3-flatcontainer/{id}/index.json", h.proxyUpstream)
+	mux.HandleFunc("GET /v3-flatcontainer/{id}/index.json", h.handleVersionList)
 
 	// Registration (package metadata) - use prefix matching since {version}.json isn't allowed
-	mux.HandleFunc("GET /v3/registration5-gz-semver2/", h.handleRegistration)
+	for _, prefix := range nugetRegistrationPrefixes {
+		mux.HandleFunc("GET "+prefix, h.handleRegistration)
+	}
 
 	// Search
 	mux.HandleFunc("GET /query", h.proxyUpstream)
@@ -84,6 +85,10 @@ func (h *NuGetHandler) handleServiceIndex(w http.ResponseWriter, r *http.Request
 
 	rewritten, err := h.rewriteServiceIndex(body)
 	if err != nil {
+		if h.cooldownEnabled() {
+			h.nugetMetadataError(w, err)
+			return
+		}
 		h.proxy.Logger.Warn("failed to rewrite service index, proxying original", "error", err)
 		w.Header().Set(headerContentType, "application/json")
 		_, _ = w.Write(body)
@@ -131,6 +136,10 @@ func (h *NuGetHandler) rewriteNuGetURL(origURL, serviceType string) string {
 	switch serviceType {
 	case "PackageBaseAddress/3.0.0":
 		return h.proxyURL + "/nuget/v3-flatcontainer/"
+	case "RegistrationsBaseUrl", "RegistrationsBaseUrl/3.0.0-beta", "RegistrationsBaseUrl/3.0.0-rc":
+		return h.proxyURL + "/nuget/v3/registration5-semver1/"
+	case "RegistrationsBaseUrl/3.4.0":
+		return h.proxyURL + "/nuget/v3/registration5-gz-semver1/"
 	case "RegistrationsBaseUrl/3.6.0", "RegistrationsBaseUrl/Versioned":
 		return h.proxyURL + "/nuget/v3/registration5-gz-semver2/"
 	case "SearchQueryService", "SearchQueryService/3.0.0-rc", "SearchQueryService/3.5.0":
@@ -142,140 +151,6 @@ func (h *NuGetHandler) rewriteNuGetURL(origURL, serviceType string) string {
 	}
 }
 
-// handleRegistration proxies NuGet registration pages, applying cooldown filtering.
-func (h *NuGetHandler) handleRegistration(w http.ResponseWriter, r *http.Request) {
-	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		h.proxyUpstream(w, r)
-		return
-	}
-
-	upstreamURL := h.buildUpstreamURL(r)
-
-	h.proxy.Logger.Debug("fetching registration for cooldown filtering", "url", upstreamURL)
-
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
-	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-	req.Header.Set(headerAcceptEncoding, "gzip")
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		h.proxy.Logger.Error("upstream request failed", "error", err)
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	if resp.StatusCode != http.StatusOK {
-		for k, vv := range resp.Header {
-			for _, v := range vv {
-				w.Header().Add(k, v)
-			}
-		}
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
-		return
-	}
-
-	body, err := h.proxy.ReadMetadata(resp.Body)
-	if err != nil {
-		http.Error(w, "failed to read response", http.StatusInternalServerError)
-		return
-	}
-
-	filtered, err := h.applyCooldownFiltering(body)
-	if err != nil {
-		h.proxy.Logger.Warn("failed to filter registration, proxying original", "error", err)
-		w.Header().Set(headerContentType, "application/json")
-		_, _ = w.Write(body)
-		return
-	}
-
-	w.Header().Set(headerContentType, "application/json")
-	_, _ = w.Write(filtered)
-}
-
-// applyCooldownFiltering filters versions from NuGet registration pages
-// that are too recently published.
-func (h *NuGetHandler) applyCooldownFiltering(body []byte) ([]byte, error) {
-	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		return body, nil
-	}
-
-	var registration map[string]any
-	if err := json.Unmarshal(body, &registration); err != nil {
-		return nil, err
-	}
-
-	pages, ok := registration["items"].([]any)
-	if !ok {
-		return body, nil
-	}
-
-	for _, page := range pages {
-		pageMap, ok := page.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		items, ok := pageMap["items"].([]any)
-		if !ok {
-			continue
-		}
-
-		filtered := items[:0]
-		for _, item := range items {
-			itemMap, ok := item.(map[string]any)
-			if !ok {
-				continue
-			}
-
-			catalogEntry, ok := itemMap["catalogEntry"].(map[string]any)
-			if !ok {
-				filtered = append(filtered, item)
-				continue
-			}
-
-			version, _ := catalogEntry["version"].(string)
-			id, _ := catalogEntry["id"].(string)
-			publishedStr, _ := catalogEntry["published"].(string)
-
-			if publishedStr == "" {
-				filtered = append(filtered, item)
-				continue
-			}
-
-			publishedAt, err := time.Parse(time.RFC3339, publishedStr)
-			if err != nil {
-				// NuGet uses a slightly non-standard format, try parsing with fractional seconds
-				publishedAt, err = time.Parse("2006-01-02T15:04:05.999-07:00", publishedStr)
-				if err != nil {
-					filtered = append(filtered, item)
-					continue
-				}
-			}
-
-			packagePURL := canonicalPackagePURL("nuget", strings.ToLower(id))
-
-			if !h.proxy.Cooldown.IsAllowed("nuget", packagePURL, publishedAt) {
-				h.proxy.Logger.Info("cooldown: filtering nuget version",
-					"package", id, "version", version,
-					"published", publishedStr)
-				continue
-			}
-
-			filtered = append(filtered, item)
-		}
-
-		pageMap["items"] = filtered
-		pageMap["count"] = len(filtered)
-	}
-
-	return json.Marshal(registration)
-}
-
 // handleDownload serves a package file, fetching and caching from upstream if needed.
 func (h *NuGetHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	id := r.PathValue("id")
@@ -285,6 +160,18 @@ func (h *NuGetHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if id == "" || version == "" || filename == "" {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
+	}
+
+	if h.cooldownEnabled() {
+		allowed, err := h.nugetDownloadAllowed(r.Context(), id, version)
+		if err != nil {
+			h.nugetMetadataError(w, err)
+			return
+		}
+		if !allowed {
+			JSONError(w, http.StatusNotFound, "version not found")
+			return
+		}
 	}
 
 	// Only cache .nupkg files
