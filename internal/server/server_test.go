@@ -237,7 +237,7 @@ func testStartUsesConfiguredLoopbackUpstreams(t *testing.T) {
 		}
 	}()
 
-	client := &http.Client{Timeout: 250 * time.Millisecond}
+	probeClient := &http.Client{Timeout: 250 * time.Millisecond}
 	deadline := time.Now().Add(5 * time.Second)
 	for {
 		req, err := http.NewRequest(http.MethodGet, cfg.BaseURL+"/pypi/simple/ruff/", nil)
@@ -245,7 +245,7 @@ func testStartUsesConfiguredLoopbackUpstreams(t *testing.T) {
 			t.Fatalf("creating request: %v", err)
 		}
 		req.Header.Set("Accept", "application/vnd.pypi.simple.v1+json")
-		resp, requestErr := client.Do(req)
+		resp, requestErr := probeClient.Do(req)
 		if requestErr == nil {
 			body, readErr := io.ReadAll(resp.Body)
 			_ = resp.Body.Close()
@@ -266,6 +266,9 @@ func testStartUsesConfiguredLoopbackUpstreams(t *testing.T) {
 		time.Sleep(10 * time.Millisecond)
 	}
 
+	// This checks upstream routing, not latency. Allow time for fetching and
+	// cache I/O under -race on slower CI workers.
+	client := &http.Client{Timeout: 5 * time.Second}
 	resp, err := client.Get(cfg.BaseURL + "/v2/library/demo/manifests/latest")
 	if err != nil {
 		t.Fatalf("OCI request failed: %v", err)
