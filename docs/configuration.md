@@ -409,6 +409,11 @@ or invalid publication timestamps retain the permissive behavior used by metadat
 filtering; metadata fetch or JSON parsing failures return an error when no usable
 cached metadata is available.
 
+If the semver2 registration endpoint returns not found, cooldown checks try the
+older registration aliases advertised by the source's service index. Invalid JSON
+or compressed metadata cannot replace a previously valid cached document; the
+proxy falls back to that document and evaluates it against the current policy.
+
 Note: Hex cooldown requires disabling registry signature verification since the proxy re-encodes the protobuf payload without the original signature. Set `HEX_NO_VERIFY_REPO_ORIGIN=1` or configure your repo with `no_verify: true`.
 
 ## Artifact Scanning

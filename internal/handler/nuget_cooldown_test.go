@@ -100,6 +100,46 @@ func nugetGet(t *testing.T, routes http.Handler, path string, status int) *httpt
 	return w
 }
 
+func TestNuGetMetadataWithoutEffectiveCooldown(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		policy *cooldown.Config
+	}{
+		{"package exemption", &cooldown.Config{Default: "14d", Packages: map[string]string{"pkg:nuget/testpkg": "0"}}},
+		{"ecosystem exemption", &cooldown.Config{Default: "14d", Ecosystems: map[string]string{"nuget": "0"}}},
+		{"other ecosystem only", &cooldown.Config{Ecosystems: map[string]string{"npm": "14d"}}},
+		{"other package only", &cooldown.Config{Packages: map[string]string{"pkg:nuget/other": "14d"}}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			const body = `{"versions":["1.0.0","2.0.0"]}`
+			const pagePath = nugetRegistrationPath + "testpkg/page/1.0.0/2.0.0.json"
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/v3-flatcontainer/testpkg/index.json":
+					_, _ = io.WriteString(w, body)
+				case nugetRegistrationPath + "testpkg/index.json":
+					_, _ = io.WriteString(w, `{"count":1,"items":[{"@id":"`+pagePath+`","count":2,"lower":"1.0.0","upper":"2.0.0"}]}`)
+				default:
+					t.Errorf("unnecessary registration request: %s", r.URL.Path)
+					http.Error(w, "registration unavailable", http.StatusServiceUnavailable)
+				}
+			}))
+			defer upstream.Close()
+			p := nugetTestProxy()
+			p.Cooldown = tt.policy
+			h := NewNuGetHandlerWithUpstreams(p, "http://proxy.test", upstream.URL, upstream.URL)
+			w := nugetGet(t, h.Routes(), "/v3-flatcontainer/TestPkg/index.json", http.StatusOK)
+			if got := strings.TrimSpace(w.Body.String()); got != body {
+				t.Fatalf("version list = %s, want %s", got, body)
+			}
+			w = nugetGet(t, h.Routes(), nugetRegistrationPath+"testpkg/index.json", http.StatusOK)
+			if !strings.Contains(w.Body.String(), `"@id":"http://proxy.test/nuget`+pagePath+`"`) {
+				t.Fatalf("registration page link was not rewritten: %s", w.Body.String())
+			}
+		})
+	}
+}
+
 func TestNuGetCooldownColdDownload(t *testing.T) {
 	for _, tt := range []struct {
 		name, published string

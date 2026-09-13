@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"slices"
 	"strings"
 	"time"
 )
@@ -26,15 +27,29 @@ func (h *NuGetHandler) cooldownEnabled() bool {
 	return h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled()
 }
 
+func (h *NuGetHandler) nugetCooldownApplies(id string) bool {
+	return h.cooldownEnabled() && h.proxy.Cooldown.For("nuget", canonicalPackagePURL("nuget", strings.ToLower(id))) > 0
+}
+
 // Cache upstream documents, not filtered results, so policy changes and elapsed
 // time take effect even while metadata is fresh. Include the upstream in the key.
 func (h *NuGetHandler) nugetMetadata(ctx context.Context, path string) (map[string]any, error) {
 	target := h.upstreamURL + path
 	key := fmt.Sprintf("_cooldown/%x", sha256.Sum256([]byte(target)))
-	body, _, err := h.proxy.FetchOrCacheMetadata(ctx, "nuget", key, target)
+	var document map[string]any
+	validate := func(body []byte) error {
+		var err error
+		document, err = h.decodeNuGetMetadata(body)
+		return err
+	}
+	_, _, err := h.proxy.fetchOrCacheMetadata(ctx, "nuget", key, target, false, validate)
 	if err != nil {
 		return nil, err
 	}
+	return document, nil
+}
+
+func (h *NuGetHandler) decodeNuGetMetadata(body []byte) (map[string]any, error) {
 	// Normally the HTTP transport decodes gzip. Also support compressed cached
 	// bytes and clients with transparent decompression disabled, with the same
 	// metadata limit applied to the decompressed document.
@@ -59,6 +74,43 @@ func (h *NuGetHandler) nugetMetadata(ctx context.Context, path string) (map[stri
 	return document, nil
 }
 
+// Prefer semver2, but a configured source may advertise only an older hive.
+// Retry only advertised aliases on 404; transport/validation errors must not
+// silently switch to a hive with less complete metadata. Keep requests on the
+// configured upstream, consistent with the service-index route rewriting.
+func (h *NuGetHandler) nugetRegistrationMetadata(ctx context.Context, suffix string) (map[string]any, string, error) {
+	path := nugetRegistrationPath + suffix
+	document, err := h.nugetMetadata(ctx, path)
+	if !errors.Is(err, ErrUpstreamNotFound) {
+		return document, path, err
+	}
+	index, indexErr := h.nugetMetadata(ctx, "/v3/index.json")
+	if indexErr != nil {
+		return nil, path, indexErr
+	}
+	resources, _ := index["resources"].([]any)
+	seen := map[string]bool{nugetRegistrationPath: true}
+	for _, resource := range resources {
+		entry, _ := resource.(map[string]any)
+		service, _ := entry["@type"].(string)
+		id, _ := entry["@id"].(string)
+		if id == "" || !strings.HasPrefix(service, "RegistrationsBaseUrl") {
+			continue
+		}
+		prefix := strings.TrimPrefix(h.rewriteNuGetURL(id, service), h.proxyURL+"/nuget")
+		if !slices.Contains(nugetRegistrationPrefixes, prefix) || seen[prefix] {
+			continue
+		}
+		seen[prefix] = true
+		path = prefix + suffix
+		document, err = h.nugetMetadata(ctx, path)
+		if !errors.Is(err, ErrUpstreamNotFound) {
+			return document, path, err
+		}
+	}
+	return nil, path, err
+}
+
 func (h *NuGetHandler) nugetMetadataError(w http.ResponseWriter, err error) {
 	if errors.Is(err, ErrUpstreamNotFound) {
 		JSONError(w, http.StatusNotFound, "package metadata not found")
@@ -79,17 +131,20 @@ func (h *NuGetHandler) handleVersionList(w http.ResponseWriter, r *http.Request)
 		h.nugetMetadataError(w, err)
 		return
 	}
-	registrationPath := nugetRegistrationPath + url.PathEscape(id) + "/index.json"
-	registration, err := h.nugetMetadata(r.Context(), registrationPath)
-	if err == nil {
-		err = h.expandNuGetPages(r.Context(), registration, registrationPath)
-	}
-	if err != nil {
-		h.nugetMetadataError(w, err)
-		return
-	}
 	blocked := make(map[string]bool)
-	h.collectNuGetBlockedVersions(registration, id, blocked)
+	// A globally enabled policy may still exempt this package or ecosystem.
+	// Keep metadata caching, but do not require publication data in that case.
+	if h.nugetCooldownApplies(id) {
+		registration, registrationPath, err := h.nugetRegistrationMetadata(r.Context(), url.PathEscape(id)+"/index.json")
+		if err == nil {
+			err = h.expandNuGetPages(r.Context(), registration, registrationPath)
+		}
+		if err != nil {
+			h.nugetMetadataError(w, err)
+			return
+		}
+		h.collectNuGetBlockedVersions(registration, id, blocked)
+	}
 	versions, ok := document["versions"].([]any)
 	if !ok {
 		h.nugetMetadataError(w, fmt.Errorf("missing NuGet versions"))
@@ -117,11 +172,11 @@ func nugetVersionKey(version string) string {
 }
 
 func (h *NuGetHandler) nugetDownloadAllowed(ctx context.Context, id, version string) (bool, error) {
-	if h.proxy.Cooldown.For("nuget", canonicalPackagePURL("nuget", strings.ToLower(id))) <= 0 {
+	if !h.nugetCooldownApplies(id) {
 		return true, nil
 	}
-	path := nugetRegistrationPath + url.PathEscape(strings.ToLower(id)) + "/" + url.PathEscape(nugetVersionKey(version)) + ".json"
-	leaf, err := h.nugetMetadata(ctx, path)
+	suffix := url.PathEscape(strings.ToLower(id)) + "/" + url.PathEscape(nugetVersionKey(version)) + ".json"
+	leaf, _, err := h.nugetRegistrationMetadata(ctx, suffix)
 	if err != nil {
 		return false, err
 	}
@@ -172,17 +227,18 @@ func (h *NuGetHandler) handleRegistration(w http.ResponseWriter, r *http.Request
 		h.proxyUpstream(w, r)
 		return
 	}
+	id := nugetRegistrationID(r.URL.Path)
+	applyCooldown := h.nugetCooldownApplies(id)
 	document, err := h.nugetMetadata(r.Context(), r.URL.Path)
-	if err == nil {
+	if err == nil && applyCooldown {
 		err = h.expandNuGetPages(r.Context(), document, r.URL.Path)
 	}
 	if err != nil {
 		h.nugetMetadataError(w, err)
 		return
 	}
-	id := nugetRegistrationID(r.URL.Path)
 	_, hasItems := document["items"]
-	if !h.filterNuGetRegistration(document, id) && !hasItems {
+	if applyCooldown && !h.filterNuGetRegistration(document, id) && !hasItems {
 		JSONError(w, http.StatusNotFound, "version not found")
 		return
 	}
