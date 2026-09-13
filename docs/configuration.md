@@ -401,6 +401,14 @@ Resolution order: package override, then ecosystem override, then global default
 
 Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyGems, and Hex. These ecosystems include publish timestamps in their metadata.
 
+For NuGet, cooldown filters flat-container version lists and registration metadata,
+including separately fetched registration pages. Pinned package downloads are
+checked before serving either upstream or cached files. Registration metadata is
+cached unfiltered and evaluated against the current policy on each request. Missing
+or invalid publication timestamps retain the permissive behavior used by metadata
+filtering; metadata fetch or JSON parsing failures return an error when no usable
+cached metadata is available.
+
 Note: Hex cooldown requires disabling registry signature verification since the proxy re-encodes the protobuf payload without the original signature. Set `HEX_NO_VERIFY_REPO_ORIGIN=1` or configure your repo with `no_verify: true`.
 
 ## Artifact Scanning
