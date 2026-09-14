@@ -231,7 +231,10 @@ func (p *Proxy) GetOrFetchArtifact(ctx context.Context, ecosystem, name, version
 	metrics.RecordCacheMiss(ecosystem)
 
 	key := artifactCoalesceKey(versionPURL, filename, "", "")
-	return p.coalesceFetch(ctx, key, func(fetchCtx context.Context) (artifacts.Artifact, string, error) {
+	recheck := func() (artifacts.Artifact, string, bool) {
+		return p.cachedArtifactRecord(pkgPURL, versionPURL, filename, "")
+	}
+	return p.coalesceFetch(ctx, key, recheck, func(fetchCtx context.Context) (artifacts.Artifact, string, error) {
 		return p.fetchAndCache(fetchCtx, ecosystem, name, version, filename, pkgPURL, versionPURL)
 	})
 }
@@ -495,6 +498,22 @@ func artifactCoalesceKey(versionPURL, filename, downloadURL, upstreamHash string
 	return strings.Join([]string{versionPURL, filename, downloadURL, strings.ToLower(upstreamHash)}, "\x00")
 }
 
+// cachedArtifactRecord reports an artifact already committed to the cache,
+// without opening it. A caller checks the cache before it gets here, so a
+// concurrent fetch can commit the same artifact in between; rechecking the
+// record keeps that caller from fetching it a second time. A lookup error is
+// reported as a miss, which costs a redundant fetch rather than a failure.
+func (p *Proxy) cachedArtifactRecord(pkgPURL, versionPURL, filename, upstreamHash string) (artifacts.Artifact, string, bool) {
+	record, err := p.DB.GetCachedArtifact(pkgPURL, versionPURL, filename)
+	if err != nil || record == nil {
+		return artifacts.Artifact{}, "", false
+	}
+	if !artifactHashMatches(record.Artifact.Digest.Encoded(), upstreamHash) {
+		return artifacts.Artifact{}, "", false
+	}
+	return record.Artifact, record.StoragePath, true
+}
+
 // errSharedFetchAbandoned is what waiters see if the caller running a shared
 // fetch panicked out of it.
 var errSharedFetchAbandoned = errors.New("shared upstream fetch did not complete")
@@ -517,6 +536,11 @@ type inflightFetch struct {
 // away, while the caller running the fetch must see it through so
 // storeArtifact's scan-on-disconnect handling still decides the outcome.
 //
+// Before fetching, that caller rechecks the cache through recheck: its own
+// lookup happened before it took the key, so a fetch that committed in
+// between would otherwise be repeated. A hit fills the shared value as a
+// fetch would.
+//
 // commit runs on that caller's context, so cancellation behaves as it did
 // uncoalesced and mirroring still relies on it aborting the fetch. If that
 // caller goes away, everyone sharing the fetch gets its error and the key is
@@ -525,7 +549,7 @@ type inflightFetch struct {
 // Every sharing caller still records a cache miss, so the gap between
 // proxy_cache_misses_total and upstream fetch observations is what coalescing
 // saved.
-func (p *Proxy) coalesceFetch(ctx context.Context, key string, commit func(context.Context) (artifacts.Artifact, string, error)) (*CacheResult, error) {
+func (p *Proxy) coalesceFetch(ctx context.Context, key string, recheck func() (artifacts.Artifact, string, bool), commit func(context.Context) (artifacts.Artifact, string, error)) (*CacheResult, error) {
 	p.fetchMu.Lock()
 	if p.inFlight == nil {
 		p.inFlight = make(map[string]*inflightFetch)
@@ -538,7 +562,7 @@ func (p *Proxy) coalesceFetch(ctx context.Context, key string, commit func(conte
 	p.fetchMu.Unlock()
 
 	if !joined {
-		return p.runSharedFetch(ctx, key, f, commit)
+		return p.runSharedFetch(ctx, key, f, recheck, commit)
 	}
 
 	select {
@@ -555,7 +579,7 @@ func (p *Proxy) coalesceFetch(ctx context.Context, key string, commit func(conte
 
 // runSharedFetch performs the fetch that joined callers are waiting on. It is
 // never abandoned early, and always releases the key and wakes the waiters.
-func (p *Proxy) runSharedFetch(ctx context.Context, key string, f *inflightFetch, commit func(context.Context) (artifacts.Artifact, string, error)) (*CacheResult, error) {
+func (p *Proxy) runSharedFetch(ctx context.Context, key string, f *inflightFetch, recheck func() (artifacts.Artifact, string, bool), commit func(context.Context) (artifacts.Artifact, string, error)) (*CacheResult, error) {
 	// Set before running so a panicking commit leaves waiters with an error
 	// rather than a zero-valued artifact.
 	f.err = errSharedFetchAbandoned
@@ -565,6 +589,17 @@ func (p *Proxy) runSharedFetch(ctx context.Context, key string, f *inflightFetch
 		p.fetchMu.Unlock()
 		close(f.done)
 	}()
+
+	// A caller checks the cache before reaching here, so a fetch that finished
+	// in between would otherwise be repeated. Serve that record only if its
+	// bytes are still present: a record can outlive them, and refetching is
+	// the same recovery the cache lookup makes.
+	if stored, path, ok := recheck(); ok {
+		if res, err := p.openStoredArtifact(ctx, stored, path); err == nil {
+			f.val, f.err = fetchedArtifact{artifact: stored, storagePath: path}, nil
+			return res, nil
+		}
+	}
 
 	stored, path, err := commit(ctx)
 	f.val, f.err = fetchedArtifact{artifact: stored, storagePath: path}, err
@@ -1215,7 +1250,10 @@ func (p *Proxy) getOrFetchArtifactFromURLWithCachePURLs(ctx context.Context, eco
 	metrics.RecordCacheMiss(ecosystem)
 
 	key := artifactCoalesceKey(versionPURL, filename, downloadURL, upstreamHash)
-	return p.coalesceFetch(ctx, key, func(fetchCtx context.Context) (artifacts.Artifact, string, error) {
+	recheck := func() (artifacts.Artifact, string, bool) {
+		return p.cachedArtifactRecord(pkgPURL, versionPURL, filename, upstreamHash)
+	}
+	return p.coalesceFetch(ctx, key, recheck, func(fetchCtx context.Context) (artifacts.Artifact, string, error) {
 		return p.fetchAndCacheFromURL(fetchCtx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, upstreamHash)
 	})
 }

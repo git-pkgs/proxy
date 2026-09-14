@@ -415,6 +415,143 @@ func TestCoalesce_KeyIsReleasedAfterFetch(t *testing.T) {
 	}
 }
 
+// missingFromCache is a recheck that always reports a miss, so the shared fetch
+// runs.
+func missingFromCache() (artifacts.Artifact, string, bool) {
+	return artifacts.Artifact{}, "", false
+}
+
+// TestCoalesce_LeaderRechecksCacheBeforeFetching covers the window between a
+// caller's own cache lookup and it becoming the leader: a concurrent fetch can
+// commit the artifact in that gap, and the leader must serve that rather than
+// fetch it a second time.
+func TestCoalesce_LeaderRechecksCacheBeforeFetching(t *testing.T) {
+	const content = "artifact bytes"
+	proxy, _, store, _ := setupTestProxy(t)
+
+	const storagePath = "npm/pkg/1.0.0/pkg-1.0.0.tgz"
+	if _, _, err := store.Store(context.Background(), storagePath, strings.NewReader(content)); err != nil {
+		t.Fatalf("seeding storage: %v", err)
+	}
+	committed := artifacts.Artifact{
+		PURL:     "pkg:npm/pkg@1.0.0",
+		Filename: "pkg-1.0.0.tgz",
+		Size:     int64(len(content)),
+	}
+
+	res, err := proxy.coalesceFetch(context.Background(), "any-key",
+		func() (artifacts.Artifact, string, bool) { return committed, storagePath, true },
+		func(context.Context) (artifacts.Artifact, string, error) {
+			t.Error("fetched an artifact that was already in the cache")
+			return artifacts.Artifact{}, "", errors.New("commit must not run")
+		})
+	if err != nil {
+		t.Fatalf("coalesceFetch failed: %v", err)
+	}
+	defer drain(res)
+	got, err := io.ReadAll(res.Reader)
+	if err != nil {
+		t.Fatalf("reading result: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("got %q, want %q", got, content)
+	}
+	if n := inFlightLen(proxy); n != 0 {
+		t.Errorf("in-flight entries = %d, want 0", n)
+	}
+}
+
+// TestCachedArtifactRecord covers the recheck itself: it must report the row a
+// concurrent fetch committed, match its digest the way artifactHashMatches
+// does, and report a miss for anything else.
+func TestCachedArtifactRecord(t *testing.T) {
+	const (
+		content     = "artifact bytes"
+		pkgPURL     = "pkg:npm/pkg"
+		versionPURL = "pkg:npm/pkg@1.0.0"
+		filename    = "pkg-1.0.0.tgz"
+		storagePath = "npm/pkg/1.0.0/pkg-1.0.0.tgz"
+	)
+	proxy, _, _, _ := setupTestProxy(t)
+
+	hex := sha256Hex(content)
+	committed := testArtifact(content, versionPURL, filename, "application/gzip")
+	if err := proxy.updateCacheDB("npm", "pkg", pkgPURL,
+		"https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz", storagePath, committed); err != nil {
+		t.Fatalf("seeding cache record: %v", err)
+	}
+
+	for _, tc := range []struct {
+		name, filename, hash string
+		want                 bool
+	}{
+		{"no upstream hash", filename, "", true},
+		{"matching hash", filename, hex, true},
+		{"matching hash in upper case", filename, strings.ToUpper(hex), true},
+		{"different hash", filename, sha256Hex("something else entirely"), false},
+		{"unknown filename", "pkg-1.0.0.zip", hex, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			got, path, ok := proxy.cachedArtifactRecord(pkgPURL, versionPURL, tc.filename, tc.hash)
+			if ok != tc.want {
+				t.Fatalf("ok = %v, want %v", ok, tc.want)
+			}
+			if !ok {
+				return
+			}
+			if path != storagePath {
+				t.Errorf("storage path = %q, want %q", path, storagePath)
+			}
+			if got.Digest.Encoded() != hex {
+				t.Errorf("digest = %q, want %q", got.Digest.Encoded(), hex)
+			}
+		})
+	}
+}
+
+// TestCoalesce_LeaderFetchesWhenRecheckedBytesAreGone covers the other branch
+// of the recheck: a record whose bytes no longer open is not served, and the
+// shared fetch runs instead, the same recovery the cache lookup makes.
+func TestCoalesce_LeaderFetchesWhenRecheckedBytesAreGone(t *testing.T) {
+	const content = "fetched bytes"
+	const storagePath = "npm/pkg/1.0.0/pkg-1.0.0.tgz"
+	proxy, _, store, _ := setupTestProxy(t)
+
+	stale := artifacts.Artifact{PURL: "pkg:npm/pkg@1.0.0", Filename: "pkg-1.0.0.tgz"}
+	if _, err := store.Open(context.Background(), storagePath); err == nil {
+		t.Fatal("stale bytes were present, so the test proves nothing")
+	}
+
+	// The leader runs commit on its own goroutine, so a plain counter is safe.
+	fetches := 0
+	res, err := proxy.coalesceFetch(context.Background(), "any-key",
+		func() (artifacts.Artifact, string, bool) { return stale, storagePath, true },
+		func(ctx context.Context) (artifacts.Artifact, string, error) {
+			fetches++
+			if _, _, err := store.Store(ctx, storagePath, strings.NewReader(content)); err != nil {
+				return artifacts.Artifact{}, "", err
+			}
+			return testArtifact(content, stale.PURL, stale.Filename, "application/gzip"), storagePath, nil
+		})
+	if err != nil {
+		t.Fatalf("coalesceFetch failed: %v", err)
+	}
+	defer drain(res)
+	if fetches != 1 {
+		t.Errorf("shared fetches = %d, want 1: a record without bytes must be refetched", fetches)
+	}
+	got, err := io.ReadAll(res.Reader)
+	if err != nil {
+		t.Fatalf("reading result: %v", err)
+	}
+	if string(got) != content {
+		t.Errorf("got %q, want %q", got, content)
+	}
+	if n := inFlightLen(proxy); n != 0 {
+		t.Errorf("in-flight entries = %d, want 0", n)
+	}
+}
+
 // TestCoalesce_PanicInSharedFetchDoesNotStrandWaiters checks the failure mode
 // that matters most: a caller parked on a shared fetch must never be left
 // blocked forever when that fetch dies.
@@ -438,7 +575,7 @@ func TestCoalesce_PanicInSharedFetchDoesNotStrandWaiters(t *testing.T) {
 			_ = recover() // the panic surfaces in the leader, as it would in a handler
 			close(leaderPanicked)
 		}()
-		_, _ = proxy.coalesceFetch(context.Background(), key,
+		_, _ = proxy.coalesceFetch(context.Background(), key, missingFromCache,
 			func(context.Context) (artifacts.Artifact, string, error) {
 				close(inCommit)
 				<-release
