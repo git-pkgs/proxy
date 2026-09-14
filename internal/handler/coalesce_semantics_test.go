@@ -4,12 +4,12 @@ import (
 	"context"
 	"errors"
 	"io"
-	"net/http"
 	"strings"
 	"sync"
 	"testing"
 	"time"
 
+	"github.com/git-pkgs/artifacts"
 	"github.com/git-pkgs/registries/fetch"
 )
 
@@ -415,55 +415,58 @@ func TestCoalesce_KeyIsReleasedAfterFetch(t *testing.T) {
 	}
 }
 
-// panickingFetcher blows up mid-fetch, after waiters have had time to join.
-type panickingFetcher struct{ countingFetcher }
-
-func (f *panickingFetcher) Fetch(ctx context.Context, url string) (*fetch.Artifact, error) {
-	return f.FetchWithHeaders(ctx, url, nil)
-}
-
-func (f *panickingFetcher) FetchWithHeaders(context.Context, string, http.Header) (*fetch.Artifact, error) {
-	f.calls.Add(1)
-	time.Sleep(fetchHoldTime)
-	panic("upstream fetch exploded")
-}
-
 // TestCoalesce_PanicInSharedFetchDoesNotStrandWaiters checks the failure mode
-// that matters most: a waiter must never be left blocked forever on a fetch
-// that died.
+// that matters most: a caller parked on a shared fetch must never be left
+// blocked forever when that fetch dies.
+//
+// This drives coalesceFetch directly and holds the shared entry itself, because
+// whether a second caller has reached the wait is not observable from outside:
+// it runs a cache lookup against the database first, so releasing the leader on
+// a timer races that query. Losing the race made a second caller the leader
+// instead of a waiter, and its panic was unrecovered, killing the test binary
+// rather than failing the test.
 func TestCoalesce_PanicInSharedFetchDoesNotStrandWaiters(t *testing.T) {
-	const url = "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz"
 	proxy, _, _, _ := setupTestProxy(t)
-	proxy.Fetcher = &panickingFetcher{}
+	const key = "pkg:npm/pkg@1.0.0\x00pkg-1.0.0.tgz"
 
+	inCommit := make(chan struct{})
+	release := make(chan struct{})
 	leaderPanicked := make(chan struct{})
+
 	go func() {
 		defer func() {
 			_ = recover() // the panic surfaces in the leader, as it would in a handler
 			close(leaderPanicked)
 		}()
-		res, _ := proxy.GetOrFetchArtifactFromURL(context.Background(),
-			"npm", "pkg", "1.0.0", "pkg-1.0.0.tgz", url)
-		drain(res)
+		_, _ = proxy.coalesceFetch(context.Background(), key,
+			func(context.Context) (artifacts.Artifact, string, error) {
+				close(inCommit)
+				<-release
+				panic("upstream fetch exploded")
+			})
 	}()
 
-	time.Sleep(fetchHoldTime / 2) // join while the doomed fetch is still running
-	done := make(chan error, 1)
-	go func() {
-		res, err := proxy.GetOrFetchArtifactFromURL(context.Background(),
-			"npm", "pkg", "1.0.0", "pkg-1.0.0.tgz", url)
-		drain(res)
-		done <- err
-	}()
+	<-inCommit // the leader holds the key and is inside the fetch
+
+	// Take the entry a waiter would park on, while the leader is still held.
+	proxy.fetchMu.Lock()
+	shared := proxy.inFlight[key]
+	proxy.fetchMu.Unlock()
+	if shared == nil {
+		t.Fatal("no in-flight entry registered for a running fetch")
+	}
+
+	close(release)
 
 	select {
-	case err := <-done:
-		if !errors.Is(err, errSharedFetchAbandoned) {
-			t.Errorf("waiter error = %v, want errSharedFetchAbandoned", err)
-		}
+	case <-shared.done:
 	case <-time.After(5 * time.Second):
 		t.Fatal("waiter stranded: a panicking shared fetch never released its waiters")
 	}
+	if !errors.Is(shared.err, errSharedFetchAbandoned) {
+		t.Errorf("waiter error = %v, want errSharedFetchAbandoned", shared.err)
+	}
+
 	<-leaderPanicked
 	if n := inFlightLen(proxy); n != 0 {
 		t.Errorf("in-flight entries after a panic = %d, want 0", n)
