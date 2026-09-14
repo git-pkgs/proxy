@@ -78,6 +78,35 @@ func TestCoalesceKey_DifferentUpstreamHashDoesNotShare(t *testing.T) {
 	}
 }
 
+// TestCoalesceKey_HashCasingSharesOneFetch is the other half of that property.
+// artifactHashMatches compares digests case-insensitively, so one digest in two
+// casings describes one artifact and must not split into two fetches.
+func TestCoalesceKey_HashCasingSharesOneFetch(t *testing.T) {
+	const content = "artifact bytes"
+	proxy, _, _, _ := setupTestProxy(t)
+	fetcher := &countingFetcher{content: content, delay: fetchHoldTime}
+	proxy.Fetcher = fetcher
+
+	hex := sha256Hex(content)
+	digests := []string{"sha256:" + hex, "sha256:" + strings.ToUpper(hex)}
+
+	for i, err := range runConcurrent(2, func(i int) error {
+		res, err := proxy.GetOrFetchArtifactFromURLWithDigest(context.Background(),
+			"npm", "pkg", "1.0.0", "pkg-1.0.0.tgz",
+			"https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz", digests[i])
+		drain(res)
+		return err
+	}) {
+		if err != nil {
+			t.Fatalf("caller %d failed: %v", i, err)
+		}
+	}
+
+	if got := fetcher.calls.Load(); got != 1 {
+		t.Errorf("upstream fetches = %d, want 1: one digest in two casings is one artifact", got)
+	}
+}
+
 // TestCoalesceKey_DifferentDownloadURLDoesNotShare covers the other half of the
 // key: same package, different upstream URL, must not collapse into one fetch.
 func TestCoalesceKey_DifferentDownloadURLDoesNotShare(t *testing.T) {

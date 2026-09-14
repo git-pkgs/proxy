@@ -488,9 +488,11 @@ func (p *Proxy) openStoredArtifact(ctx context.Context, artifact artifacts.Artif
 
 // artifactCoalesceKey identifies one artifact fetch. downloadURL and
 // upstreamHash are included so callers expecting different bytes (multiple
-// upstreams, or a re-published version) never share a fetch.
+// upstreams, or a re-published version) never share a fetch. The hash is
+// lowercased because artifactHashMatches compares case-insensitively, so one
+// digest in two casings describes one artifact and must not split the fetch.
 func artifactCoalesceKey(versionPURL, filename, downloadURL, upstreamHash string) string {
-	return strings.Join([]string{versionPURL, filename, downloadURL, upstreamHash}, "\x00")
+	return strings.Join([]string{versionPURL, filename, downloadURL, strings.ToLower(upstreamHash)}, "\x00")
 }
 
 // errSharedFetchAbandoned is what waiters see if the caller running a shared
