@@ -563,3 +563,28 @@ func TestLegacySidecarPathEmptyForCloudBackends(t *testing.T) {
 		t.Errorf("legacySidecarPath = %q, want \"\" when there is no file root", got)
 	}
 }
+
+// Cleanup that cannot complete must not fail the write. A non-empty directory
+// at the sidecar path makes os.Remove fail with something other than not-exist
+// on every platform, which is what a Windows sharing violation would look like
+// here.
+func TestStoreSucceedsWhenSidecarCannotBeRemoved(t *testing.T) {
+	const key = "npm/pkg/1.0.0/pkg-1.0.0.tgz"
+	const payload = "payload"
+	dir := t.TempDir()
+	ctx := context.Background()
+
+	b := openFileBlob(t, dir)
+
+	sidecar := filepath.Join(dir, filepath.FromSlash(key)) + ".attrs"
+	if err := os.MkdirAll(filepath.Join(sidecar, "blocker"), 0o750); err != nil {
+		t.Fatalf("seeding an unremovable sidecar: %v", err)
+	}
+	if err := os.Remove(sidecar); err == nil {
+		t.Fatal("sidecar path was removable, so the test proves nothing")
+	}
+
+	if _, _, err := b.Store(ctx, key, strings.NewReader(payload)); err != nil {
+		t.Errorf("Store failed because cleanup could not complete: %v", err)
+	}
+}

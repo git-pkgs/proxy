@@ -137,14 +137,27 @@ func (b *Blob) legacySidecarPath(key string) string {
 	return filepath.Join(b.fileRoot, rel) + attrsExt
 }
 
-func (b *Blob) Store(ctx context.Context, path string, r io.Reader) (int64, string, error) {
-	// Drop any sidecar an earlier version left for this key. Nothing rewrites
-	// one now, so a partial sidecar from an interrupted write would fail every
-	// read of the key for good. Removal is atomic where the rewrite was not,
-	// so a concurrent reader gets the whole old file or nothing.
-	if sidecar := b.legacySidecarPath(path); sidecar != "" {
+// clearLegacySidecar removes the ".attrs" file an earlier version wrote for
+// key. Nothing rewrites one now, so a sidecar left partial by an interrupted
+// write would fail every read of that key for good. Removing is atomic where
+// the rewrite was not, so a concurrent reader gets the whole old file or
+// nothing.
+//
+// Failure is deliberately not fatal. Usually the key never had a sidecar and
+// os.Remove reports not-exist. A real failure leaves exactly the state this
+// change inherited, while failing the write would turn a cleanup miss into a
+// failed request. Windows makes that concrete: Go opens files without
+// FILE_SHARE_DELETE, so a reader holding the sidecar open blocks deletion, and
+// that reader is the very workload this change protects. The next store of the
+// key retries.
+func (b *Blob) clearLegacySidecar(key string) {
+	if sidecar := b.legacySidecarPath(key); sidecar != "" {
 		_ = os.Remove(sidecar)
 	}
+}
+
+func (b *Blob) Store(ctx context.Context, path string, r io.Reader) (int64, string, error) {
+	b.clearLegacySidecar(path)
 
 	// Compute hash while writing
 	h := sha256.New()
