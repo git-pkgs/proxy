@@ -697,7 +697,7 @@ func metadataStoragePath(ecosystem, cacheKey string) string {
 // cacheKey is typically the package name but can include subpath components.
 // Optional acceptHeaders specify the Accept header(s) to send; defaults to application/json.
 func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL string, acceptHeaders ...string) ([]byte, string, error) {
-	return p.fetchOrCacheMetadata(ctx, ecosystem, cacheKey, upstreamURL, false, acceptHeaders...)
+	return p.fetchOrCacheMetadata(ctx, ecosystem, cacheKey, upstreamURL, false, nil, acceptHeaders...)
 }
 
 // fetchOrCacheMetadata implements FetchOrCacheMetadata. When verbatim is true
@@ -705,7 +705,9 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 // upstream is fetched with Accept-Encoding: identity so signed and hash-pinned
 // index files are cached exactly as sent. Direct callers that parse or rewrite
 // the body pass verbatim=false and keep transparent transfer compression.
-func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL string, verbatim bool, acceptHeaders ...string) ([]byte, string, error) {
+// validate, when supplied, runs before caching or serving a document. Validation
+// failures follow the same stale-cache fallback path as upstream failures.
+func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL string, verbatim bool, validate func([]byte) error, acceptHeaders ...string) ([]byte, string, error) {
 	if containsPathTraversal(cacheKey) {
 		return nil, "", fmt.Errorf("invalid cache key: %q", cacheKey)
 	}
@@ -721,18 +723,14 @@ func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 	// Serve from cache if within TTL (skip upstream entirely)
 	if entry != nil && p.MetadataTTL > 0 && entry.FetchedAt.Valid {
 		if time.Since(entry.FetchedAt.Time) < p.MetadataTTL {
-			cached, readErr := p.Storage.Open(ctx, entry.StoragePath)
+			data, ct, readErr := p.readCachedMetadata(ctx, entry, validate)
 			if readErr == nil {
-				defer func() { _ = cached.Close() }()
-				data, readErr := p.ReadMetadata(cached)
-				if readErr == nil {
-					ct := contentTypeJSON
-					if entry.ContentType.Valid {
-						ct = entry.ContentType.String
-					}
-					metrics.RecordCacheHit(ecosystem)
-					return data, ct, nil
-				}
+				metrics.RecordCacheHit(ecosystem)
+				return data, ct, nil
+			}
+			if validate != nil {
+				// Do not revalidate an unusable cached body with its ETag.
+				entry = nil
 			}
 			// Cache file missing/unreadable, fall through to upstream
 		}
@@ -750,6 +748,9 @@ func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 		// 304 but cached file is gone; retry without ETag
 		meta, err = p.fetchUpstreamMetadata(ctx, upstreamURL, nil, accept, verbatim)
 	}
+	if err == nil && validate != nil {
+		err = validate(meta.body)
+	}
 	if err == nil {
 		if p.CacheMetadata {
 			p.cacheMetadataBlob(ctx, ecosystem, cacheKey, storagePath, meta)
@@ -765,23 +766,33 @@ func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 	p.Logger.Warn("upstream metadata fetch failed, checking cache",
 		"ecosystem", ecosystem, "key", cacheKey, "error", err)
 
-	cached, readErr := p.Storage.Open(ctx, entry.StoragePath)
+	data, ct, readErr := p.readCachedMetadata(ctx, entry, validate)
 	if readErr != nil {
-		return nil, "", fmt.Errorf("upstream failed and cached file missing: %w", err)
+		return nil, "", fmt.Errorf("upstream failed and cached metadata unusable (%v): %w", readErr, err)
+	}
+
+	p.Logger.Info("serving metadata from cache",
+		"ecosystem", ecosystem, "key", cacheKey)
+	return data, ct, nil
+}
+
+func (p *Proxy) readCachedMetadata(ctx context.Context, entry *database.MetadataCacheEntry, validate func([]byte) error) ([]byte, string, error) {
+	cached, err := p.Storage.Open(ctx, entry.StoragePath)
+	if err != nil {
+		return nil, "", err
 	}
 	defer func() { _ = cached.Close() }()
-
-	data, readErr := p.ReadMetadata(cached)
-	if readErr != nil {
-		return nil, "", fmt.Errorf("upstream failed and cached read error: %w", err)
+	data, err := p.ReadMetadata(cached)
+	if err == nil && validate != nil {
+		err = validate(data)
 	}
-
+	if err != nil {
+		return nil, "", err
+	}
 	ct := contentTypeJSON
 	if entry.ContentType.Valid {
 		ct = entry.ContentType.String
 	}
-	p.Logger.Info("serving metadata from cache",
-		"ecosystem", ecosystem, "key", cacheKey)
 	return data, ct, nil
 }
 
@@ -952,7 +963,7 @@ func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL,
 		return
 	}
 
-	body, contentType, err := p.fetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, true, acceptHeaders...)
+	body, contentType, err := p.fetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, true, nil, acceptHeaders...)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
