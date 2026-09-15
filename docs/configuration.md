@@ -548,7 +548,7 @@ http_timeout: "30s"   # default
 
 Or via environment variable: `PROXY_HTTP_TIMEOUT=2m`.
 
-Set to `"0"` to disable the timeout entirely (requests then rely only on the server's write timeout).
+Set to `"0"` to disable the timeout entirely (requests then rely only on the server's write timeout). Independently of this setting, the shared transport gives up on an upstream that has not sent response headers within 60 seconds.
 
 ## Mirror API
 

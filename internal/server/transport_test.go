@@ -50,8 +50,9 @@ func trustUpstream(t *testing.T, transport *http.Transport, srv *httptest.Server
 	t.Cleanup(transport.CloseIdleConnections)
 }
 
-// burst issues n concurrent GETs and drains every body so the connections
-// return to the idle pool.
+// burst issues n concurrent GETs and drains every body. The transport hands a
+// connection back to the idle pool before the body's final Read returns, so
+// the pool is settled when burst returns.
 func burst(t *testing.T, client *http.Client, url string, n int) {
 	t.Helper()
 	var wg sync.WaitGroup
@@ -88,19 +89,22 @@ func TestUpstreamClientReusesConnectionsAcrossBursts(t *testing.T) {
 	}
 
 	tests := []struct {
-		name          string
-		client        *http.Client
-		maxNewInBurst int
+		name   string
+		client *http.Client
+		// Bounds on how many connections the second burst has to dial.
+		minNew, maxNew int
 	}{
 		{
-			name:          "go default keeps two idle connections",
-			client:        safehttp.New(nil, safehttp.Options{AllowLoopback: true}),
-			maxNewInBurst: burstSize, // documents the baseline; asserted below as >= burstSize-2
+			name:   "go default keeps two idle connections",
+			client: safehttp.New(nil, safehttp.Options{AllowLoopback: true}),
+			minNew: burstSize - 2,
+			maxNew: burstSize,
 		},
 		{
-			name:          "tuned transport reuses the whole burst",
-			client:        newUpstreamClient(config.UpstreamConfig{AllowLoopback: true}),
-			maxNewInBurst: 0,
+			name:   "tuned transport reuses the whole burst",
+			client: newUpstreamClient(config.UpstreamConfig{AllowLoopback: true}),
+			minNew: 0,
+			maxNew: 0,
 		},
 	}
 	for _, tc := range tests {
@@ -114,30 +118,22 @@ func TestUpstreamClientReusesConnectionsAcrossBursts(t *testing.T) {
 			if afterFirst < burstSize {
 				t.Fatalf("first burst opened %d connections, want at least %d", afterFirst, burstSize)
 			}
-			// Let the read loops hand the connections back to the idle pool.
-			time.Sleep(50 * time.Millisecond)
 
 			burst(t, tc.client, srv.URL, burstSize)
 			newInSecond := accepted() - afterFirst
 			t.Logf("second burst: %d new connections, %d reused", newInSecond, burstSize-newInSecond)
 
-			if tc.maxNewInBurst == 0 {
-				if newInSecond != 0 {
-					t.Errorf("second burst opened %d new connections, want 0", newInSecond)
-				}
-				return
-			}
-			if newInSecond < burstSize-2 {
-				t.Errorf("default transport reused more than its two idle connections: %d new", newInSecond)
+			if newInSecond < tc.minNew || newInSecond > tc.maxNew {
+				t.Errorf("second burst opened %d new connections, want between %d and %d", newInSecond, tc.minNew, tc.maxNew)
 			}
 		})
 	}
 }
 
-// TestUpstreamClientBoundsStallBeforeHeaders pins the production values and
-// shows that an upstream which accepts a request but never sends headers is
-// cut off by ResponseHeaderTimeout rather than by the client's overall
-// timeout.
+// TestUpstreamClientBoundsStallBeforeHeaders pins the production transport
+// values, then lowers the header timeout so it can show within milliseconds
+// that this is what cuts off an upstream which accepts a request but never
+// sends headers.
 func TestUpstreamClientBoundsStallBeforeHeaders(t *testing.T) {
 	client := newUpstreamClient(config.UpstreamConfig{AllowLoopback: true})
 	transport := client.Transport.(*http.Transport)
@@ -158,22 +154,16 @@ func TestUpstreamClientBoundsStallBeforeHeaders(t *testing.T) {
 	t.Cleanup(func() { close(stall) })
 	trustUpstream(t, transport, srv)
 
-	// Shorten the header timeout for the test; the overall client timeout
-	// stays far above it so only the header timeout can end the request.
+	// Far below the client's overall timeout, so the header timeout ends the
+	// request; the error text tells the two timeouts apart.
 	transport.ResponseHeaderTimeout = 200 * time.Millisecond
-	client.Timeout = 10 * time.Second
 
-	start := time.Now()
 	resp, err := client.Get(srv.URL)
-	elapsed := time.Since(start)
 	if err == nil {
 		_ = resp.Body.Close()
 		t.Fatal("request to a stalled upstream succeeded, want a timeout")
 	}
 	if !strings.Contains(err.Error(), "timeout awaiting response headers") {
 		t.Fatalf("error = %v, want a response-header timeout", err)
-	}
-	if elapsed >= client.Timeout {
-		t.Fatalf("request took %v, was bounded by the client timeout rather than the header timeout", elapsed)
 	}
 }

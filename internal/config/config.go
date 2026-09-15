@@ -137,7 +137,9 @@ type Config struct {
 	// HTTPTimeout is the timeout for individual upstream HTTP requests made
 	// by protocol handlers (metadata fetches, pass-through file requests).
 	// Uses Go duration syntax (e.g. "30s", "2m"). Default: "30s".
-	// Set to "0" to disable the timeout entirely.
+	// Set to "0" to disable the timeout entirely. Independently of this
+	// setting, the shared transport gives up on an upstream that has not sent
+	// response headers within 60 seconds.
 	HTTPTimeout string `json:"http_timeout" yaml:"http_timeout"`
 
 	// MirrorAPI enables the /api/mirror endpoints for starting mirror jobs via HTTP.
