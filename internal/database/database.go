@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"time"
 
 	"github.com/jmoiron/sqlx"
 	_ "github.com/lib/pq"
@@ -13,6 +14,16 @@ import (
 const SchemaVersion = 1
 
 const dirPermissions = 0755
+
+// Postgres connection pool limits. database/sql keeps only two idle
+// connections by default, which opens a new Postgres session for almost every
+// request under load.
+const (
+	postgresMaxOpenConns    = 32
+	postgresMaxIdleConns    = 32
+	postgresConnMaxIdleTime = 5 * time.Minute
+	postgresConnMaxLifetime = 30 * time.Minute
+)
 
 type Dialect string
 
@@ -93,6 +104,11 @@ func OpenPostgres(url string) (*DB, error) {
 	if err != nil {
 		return nil, fmt.Errorf("opening postgres database: %w", err)
 	}
+
+	sqlDB.SetMaxOpenConns(postgresMaxOpenConns)
+	sqlDB.SetMaxIdleConns(postgresMaxIdleConns)
+	sqlDB.SetConnMaxIdleTime(postgresConnMaxIdleTime)
+	sqlDB.SetConnMaxLifetime(postgresConnMaxLifetime)
 
 	if err := sqlDB.Ping(); err != nil {
 		_ = sqlDB.Close()
