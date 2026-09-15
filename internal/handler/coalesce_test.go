@@ -27,6 +27,12 @@ type countingFetcher struct {
 	calls   atomic.Int64
 	content string
 	delay   time.Duration
+
+	// entered, if set, is closed when the first fetch begins. A test can wait
+	// on it to know the leader holds the key, rather than guessing with a
+	// sleep.
+	entered   chan struct{}
+	enterOnce sync.Once
 }
 
 func (f *countingFetcher) Fetch(ctx context.Context, url string) (*fetch.Artifact, error) {
@@ -35,6 +41,9 @@ func (f *countingFetcher) Fetch(ctx context.Context, url string) (*fetch.Artifac
 
 func (f *countingFetcher) FetchWithHeaders(_ context.Context, _ string, _ http.Header) (*fetch.Artifact, error) {
 	f.calls.Add(1)
+	if f.entered != nil {
+		f.enterOnce.Do(func() { close(f.entered) })
+	}
 	time.Sleep(f.delay)
 	return &fetch.Artifact{
 		Body:        io.NopCloser(strings.NewReader(f.content)),

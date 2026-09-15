@@ -324,7 +324,7 @@ func TestCoalesce_CanceledWaiterDoesNotWaitForTheSharedFetch(t *testing.T) {
 	const url = "https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz"
 
 	proxy, _, _, _ := setupTestProxy(t)
-	fetcher := &countingFetcher{content: "artifact bytes", delay: leaderFetch}
+	fetcher := &countingFetcher{content: "artifact bytes", delay: leaderFetch, entered: make(chan struct{})}
 	proxy.Fetcher = fetcher
 
 	leaderDone := make(chan error, 1)
@@ -335,7 +335,11 @@ func TestCoalesce_CanceledWaiterDoesNotWaitForTheSharedFetch(t *testing.T) {
 		leaderDone <- err
 	}()
 
-	time.Sleep(200 * time.Millisecond) // let the leader take the key
+	select {
+	case <-fetcher.entered: // the leader holds the key and is inside its fetch
+	case <-time.After(5 * time.Second):
+		t.Fatal("leader never started its fetch")
+	}
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
