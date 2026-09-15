@@ -118,23 +118,59 @@ func OpenBucket(ctx context.Context, urlStr string) (Storage, error) {
 }
 
 // legacySidecarPath gives the ".attrs" path an earlier version wrote for key,
-// or "" when the mapping is not certain.
+// or "" when that path would not be a file inside fileRoot.
 //
-// fileblob maps keys with an unexported escapeKey, so this derives it.
-// escapeKey is the identity for a plain key and parts from one only for keys
-// that are not valid local paths, which is what filepath.Localize rejects.
-// Declining those keeps the removal inside fileRoot too: a key holding ".."
-// would otherwise resolve outside the cache. A control character is the one
-// case Localize accepts and escapeKey does not, where removal simply misses.
+// The key is escaped the way fileblob escapes it on the way to disk, so the
+// sidecar is looked for where fileblob wrote it. filepath.Localize then
+// validates the escaped form: it rejects an empty, absolute or ".." path, and
+// "." would name fileRoot itself. What it declines are keys the proxy never
+// produces.
 func (b *Blob) legacySidecarPath(key string) string {
 	if b.fileRoot == "" {
 		return ""
 	}
-	rel, err := filepath.Localize(key)
-	if err != nil {
+	rel, err := filepath.Localize(escapeKey(key))
+	if err != nil || rel == "." {
 		return ""
 	}
 	return filepath.Join(b.fileRoot, rel) + attrsExt
+}
+
+// escapeKey mirrors fileblob's unexported escapeKey, which hex-escapes a rune
+// as "__0x<hex>__". Slashes stay as "/" for filepath.Localize to convert.
+func escapeKey(key string) string {
+	runes := []rune(key)
+	var out strings.Builder
+	for i, r := range runes {
+		if escapeRune(runes, i) {
+			fmt.Fprintf(&out, "__%#x__", r)
+		} else {
+			out.WriteRune(r)
+		}
+	}
+	return out.String()
+}
+
+// escapeRune is fileblob's rule for which runes of a key to escape: control
+// characters, a raw path separator, a slash that would form "../", "//" or
+// end the key, and on Windows the characters its filesystem reserves.
+func escapeRune(r []rune, i int) bool {
+	c := r[i]
+	switch {
+	case c < ' ':
+		return true
+	case os.PathSeparator != '/' && c == os.PathSeparator:
+		return true
+	case i > 1 && c == '/' && r[i-1] == '.' && r[i-2] == '.':
+		return true
+	case i > 0 && c == '/' && r[i-1] == '/':
+		return true
+	case c == '/' && i == len(r)-1:
+		return true
+	case os.PathSeparator == '\\' && strings.ContainsRune(`<>:"|?*`, c):
+		return true
+	}
+	return false
 }
 
 // clearLegacySidecar removes the ".attrs" file an earlier version wrote for

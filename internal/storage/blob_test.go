@@ -467,6 +467,9 @@ func TestStoreClearsLegacyAttrsSidecar(t *testing.T) {
 		"conda/numpy/1.26.4/numpy-1.26.4-py311.conda",
 		"_metadata/npm/@babel/core/metadata",
 		"_gradle/http-build-cache/0a1b2c3d4e5f",
+		// Keys fileblob escapes on every platform.
+		"npm/pkg//1.0.0/x.tgz",
+		"npm/pkg/../1.0.0/x.tgz",
 	}
 
 	for _, key := range keys {
@@ -498,8 +501,7 @@ func assertStoreClearsSidecar(t *testing.T, key string) {
 	}
 
 	if derived == "" {
-		assertSidecarKept(t, sidecar)
-		return
+		t.Fatalf("legacySidecarPath declined %q, but fileblob wrote %q", key, sidecar)
 	}
 	if derived != sidecar {
 		t.Fatalf("derived %q, but fileblob wrote %q", derived, sidecar)
@@ -512,15 +514,6 @@ func assertStoreClearsSidecar(t *testing.T, key string) {
 
 // Windows rejects ":" in a local path and fileblob escapes it, so for those
 // keys the mapping is not certain and the sidecar is left alone.
-func assertSidecarKept(t *testing.T, sidecar string) {
-	t.Helper()
-	if runtime.GOOS != osWindows {
-		t.Fatalf("declined a key that is a plain local path on %s", runtime.GOOS)
-	}
-	if _, err := os.Stat(sidecar); err != nil {
-		t.Errorf("declined key should keep its sidecar, stat err = %v", err)
-	}
-}
 
 func assertReadsBack(t *testing.T, b *Blob, key, want string) {
 	t.Helper()
@@ -555,23 +548,39 @@ func openFileBlob(t *testing.T, dir string) *Blob {
 // fileblob escapes a non-local key in a way this cannot reproduce, and one
 // holding ".." resolves outside the cache directory. Removal declines both
 // rather than delete the wrong file.
+func TestLegacySidecarPathEscapesLikeFileblob(t *testing.T) {
+	root := filepath.FromSlash("/var/cache/proxy")
+	b := &Blob{fileRoot: root}
+	windows := runtime.GOOS == osWindows
+
+	for _, tc := range []struct{ key, unix, windows string }{
+		{"npm/pkg/1.0.0/x.tgz", "npm/pkg/1.0.0/x.tgz", "npm/pkg/1.0.0/x.tgz"},
+		{"npm/pkg//1.0.0/x.tgz", "npm/pkg/__0x2f__1.0.0/x.tgz", "npm/pkg/__0x2f__1.0.0/x.tgz"},
+		{"npm/pkg/../../etc/passwd", "npm/pkg/..__0x2f__..__0x2f__etc/passwd", "npm/pkg/..__0x2f__..__0x2f__etc/passwd"},
+		{"npm/pkg/1.0.0/", "npm/pkg/1.0.0__0x2f__", "npm/pkg/1.0.0__0x2f__"},
+		{"npm/a\x01b", "npm/a__0x1__b", "npm/a__0x1__b"},
+		{"oci/nginx/sha256:abc/manifest", "oci/nginx/sha256:abc/manifest", "oci/nginx/sha256__0x3a__abc/manifest"},
+		{"debian/tzdata/1:2024a-1/x.deb", "debian/tzdata/1:2024a-1/x.deb", "debian/tzdata/1__0x3a__2024a-1/x.deb"},
+		{`npm/a\b`, `npm/a\b`, "npm/a__0x5c__b"},
+	} {
+		want := tc.unix
+		if windows {
+			want = tc.windows
+		}
+		want = filepath.Join(root, filepath.FromSlash(want)) + attrsExt
+		if got := b.legacySidecarPath(tc.key); got != want {
+			t.Errorf("legacySidecarPath(%q) = %q, want %q", tc.key, got, want)
+		}
+	}
+}
+
 func TestLegacySidecarPathDeclinesNonLocalKeys(t *testing.T) {
 	b := &Blob{fileRoot: filepath.FromSlash("/var/cache/proxy")}
 
-	for _, key := range []string{
-		"npm/pkg//1.0.0/x.tgz",
-		"npm/pkg/../../../../etc/passwd",
-		"npm/pkg/1.0.0/",
-		"/etc/passwd",
-		"",
-	} {
+	for _, key := range []string{"", ".", "..", "/etc/passwd"} {
 		if got := b.legacySidecarPath(key); got != "" {
 			t.Errorf("legacySidecarPath(%q) = %q, want \"\"", key, got)
 		}
-	}
-
-	if got := b.legacySidecarPath("npm/pkg/1.0.0/x.tgz"); got == "" {
-		t.Error("a plain key must still map to a sidecar path")
 	}
 }
 
