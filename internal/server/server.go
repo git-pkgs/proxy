@@ -89,6 +89,13 @@ const (
 	serverIdleTimeout  = 60 * time.Second
 	dashboardTopN      = 10
 	hoursPerDay        = 24
+
+	// Upstream transport defaults, matching what fetch.NewFetcher would use
+	// if we did not hand it our own client. Go's default transport keeps only
+	// two idle connections per host and never times out waiting for response
+	// headers.
+	upstreamMaxIdleConnsPerHost   = 10
+	upstreamResponseHeaderTimeout = 60 * time.Second
 )
 
 // Server is the main proxy server.
@@ -205,7 +212,7 @@ func (s *Server) Start(listeners ...net.Listener) error {
 func (s *Server) serve(listener net.Listener) error {
 	// Use one authentication-aware transport for metadata and artifacts so
 	// configured credentials and cached OCI challenges apply consistently.
-	safeClient := safehttp.New(nil, upstreamSafeHTTPOptions(s.cfg.Upstream))
+	safeClient := newUpstreamClient(s.cfg.Upstream)
 	baseTransport := safeClient.Transport
 	if s.accessLog != nil {
 		baseTransport = upstreamhttp.NewAccessLogTransport(baseTransport, s.accessLog, s.logger)
@@ -452,6 +459,19 @@ func configureScanning(proxy *handler.Proxy, cfg config.ScanningConfig, baseURL 
 	proxy.ScanSigningKey = []byte(cfg.SigningKeyExpanded())
 	proxy.ScanFetchBaseURL = cmp.Or(cfg.FetchBaseURL, baseURL)
 	return scanGroup, nil
+}
+
+// newUpstreamClient builds the shared upstream client: a safehttp client whose
+// transport keeps upstreamMaxIdleConnsPerHost idle connections per host and
+// gives up after upstreamResponseHeaderTimeout when an upstream accepts a
+// request but stalls before sending headers.
+func newUpstreamClient(upstream config.UpstreamConfig) *http.Client {
+	client := safehttp.New(nil, upstreamSafeHTTPOptions(upstream))
+	if transport, ok := client.Transport.(*http.Transport); ok {
+		transport.MaxIdleConnsPerHost = upstreamMaxIdleConnsPerHost
+		transport.ResponseHeaderTimeout = upstreamResponseHeaderTimeout
+	}
+	return client
 }
 
 func upstreamSafeHTTPOptions(upstream config.UpstreamConfig) safehttp.Options {
