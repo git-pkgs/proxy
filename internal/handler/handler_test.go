@@ -123,11 +123,15 @@ func (s *mockStorage) URL() string { return "mem://" }
 
 func (s *mockStorage) Close() error { return nil }
 
-// mockFetcher implements fetch.FetcherInterface for testing.
+// mockFetcher implements fetch.FetcherInterface for testing. Recording is
+// locked because coalescing tests call the handler from many goroutines; tests
+// read the recorded fields only after those calls have returned.
 type mockFetcher struct {
 	artifact      *fetch.Artifact
 	fetchErr      error
 	fetchErrByURL map[string]error
+
+	mu            sync.Mutex
 	fetchCalled   bool
 	fetchedURL    string
 	fetchedHeader http.Header
@@ -138,9 +142,11 @@ func (f *mockFetcher) Fetch(ctx context.Context, url string) (*fetch.Artifact, e
 }
 
 func (f *mockFetcher) FetchWithHeaders(_ context.Context, url string, headers http.Header) (*fetch.Artifact, error) {
+	f.mu.Lock()
 	f.fetchCalled = true
 	f.fetchedURL = url
 	f.fetchedHeader = headers.Clone()
+	f.mu.Unlock()
 	if f.fetchErrByURL != nil {
 		if err, ok := f.fetchErrByURL[url]; ok {
 			return nil, err
