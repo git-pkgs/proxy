@@ -936,10 +936,9 @@ func (p *Proxy) currentMetadataEntry(ecosystem, cacheKey string, fallback *datab
 
 // cachedMeta holds cache validators and freshness state from a metadata cache entry.
 type cachedMeta struct {
-	etag            string
-	lastModified    time.Time
-	contentEncoding string
-	stale           bool
+	etag         string
+	lastModified time.Time
+	stale        bool
 }
 
 // lookupCachedMeta retrieves cache validators for a metadata entry.
@@ -957,9 +956,6 @@ func (p *Proxy) lookupCachedMeta(ecosystem, cacheKey string) cachedMeta {
 	}
 	if entry.LastModified.Valid {
 		cm.lastModified = entry.LastModified.Time
-	}
-	if entry.ContentEncoding.Valid {
-		cm.contentEncoding = entry.ContentEncoding.String
 	}
 	// If FetchedAt is older than TTL, upstream must have failed and
 	// we served from stale cache (successful fetches update FetchedAt).
@@ -980,7 +976,7 @@ func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL,
 // proxyCachedWithEncoding is ProxyCached with an explicit upstream Accept-Encoding.
 // "identity" preserves signed index bytes (the default); "gzip" keeps both hops
 // compressed for large, non-hash-pinned metadata whose clients decode gzip
-// (conda repodata). The stored bytes and Content-Encoding are replayed verbatim
+// (Homebrew API). The stored bytes and Content-Encoding are replayed verbatim
 // either way.
 func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, upstreamURL, ecosystem, cacheKey, acceptEncoding string, acceptHeaders ...string) {
 	if !p.CacheMetadata {
