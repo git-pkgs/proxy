@@ -512,9 +512,6 @@ func assertStoreClearsSidecar(t *testing.T, key string) {
 	assertReadsBack(t, b, key, payload)
 }
 
-// Windows rejects ":" in a local path and fileblob escapes it, so for those
-// keys the mapping is not certain and the sidecar is left alone.
-
 func assertReadsBack(t *testing.T, b *Blob, key, want string) {
 	t.Helper()
 	r, err := b.Open(context.Background(), key)
