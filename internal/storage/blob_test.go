@@ -327,6 +327,12 @@ func TestOpenBucketWritesNoAttrsSidecar(t *testing.T) {
 // its ".attrs" sidecar in place, so a reader decoding it mid-write saw a
 // partial file, which the proxy served as a 502 on an artifact it held.
 func TestConcurrentReadsSurviveWritesToSameKey(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		// Go opens files without FILE_SHARE_DELETE, so a writer cannot replace
+		// a file a reader holds open: its rename fails with access denied
+		// instead of contending. The other platforms exercise this race.
+		t.Skip("Windows refuses to replace a file readers hold open")
+	}
 	const (
 		key          = "pkg/thing-1.0.0.tgz"
 		readers      = 4
@@ -346,8 +352,13 @@ func TestConcurrentReadsSurviveWritesToSameKey(t *testing.T) {
 		t.Fatalf("seeding Store failed: %v", err)
 	}
 
+	// The writer reports how it ended: a Store failure would otherwise stop
+	// the writes silently and let zero read failures pass for a test that
+	// never contended anything.
 	done := make(chan struct{})
 	var writers sync.WaitGroup
+	var writes int
+	var writeErr error
 	writers.Add(1)
 	go func() {
 		defer writers.Done()
@@ -358,8 +369,10 @@ func TestConcurrentReadsSurviveWritesToSameKey(t *testing.T) {
 			default:
 			}
 			if _, _, err := b.Store(ctx, key, strings.NewReader(payload)); err != nil {
+				writeErr = err
 				return
 			}
+			writes++
 		}
 	}()
 
@@ -386,6 +399,12 @@ func TestConcurrentReadsSurviveWritesToSameKey(t *testing.T) {
 	close(done)
 	writers.Wait()
 
+	if writeErr != nil {
+		t.Fatalf("writer stopped early: %v", writeErr)
+	}
+	if writes == 0 {
+		t.Fatal("no write completed, so the reads were never contended")
+	}
 	if got := failures.Load(); got != 0 {
 		t.Errorf("%d of %d reads failed while one writer rewrote the same key, want 0", got, readers*readsPerRead)
 	}
