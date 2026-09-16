@@ -83,9 +83,30 @@ func burst(t *testing.T, client *http.Client, url string, n int) {
 // tuned transport the second burst reuses all of them.
 func TestUpstreamClientReusesConnectionsAcrossBursts(t *testing.T) {
 	const burstSize = 8
-	handler := func(w http.ResponseWriter, _ *http.Request) {
-		time.Sleep(100 * time.Millisecond) // keep the burst in flight together
-		_, _ = w.Write([]byte("ok"))
+
+	// holdBurst returns a handler that answers a request only once burstSize
+	// of them are waiting at the same time. With HTTP/1.1 pinned that puts
+	// every burst on burstSize distinct connections, whatever the scheduling.
+	holdBurst := func() http.HandlerFunc {
+		var mu sync.Mutex
+		waiting := 0
+		release := make(chan struct{})
+		return func(w http.ResponseWriter, r *http.Request) {
+			mu.Lock()
+			gate := release
+			waiting++
+			if waiting == burstSize {
+				close(gate)
+				waiting = 0
+				release = make(chan struct{})
+			}
+			mu.Unlock()
+			select {
+			case <-gate:
+			case <-r.Context().Done():
+			}
+			_, _ = w.Write([]byte("ok"))
+		}
 	}
 
 	tests := []struct {
@@ -109,7 +130,7 @@ func TestUpstreamClientReusesConnectionsAcrossBursts(t *testing.T) {
 	}
 	for _, tc := range tests {
 		t.Run(tc.name, func(t *testing.T) {
-			srv, accepted := tlsUpstream(t, handler)
+			srv, accepted := tlsUpstream(t, holdBurst())
 			transport := tc.client.Transport.(*http.Transport)
 			trustUpstream(t, transport, srv)
 
