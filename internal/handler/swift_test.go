@@ -332,7 +332,7 @@ func TestSwiftSourceArchiveCanonicalizesPackageIdentity(t *testing.T) {
 	}
 }
 
-func TestSwiftSourceArchiveHeadDiscardsCachedChecksumMismatch(t *testing.T) {
+func TestSwiftSourceArchiveHeadLeavesStaleCacheForTheFetch(t *testing.T) {
 	archive := []byte("cached archive")
 	upstreamChecksum := sha256.Sum256([]byte("upstream archive"))
 
@@ -379,11 +379,27 @@ func TestSwiftSourceArchiveHeadDiscardsCachedChecksumMismatch(t *testing.T) {
 	if got := w.Header().Get("Content-Length"); got != "456" {
 		t.Errorf("Content-Length = %q, want 456 from upstream probe", got)
 	}
-	if len(store.files) != 0 {
-		t.Errorf("mismatched cached archive remained in storage: %v", store.files)
+	// HEAD leaves the stale entry alone; the next GET replaces it under the
+	// coalescing key.
+	if len(store.files) != 1 {
+		t.Errorf("HEAD must leave the stale archive in storage, got %v", store.files)
 	}
-	if rec, _ := db.GetCachedArtifact(packagePURL, versionPURL, "example-1.2.3.zip"); rec != nil {
-		t.Error("mismatched cache record was not cleared")
+	if rec, _ := db.GetCachedArtifact(packagePURL, versionPURL, "example-1.2.3.zip"); rec == nil {
+		t.Error("HEAD must leave the stale cache record in place")
+	}
+
+	fetcher.artifact = artifactBody("upstream archive")
+	w = httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/apple/example/1.2.3.zip", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("GET status = %d, want 200; body: %s", w.Code, w.Body.String())
+	}
+	if w.Body.String() != "upstream archive" {
+		t.Errorf("GET body = %q, want the refreshed archive", w.Body.String())
+	}
+	rec, _ := db.GetCachedArtifact(packagePURL, versionPURL, "example-1.2.3.zip")
+	if rec == nil || rec.Artifact.Digest.Encoded() != hex.EncodeToString(upstreamChecksum[:]) {
+		t.Errorf("cache record after GET = %+v, want the upstream checksum", rec)
 	}
 }
 

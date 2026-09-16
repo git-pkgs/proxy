@@ -1294,12 +1294,19 @@ func (p *Proxy) getOrFetchArtifactFromURLWithCachePURLs(ctx context.Context, eco
 		return cached, nil
 	}
 	metrics.RecordCacheMiss(ecosystem)
+	return p.coalescedFetchFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, upstreamHash)
+}
 
+// coalescedFetchFromURL fetches an artifact the cache could not serve, sharing
+// the fetch with concurrent callers. The caller running it discards a stale
+// entry under the key, where it cannot delete a fetch that just replaced it.
+func (p *Proxy) coalescedFetchFromURL(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, upstreamHash string) (*CacheResult, error) {
 	key := artifactCoalesceKey(versionPURL, filename, downloadURL, upstreamHash)
 	recheck := func() (artifacts.Artifact, string, bool) {
 		return p.cachedArtifactRecord(pkgPURL, versionPURL, filename, upstreamHash)
 	}
 	return p.coalesceFetch(ctx, key, recheck, func(fetchCtx context.Context) (artifacts.Artifact, string, error) {
+		p.discardStaleArtifact(fetchCtx, pkgPURL, versionPURL, filename, upstreamHash)
 		return p.fetchAndCacheFromURL(fetchCtx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, upstreamHash)
 	})
 }
@@ -1308,8 +1315,9 @@ func (p *Proxy) getOrFetchArtifactFromURLWithCachePURLs(ctx context.Context, eco
 // content hash matches the checksum the upstream currently declares for it.
 // This detects an upstream re-publishing under the same version, which the
 // stream integrity check in checkCache cannot: that check only verifies the
-// stored blob against the hash recorded when it was cached. On mismatch the
-// stale entry is discarded and nil is returned so the caller re-fetches.
+// stored blob against the hash recorded when it was cached. A stale entry is
+// a miss and is left in place: the fetch that replaces it discards it under
+// the coalescing key.
 func (p *Proxy) getCachedArtifactWithUpstreamHash(ctx context.Context, pkgPURL, versionPURL, filename, upstreamHash string) (*CacheResult, error) {
 	cached, err := p.checkCache(ctx, pkgPURL, versionPURL, filename)
 	if err != nil || cached == nil {
@@ -1318,14 +1326,28 @@ func (p *Proxy) getCachedArtifactWithUpstreamHash(ctx context.Context, pkgPURL, 
 	if artifactHashMatches(cached.Artifact.Digest.Encoded(), upstreamHash) {
 		return cached, nil
 	}
-
 	if cached.Reader != nil {
 		_ = cached.Reader.Close()
 	}
-	p.Logger.Warn("cached artifact hash disagrees with upstream metadata, discarding",
-		"purl", versionPURL, "filename", filename, "cached", cached.Artifact.Digest.Encoded(), "upstream", upstreamHash)
-	p.discardCachedArtifact(ctx, versionPURL, filename, cached.storagePath)
 	return nil, nil
+}
+
+// discardStaleArtifact removes the cached entry when its digest disagrees
+// with upstreamHash. It runs under the coalescing key, after the recheck, so
+// an entry a previous fetch refreshed is kept.
+func (p *Proxy) discardStaleArtifact(ctx context.Context, pkgPURL, versionPURL, filename, upstreamHash string) {
+	record, err := p.DB.GetCachedArtifact(pkgPURL, versionPURL, filename)
+	if err != nil {
+		p.Logger.Warn("failed to read cache record before refetch",
+			"purl", versionPURL, "filename", filename, "error", err)
+		return
+	}
+	if record == nil || artifactHashMatches(record.Artifact.Digest.Encoded(), upstreamHash) {
+		return
+	}
+	p.Logger.Warn("cached artifact hash disagrees with upstream metadata, discarding",
+		"purl", versionPURL, "filename", filename, "cached", record.Artifact.Digest.Encoded(), "upstream", upstreamHash)
+	p.discardCachedArtifact(ctx, versionPURL, filename, record.StoragePath)
 }
 
 func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, upstreamHash string) (artifacts.Artifact, string, error) {
