@@ -610,8 +610,10 @@ func createTestPostgresDB(t *testing.T) *DB {
 		t.Fatalf("OpenPostgres failed: %v", err)
 	}
 
-	// Drop and recreate tables for clean test state
-	tables := []string{"artifacts", "versions", "packages", "schema_info"}
+	// Drop and recreate every table CreateSchema creates for clean test state;
+	// leftover migration records make the next CreateSchema fail on the
+	// migrations primary key.
+	tables := []string{"artifacts", "versions", "packages", "vulnerabilities", "metadata_cache", "migrations", "schema_info"}
 	for _, table := range tables {
 		_, _ = db.Exec("DROP TABLE IF EXISTS " + table + " CASCADE")
 	}
