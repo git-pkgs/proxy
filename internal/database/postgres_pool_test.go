@@ -26,6 +26,11 @@ func TestOpenPostgresKeepsConnectionsIdle(t *testing.T) {
 	defer func() { _ = db.Close() }()
 
 	const burst = postgresMaxIdleConns
+	// database/sql keeps two idle connections by default; a burst that small
+	// could not tell the tuned pool from the default one.
+	if burst <= 2 {
+		t.Fatalf("postgresMaxIdleConns = %d, want more than database/sql's default of 2", burst)
+	}
 	if got := db.Stats().MaxOpenConnections; got <= 0 || got < burst {
 		t.Fatalf("MaxOpenConnections = %d, want a cap of at least %d", got, burst)
 	}
@@ -36,6 +41,7 @@ func TestOpenPostgresKeepsConnectionsIdle(t *testing.T) {
 		if err != nil {
 			t.Fatalf("taking connection %d: %v", len(conns)+1, err)
 		}
+		t.Cleanup(func() { _ = conn.Close() }) // release the session if an assertion below fails
 		conns = append(conns, conn)
 	}
 	if got := db.Stats().InUse; got != burst {
