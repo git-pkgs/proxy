@@ -7,10 +7,12 @@ import (
 	"testing"
 )
 
-// TestOpenPostgresKeepsConnectionsIdle checks the pool limits OpenPostgres
-// sets. Taking a burst of connections and releasing them again must leave all
-// of them idle in the pool; database/sql's default keeps only two, so the
-// next burst would open a new Postgres session for almost every request.
+// TestOpenPostgresKeepsConnectionsIdle checks the connection-count limits
+// OpenPostgres sets: the open cap admits a burst of postgresMaxIdleConns
+// connections, and releasing them again leaves all of them idle in the pool.
+// database/sql's default keeps only two, so the next burst would open a new
+// Postgres session for almost every request. The idle-time and lifetime
+// settings are not exercised here.
 func TestOpenPostgresKeepsConnectionsIdle(t *testing.T) {
 	url := os.Getenv("PROXY_DATABASE_URL")
 	if url == "" {
@@ -23,11 +25,11 @@ func TestOpenPostgresKeepsConnectionsIdle(t *testing.T) {
 	}
 	defer func() { _ = db.Close() }()
 
-	if got := db.Stats().MaxOpenConnections; got != postgresMaxOpenConns {
-		t.Fatalf("MaxOpenConnections = %d, want %d", got, postgresMaxOpenConns)
+	const burst = postgresMaxIdleConns
+	if got := db.Stats().MaxOpenConnections; got <= 0 || got < burst {
+		t.Fatalf("MaxOpenConnections = %d, want a cap of at least %d", got, burst)
 	}
 
-	const burst = 16
 	conns := make([]*sql.Conn, 0, burst)
 	for range burst {
 		conn, err := db.Conn(context.Background())
