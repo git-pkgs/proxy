@@ -551,10 +551,15 @@ type UpstreamConfig struct {
 	// Default: https://tuist.dev/api/registry/swift
 	Swift string `json:"swift" yaml:"swift"`
 
-	// Debian is the upstream APT repository base URL.
+	// Debian is the upstream APT repository base URL, served at /debian/.
 	// Example: http://archive.ubuntu.com/ubuntu would get Ubuntu.
 	// Default: http://deb.debian.org/debian
 	Debian string `json:"debian" yaml:"debian"`
+
+	// DebianRepositories maps repository names to additional APT repository
+	// base URLs, served at /debian/{name}/.
+	// Example: {"security": "https://security.debian.org/debian-security"}.
+	DebianRepositories map[string]string `json:"debian_repositories" yaml:"debian_repositories"`
 
 	// RPM is the upstream RPM repository base URL.
 	// Default: https://dl.fedoraproject.org/pub/fedora/linux
@@ -644,8 +649,23 @@ func (u *UpstreamConfig) Validate() error {
 	if err := validateNamedUpstreams("upstream.generic", u.Generic); err != nil {
 		return err
 	}
+	if err := validateNamedUpstreams("upstream.debian_repositories", u.DebianRepositories); err != nil {
+		return err
+	}
+	for _, name := range debianReservedRepositoryNames {
+		if _, found := u.DebianRepositories[name]; found {
+			return fmt.Errorf(
+				"invalid upstream.debian_repositories name %q: reserved for the upstream.debian archive",
+				name,
+			)
+		}
+	}
 	return nil
 }
+
+// debianReservedRepositoryNames are the upstream.debian archive's own root
+// paths, which a repository of the same name would shadow.
+var debianReservedRepositoryNames = []string{"pool", "dists"}
 
 func validateNamedUpstreams(field string, upstreams map[string]string) error {
 	for name, upstreamURL := range upstreams {

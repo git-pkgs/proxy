@@ -265,6 +265,35 @@ verification keeps working; `.apk` packages use the shared artifact cache.
 When `upstream.apk` is empty, a single repository named `alpine` pointing at
 the official mirror is available; configuring any entry replaces that default.
 
+### Debian archives
+
+```yaml
+upstream:
+
+  # The main APT archive, served at /debian/.
+  debian: "http://deb.debian.org/debian"
+
+  # Additional APT archives, served at /debian/{name}/.
+  debian_repositories:
+    security: "https://security.debian.org/debian-security"
+```
+
+A Debian release is served by more than one archive: security updates live on
+a separate host from the main archive, so `upstream.debian` alone cannot serve
+a complete suite set. Requests to `/debian/{name}/…` mirror the upstream
+layout, e.g. `/debian/security/dists/trixie-security/InRelease`.
+
+`upstream.debian_repositories` is additive. `/debian/pool/…` and
+`/debian/dists/…` continue to address `upstream.debian` with unchanged cache
+identities, so existing deployments and their warm caches are unaffected. A
+repository name shadows the main archive's root path of the same name; `pool`
+and `dists` are refused at config load for that reason, and other root paths
+an archive may serve (`indices`, `project`, `doc`, `tools`) are not, so avoid
+those names unless the shadowing is intended.
+
+This field has no environment variable, as with the other named upstream maps.
+`PROXY_UPSTREAM_DEBIAN` still sets `upstream.debian`.
+
 ## Authentication
 
 Configure authentication for private upstream registries. The same authentication-aware client is used for metadata and artifact downloads, and credentials can reference environment variables using `${VAR_NAME}` syntax.

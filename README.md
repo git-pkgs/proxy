@@ -494,6 +494,25 @@ upstream:
   debian: "http://archive.ubuntu.com/ubuntu"
 ```
 
+A release's security updates are served by a separate archive, so additional
+archives are configured under `upstream.debian_repositories` and served at
+`/debian/{name}/`:
+
+```yaml
+upstream:
+  debian: "http://deb.debian.org/debian"
+  debian_repositories:
+    security: "https://security.debian.org/debian-security"
+```
+
+```
+deb http://localhost:8080/debian trixie main
+deb http://localhost:8080/debian/security trixie-security main
+```
+
+`upstream.debian` keeps serving `/debian/pool/…` and `/debian/dists/…`
+unchanged. See [Debian archives](docs/configuration.md#debian-archives).
+
 ### RPM / Yum / DNF
 
 Configure yum/dnf to use the proxy in `/etc/yum.repos.d/proxy.repo`:
@@ -880,7 +899,8 @@ Recently cached:
 | `GET /v2/homebrew/core/*` | Homebrew core bottle manifests and blobs from GHCR |
 | `GET /apk/{repository}/*` | Alpine APK repository protocol |
 | `GET /generic/{name}/*` | Generic HTTP download proxy (GitHub release assets, mise/aqua) |
-| `GET /debian/*` | Debian/APT repository protocol |
+| `GET /debian/*` | Debian/APT repository protocol (main archive) |
+| `GET /debian/{repository}/*` | Debian/APT repository protocol (named archive, e.g. security) |
 | `GET /rpm/*` | RPM/Yum repository protocol |
 
 ### Mirror API

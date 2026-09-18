@@ -1243,6 +1243,53 @@ func TestValidateNamedUpstreams(t *testing.T) {
 			},
 			wantErr: true,
 		},
+		{
+			name: "valid Debian repository",
+			modify: func(cfg *Config) {
+				cfg.Upstream.DebianRepositories = map[string]string{
+					"security": "https://security.debian.org/debian-security",
+				}
+			},
+		},
+		{
+			name: "Debian repository name contains path separator",
+			modify: func(cfg *Config) {
+				cfg.Upstream.DebianRepositories = map[string]string{
+					"debian/security": "https://security.debian.org/debian-security",
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "Debian repository name is a relative path element",
+			modify: func(cfg *Config) {
+				cfg.Upstream.DebianRepositories = map[string]string{
+					".": "https://security.debian.org/debian-security",
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "Debian repository URL is not absolute",
+			modify: func(cfg *Config) {
+				cfg.Upstream.DebianRepositories = map[string]string{"security": "security.debian.org"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "Debian repository shadows the pool prefix",
+			modify: func(cfg *Config) {
+				cfg.Upstream.DebianRepositories = map[string]string{"pool": "https://security.debian.org"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "Debian repository shadows the dists prefix",
+			modify: func(cfg *Config) {
+				cfg.Upstream.DebianRepositories = map[string]string{"dists": "https://security.debian.org"}
+			},
+			wantErr: true,
+		},
 	}
 
 	for _, tt := range tests {

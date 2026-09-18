@@ -418,7 +418,12 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	handler.RegisterHomebrewArtifacts(containerHandler, s.cfg.Upstream.HomebrewArtifact)
 	helmHandler := handler.NewHelmHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm)
 	apkHandler := handler.NewAPKHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.APK)
-	debianHandler := handler.NewDebianHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Debian)
+	debianHandler := handler.NewDebianHandler(
+		proxy,
+		s.cfg.BaseURL,
+		s.cfg.Upstream.Debian,
+		s.cfg.Upstream.DebianRepositories,
+	)
 	rpmHandler := handler.NewRPMHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.RPM)
 	genericHandler := handler.NewGenericHandler(proxy, s.cfg.Upstream.Generic)
 

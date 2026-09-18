@@ -174,6 +174,11 @@ upstream:
   # Debian/APT repository URL (used by /debian endpoint)
   debian: "http://deb.debian.org/debian"
 
+  # Additional Debian/APT archives, served at /debian/{name}/.
+  # The names "pool" and "dists" are reserved for the main archive's own paths.
+  debian_repositories:
+    security: "https://security.debian.org/debian-security"
+
   # RPM repository URL (used by /rpm endpoint)
   rpm: "https://dl.fedoraproject.org/pub/fedora/linux"
 
