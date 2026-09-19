@@ -23,9 +23,10 @@ const (
 // HelmHandler serves read-only HTTP Helm chart repositories. Each configured
 // repository is mounted at /helm/{repository}/.
 type HelmHandler struct {
-	proxy        *Proxy
-	proxyURL     string
-	repositories map[string]string
+	proxy         *Proxy
+	proxyURL      string
+	repositories  map[string]string
+	ociRegistries []helmOCIRegistry
 }
 
 // NewHelmHandler creates a Helm chart repository protocol handler.
@@ -195,7 +196,11 @@ func (h *HelmHandler) rewriteIndex(repository, upstreamURL string, body []byte) 
 				continue
 			}
 			for _, download := range chart.downloads {
-				download.node.Value = h.chartProxyURL(repository, chart.digest, download.filename)
+				if download.oci {
+					download.node.Value = h.ociChartProxyURL(download.url)
+				} else {
+					download.node.Value = h.chartProxyURL(repository, chart.digest, download.filename)
+				}
 			}
 			filtered = append(filtered, release)
 		}
@@ -226,7 +231,7 @@ func (h *HelmHandler) findChartDownload(upstreamURL string, body []byte, digest,
 				continue
 			}
 			for _, download := range chart.downloads {
-				if download.filename == filename {
+				if !download.oci && download.filename == filename {
 					return download.url, nil
 				}
 			}
@@ -245,6 +250,7 @@ type helmChartDownload struct {
 	node     *yaml.Node
 	url      string
 	filename string
+	oci      bool
 }
 
 type helmChartRelease struct {
@@ -280,28 +286,40 @@ func (h *HelmHandler) parseChartRelease(chartName, upstreamURL string, release *
 	}
 
 	for _, urlNode := range urlsNode.Content {
-		if urlNode.Kind != yaml.ScalarNode {
-			return helmChartRelease{}, fmt.Errorf("chart %q has invalid URL", chartName)
-		}
-		reference, err := url.Parse(urlNode.Value)
+		download, err := parseHelmChartDownload(chartName, baseURL, urlNode)
 		if err != nil {
-			return helmChartRelease{}, fmt.Errorf("parsing chart %q URL: %w", chartName, err)
+			return helmChartRelease{}, err
 		}
-		downloadURL := baseURL.ResolveReference(reference)
-		if (downloadURL.Scheme != "http" && downloadURL.Scheme != "https") || downloadURL.Host == "" {
-			return helmChartRelease{}, fmt.Errorf("chart %q URL must be HTTP(S)", chartName)
-		}
-		filename := path.Base(downloadURL.Path)
-		if filename == "." || filename == "/" || filename == "" || !strings.HasSuffix(filename, ".tgz") {
-			return helmChartRelease{}, fmt.Errorf("chart %q URL must point to a .tgz file", chartName)
-		}
-		chart.downloads = append(chart.downloads, helmChartDownload{
-			node:     urlNode,
-			url:      downloadURL.String(),
-			filename: filename,
-		})
+		chart.downloads = append(chart.downloads, download)
 	}
 	return chart, nil
+}
+
+func parseHelmChartDownload(chartName string, baseURL *url.URL, node *yaml.Node) (helmChartDownload, error) {
+	if node.Kind != yaml.ScalarNode {
+		return helmChartDownload{}, fmt.Errorf("chart %q has invalid URL", chartName)
+	}
+	reference, err := url.Parse(node.Value)
+	if err != nil {
+		return helmChartDownload{}, fmt.Errorf("parsing chart %q URL: %w", chartName, err)
+	}
+	if reference.Scheme == "oci" {
+		if reference.Hostname() == "" || strings.Trim(reference.Path, "/") == "" ||
+			reference.User != nil || reference.RawQuery != "" || reference.ForceQuery || reference.Fragment != "" ||
+			containsPathTraversal(reference.Path) {
+			return helmChartDownload{}, fmt.Errorf("chart %q has invalid OCI reference", chartName)
+		}
+		return helmChartDownload{node: node, url: node.Value, oci: true}, nil
+	}
+	downloadURL := baseURL.ResolveReference(reference)
+	if (downloadURL.Scheme != "http" && downloadURL.Scheme != "https") || downloadURL.Host == "" {
+		return helmChartDownload{}, fmt.Errorf("chart %q URL must be HTTP(S) or OCI", chartName)
+	}
+	filename := path.Base(downloadURL.Path)
+	if filename == "." || filename == "/" || filename == "" || !strings.HasSuffix(filename, ".tgz") {
+		return helmChartDownload{}, fmt.Errorf("chart %q URL must point to a .tgz file", chartName)
+	}
+	return helmChartDownload{node: node, url: downloadURL.String(), filename: filename}, nil
 }
 
 func (h *HelmHandler) chartProxyURL(repository, digest, filename string) string {

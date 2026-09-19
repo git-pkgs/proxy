@@ -211,6 +211,13 @@ repository's `index.yaml` so chart archives are downloaded through the proxy.
 Chart archives are retained only when their SHA-256 digest matches the digest
 listed in the index. Relative and absolute chart URLs are both supported.
 
+HTTP indexes can also contain `oci://` chart references. References matching the
+host and port of a configured `upstream.oci` registry or `upstream.oci_default`
+are rewritten through the OCI proxy, with named registries preferred. Unmatched
+references are left unchanged, so Helm contacts those registries directly.
+Automatic rewriting requires both the OCI upstream URL and `base_url` to be
+root URLs without a path prefix. Repository paths, tags, and digests are preserved.
+
 Generic HTTP upstreams proxy plain downloads from fixed base URLs:
 
 ```yaml
