@@ -403,3 +403,40 @@ func clearRecordedSize(t *testing.T, db *database.DB, versionPURL, filename stri
 		t.Fatalf("clearing recorded size: %v", err)
 	}
 }
+
+// TestEvictBatch_SkipsRecordThatMoved evicts from a row read before a newer
+// fetch moved the record. Only the old object goes, and nothing is counted as
+// freed, since the size in use is unchanged and counting it would end the pass
+// while the cache is still over its limit.
+func TestEvictBatch_SkipsRecordThatMoved(t *testing.T) {
+	db, store := setupEvictionTest(t)
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	seedArtifact(t, ctx, db, store, "moved", 1000, time.Now().Add(-time.Hour))
+
+	stale, err := db.GetLeastRecentlyUsedArtifacts(evictionBatch)
+	if err != nil || len(stale) != 1 {
+		t.Fatalf("reading LRU rows: %v, %v", stale, err)
+	}
+	newer := storage.FetchPath("npm", "moved", "1.0.0", storage.NewFetchID(), "moved-1.0.0.tgz")
+	if _, _, err := store.Store(ctx, newer, strings.NewReader("refetched")); err != nil {
+		t.Fatalf("storing refetch: %v", err)
+	}
+	moved := stale[0]
+	moved.StoragePath = sql.NullString{String: newer, Valid: true}
+	if err := db.UpsertArtifact(&moved); err != nil {
+		t.Fatalf("moving record: %v", err)
+	}
+
+	cleared, freed := evictBatch(ctx, db, store, logger, stale, 0, 1000)
+	if cleared != 0 || freed != 0 {
+		t.Errorf("cleared %d records freeing %d bytes, want nothing counted", cleared, freed)
+	}
+	record, err := db.GetArtifact(moved.VersionPURL, moved.Filename)
+	if err != nil || record == nil || record.StoragePath.String != newer {
+		t.Fatalf("record = %+v (err %v), want it kept at %q", record, err, newer)
+	}
+	if ok, _ := store.Exists(ctx, newer); !ok {
+		t.Error("the newer fetch's object was deleted")
+	}
+}

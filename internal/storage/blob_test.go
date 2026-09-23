@@ -127,6 +127,44 @@ func TestBlobDelete(t *testing.T) {
 	}
 }
 
+// A fetch stores its object in a directory of its own, so Delete removes that
+// directory once it is empty rather than leave one behind per deleted object.
+// A version directory from the layout before fetch directories is left alone,
+// since a new fetch may be creating its directory inside it.
+func TestBlobDeleteRemovesEmptyFetchDirectory(t *testing.T) {
+	dir := t.TempDir()
+	b := openFileBlob(t, dir)
+	ctx := context.Background()
+	const (
+		emptied = "npm/pkg/1.0.0/0123456789abcdef/pkg.tgz"
+		shared  = "npm/pkg/1.0.0/fedcba9876543210/pkg.tgz"
+		kept    = "npm/pkg/1.0.0/fedcba9876543210/other.tgz"
+		legacy  = "npm/pkg/2.0.0/pkg.tgz"
+	)
+	for _, key := range []string{emptied, shared, kept, legacy} {
+		if _, _, err := b.Store(ctx, key, strings.NewReader("content")); err != nil {
+			t.Fatalf("Store(%q): %v", key, err)
+		}
+	}
+
+	for _, key := range []string{emptied, shared, legacy} {
+		if err := b.Delete(ctx, key); err != nil {
+			t.Fatalf("Delete(%q): %v", key, err)
+		}
+	}
+
+	pkg := filepath.Join(dir, "npm", "pkg")
+	if _, err := os.Stat(filepath.Join(pkg, "1.0.0", "0123456789abcdef")); !os.IsNotExist(err) {
+		t.Errorf("emptied fetch directory left behind (stat err %v)", err)
+	}
+	for _, d := range []string{filepath.Join("1.0.0", "fedcba9876543210"), "1.0.0", "2.0.0"} {
+		if _, err := os.Stat(filepath.Join(pkg, d)); err != nil {
+			t.Errorf("directory %s removed: %v", d, err)
+		}
+	}
+	assertReadsBack(t, b, kept, "content")
+}
+
 func TestBlobDeleteNotFound(t *testing.T) {
 	b := createTestBlob(t)
 	ctx := context.Background()

@@ -119,13 +119,21 @@ func OpenBucket(ctx context.Context, urlStr string) (Storage, error) {
 
 // legacySidecarPath gives the ".attrs" path an earlier version wrote for key,
 // or "" when that path would not be a file inside fileRoot.
-//
-// The key is escaped the way fileblob escapes it on the way to disk, so the
-// sidecar is looked for where fileblob wrote it. filepath.Localize then
-// validates the escaped form: it rejects an empty, absolute or ".." path, and
-// "." would name fileRoot itself. What it declines are keys the proxy never
-// produces.
 func (b *Blob) legacySidecarPath(key string) string {
+	if p := b.localPath(key); p != "" {
+		return p + attrsExt
+	}
+	return ""
+}
+
+// localPath gives the file fileblob keeps key in, or "" when that would not
+// be a file inside fileRoot.
+//
+// The key is escaped the way fileblob escapes it on the way to disk.
+// filepath.Localize then validates the escaped form: it rejects an empty,
+// absolute or ".." path, and "." would name fileRoot itself. What it declines
+// are keys the proxy never produces.
+func (b *Blob) localPath(key string) string {
 	if b.fileRoot == "" {
 		return ""
 	}
@@ -133,7 +141,7 @@ func (b *Blob) legacySidecarPath(key string) string {
 	if err != nil || rel == "." {
 		return ""
 	}
-	return filepath.Join(b.fileRoot, rel) + attrsExt
+	return filepath.Join(b.fileRoot, rel)
 }
 
 // escapeKey mirrors fileblob's unexported escapeKey, which hex-escapes a rune
@@ -238,10 +246,19 @@ func (b *Blob) Exists(ctx context.Context, path string) (bool, error) {
 	return exists, nil
 }
 
+// Delete removes the object at path. On a file:// bucket it also removes the
+// object's fetch directory once empty, since fileblob leaves directories
+// behind. Any other directory, such as a version directory another fetch may
+// be creating its own directory in, is left alone.
 func (b *Blob) Delete(ctx context.Context, path string) error {
 	err := b.bucket.Delete(ctx, path)
 	if err != nil && !isNotExist(err) {
 		return fmt.Errorf("deleting object: %w", err)
+	}
+	if p := b.localPath(path); p != "" {
+		if dir := filepath.Dir(p); dir != b.fileRoot && isFetchDir(filepath.Base(dir)) {
+			_ = os.Remove(dir) // fails, harmlessly, while the directory holds anything
+		}
 	}
 	return nil
 }

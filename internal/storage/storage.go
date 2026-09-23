@@ -14,6 +14,8 @@ package storage
 
 import (
 	"context"
+	"crypto/rand"
+	"encoding/hex"
 	"errors"
 	"io"
 	"time"
@@ -72,7 +74,8 @@ type Storage interface {
 	Close() error
 }
 
-// ArtifactPath builds a storage path for an artifact.
+// ArtifactPath builds the storage path artifacts were cached under before each
+// fetch got its own; records from then still point at such paths.
 // Format: {ecosystem}/{namespace}/{name}/{version}/{filename}
 // For packages without namespace: {ecosystem}/{name}/{version}/{filename}
 func ArtifactPath(ecosystem, namespace, name, version, filename string) string {
@@ -80,4 +83,37 @@ func ArtifactPath(ecosystem, namespace, name, version, filename string) string {
 		return ecosystem + "/" + namespace + "/" + name + "/" + version + "/" + filename
 	}
 	return ecosystem + "/" + name + "/" + version + "/" + filename
+}
+
+// FetchPath builds the storage path for one fetch of an artifact:
+// {ecosystem}/{name}/{version}/{fetchID}/{filename}. Each fetch writes its own
+// object, so no fetch overwrites or deletes another's.
+func FetchPath(ecosystem, name, version, fetchID, filename string) string {
+	return ecosystem + "/" + name + "/" + version + "/" + fetchID + "/" + filename
+}
+
+// fetchIDBytes sizes a fetch id: 16 hex characters keeps paths short, which
+// matters on Windows, and a collision between fetches of one artifact version
+// is out of reach.
+const fetchIDBytes = 8
+
+// NewFetchID returns a random id for FetchPath.
+func NewFetchID() string {
+	b := make([]byte, fetchIDBytes)
+	_, _ = rand.Read(b)
+	return hex.EncodeToString(b)
+}
+
+// isFetchDir reports whether a directory name has the shape of a fetch id.
+// Only one fetch ever writes into such a directory.
+func isFetchDir(name string) bool {
+	if len(name) != 2*fetchIDBytes {
+		return false
+	}
+	for _, c := range name {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
+			return false
+		}
+	}
+	return true
 }

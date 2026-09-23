@@ -89,9 +89,12 @@ func TestStaleCacheIsDiscardedBeforeTheFetch(t *testing.T) {
 	if got := cachedDigest(t, proxy); got != "" {
 		t.Errorf("stale record survived a failed refresh, digest = %q", got)
 	}
-	if bytesPresent(store) {
-		t.Error("stale bytes survived a failed refresh")
+	// A request that read the stale record may still be opening its bytes,
+	// so they are queued for deletion rather than deleted.
+	if !bytesPresent(store) {
+		t.Error("stale bytes were deleted while a reader may still open them")
 	}
+	assertQueuedForDeletion(t, proxy.DB, staleStoragePath)
 }
 
 func TestStaleCacheIsReplacedByTheFetch(t *testing.T) {

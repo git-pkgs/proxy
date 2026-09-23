@@ -9,6 +9,19 @@ import (
 	"testing"
 )
 
+func TestIsFetchDir(t *testing.T) {
+	for range 10 {
+		if id := NewFetchID(); !isFetchDir(id) {
+			t.Errorf("isFetchDir(%q) = false for a fetch id", id)
+		}
+	}
+	for _, name := range []string{"1.0.0", "0123456789abcde", "0123456789abcdef0", "0123456789ABCDEF", "0123456789abcdeg", ""} {
+		if isFetchDir(name) {
+			t.Errorf("isFetchDir(%q) = true", name)
+		}
+	}
+}
+
 func TestArtifactPath(t *testing.T) {
 	tests := []struct {
 		ecosystem string

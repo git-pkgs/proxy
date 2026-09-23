@@ -10,6 +10,7 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync"
 	"testing"
@@ -246,6 +247,16 @@ func seedPackage(t testing.TB, db *database.DB, store *mockStorage, ecosystem, n
 	}
 }
 
+// recordedStoragePath returns the storage path the artifact's record points at.
+func recordedStoragePath(t testing.TB, db *database.DB, versionPURL, filename string) string {
+	t.Helper()
+	art, err := db.GetArtifact(versionPURL, filename)
+	if err != nil || art == nil || !art.StoragePath.Valid {
+		t.Fatalf("no storage path recorded for %s %s (err %v)", versionPURL, filename, err)
+	}
+	return art.StoragePath.String
+}
+
 // pathParseCase holds a single test case for path parsing functions that return
 // (name, version, arch).
 type pathParseCase struct {
@@ -394,6 +405,38 @@ func assertMalformedCacheRejected(t *testing.T, malformedHash, malformedIntegrit
 	if artifact.StoragePath.Valid {
 		t.Error("unusable cache record retained its storage path")
 	}
+	assertQueuedForDeletion(t, db, storage.ArtifactPath("npm", "", packageName, version, filename))
+}
+
+// TestCorruptCachedArtifactIsQueuedForDeletion streams cached bytes that no
+// longer match their recorded digest, which clears the record once the stream
+// ends. With each fetch writing its own path, no later fetch overwrites them,
+// so they must be queued for deletion.
+func TestCorruptCachedArtifactIsQueuedForDeletion(t *testing.T) {
+	proxy, db, store, _ := setupTestProxy(t)
+	seedPackage(t, db, store, "npm", "corrupt", "1.0.0", "corrupt-1.0.0.tgz", "cached content")
+	storagePath := storage.ArtifactPath("npm", "", "corrupt", "1.0.0", "corrupt-1.0.0.tgz")
+	store.files[storagePath] = []byte("tampered bytes")
+
+	result, err := proxy.GetCachedArtifact(context.Background(), "npm", "corrupt", "1.0.0", "corrupt-1.0.0.tgz")
+	if err != nil || result == nil {
+		t.Fatalf("GetCachedArtifact = %v, %v", result, err)
+	}
+	drain(result)
+	artifact, err := db.GetArtifact("pkg:npm/corrupt@1.0.0", "corrupt-1.0.0.tgz")
+	if err != nil || artifact == nil || artifact.StoragePath.Valid {
+		t.Errorf("record = %+v (err %v), want it cleared", artifact, err)
+	}
+	assertQueuedForDeletion(t, db, storagePath)
+}
+
+// assertQueuedForDeletion fails unless path waits in the pending delete queue.
+func assertQueuedForDeletion(t *testing.T, db *database.DB, path string) {
+	t.Helper()
+	queued, err := db.GetDuePendingDeletes(time.Now().Add(time.Hour), 100)
+	if err != nil || !slices.Contains(queued, path) {
+		t.Errorf("queued %v (err %v), want %q queued for deletion", queued, err, path)
+	}
 }
 
 func TestGetOrFetchArtifact_CacheMiss_NoPackage(t *testing.T) {
@@ -454,7 +497,7 @@ func TestGetOrFetchArtifactFromURL_CacheMiss_StorageMissing(t *testing.T) {
 	}
 
 	// Verify the new content was stored
-	storagePath := storage.ArtifactPath("npm", "", "missing", "1.0.0", "missing-1.0.0.tgz")
+	storagePath := recordedStoragePath(t, db, "pkg:npm/missing@1.0.0", "missing-1.0.0.tgz")
 	if _, ok := store.files[storagePath]; !ok {
 		t.Error("refetched artifact should be stored")
 	}
@@ -718,7 +761,7 @@ func TestGetOrFetchArtifactFromURL_CacheHit(t *testing.T) {
 }
 
 func TestGetOrFetchArtifactFromURL_CacheMiss(t *testing.T) {
-	proxy, _, store, fetcher := setupTestProxy(t)
+	proxy, db, store, fetcher := setupTestProxy(t)
 	missesBefore := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("pypi"))
 	fetchesBefore := histogramSampleCount(t, metrics.UpstreamFetchDuration.WithLabelValues("pypi"))
 	writesBefore := histogramSampleCount(t, metrics.StorageOperationDuration.WithLabelValues("write"))
@@ -763,7 +806,7 @@ func TestGetOrFetchArtifactFromURL_CacheMiss(t *testing.T) {
 	}
 
 	// Verify it was stored
-	storagePath := storage.ArtifactPath("pypi", "", "newpkg", "1.0.0", "newpkg-1.0.0.tar.gz")
+	storagePath := recordedStoragePath(t, db, "pkg:pypi/newpkg@1.0.0", "newpkg-1.0.0.tar.gz")
 	if _, ok := store.files[storagePath]; !ok {
 		t.Error("artifact was not stored in storage")
 	}

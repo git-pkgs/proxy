@@ -267,9 +267,9 @@ func (p *Proxy) GetCachedArtifact(ctx context.Context, ecosystem, name, version,
 	return p.checkCache(ctx, pkgPURL, versionPURL, filename)
 }
 
-// ClearCachedArtifact removes both an artifact cache record and its stored
-// bytes after an external integrity check fails.
-func (p *Proxy) ClearCachedArtifact(ctx context.Context, ecosystem, name, version, filename string) error {
+// ClearCachedArtifact clears an artifact cache record after an external
+// integrity check fails, and queues its stored bytes for deletion.
+func (p *Proxy) ClearCachedArtifact(_ context.Context, ecosystem, name, version, filename string) error {
 	if p.DB == nil || p.Storage == nil {
 		return nil
 	}
@@ -284,10 +284,7 @@ func (p *Proxy) ClearCachedArtifact(ctx context.Context, ecosystem, name, versio
 	if cached == nil {
 		return nil
 	}
-	if err := p.Storage.Delete(ctx, cached.StoragePath); err != nil {
-		return fmt.Errorf("deleting cached artifact: %w", err)
-	}
-	return p.DB.ClearArtifactCache(versionPURL, filename)
+	return p.DB.DiscardArtifact(versionPURL, filename, cached.StoragePath)
 }
 
 // checkCache looks up an artifact in the cache. Returns nil if not cached.
@@ -343,7 +340,7 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 				"purl", versionPURL, "filename", filename,
 				"path", artifact.StoragePath, "reason", reason)
 			metrics.RecordIntegrityFailure(purl.NormalizeEcosystem(artifact.Ecosystem))
-			if err := p.DB.ClearArtifactCache(versionPURL, filename); err != nil {
+			if err := p.DB.DiscardArtifact(versionPURL, filename, artifact.StoragePath); err != nil {
 				p.Logger.Warn("failed to clear corrupt artifact from cache", "error", err)
 			}
 		})
@@ -386,7 +383,7 @@ func (p *Proxy) rejectUnusableCacheRecord(artifact *database.CachedArtifact, ver
 		"purl", versionPURL, "filename", filename,
 		"path", artifact.StoragePath, "error", cause)
 	metrics.RecordIntegrityFailure(purl.NormalizeEcosystem(artifact.Ecosystem))
-	if err := p.DB.ClearArtifactCache(versionPURL, filename); err != nil {
+	if err := p.DB.DiscardArtifact(versionPURL, filename, artifact.StoragePath); err != nil {
 		p.Logger.Warn("failed to clear unusable artifact from cache", "error", err)
 	}
 }
@@ -448,7 +445,7 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 // It returns the artifact and its storage path, not a reader; callers get one
 // from openStoredArtifact.
 func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, upstreamURL, upstreamHash string, artifact *fetch.Artifact) (artifacts.Artifact, string, error) {
-	storagePath := storage.ArtifactPath(ecosystem, "", name, version, filename)
+	storagePath := storage.FetchPath(ecosystem, name, version, storage.NewFetchID(), filename)
 
 	storeStart := time.Now()
 	size, hash, err := p.Storage.Store(ctx, storagePath, artifact.Body)
@@ -490,7 +487,11 @@ func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, fil
 	// Update database
 	if err := p.updateCacheDB(ecosystem, name, pkgPURL, upstreamURL, storagePath, sharedArtifact); err != nil {
 		p.Logger.Warn("failed to update cache database", "error", err)
-		// Continue anyway - we have the file
+		// Continue anyway - we have the file. Queue it for deletion in case
+		// no record points at it; the queue skips it while one does.
+		if qErr := p.DB.QueuePendingDelete(storagePath); qErr != nil {
+			p.Logger.Warn("failed to queue unrecorded artifact for deletion", "path", storagePath, "error", qErr)
+		}
 	}
 
 	return sharedArtifact, storagePath, nil
@@ -1352,7 +1353,7 @@ func (p *Proxy) coalescedFetchFromURL(ctx context.Context, ecosystem, name, vers
 		return p.cachedArtifactRecord(pkgPURL, versionPURL, filename, upstreamHash)
 	}
 	return p.coalesceFetch(ctx, key, recheck, func(fetchCtx context.Context) (artifacts.Artifact, string, error) {
-		p.discardStaleArtifact(fetchCtx, pkgPURL, versionPURL, filename, upstreamHash)
+		p.discardStaleArtifact(pkgPURL, versionPURL, filename, upstreamHash)
 		return p.fetchAndCacheFromURL(fetchCtx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, upstreamHash)
 	})
 }
@@ -1378,10 +1379,10 @@ func (p *Proxy) getCachedArtifactWithUpstreamHash(ctx context.Context, pkgPURL, 
 	return nil, nil
 }
 
-// discardStaleArtifact removes the cached entry when its digest disagrees
-// with upstreamHash. It runs under the coalescing key, after the recheck, so
-// an entry a previous fetch refreshed is kept.
-func (p *Proxy) discardStaleArtifact(ctx context.Context, pkgPURL, versionPURL, filename, upstreamHash string) {
+// discardStaleArtifact clears the cached entry when its digest disagrees with
+// upstreamHash, queueing its object for deletion. It runs under the coalescing
+// key, after the recheck, so an entry a previous fetch refreshed is kept.
+func (p *Proxy) discardStaleArtifact(pkgPURL, versionPURL, filename, upstreamHash string) {
 	record, err := p.DB.GetCachedArtifact(pkgPURL, versionPURL, filename)
 	if err != nil {
 		p.Logger.Warn("failed to read cache record before refetch",
@@ -1393,7 +1394,9 @@ func (p *Proxy) discardStaleArtifact(ctx context.Context, pkgPURL, versionPURL, 
 	}
 	p.Logger.Warn("cached artifact hash disagrees with upstream metadata, discarding",
 		"purl", versionPURL, "filename", filename, "cached", record.Artifact.Digest.Encoded(), "upstream", upstreamHash)
-	p.discardCachedArtifact(ctx, versionPURL, filename, record.StoragePath)
+	if err := p.DB.DiscardArtifact(versionPURL, filename, record.StoragePath); err != nil {
+		p.Logger.Warn("failed to clear artifact cache record", "purl", versionPURL, "filename", filename, "error", err)
+	}
 }
 
 func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, upstreamHash string) (artifacts.Artifact, string, error) {
@@ -1420,15 +1423,4 @@ var ErrArtifactDigestMismatch = errors.New("artifact digest mismatch")
 
 func artifactHashMatches(got, expected string) bool {
 	return expected == "" || strings.EqualFold(got, expected)
-}
-
-func (p *Proxy) discardCachedArtifact(ctx context.Context, versionPURL, filename, storagePath string) {
-	if storagePath != "" {
-		if err := p.Storage.Delete(ctx, storagePath); err != nil {
-			p.Logger.Warn("failed to discard cached artifact", "path", storagePath, "error", err)
-		}
-	}
-	if err := p.DB.ClearArtifactCache(versionPURL, filename); err != nil {
-		p.Logger.Warn("failed to clear artifact cache record", "purl", versionPURL, "filename", filename, "error", err)
-	}
 }
