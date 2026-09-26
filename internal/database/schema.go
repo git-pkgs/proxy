@@ -78,6 +78,11 @@ CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_version_filename ON artifacts(ve
 CREATE INDEX IF NOT EXISTS idx_artifacts_storage_path ON artifacts(storage_path);
 CREATE INDEX IF NOT EXISTS idx_artifacts_last_accessed ON artifacts(last_accessed_at);
 
+CREATE TABLE IF NOT EXISTS pending_deletes (
+	path TEXT NOT NULL PRIMARY KEY,
+	queued_at DATETIME NOT NULL
+);
+
 CREATE TABLE IF NOT EXISTS vulnerabilities (
 	id INTEGER PRIMARY KEY,
 	vuln_id TEXT NOT NULL,
@@ -180,6 +185,11 @@ CREATE TABLE IF NOT EXISTS artifacts (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_version_filename ON artifacts(version_purl, filename);
 CREATE INDEX IF NOT EXISTS idx_artifacts_storage_path ON artifacts(storage_path);
 CREATE INDEX IF NOT EXISTS idx_artifacts_last_accessed ON artifacts(last_accessed_at);
+
+CREATE TABLE IF NOT EXISTS pending_deletes (
+	path TEXT NOT NULL PRIMARY KEY,
+	queued_at TIMESTAMP NOT NULL
+);
 
 CREATE TABLE IF NOT EXISTS vulnerabilities (
 	id SERIAL PRIMARY KEY,
@@ -368,6 +378,7 @@ var migrations = []migration{
 	{"006_add_metadata_content_digest", migrateAddMetadataContentDigest},
 	{"007_add_metadata_link", migrateAddMetadataLink},
 	{"008_add_metadata_content_encoding", migrateAddMetadataContentEncoding},
+	{"009_add_pending_deletes", migrateAddPendingDeletes},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -636,6 +647,23 @@ func migrateAddMetadataContentEncoding(db *DB) error {
 	// instead of an If-None-Match 304 re-serving the stale decompressed copy.
 	if _, err := db.Exec("UPDATE metadata_cache SET etag = NULL, fetched_at = NULL"); err != nil {
 		return fmt.Errorf("invalidating metadata_cache validators: %w", err)
+	}
+	return nil
+}
+
+// migrateAddPendingDeletes creates the queue of storage paths that no record
+// points at any more, which the server deletes after a grace period.
+func migrateAddPendingDeletes(db *DB) error {
+	ts := sqliteDatetime
+	if db.dialect == DialectPostgres {
+		ts = postgresTimestamp
+	}
+	query := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS pending_deletes (
+		path TEXT NOT NULL PRIMARY KEY,
+		queued_at %s NOT NULL
+	)`, ts)
+	if _, err := db.Exec(query); err != nil {
+		return fmt.Errorf("creating pending_deletes table: %w", err)
 	}
 	return nil
 }

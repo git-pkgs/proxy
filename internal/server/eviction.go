@@ -122,9 +122,15 @@ func evictBatch(ctx context.Context, db *database.DB, store storage.Storage, log
 			continue
 		}
 
-		if err := db.ClearArtifactCache(art.VersionPURL, art.Filename); err != nil {
+		recordCleared, err := db.ClearArtifactCache(art.VersionPURL, art.Filename, art.StoragePath.String)
+		if err != nil {
 			logger.Warn("eviction: failed to clear artifact record",
 				"version_purl", art.VersionPURL, "filename", art.Filename, "error", err)
+			continue
+		}
+		if !recordCleared {
+			// The record no longer points here, so this delete freed nothing
+			// the recorded size counts.
 			continue
 		}
 

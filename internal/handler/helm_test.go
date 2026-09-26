@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -164,11 +165,23 @@ func TestHelmHandler_RejectsChartDigestMismatch(t *testing.T) {
 	if requests != 2 {
 		t.Errorf("chart requests = %d, want 2 after invalid cache entry is cleared", requests)
 	}
-	storagePath := storage.ArtifactPath(helmMetadataEcosystem, "", "test", digest, "demo.tgz")
-	if exists, err := store.Exists(t.Context(), storagePath); err != nil {
-		t.Fatalf("checking rejected chart storage: %v", err)
-	} else if exists {
-		t.Errorf("rejected chart remains in storage at %q", storagePath)
+	queued, err := proxy.DB.GetDuePendingDeletes(time.Now().Add(time.Hour), 10)
+	if err != nil {
+		t.Fatalf("listing queued deletes: %v", err)
+	}
+	chartDir := storage.ArtifactPath(helmMetadataEcosystem, "", "test", digest, "")
+	stored := 0
+	for path := range store.files {
+		if !strings.HasPrefix(path, chartDir) {
+			continue
+		}
+		stored++
+		if !slices.Contains(queued, path) {
+			t.Errorf("rejected chart at %q is not queued for deletion", path)
+		}
+	}
+	if stored != requests {
+		t.Errorf("found %d stored charts, want one per request (%d)", stored, requests)
 	}
 }
 

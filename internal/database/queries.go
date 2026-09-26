@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"errors"
 	"fmt"
 	"time"
 
@@ -310,7 +311,42 @@ func (db *DB) GetArtifactsByVersionPURL(versionPURL string) ([]Artifact, error) 
 	return artifacts, nil
 }
 
+// upsertArtifactAttempts bounds how often UpsertArtifact retries a record that
+// concurrent commits keep moving.
+const upsertArtifactAttempts = 5
+
+// UpsertArtifact records a. A storage path the record stops pointing at is
+// queued for deletion, since each fetch stores its own object and nothing else
+// would remove it. The write applies only if the record still holds the path
+// read before it, so commits racing on one artifact each queue the path they
+// replaced.
 func (db *DB) UpsertArtifact(a *Artifact) error {
+	for range upsertArtifactAttempts {
+		var previous sql.NullString
+		query := db.Rebind(`SELECT storage_path FROM artifacts WHERE version_purl = ? AND filename = ?`)
+		if err := db.Get(&previous, query, a.VersionPURL, a.Filename); err != nil && !errors.Is(err, sql.ErrNoRows) {
+			return fmt.Errorf("reading artifact: %w", err)
+		}
+		applied, err := db.upsertArtifactFrom(a, previous)
+		if err != nil {
+			return err
+		}
+		if !applied {
+			continue
+		}
+		if previous.Valid && previous.String != a.StoragePath.String {
+			if err := db.QueuePendingDelete(previous.String); err != nil {
+				return fmt.Errorf("queueing replaced artifact: %w", err)
+			}
+		}
+		return nil
+	}
+	return errors.New("upserting artifact: record kept changing")
+}
+
+// upsertArtifactFrom writes a if the record is absent or still holds
+// previous, and reports whether it did.
+func (db *DB) upsertArtifactFrom(a *Artifact, previous sql.NullString) (bool, error) {
 	now := time.Now()
 	var query string
 
@@ -327,6 +363,7 @@ func (db *DB) UpsertArtifact(a *Artifact) error {
 				content_type = EXCLUDED.content_type,
 				fetched_at = EXCLUDED.fetched_at,
 				updated_at = EXCLUDED.updated_at
+			WHERE artifacts.storage_path IS NOT DISTINCT FROM $13
 		`
 	} else {
 		query = `
@@ -341,17 +378,22 @@ func (db *DB) UpsertArtifact(a *Artifact) error {
 				content_type = excluded.content_type,
 				fetched_at = excluded.fetched_at,
 				updated_at = excluded.updated_at
+			WHERE artifacts.storage_path IS ?
 		`
 	}
 
-	_, err := db.Exec(query,
+	res, err := db.Exec(query,
 		a.VersionPURL, a.Filename, a.UpstreamURL, a.StoragePath, a.ContentHash,
-		a.Size, a.ContentType, a.FetchedAt, a.HitCount, a.LastAccessedAt, now, now,
+		a.Size, a.ContentType, a.FetchedAt, a.HitCount, a.LastAccessedAt, now, now, previous,
 	)
 	if err != nil {
-		return fmt.Errorf("upserting artifact: %w", err)
+		return false, fmt.Errorf("upserting artifact: %w", err)
 	}
-	return nil
+	n, err := res.RowsAffected()
+	if err != nil {
+		return false, fmt.Errorf("upserting artifact: %w", err)
+	}
+	return n > 0, nil
 }
 
 func (db *DB) RecordArtifactHit(versionPURL, filename string) error {
@@ -415,14 +457,71 @@ func (db *DB) GetCachedArtifactCount() (int64, error) {
 	return count, err
 }
 
-func (db *DB) ClearArtifactCache(versionPURL, filename string) error {
+// ClearArtifactCache marks an artifact uncached if its record still points at
+// storagePath, and reports whether it did. A record a newer fetch has moved
+// elsewhere is left alone, so a clear never orphans the object that fetch
+// committed.
+func (db *DB) ClearArtifactCache(versionPURL, filename, storagePath string) (bool, error) {
+	return db.clearArtifactCache(versionPURL, filename, storagePath)
+}
+
+// DiscardArtifact clears the record as ClearArtifactCache does and queues
+// storagePath for deletion, for callers that must not delete an object another
+// request may be reading.
+func (db *DB) DiscardArtifact(versionPURL, filename, storagePath string) error {
+	cleared, err := db.clearArtifactCache(versionPURL, filename, storagePath)
+	if err != nil || !cleared {
+		return err
+	}
+	return db.QueuePendingDelete(storagePath)
+}
+
+func (db *DB) clearArtifactCache(versionPURL, filename, storagePath string) (bool, error) {
 	query := db.Rebind(`
 		UPDATE artifacts
 		SET storage_path = NULL, content_hash = NULL, size = NULL,
 		    content_type = NULL, fetched_at = NULL, updated_at = ?
-		WHERE version_purl = ? AND filename = ?
+		WHERE version_purl = ? AND filename = ? AND storage_path = ?
 	`)
-	_, err := db.Exec(query, time.Now(), versionPURL, filename)
+	res, err := db.Exec(query, time.Now(), versionPURL, filename, storagePath)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
+// QueuePendingDelete queues a storage path no record points at any more.
+// Queueing a path again restarts its grace period.
+func (db *DB) QueuePendingDelete(path string) error {
+	query := db.Rebind(`
+		INSERT INTO pending_deletes (path, queued_at) VALUES (?, ?)
+		ON CONFLICT(path) DO UPDATE SET queued_at = excluded.queued_at
+	`)
+	_, err := db.Exec(query, path, time.Now().UTC())
+	return err
+}
+
+// GetDuePendingDeletes returns up to limit paths queued before cutoff, oldest
+// first. A path a record points at again is skipped.
+func (db *DB) GetDuePendingDeletes(cutoff time.Time, limit int) ([]string, error) {
+	var paths []string
+	query := db.Rebind(`
+		SELECT path FROM pending_deletes
+		WHERE queued_at < ?
+		  AND NOT EXISTS (SELECT 1 FROM artifacts WHERE artifacts.storage_path = pending_deletes.path)
+		ORDER BY queued_at
+		LIMIT ?
+	`)
+	if err := db.Select(&paths, query, cutoff.UTC(), limit); err != nil {
+		return nil, err
+	}
+	return paths, nil
+}
+
+// RemovePendingDelete drops a deleted path from the queue.
+func (db *DB) RemovePendingDelete(path string) error {
+	_, err := db.Exec(db.Rebind(`DELETE FROM pending_deletes WHERE path = ?`), path)
 	return err
 }
 

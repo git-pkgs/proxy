@@ -146,6 +146,11 @@ artifacts (
 )
 -- indexes: (version_purl, filename) unique, storage_path, last_accessed_at
 
+pending_deletes (
+    path          TEXT NOT NULL PRIMARY KEY, -- storage path no record points at
+    queued_at     DATETIME NOT NULL
+)
+
 vulnerabilities (
     id            INTEGER PRIMARY KEY,
     vuln_id       TEXT NOT NULL,      -- e.g. CVE-2021-1234
@@ -209,10 +214,10 @@ type Storage interface {
 ```
 
 **Filesystem implementation:**
-- Stores files in nested directories: `{ecosystem}/{name}/{version}/{filename}`
+- Stores files in nested directories: `{ecosystem}/{name}/{version}/{fetch id}/{filename}`, a new id per fetch, so fetches of one artifact never overwrite or delete each other's object (artifacts cached before this sit at `{ecosystem}/{name}/{version}/{filename}`)
 - Atomic writes using temp file + rename
 - Computes SHA256 hash during write
-- Cleans up empty parent directories on delete
+- Removes a fetch's directory once its object is deleted
 
 **Path structure:**
 
@@ -221,15 +226,18 @@ cache/artifacts/
 ├── npm/
 │   ├── lodash/
 │   │   └── 4.17.21/
-│   │       └── lodash-4.17.21.tgz
+│   │       └── 3f9a0c1d2e4b5a67/
+│   │           └── lodash-4.17.21.tgz
 │   └── @babel/
 │       └── core/
 │           └── 7.23.0/
-│               └── core-7.23.0.tgz
+│               └── 8c2e41f09a7d3b15/
+│                   └── core-7.23.0.tgz
 └── cargo/
     └── serde/
         └── 1.0.193/
-            └── serde-1.0.193.crate
+            └── d05b7e9c14a2f863/
+                └── serde-1.0.193.crate
 ```
 
 ### `internal/upstream`
@@ -340,6 +348,8 @@ Eviction can be implemented as:
 1. Background goroutine checking `GetTotalCacheSize()`
 2. When over limit, get LRU artifacts
 3. Delete from storage and clear database records
+
+An object a record stops pointing at, because a refetch replaced it or its entry was discarded, is not deleted at once: a request that read the record may still be opening it. Its path goes into `pending_deletes`, and a background loop deletes it after a grace period of at least an hour, or `direct_serve_ttl` if longer, so signed URLs to it stay valid. This runs whether or not `max_size` is set.
 
 ## Design Decisions
 
