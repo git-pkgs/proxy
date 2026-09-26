@@ -117,13 +117,7 @@ func (h *HexHandler) handlePackages(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = protoResp.Body.Close() }()
 
 	if protoResp.StatusCode != http.StatusOK {
-		for k, vv := range protoResp.Header {
-			for _, v := range vv {
-				w.Header().Add(k, v)
-			}
-		}
-		w.WriteHeader(protoResp.StatusCode)
-		_, _ = io.Copy(w, protoResp.Body)
+		h.proxy.relayResponse(w, r, protoResp, nil)
 		return
 	}
 

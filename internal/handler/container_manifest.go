@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"mime"
 	"net/http"
 	"regexp"
@@ -77,15 +76,12 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 			writeContainerManifest(w, r, cached, true)
 			return
 		}
-		copyContainerManifestHeaders(w.Header(), resp.Header)
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
+		h.proxy.relayResponse(w, r, resp, copyContainerManifestHeaders)
 		return
 	}
 
 	if r.Method == http.MethodHead {
-		copyContainerManifestHeaders(w.Header(), resp.Header)
-		w.WriteHeader(http.StatusOK)
+		h.proxy.relayResponse(w, r, resp, copyContainerManifestHeaders)
 		return
 	}
 

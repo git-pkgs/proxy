@@ -1216,6 +1216,12 @@ type responseWriter struct {
 	status int
 }
 
+// Unwrap lets ResponseController reach capabilities such as flushing when a
+// relayed response discovers trailers only after its body has been copied.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
+}
+
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.status = code
 	rw.ResponseWriter.WriteHeader(code)

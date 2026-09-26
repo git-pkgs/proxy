@@ -8,7 +8,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -411,21 +410,18 @@ func (h *SwiftHandler) proxySwiftResource(w http.ResponseWriter, r *http.Request
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	copySwiftResponseHeaders(w.Header(), resp.Header)
-	if location := resp.Header.Get("Location"); location != "" {
-		w.Header().Set("Location", h.rewriteRegistryURL(location, upstreamURL))
-	}
-	for _, link := range resp.Header.Values("Link") {
-		w.Header().Add("Link", h.rewriteLinkHeader(link, upstreamURL))
-	}
-	if w.Header().Get("Content-Version") == "" {
-		w.Header().Set("Content-Version", swiftContentVersion)
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	if r.Method != http.MethodHead {
-		_, _ = io.Copy(w, resp.Body)
-	}
+	h.proxy.relayResponse(w, r, resp, func(dst, src http.Header) {
+		copySwiftResponseHeaders(dst, src)
+		if location := src.Get("Location"); location != "" {
+			dst.Set("Location", h.rewriteRegistryURL(location, upstreamURL))
+		}
+		for _, link := range src.Values("Link") {
+			dst.Add("Link", h.rewriteLinkHeader(link, upstreamURL))
+		}
+		if dst.Get("Content-Version") == "" {
+			dst.Set("Content-Version", swiftContentVersion)
+		}
+	})
 }
 
 func copySwiftResponseHeaders(dst, src http.Header) {

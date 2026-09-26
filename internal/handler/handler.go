@@ -768,7 +768,8 @@ func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
 
 // ProxyUpstream forwards a request to an upstream URL without caching.
 // It copies the request, forwards specified headers, and streams the response back.
-// If forwardHeaders is nil, all response headers are copied.
+// forwardHeaders controls the request headers sent upstream. End-to-end response
+// headers and trailers are relayed independently of that list.
 func (p *Proxy) ProxyUpstream(w http.ResponseWriter, r *http.Request, upstreamURL string, forwardHeaders []string) {
 	p.Logger.Debug("proxying to upstream", "url", upstreamURL)
 
@@ -794,17 +795,10 @@ func (p *Proxy) ProxyUpstream(w http.ResponseWriter, r *http.Request, upstreamUR
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	p.relayResponse(w, r, resp, nil)
 }
 
-// ProxyFile forwards a file request to upstream, copying all response headers.
+// ProxyFile forwards a file request, relaying end-to-end headers and trailers.
 func (p *Proxy) ProxyFile(w http.ResponseWriter, r *http.Request, upstreamURL string) {
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
 	if err != nil {
@@ -820,14 +814,7 @@ func (p *Proxy) ProxyFile(w http.ResponseWriter, r *http.Request, upstreamURL st
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for key, values := range resp.Header {
-		for _, v := range values {
-			w.Header().Add(key, v)
-		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	p.relayResponse(w, r, resp, nil)
 }
 
 // JSONError writes a JSON error response.
@@ -1273,16 +1260,13 @@ func (p *Proxy) proxyMetadataStream(w http.ResponseWriter, r *http.Request, upst
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for _, header := range []string{headerContentType, headerContentLength, headerContentEncoding, headerLastModified, headerETag} {
-		if v := resp.Header.Get(header); v != "" {
-			w.Header().Set(header, v)
+	p.relayResponse(w, r, resp, func(dst, src http.Header) {
+		for _, header := range []string{headerContentType, headerContentLength, headerContentEncoding, headerLastModified, headerETag} {
+			if v := src.Get(header); v != "" {
+				dst.Set(header, v)
+			}
 		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	if r.Method != http.MethodHead {
-		_, _ = io.Copy(w, resp.Body)
-	}
+	})
 }
 
 func (p *Proxy) applyUpstreamAuth(req *http.Request) {

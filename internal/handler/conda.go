@@ -156,13 +156,7 @@ func (h *CondaHandler) handleRepodata(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode != http.StatusOK {
-		for k, vv := range resp.Header {
-			for _, v := range vv {
-				w.Header().Add(k, v)
-			}
-		}
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
+		h.proxy.relayResponse(w, r, resp, nil)
 		return
 	}
 

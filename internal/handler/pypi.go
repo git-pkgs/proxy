@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
-	"io"
 	"mime"
 	"net/http"
 	"regexp"
@@ -817,13 +816,8 @@ func (h *PyPIHandler) proxySimple(w http.ResponseWriter, r *http.Request, path s
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
-	}
-	ensureVaryAccept(w.Header())
-
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	h.proxy.relayResponse(w, r, resp, func(dst, src http.Header) {
+		copyRelayHeaders(dst, src)
+		ensureVaryAccept(dst)
+	})
 }

@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"io"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -73,9 +72,7 @@ func (h *ContainerHandler) serveTagsList(w http.ResponseWriter, r *http.Request,
 			writeContainerTags(w, cached, true)
 			return
 		}
-		copyContainerTagsHeaders(w.Header(), resp.Header)
-		w.WriteHeader(resp.StatusCode)
-		_, _ = io.Copy(w, resp.Body)
+		h.proxy.relayResponse(w, r, resp, copyContainerTagsHeaders)
 		return
 	}
 

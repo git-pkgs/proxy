@@ -274,16 +274,16 @@ func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request,
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	for _, header := range []string{headerContentType, headerContentLength, "Docker-Content-Digest", headerETag, headerLastModified} {
-		if v := resp.Header.Get(header); v != "" {
-			w.Header().Set(header, v)
+	h.proxy.relayResponse(w, r, resp, func(dst, src http.Header) {
+		for _, header := range []string{headerContentType, headerContentLength, "Docker-Content-Digest", headerETag, headerLastModified} {
+			if v := src.Get(header); v != "" {
+				dst.Set(header, v)
+			}
 		}
-	}
-	if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices && w.Header().Get("Docker-Content-Digest") == "" {
-		w.Header().Set("Docker-Content-Digest", digest)
-	}
-
-	w.WriteHeader(resp.StatusCode)
+		if resp.StatusCode >= http.StatusOK && resp.StatusCode < http.StatusMultipleChoices && dst.Get("Docker-Content-Digest") == "" {
+			dst.Set("Docker-Content-Digest", digest)
+		}
+	})
 }
 
 // registryForName resolves a client-visible OCI repository name to an upstream

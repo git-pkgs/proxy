@@ -4,7 +4,6 @@ import (
 	"bufio"
 	"encoding/json"
 	"fmt"
-	"io"
 	"net/http"
 	"strings"
 	"time"
@@ -117,17 +116,13 @@ func (h *GemHandler) handleCompactIndex(w http.ResponseWriter, r *http.Request) 
 	defer func() { _ = indexResp.Body.Close() }()
 
 	if indexResp.StatusCode != http.StatusOK {
-		copyResponseHeaders(w, indexResp.Header)
-		w.WriteHeader(indexResp.StatusCode)
-		_, _ = io.Copy(w, indexResp.Body)
+		h.proxy.relayResponse(w, r, indexResp, nil)
 		return
 	}
 
 	if filteredVersions == nil {
 		h.proxy.Logger.Warn("failed to fetch version timestamps, proxying unfiltered", "name", name)
-		copyResponseHeaders(w, indexResp.Header)
-		w.WriteHeader(http.StatusOK)
-		_, _ = io.Copy(w, indexResp.Body)
+		h.proxy.relayResponse(w, r, indexResp, nil)
 		return
 	}
 
@@ -212,15 +207,6 @@ func (h *GemHandler) writeFilteredIndex(w http.ResponseWriter, resp *http.Respon
 		}
 
 		_, _ = fmt.Fprintln(w, line)
-	}
-}
-
-// copyResponseHeaders copies HTTP headers from a response to a writer.
-func copyResponseHeaders(w http.ResponseWriter, headers http.Header) {
-	for k, vv := range headers {
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
 	}
 }
 
@@ -314,15 +300,7 @@ func (h *GemHandler) proxyUpstream(w http.ResponseWriter, r *http.Request) {
 	}
 	defer func() { _ = resp.Body.Close() }()
 
-	// Copy response headers
-	for k, vv := range resp.Header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
-		}
-	}
-
-	w.WriteHeader(resp.StatusCode)
-	_, _ = io.Copy(w, resp.Body)
+	h.proxy.relayResponse(w, r, resp, nil)
 }
 
 func init() {
