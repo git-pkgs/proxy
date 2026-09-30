@@ -31,6 +31,7 @@
 // Web UI (HTML), mounted under /ui so reverse proxies can gate it
 // separately from the package endpoints:
 //   - /ui/                - Dashboard
+//   - /ui/analytics       - Download and cache analytics
 //   - /ui/install         - Client configuration guide
 //   - /ui/packages        - List all cached packages
 //   - /ui/search          - Search packages
@@ -113,6 +114,8 @@ type Server struct {
 	accessLog   *accesslog.Logger
 	ecr         *ecrTokens
 	breakers    *breakerMonitor
+	ecoStats    ecosystemStatsCache
+	sources     sourceTracker
 }
 
 // New creates a new Server with the given configuration.
@@ -304,6 +307,7 @@ func (s *Server) serve(listener net.Listener) error {
 	r.Route("/ui", func(ui chi.Router) {
 		ui.Mount("/static", http.StripPrefix("/ui/static/", staticHandler()))
 		ui.Get("/", s.handleRoot)
+		ui.Get("/analytics", s.handleAnalytics)
 		ui.Get("/install", s.handleInstall)
 		ui.Get("/search", s.handleSearch)
 		ui.Get("/packages", s.handlePackagesList)
@@ -513,6 +517,31 @@ func (s *Server) updateCacheStats() {
 		return
 	}
 	metrics.UpdateCacheStats(stats.TotalSize, stats.TotalArtifacts)
+
+	ecosystems, err := s.ecoStats.Refresh(s.db)
+	if err != nil {
+		s.logger.Warn("failed to get ecosystem stats for metrics", "error", err)
+		return
+	}
+	metrics.UpdateEcosystemStats(ecosystemMetrics(ecosystems))
+}
+
+// ecosystemMetrics converts database rows into the metrics package's own
+// snapshot type, so that package keeps no dependency on the database schema.
+func ecosystemMetrics(stats []database.EcosystemStats) []metrics.EcosystemStats {
+	out := make([]metrics.EcosystemStats, 0, len(stats))
+	for _, e := range stats {
+		out = append(out, metrics.EcosystemStats{
+			Ecosystem:       e.Ecosystem,
+			Packages:        e.Packages,
+			Versions:        e.Versions,
+			Artifacts:       e.Artifacts,
+			CacheSize:       e.CacheSize,
+			Downloads:       e.Downloads,
+			DownloadedBytes: e.DownloadedBytes,
+		})
+	}
+	return out
 }
 
 // Shutdown gracefully shuts down the server.
@@ -607,16 +636,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			TotalPackages:   stats.TotalPackages,
 			TotalVersions:   stats.TotalVersions,
 		},
-		EnrichmentStats: EnrichmentStatsView{
-			EnrichedPackages:     enrichStats.EnrichedPackages,
-			VulnSyncedPackages:   enrichStats.VulnSyncedPackages,
-			TotalVulnerabilities: enrichStats.TotalVulnerabilities,
-			CriticalVulns:        enrichStats.CriticalVulns,
-			HighVulns:            enrichStats.HighVulns,
-			MediumVulns:          enrichStats.MediumVulns,
-			LowVulns:             enrichStats.LowVulns,
-			HasVulns:             enrichStats.TotalVulnerabilities > 0,
-		},
+		EnrichmentStats: enrichmentStatsView(enrichStats),
 	}
 
 	for _, p := range popular {
@@ -1101,8 +1121,26 @@ type StatsResponse struct {
 	CachedArtifacts int64  `json:"cached_artifacts"`
 	TotalSize       int64  `json:"total_size_bytes"`
 	TotalSizeHuman  string `json:"total_size"`
-	StorageURL      string `json:"storage_url"`
-	DatabasePath    string `json:"database_path"`
+	// DownloadedBytes is the accumulated download volume across every
+	// ecosystem: cache hits multiplied by the artifact size they served.
+	DownloadedBytes      int64                 `json:"downloaded_bytes"`
+	DownloadedBytesHuman string                `json:"downloaded"`
+	Downloads            int64                 `json:"downloads"`
+	Ecosystems           []EcosystemStatsEntry `json:"ecosystems"`
+	StorageURL           string                `json:"storage_url"`
+	DatabasePath         string                `json:"database_path"`
+}
+
+// EcosystemStatsEntry is one ecosystem's slice of the cache statistics.
+type EcosystemStatsEntry struct {
+	Ecosystem       string `json:"ecosystem"`
+	DownloadedBytes int64  `json:"downloaded_bytes"`
+	Downloaded      string `json:"downloaded"`
+	Downloads       int64  `json:"downloads"`
+	CacheSize       int64  `json:"cache_size_bytes"`
+	Artifacts       int64  `json:"cached_artifacts"`
+	Packages        int64  `json:"packages"`
+	Versions        int64  `json:"versions"`
 }
 
 // handleStats returns cache statistics.
@@ -1127,15 +1165,41 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A failing per-ecosystem aggregation must not take down an endpoint that
+	// answered from two cheap counters before it existed. Get returns the last
+	// good snapshot with the error, so the breakdown is served stale when there
+	// is one and omitted when there is not.
+	ecosystems, err := s.ecoStats.Get(s.db)
+	if err != nil {
+		s.logger.Error("failed to get ecosystem stats for /stats", "error", err)
+	}
+
 	_ = ctx // Could use for storage.UsedSpace if needed
 
 	stats := StatsResponse{
 		CachedArtifacts: count,
 		TotalSize:       size,
 		TotalSizeHuman:  formatSize(size),
+		Ecosystems:      make([]EcosystemStatsEntry, 0, len(ecosystems)),
 		StorageURL:      s.storage.URL(),
 		DatabasePath:    s.cfg.Database.String(),
 	}
+
+	for _, e := range ecosystems {
+		stats.DownloadedBytes += e.DownloadedBytes
+		stats.Downloads += e.Downloads
+		stats.Ecosystems = append(stats.Ecosystems, EcosystemStatsEntry{
+			Ecosystem:       e.Ecosystem,
+			DownloadedBytes: e.DownloadedBytes,
+			Downloaded:      formatSize(e.DownloadedBytes),
+			Downloads:       e.Downloads,
+			CacheSize:       e.CacheSize,
+			Artifacts:       e.Artifacts,
+			Packages:        e.Packages,
+			Versions:        e.Versions,
+		})
+	}
+	stats.DownloadedBytesHuman = formatSize(stats.DownloadedBytes)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(stats)
@@ -1210,13 +1274,39 @@ func categorizeLicense(license sql.NullString) string {
 	return categorizeLicenseCSS(license.String)
 }
 
-// responseWriter wraps http.ResponseWriter to capture status code.
+// responseWriter wraps http.ResponseWriter to capture the status code and the
+// number of body bytes written, which is what a client actually downloaded.
 type responseWriter struct {
 	http.ResponseWriter
 	status int
+	bytes  int64
 }
 
 func (rw *responseWriter) WriteHeader(code int) {
 	rw.status = code
 	rw.ResponseWriter.WriteHeader(code)
+}
+
+func (rw *responseWriter) Write(b []byte) (int, error) {
+	n, err := rw.ResponseWriter.Write(b)
+	rw.bytes += int64(n)
+	return n, err
+}
+
+// Flush keeps streaming responses streaming. The embedded field is an
+// interface, so without this the wrapper hides the underlying Flusher.
+func (rw *responseWriter) Flush() {
+	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
+}
+
+// Unwrap exposes the wrapped writer to http.ResponseController.
+//
+// Defining Flush above makes this wrapper satisfy http.Flusher whether or not
+// the writer it wraps does, so a downstream type assertion would succeed and
+// then silently do nothing. ResponseController follows Unwrap to find the real
+// implementation instead of trusting the outermost type.
+func (rw *responseWriter) Unwrap() http.ResponseWriter {
+	return rw.ResponseWriter
 }

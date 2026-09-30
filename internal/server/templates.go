@@ -2,6 +2,7 @@ package server
 
 import (
 	"embed"
+	"fmt"
 	"html/template"
 	"net/http"
 	"path/filepath"
@@ -29,6 +30,7 @@ func (t *Templates) load() error {
 			"supportedEcosystems": supportedEcosystems,
 			"ecosystemBadgeClass": ecosystemBadgeClasses,
 			"ecosystemBadgeLabel": ecosystemBadgeLabel,
+			"dict":                templateDict,
 		}
 
 		pageFiles, err := templatesFS.ReadDir("templates/pages")
@@ -77,4 +79,25 @@ func (t *Templates) Render(w http.ResponseWriter, pageName string, data any) err
 	}
 
 	return tmpl.ExecuteTemplate(w, "base", data)
+}
+
+// templateDict builds a map from alternating key/value arguments, so a
+// component can be invoked with named parameters rather than being handed a
+// whole page struct it would have to reach through.
+func templateDict(values ...any) (map[string]any, error) {
+	const pair = 2
+
+	if len(values)%pair != 0 {
+		return nil, fmt.Errorf("dict: got %d arguments, want an even number of key/value pairs", len(values))
+	}
+
+	out := make(map[string]any, len(values)/pair)
+	for i := 0; i < len(values); i += pair {
+		key, ok := values[i].(string)
+		if !ok {
+			return nil, fmt.Errorf("dict: key %d is %T, want string", i, values[i])
+		}
+		out[key] = values[i+1]
+	}
+	return out, nil
 }

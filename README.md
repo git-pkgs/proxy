@@ -1102,6 +1102,7 @@ Response:
 The proxy serves a web UI under `/ui`. No separate frontend build is needed -- templates and assets are embedded in the binary. `GET /` redirects to `/ui/`. The UI is mounted under its own prefix so a reverse proxy can apply different access rules to it than to the package endpoints (for example, requiring auth for `PathPrefix(/ui)` while leaving `/npm`, `/pypi` etc. open to build machines).
 
 - **Dashboard** (`/ui/`) -- cache stats, popular packages, recently cached artifacts, and vulnerability overview.
+- **Analytics** (`/ui/analytics`) -- accumulated download size as a ring broken down by ecosystem with the total in the middle, the cache size, artifact, package and version counts, a per-ecosystem table, the vulnerability overview, and a Runtime card mirroring every counter `/metrics` exposes. See [Analytics](#analytics).
 - **Install guide** (`/ui/install`) -- per-ecosystem configuration instructions, so you don't have to look them up here.
 - **Package browser** (`/ui/packages`) -- browse all cached packages with filtering by ecosystem and sorting by hits, size, name, or vulnerability count.
 - **Search** (`/ui/search?q=...`) -- search cached packages by name.
@@ -1130,14 +1131,80 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 | `proxy_health_probe_failures_total` | counter | `step` | Storage health probe failures by failing step (`write`, `size`, `read`, `verify`, `delete`). |
 | `proxy_circuit_breaker_state` | gauge | `registry` | Artifact-fetch circuit breaker state per upstream registry (0 closed, 2 open). Published once that registry's breaker has tripped. |
 | `proxy_circuit_breaker_trips_total` | counter | `registry` | Circuit breaker trips per upstream registry. |
+| `proxy_downloaded_bytes` | gauge | `ecosystem` | Accumulated bytes served from cache: cache hits multiplied by the artifact size they served. |
+| `proxy_artifact_downloads` | gauge | `ecosystem` | Accumulated artifact downloads served from cache. |
+| `proxy_ecosystem_cache_size_bytes` | gauge | `ecosystem` | Size of cached artifacts per ecosystem. |
+| `proxy_ecosystem_cached_artifacts` | gauge | `ecosystem` | Number of cached artifacts per ecosystem. |
+| `proxy_ecosystem_packages` | gauge | `ecosystem` | Known packages per ecosystem. |
+| `proxy_ecosystem_versions` | gauge | `ecosystem` | Known package versions per ecosystem. |
+| `proxy_response_bytes_total` | counter | `ecosystem` | Response body bytes written to clients. Route-labelled, see the label caveat below. |
+| `proxy_client_requests_total` | counter | `client` | Requests by client tool, from the User-Agent. |
+| `proxy_client_response_bytes_total` | counter | `client` | Response bytes by client tool. |
 
-Cache size and artifact count are refreshed every 60 seconds. Circuit breaker state is read from the fetcher on each scrape of `/metrics` and each `/health` request, so `proxy_circuit_breaker_trips_total` counts the trips visible between those reads — a breaker that opens and recovers entirely between two scrapes is not counted. The remaining metrics update on each request.
+Cache size, artifact count and the per-ecosystem gauges are refreshed every 60 seconds, from a single pass over the database, and `/stats` serves that same snapshot rather than re-running the aggregation per request.
+
+> **Label change:** `proxy_upstream_fetch_duration_seconds` and `proxy_upstream_errors_total` now normalize their `ecosystem` label, as the cache, integrity and scan metrics already did. Series previously labelled `composer`, `gem` and `go` are now `packagist`, `rubygems` and `golang`. Without this they could not be joined against any other ecosystem metric. Queries and alerts pinned to the old values need updating.
+
+Circuit breaker state is read from the fetcher on each scrape of `/metrics` and each `/health` request, so `proxy_circuit_breaker_trips_total` counts the trips visible between those reads — a breaker that opens and recovers entirely between two scrapes is not counted. The remaining metrics update on each request.
 
 The breaker metrics carry one series per upstream host, but only for hosts whose breaker has tripped at least once since startup. A breaker is created per host the proxy fetches artifacts from, and for some ecosystems that host comes from upstream metadata rather than from configuration (composer takes it from a package's `dist.url`, helm from the chart URLs in `index.yaml`), so publishing every host would let upstream content grow the series count for the lifetime of the process. Once a host has tripped it keeps reporting, so a recovery still shows up as a transition to 0 rather than as a series that vanishes. `/health` is not a persistent time series and lists every breaker, tripped or not.
 
 The `registry` label is the host of the URL the artifact was fetched from. Because that URL can come from upstream metadata, it is not always one a host can be read off — a signed `dist.url` that fails to parse, for instance — and such a breaker is labelled `hostless-url-<digest>` instead, where the digest is keyed by a value drawn fresh at startup. Neither `/metrics` nor `/health` requires authentication, so a fetch URL is never published as a label or a key; the digest identifies the breaker for as long as the process runs without revealing the URL behind it or letting a chosen URL be matched against it.
 
 Alert on `proxy_circuit_breaker_state == 2` sustained for more than a few minutes: while a breaker is open, artifact downloads for that upstream fail with HTTP 502 on every cache miss, and only a single probe request per backoff interval reaches the upstream. Cached artifacts keep serving, and so does metadata for the same ecosystem (metadata does not go through the circuit breaker), so installs fail in a way that looks like a partial upstream outage.
+
+### Analytics
+
+The headline figure on `/ui/analytics` and in `proxy_downloaded_bytes` is the **accumulated download size**: for every cached artifact, the number of times it was served multiplied by its size. It answers "how much traffic has this proxy actually carried", which is the number that matters when sizing egress or justifying the cache, and it is reported both as a total and per ecosystem.
+
+Two properties of that figure are worth knowing before you alert on it:
+
+- **It counts cache hits, not upstream fetches.** The request that first pulls an artifact through the proxy is a miss and is not counted; only subsequent hits are. So the accumulated total is also the upstream bandwidth the cache has saved, not the total bytes the proxy has ever sent.
+- **Eviction removes history.** Evicting an artifact clears its size, so its past hits drop out of the total. `proxy_downloaded_bytes` is therefore a gauge, not a counter, and can step downwards. Use `max_over_time` rather than `increase` when charting it, and expect a drop after an eviction sweep rather than treating it as data loss.
+- **Artifacts with no package row are bucketed, not dropped.** Nothing at the schema level ties `artifacts.version_purl` to a version row, so a cached artifact can end up with no ecosystem to attribute it to. Those are reported under the ecosystem `unattributed`, which keeps the per-ecosystem figures adding up to `proxy_cache_size_bytes` and `proxy_cached_artifacts_total`. A non-zero `unattributed` means the database has artifact rows whose version or package rows have gone missing.
+
+The same numbers are available as JSON from `GET /stats`, which reports `downloaded_bytes`, `downloads` and an `ecosystems` array carrying the per-ecosystem breakdown.
+
+The ring shows at most six slices, because part-to-whole stops being readable past that. When more ecosystems are active, the smallest are folded into a single "Other" slice — the per-ecosystem table below the ring always lists every one of them, so nothing is hidden, only summarised.
+
+#### No history is kept
+
+The proxy stores no time series. `/ui/analytics` reads the database and the in-process metric registry at request time and reports current state; there is nowhere for it to read yesterday's figures from, and nothing is written for tomorrow. Two consequences worth being explicit about:
+
+- **Database-derived figures survive a restart.** Download volume, cache size and the package/version/artifact counts are computed from the `artifacts`, `packages` and `versions` tables, so they are as durable as the database.
+- **Registry-derived figures do not.** Everything in the page's **Runtime** card — request counts and latencies, cache hit rate, upstream and storage errors, circuit breaker state, scan results — lives only in this process's Prometheus registry and starts again from zero on restart. A small number there next to a large one above just means the proxy started recently.
+
+For history, trends and alerting, scrape `/metrics` with Prometheus and use the Grafana dashboard below. That is the intended split: the UI answers "what is true now", Prometheus answers "what happened".
+
+One label caveat. Every ecosystem-labelled metric except two takes its label from the package record and normalizes it, so aliases collapse: `gem` becomes `rubygems`, `composer` becomes `packagist`, and `go` becomes `golang`.
+
+The exceptions are `proxy_requests_total`, `proxy_request_duration_seconds` and `proxy_response_bytes_total`, which take theirs from the **request path**. Every mounted package route is named there, and the names mostly coincide with the normalized ones — they too report `rubygems`, `packagist` and `golang`. Two things still differ:
+
+- The Debian route reports `debian` where the package record says `deb`.
+- Any path that is not a package endpoint (the UI, `/health`, `/metrics`) reports `other`, which corresponds to no ecosystem at all.
+
+So the two sets join for most ecosystems and silently fail to for Debian. The Grafana dashboard keeps them on separate template variables (**Ecosystem** and **Route**) rather than papering over it.
+
+### Request sources
+
+Package managers do not say who invoked them. A request from `pip` or `go` carries a `Host`, an `Accept`, and a `User-Agent` — there is no `Referer`, no originating URL, and nothing naming a repository, pipeline or job. Whatever identity you want has to come from something on the wire, so the proxy attributes requests by the two things always present:
+
+- **Address** — the TCP peer, or the leftmost `X-Forwarded-For` entry when `access_log.trust_forwarded_for` is enabled. Enable that only behind a load balancer or ingress that sets the header; any client can send it, so in front of one it lets a caller forge its own attribution — and, by cycling synthetic addresses, fill the table and push every genuine caller into the overflow row. The totals stay correct; the attribution is what is lost.
+- **Client** — the tool, taken from the leading User-Agent token: `pip`, `npm`, `go`, `docker`, `apt`, `curl` and so on. Anything unrecognised reports as `other`.
+
+Both appear on `/ui/analytics` under **Runtime → Request sources**, as a table of the busiest callers by bytes downloaded, plus a per-tool breakdown. The table is in-memory and process-lifetime, like the rest of that card. It tracks 200 callers, evicting the least recently seen once full, and summarises everything it is not showing individually — both evicted callers and those ranked below the display limit — in a single "other callers" row, so the rows always add up to the totals above them.
+
+**This page is not authenticated.** `/ui` carries no auth of its own — it is mounted separately from the package endpoints so a reverse proxy *can* apply its own rules (#123), and until now it exposed only package data. The sources table changes what is on offer: anyone who can reach the proxy can read the addresses of your build fleet, which tool each runs, and how much each pulled. If `/ui` is reachable from outside the network your builders run in, gate it.
+
+**What this can and cannot tell you.** How much granularity an address gives you depends entirely on your network. A fleet of build machines with stable addresses attributes cleanly. Containerised CI runners usually do not: with Docker or Kubernetes executors every job gets an ephemeral address, and egress is commonly NAT'd behind one gateway, so you get runner-node or gateway granularity, not per-project. If you need per-project attribution, the caller has to send something naming itself — a basic-auth username, or a per-project base URL — which the proxy does not currently read. Say so and it can be added.
+
+**Why addresses are not Prometheus labels.** Client tool names are exported as `proxy_client_requests_total{client}` because they come from a closed set. Addresses are not exported at all: the caller set is unbounded and outside the proxy's control, and every new address would create a time series that lives forever in your TSDB. The same goes for anything job-scoped — a pipeline ID must never become a label. Per-address and per-request detail belongs in the access log, which records `remote_ip`, `user_agent`, `client`, `ecosystem` and `bytes` on every line as JSONL, ready for `jq`, Loki or whatever you ship logs to.
+
+### Grafana dashboard
+
+A ready-made dashboard lives at [`deploy/grafana/git-pkgs-proxy.json`](deploy/grafana/git-pkgs-proxy.json). Import it via **Dashboards -> New -> Import** and pick your Prometheus data source when prompted; it has no hardcoded data source UID.
+
+It covers every metric the proxy exposes: accumulated download size (total, per ecosystem, and over time), cache hit ratio, request and upstream latency percentiles, cache composition over time, a reliability row for circuit breakers, upstream errors, storage errors and integrity failures, and a storage-and-scanning row for storage latency and pre-cache scan rate, duration, blocks and errors. Three template variables drive it: **Job**, **Ecosystem** (the package-ecosystem label used by the cache metrics) and **Route** (the path-derived label used by the request metrics, kept separate for the reason given above).
 
 ### Health Check
 

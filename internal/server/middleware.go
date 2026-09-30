@@ -46,16 +46,27 @@ func (s *Server) LoggerMiddleware(next http.Handler) http.Handler {
 		next.ServeHTTP(rw, r)
 		duration := time.Since(start)
 
+		userAgent := r.UserAgent()
+		client := clientName(userAgent)
+		addr := clientAddr(r, s.trustsForwardedFor())
+		ecosystem := requestEcosystem(r.URL.Path)
+
 		s.logger.Info("request",
 			"request_id", requestID,
 			"method", r.Method,
 			"path", r.URL.Path,
 			"status", rw.status,
 			"duration", duration,
-			"remote", r.RemoteAddr)
+			"bytes", rw.bytes,
+			"client", client,
+			"remote", addr)
 
+		// Scrapes of /metrics would otherwise attribute themselves, burying
+		// real callers under whatever polls the proxy most often.
 		if r.URL.Path != "/metrics" {
-			metrics.RecordRequest(requestEcosystem(r.URL.Path), rw.status, duration)
+			metrics.RecordRequest(ecosystem, rw.status, duration)
+			metrics.RecordResponse(ecosystem, client, rw.bytes)
+			s.sources.Record(addr, client, rw.bytes)
 		}
 
 		if s.accessLog != nil {
@@ -67,6 +78,11 @@ func (s *Server) LoggerMiddleware(next http.Handler) http.Handler {
 				StatusCode: rw.status,
 				DurationMS: duration.Milliseconds(),
 				RemoteAddr: r.RemoteAddr,
+				RemoteIP:   addr,
+				UserAgent:  userAgent,
+				Client:     client,
+				Ecosystem:  ecosystem,
+				Bytes:      rw.bytes,
 			}); err != nil {
 				s.logger.Error("failed to write access log", "error", err)
 			}
@@ -74,11 +90,20 @@ func (s *Server) LoggerMiddleware(next http.Handler) http.Handler {
 	})
 }
 
+// requestEcosystem names the ecosystem a request path belongs to.
+//
+// Every mounted package route must appear here. Anything unlisted falls to
+// "other" along with the UI, health and metrics paths, which would pool a real
+// ecosystem's traffic with traffic that belongs to no ecosystem at all.
 func requestEcosystem(path string) string {
 	segment, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
 	switch segment {
 	case "npm", "cargo", "hex", "pub", "pypi", "maven", "gradle", "nuget",
 		"conan", "conda", "cran", "julia", "debian", "rpm":
+		return segment
+	case "apk":
+		return "alpine"
+	case "helm", "homebrew", "generic", "swift":
 		return segment
 	case "gem":
 		return "rubygems"

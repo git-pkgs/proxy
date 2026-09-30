@@ -37,6 +37,46 @@ func TestTemplatesRenderAllPages(t *testing.T) {
 				{Ecosystem: "cargo", Name: "serde", Version: "1.0.0", Size: "200 KB", CachedAt: "1 hour ago"},
 			},
 		}},
+		{"analytics", AnalyticsData{
+			Totals: AnalyticsTotals{
+				DownloadedBytes:  1_500_000_000,
+				Downloaded:       "1.4 GB",
+				Downloads:        "12,004",
+				CacheSize:        "420.0 MB",
+				CachedArtifacts:  "1,204",
+				Packages:         "310",
+				Versions:         "902",
+				Ecosystems:       3,
+				ActiveEcosystems: 2,
+				Amplification:    "3.4x",
+			},
+			EnrichmentStats: EnrichmentStatsView{TotalVulnerabilities: 3, CriticalVulns: 1, HasVulns: true},
+			Ecosystems: []EcosystemRow{
+				{Ecosystem: "npm", DownloadedBytes: 1_000_000_000, Downloaded: "953.7 MB", Downloads: "9,000", CacheSize: "300.0 MB", AvgArtifactSize: "120 KB", Artifacts: "900", Packages: "200", Versions: "700", SharePct: "66.7"},
+				{Ecosystem: "cargo", DownloadedBytes: 500_000_000, Downloaded: "476.8 MB", Downloads: "3,004", CacheSize: "120.0 MB", AvgArtifactSize: "400 KB", Artifacts: "300", Packages: "100", Versions: "200", SharePct: "33.3"},
+				{Ecosystem: "rpm", Downloaded: "0 B", Downloads: "0", CacheSize: "0 B", AvgArtifactSize: "\u2014", Artifacts: "0", Packages: "10", Versions: "2", SharePct: "0.0"},
+			},
+			Donut: donutView([]database.EcosystemStats{
+				{Ecosystem: "npm", CacheSize: 300, Downloads: 9000, DownloadedBytes: 1_000_000_000},
+				{Ecosystem: "cargo", CacheSize: 120, Downloads: 3004, DownloadedBytes: 500_000_000},
+			}, 1_500_000_000, "1.4 GB"),
+			Runtime: RuntimeView{
+				Available:       true,
+				Requests:        "12,004",
+				ActiveRequests:  "2",
+				RequestMean:     "8.1 ms",
+				CacheHits:       "9,000",
+				CacheMisses:     "1,000",
+				CacheHitRatio:   "90.0",
+				HasCacheTraffic: true,
+				StatusClasses:   []LabelledCount{{Label: "2xx", Count: "11,900"}, {Label: "5xx", Count: "104", Bad: true}},
+				StorageOps:      []LabelledStat{{Label: "get", Count: "9,000", Mean: "412 µs"}},
+				ScanErrors:      []LabelledCount{{Label: "npm · clamav · timeout", Count: "3", Bad: true}},
+				ScanningOn:      true,
+				Breakers:        []BreakerRow{{Registry: "registry.npmjs.org", State: "closed"}},
+			},
+		}},
+		{"analytics", AnalyticsData{}},
 		{"install", struct {
 			Layout
 			BaseURL    string

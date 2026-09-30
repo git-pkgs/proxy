@@ -1,0 +1,302 @@
+{{define "title"}}Analytics · git-pkgs proxy{{end}}
+
+{{define "head"}}
+<style>
+  /* Categorical slots, fixed order, assigned in sequence and never cycled.
+     The dark column is the same hues stepped for the dark surface, chosen
+     against it rather than flipped. Validated for CVD separation and
+     contrast against both surfaces. */
+  .donut-slot-0 { stroke: #2a78d6; }
+  .donut-slot-1 { stroke: #eb6834; }
+  .donut-slot-2 { stroke: #1baf7a; }
+  .donut-slot-3 { stroke: #eda100; }
+  .donut-slot-4 { stroke: #e87ba4; }
+  .donut-slot-5 { stroke: #008300; }
+  .dark .donut-slot-0 { stroke: #3987e5; }
+  .dark .donut-slot-1 { stroke: #d95926; }
+  .dark .donut-slot-2 { stroke: #199e70; }
+  .dark .donut-slot-3 { stroke: #c98500; }
+  .dark .donut-slot-4 { stroke: #d55181; }
+  .dark .donut-slot-5 { stroke: #008300; }
+
+  .swatch-0 { background-color: #2a78d6; }
+  .swatch-1 { background-color: #eb6834; }
+  .swatch-2 { background-color: #1baf7a; }
+  .swatch-3 { background-color: #eda100; }
+  .swatch-4 { background-color: #e87ba4; }
+  .swatch-5 { background-color: #008300; }
+  .dark .swatch-0 { background-color: #3987e5; }
+  .dark .swatch-1 { background-color: #d95926; }
+  .dark .swatch-2 { background-color: #199e70; }
+  .dark .swatch-3 { background-color: #c98500; }
+  .dark .swatch-4 { background-color: #d55181; }
+  .dark .swatch-5 { background-color: #008300; }
+
+  .donut-slice {
+    transition: opacity 120ms ease-out;
+    cursor: default;
+  }
+  /* Dim the rest of the ring rather than growing the hovered arc, so the
+     geometry never misstates a share while being read. */
+  .donut:hover .donut-slice { opacity: 0.35; }
+  .donut .donut-slice.is-active,
+  .donut:hover .donut-slice.is-active { opacity: 1; }
+
+  .legend-row.is-active { background-color: rgb(243 244 246); }
+  .dark .legend-row.is-active { background-color: rgb(31 41 55); }
+</style>
+{{end}}
+
+{{define "content"}}
+<div class="mb-8">
+    <h1 class="text-2xl font-semibold">Analytics</h1>
+    <p class="mt-1 text-sm text-gray-500 dark:text-gray-400">
+        Accumulated download volume and cache composition across
+        {{.Totals.Ecosystems}} ecosystem{{if ne .Totals.Ecosystems 1}}s{{end}}.
+    </p>
+</div>
+
+{{if .StatsStale}}
+<div role="status"
+     class="mb-8 rounded-xl border border-amber-300 bg-amber-50 px-4 py-3 text-sm text-amber-900 dark:border-amber-500/40 dark:bg-amber-500/10 dark:text-amber-200">
+    <span class="font-medium">Figures may be out of date.</span>
+    The database query is failing, so the download and cache numbers below are
+    the last snapshot that could be read{{if .StatsAge}}, from {{.StatsAge}}{{end}}.
+    Check the proxy logs.
+</div>
+{{end}}
+
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 mb-4">
+    <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800">
+        <h2 class="text-lg font-semibold">Download size by ecosystem</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Bytes served from cache</p>
+    </div>
+    {{if .Donut.HasSlices}}
+    <div class="p-6 flex flex-col lg:flex-row items-center gap-8">
+        <div class="relative shrink-0 w-full max-w-[320px]">
+            <svg class="donut w-full h-auto -rotate-90" viewBox="0 0 {{.Donut.Size}} {{.Donut.Size}}" role="img"
+                 aria-label="Accumulated download size by ecosystem, {{.Donut.CenterValue}} in total">
+                {{range .Donut.Slices}}
+                <circle class="donut-slice donut-slot-{{.Index}}"
+                        data-slice="{{.Index}}"
+                        data-label="{{.Label}}"
+                        data-value="{{.Value}}"
+                        data-share="{{.SharePct}}"
+                        data-downloads="{{.Downloads}}"
+                        data-cache="{{.CacheSize}}"
+                        data-members="{{.Members}}"
+                        cx="{{$.Donut.Center}}" cy="{{$.Donut.Center}}" r="{{$.Donut.Radius}}"
+                        fill="none"
+                        stroke-width="{{$.Donut.Stroke}}"
+                        stroke-dasharray="{{.Dash}} {{.Gap}}"
+                        stroke-dashoffset="{{.Offset}}">
+                    <title>{{.Label}}: {{.Value}} ({{.SharePct}}%)</title>
+                </circle>
+                {{end}}
+            </svg>
+            <div class="absolute inset-0 flex flex-col items-center justify-center pointer-events-none text-center px-10">
+                <div class="text-4xl sm:text-5xl font-semibold tracking-tight">{{.Donut.CenterValue}}</div>
+                <div class="mt-1 text-xs text-gray-500 dark:text-gray-400 leading-tight">{{.Donut.CenterLabel}}</div>
+            </div>
+        </div>
+
+        <!-- Legend: identity never rests on colour alone -->
+        <ul class="w-full flex-1 space-y-1">
+            {{range .Donut.Slices}}
+            <li class="legend-row flex items-center gap-3 rounded-lg px-3 py-2 transition-colors"
+                data-slice="{{.Index}}"
+                data-label="{{.Label}}"
+                data-value="{{.Value}}"
+                data-share="{{.SharePct}}"
+                data-downloads="{{.Downloads}}"
+                data-cache="{{.CacheSize}}"
+                data-members="{{.Members}}">
+                <span class="swatch-{{.Index}} h-3 w-3 shrink-0 rounded-sm"></span>
+                <span class="min-w-0 flex-1 truncate text-sm font-medium">
+                    {{.Label}}
+                    {{- if .IsOther}}<span class="ml-1 font-normal text-gray-500 dark:text-gray-400">({{.Members}})</span>{{end}}
+                </span>
+                <span class="shrink-0 text-sm tabular-nums">{{.Value}}</span>
+                <span class="w-14 shrink-0 text-right text-sm tabular-nums text-gray-500 dark:text-gray-400">{{.SharePct}}%</span>
+            </li>
+            {{end}}
+        </ul>
+    </div>
+    {{else if .StatsFailed}}
+    <div class="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
+        Download figures are unavailable — the database query failed. Check the proxy logs.
+    </div>
+    {{else}}
+    <div class="px-6 py-12 text-center text-gray-500 dark:text-gray-400">Nothing has been served from cache yet</div>
+    {{end}}
+</div>
+
+<!-- Cache figures, carried over from the dashboard -->
+<div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4 mb-8">
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-5 shadow-sm border border-gray-200 dark:border-gray-800">
+        <div class="text-sm text-gray-500 dark:text-gray-400">Downloads</div>
+        <div class="text-2xl font-semibold mt-1">{{.Totals.Downloads}}</div>
+    </div>
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-5 shadow-sm border border-gray-200 dark:border-gray-800">
+        <div class="text-sm text-gray-500 dark:text-gray-400">Cache size</div>
+        <div class="text-2xl font-semibold mt-1">{{.Totals.CacheSize}}</div>
+    </div>
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-5 shadow-sm border border-gray-200 dark:border-gray-800">
+        <div class="text-sm text-gray-500 dark:text-gray-400">Cached artifacts</div>
+        <div class="text-2xl font-semibold mt-1">{{.Totals.CachedArtifacts}}</div>
+    </div>
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-5 shadow-sm border border-gray-200 dark:border-gray-800">
+        <div class="text-sm text-gray-500 dark:text-gray-400">Packages</div>
+        <div class="text-2xl font-semibold mt-1">{{.Totals.Packages}}</div>
+    </div>
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-5 shadow-sm border border-gray-200 dark:border-gray-800">
+        <div class="text-sm text-gray-500 dark:text-gray-400">Versions</div>
+        <div class="text-2xl font-semibold mt-1">{{.Totals.Versions}}</div>
+    </div>
+    <div class="bg-white dark:bg-gray-900 rounded-xl p-5 shadow-sm border border-gray-200 dark:border-gray-800">
+        <div class="text-sm text-gray-500 dark:text-gray-400">Ecosystems in use</div>
+        <div class="text-2xl font-semibold mt-1">{{.Totals.ActiveEcosystems}}<span class="text-base font-normal text-gray-400 dark:text-gray-500"> / {{.Totals.Ecosystems}}</span></div>
+    </div>
+</div>
+
+{{if .Totals.Amplification}}
+<p class="-mt-4 mb-8 text-sm text-gray-500 dark:text-gray-400">
+    The cache has served {{.Totals.Amplification}} the bytes it currently stores.
+</p>
+{{end}}
+
+<!-- Table view: every figure the ring folds away -->
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 mb-8 overflow-hidden">
+    <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800">
+        <h2 class="text-lg font-semibold">Per-ecosystem breakdown</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">Every ecosystem, including any folded into the ring's "Other" slice</p>
+    </div>
+    {{if .Ecosystems}}
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800">
+                <tr>
+                    <th scope="col" class="px-6 py-3 text-left font-medium">Ecosystem</th>
+                    <th scope="col" class="px-6 py-3 text-right font-medium">Downloaded</th>
+                    <th scope="col" class="px-6 py-3 text-right font-medium">Share</th>
+                    <th scope="col" class="px-6 py-3 text-right font-medium">Downloads</th>
+                    <th scope="col" class="px-6 py-3 text-right font-medium">Cache size</th>
+                    <th scope="col" class="px-6 py-3 text-right font-medium">Artifacts</th>
+                    <th scope="col" class="px-6 py-3 text-right font-medium">Avg size</th>
+                    <th scope="col" class="px-6 py-3 text-right font-medium">Packages</th>
+                    <th scope="col" class="px-6 py-3 text-right font-medium">Versions</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-800">
+                {{range .Ecosystems}}
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                    <th scope="row" class="px-6 py-3 text-left font-normal">
+                        <a href="/ui/packages?ecosystem={{.Ecosystem}}&sort=hits" class="hover:opacity-80">{{template "ecosystem_badge" .Ecosystem}}</a>
+                    </th>
+                    <td class="px-6 py-3 text-right tabular-nums font-medium">{{.Downloaded}}</td>
+                    <td class="px-6 py-3 text-right tabular-nums text-gray-500 dark:text-gray-400">{{.SharePct}}%</td>
+                    <td class="px-6 py-3 text-right tabular-nums text-gray-500 dark:text-gray-400">{{.Downloads}}</td>
+                    <td class="px-6 py-3 text-right tabular-nums text-gray-500 dark:text-gray-400">{{.CacheSize}}</td>
+                    <td class="px-6 py-3 text-right tabular-nums text-gray-500 dark:text-gray-400">{{.Artifacts}}</td>
+                    <td class="px-6 py-3 text-right tabular-nums text-gray-500 dark:text-gray-400">{{.AvgArtifactSize}}</td>
+                    <td class="px-6 py-3 text-right tabular-nums text-gray-500 dark:text-gray-400">{{.Packages}}</td>
+                    <td class="px-6 py-3 text-right tabular-nums text-gray-500 dark:text-gray-400">{{.Versions}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{else if .StatsFailed}}
+    <div class="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
+        The per-ecosystem query failed, so this table is unavailable. Check the proxy logs.
+    </div>
+    {{else}}
+    <div class="px-6 py-12 text-center text-gray-500 dark:text-gray-400">No packages cached yet</div>
+    {{end}}
+</div>
+
+{{if .EnrichmentStats.HasVulns}}
+{{template "security_overview" .EnrichmentStats}}
+{{end}}
+
+{{if .Runtime.Available}}
+{{template "runtime_metrics" .Runtime}}
+{{end}}
+
+<p class="text-sm text-gray-500 dark:text-gray-400">
+    Every figure on this page is also exported for Prometheus at
+    <a href="/metrics" class="text-blue-600 dark:text-blue-400 hover:underline">/metrics</a>.
+    This page shows current state only — nothing here is a time series. For history,
+    trends and alerting, scrape <code class="text-xs">/metrics</code> and use the
+    Grafana dashboard shipped in <code class="text-xs">deploy/grafana/</code>.
+</p>
+{{end}}
+
+{{define "scripts"}}
+<script>
+  (function () {
+    const donut = document.querySelector('.donut');
+    if (!donut) return;
+
+    const slices = Array.from(donut.querySelectorAll('.donut-slice'));
+    const rows = Array.from(document.querySelectorAll('.legend-row'));
+
+    const tip = document.createElement('div');
+    tip.className = 'pointer-events-none fixed z-50 hidden rounded-lg bg-gray-900 dark:bg-gray-100 ' +
+                    'px-3 py-2 text-xs text-gray-100 dark:text-gray-900 shadow-lg';
+    document.body.appendChild(tip);
+
+    function activate(index) {
+      slices.forEach(s => s.classList.toggle('is-active', s.dataset.slice === index));
+      rows.forEach(r => r.classList.toggle('is-active', r.dataset.slice === index));
+    }
+
+    function clear() {
+      slices.forEach(s => s.classList.remove('is-active'));
+      rows.forEach(r => r.classList.remove('is-active'));
+      tip.classList.add('hidden');
+    }
+
+    function line(cls, text) {
+      const el = document.createElement('div');
+      el.className = cls;
+      el.textContent = text;
+      return el;
+    }
+
+    function show(el, event) {
+      const d = el.dataset;
+      tip.replaceChildren(
+        line('font-semibold', d.label),
+        line('mt-1 tabular-nums whitespace-nowrap', d.value + ' · ' + d.share + '% of total'),
+        line('tabular-nums whitespace-nowrap', d.downloads + ' downloads · ' + d.cache + ' cached')
+      );
+      if (d.members) {
+        tip.appendChild(line('mt-1 max-w-[16rem] text-gray-300 dark:text-gray-600', d.members));
+      }
+      tip.classList.remove('hidden');
+      move(event);
+    }
+
+    function move(event) {
+      const pad = 14;
+      const r = tip.getBoundingClientRect();
+      let x = event.clientX + pad;
+      let y = event.clientY + pad;
+      if (x + r.width > window.innerWidth - pad) x = event.clientX - r.width - pad;
+      if (y + r.height > window.innerHeight - pad) y = event.clientY - r.height - pad;
+      tip.style.left = x + 'px';
+      tip.style.top = y + 'px';
+    }
+
+    // The arc stroke is a thin ring, so the row is given the same hover
+    // behaviour: it is a much larger hit target for the same slice.
+    slices.concat(rows).forEach(el => {
+      el.addEventListener('mouseenter', e => { activate(el.dataset.slice); show(el, e); });
+      el.addEventListener('mousemove', move);
+      el.addEventListener('mouseleave', clear);
+    });
+    donut.addEventListener('mouseleave', clear);
+  })();
+</script>
+{{end}}

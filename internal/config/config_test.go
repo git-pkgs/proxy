@@ -461,6 +461,7 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("PROXY_STORAGE_PATH", "/env/cache")
 	t.Setenv("PROXY_LOG_LEVEL", testLevelDebug)
 	t.Setenv("PROXY_ACCESS_LOG_PATH", "/tmp/proxy-access.jsonl")
+	t.Setenv("PROXY_ACCESS_LOG_TRUST_FORWARDED_FOR", "true")
 	t.Setenv("PROXY_UPSTREAM_ALLOW_PRIVATE_HOSTS", "registry.internal, 10.0.0.12")
 	t.Setenv("PROXY_UPSTREAM_ALLOW_LOOPBACK", "true")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY", "true")
@@ -488,6 +489,12 @@ func TestLoadFromEnv(t *testing.T) {
 	}
 	if cfg.AccessLog.Path != "/tmp/proxy-access.jsonl" {
 		t.Errorf("AccessLog.Path = %q, want %q", cfg.AccessLog.Path, "/tmp/proxy-access.jsonl")
+	}
+	// Containers configure the proxy through the environment, so a setting
+	// that exists only in YAML is unreachable in the deployment that most
+	// needs it.
+	if !cfg.AccessLog.TrustForwardedFor {
+		t.Error("AccessLog.TrustForwardedFor = false, want true from the environment")
 	}
 	if got := strings.Join(cfg.Upstream.AllowPrivateHosts, ","); got != "registry.internal,10.0.0.12" {
 		t.Errorf("Upstream.AllowPrivateHosts = %q, want %q", got, "registry.internal,10.0.0.12")

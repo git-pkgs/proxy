@@ -93,6 +93,15 @@ log:
 access_log:
   path: ""
 
+  # Attribute requests to the leftmost X-Forwarded-For entry rather than the
+  # TCP peer address, in the access log and in the request-source table on
+  # /ui/analytics.
+  #
+  # Enable this only when the proxy sits behind a load balancer or ingress that
+  # sets the header. Any client can send it: behind one it is the only way to
+  # see past the hop, in front of one it lets a caller forge its own address.
+  # trust_forwarded_for: false
+
 # Upstream URLs for built-in routes and authentication
 upstream:
   # Hosts allowed to resolve to private, ULA, or CGNAT addresses

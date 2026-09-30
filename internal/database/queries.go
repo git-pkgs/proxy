@@ -3,9 +3,11 @@ package database
 import (
 	"database/sql"
 	"fmt"
+	"sort"
 	"time"
 
 	"github.com/git-pkgs/artifacts"
+	"github.com/git-pkgs/purl"
 	"github.com/opencontainers/go-digest"
 )
 
@@ -1031,4 +1033,203 @@ func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 		return fmt.Errorf("upserting metadata cache: %w", err)
 	}
 	return nil
+}
+
+// Analytics queries
+
+// EcosystemStats aggregates cache and download activity for one ecosystem.
+//
+// DownloadedBytes is the accumulated download volume: every cache hit on an
+// artifact served its full size, so the sum of hit_count * size is the number
+// of bytes the proxy has handed to clients from cache for this ecosystem.
+type EcosystemStats struct {
+	Ecosystem       string `db:"ecosystem"`
+	Packages        int64  `db:"packages"`
+	Versions        int64  `db:"versions"`
+	Artifacts       int64  `db:"artifacts"`
+	CacheSize       int64  `db:"cache_size"`
+	Downloads       int64  `db:"downloads"`
+	DownloadedBytes int64  `db:"downloaded_bytes"`
+}
+
+// GetEcosystemStats returns per-ecosystem cache and download totals, ordered by
+// accumulated download volume descending. Ecosystems with rows in packages but
+// nothing cached are included with zeroed artifact counters.
+//
+// Artifacts evicted from the cache no longer contribute: eviction clears the
+// size column, so their historical hits drop out of the accumulated total.
+func (db *DB) GetEcosystemStats() ([]EcosystemStats, error) {
+	byEcosystem := make(map[string]*EcosystemStats)
+
+	get := func(ecosystem string) *EcosystemStats {
+		if s, ok := byEcosystem[ecosystem]; ok {
+			return s
+		}
+		s := &EcosystemStats{Ecosystem: ecosystem}
+		byEcosystem[ecosystem] = s
+		return s
+	}
+
+	if err := db.eachCount(`SELECT ecosystem, COUNT(*) FROM packages GROUP BY ecosystem`,
+		func(ecosystem string, n int64) { get(ecosystem).Packages = n }); err != nil {
+		return nil, err
+	}
+
+	// Left joined and bucketed for the same reason as artifacts below: a version
+	// whose package row is missing would otherwise vanish here while still
+	// counting in GetCacheStats' COUNT(*), leaving the two unable to reconcile.
+	if err := db.eachCount(`
+		SELECT COALESCE(p.ecosystem, '`+unattributedEcosystem+`'), COUNT(*)
+		FROM versions v
+		LEFT JOIN packages p ON p.purl = v.package_purl
+		GROUP BY COALESCE(p.ecosystem, '`+unattributedEcosystem+`')
+	`, func(ecosystem string, n int64) { get(ecosystem).Versions = n }); err != nil {
+		return nil, err
+	}
+
+	// The artifacts table is proxy-specific: a database inherited from
+	// git-pkgs carries packages and versions without it.
+	hasArtifacts, err := db.HasTable("artifacts")
+	if err != nil {
+		return nil, err
+	}
+	if hasArtifacts {
+		if err := db.eachArtifactStat(get); err != nil {
+			return nil, err
+		}
+	}
+
+	stats := make([]EcosystemStats, 0, len(byEcosystem))
+	for _, s := range byEcosystem {
+		stats = append(stats, *s)
+	}
+	stats = mergeAliasedEcosystems(stats)
+	sortEcosystemStats(stats)
+	return stats, nil
+}
+
+// mergeAliasedEcosystems combines rows whose ecosystem names normalize to the
+// same canonical name. The proxy writes "gem" and git-pkgs writes "rubygems",
+// so a database that has seen both carries two rows for one ecosystem; left
+// split they would render as two table rows and two chart slices, each with
+// half the real share.
+//
+// The surviving row keeps the raw spelling of whichever input held the most
+// cached bytes, because that string is what the UI filters and links by: the
+// packages table stores the raw value, so substituting the canonical name would
+// produce links that match nothing. That comparison is against each input's own
+// size, not the running total, which would otherwise let the first spelling win
+// simply by being merged into first.
+func mergeAliasedEcosystems(stats []EcosystemStats) []EcosystemStats {
+	merged := make(map[string]*EcosystemStats, len(stats))
+	largest := make(map[string]int64, len(stats))
+	order := make([]string, 0, len(stats))
+
+	for i := range stats {
+		key := purl.NormalizeEcosystem(stats[i].Ecosystem)
+		into, ok := merged[key]
+		if !ok {
+			row := stats[i]
+			merged[key] = &row
+			largest[key] = stats[i].CacheSize
+			order = append(order, key)
+			continue
+		}
+
+		// The name tiebreak matters: GetEcosystemStats builds its input by
+		// ranging a map, so without it two spellings of equal size would swap
+		// between refreshes and flip the row's badge and filter link.
+		if stats[i].CacheSize > largest[key] ||
+			(stats[i].CacheSize == largest[key] && stats[i].Ecosystem < into.Ecosystem) {
+			largest[key] = stats[i].CacheSize
+			into.Ecosystem = stats[i].Ecosystem
+		}
+		into.Packages += stats[i].Packages
+		into.Versions += stats[i].Versions
+		into.Artifacts += stats[i].Artifacts
+		into.CacheSize += stats[i].CacheSize
+		into.Downloads += stats[i].Downloads
+		into.DownloadedBytes += stats[i].DownloadedBytes
+	}
+
+	out := make([]EcosystemStats, 0, len(order))
+	for _, key := range order {
+		out = append(out, *merged[key])
+	}
+	return out
+}
+
+// unattributedEcosystem collects cached artifacts whose version or package row
+// is missing. Nothing enforces that link at the schema level, so an inner join
+// would silently drop such rows and leave the per-ecosystem totals short of
+// GetTotalCacheSize — two numbers that sit side by side in the UI and in
+// Grafana. Bucketing them keeps the two reconcilable.
+const unattributedEcosystem = "unattributed"
+
+func (db *DB) eachArtifactStat(get func(string) *EcosystemStats) error {
+	rows, err := db.Query(`
+		SELECT COALESCE(p.ecosystem, '` + unattributedEcosystem + `'),
+		       COUNT(*),
+		       COALESCE(SUM(a.size), 0),
+		       COALESCE(SUM(a.hit_count), 0),
+		       COALESCE(SUM(a.hit_count * a.size), 0)
+		FROM artifacts a
+		LEFT JOIN versions v ON v.purl = a.version_purl
+		LEFT JOIN packages p ON p.purl = v.package_purl
+		WHERE a.storage_path IS NOT NULL
+		GROUP BY COALESCE(p.ecosystem, '` + unattributedEcosystem + `')
+	`)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var ecosystem string
+		var artifacts, cacheSize, downloads, downloadedBytes int64
+		if err := rows.Scan(&ecosystem, &artifacts, &cacheSize, &downloads, &downloadedBytes); err != nil {
+			return err
+		}
+		s := get(ecosystem)
+		s.Artifacts = artifacts
+		s.CacheSize = cacheSize
+		s.Downloads = downloads
+		s.DownloadedBytes = downloadedBytes
+	}
+	return rows.Err()
+}
+
+// eachCount runs a two-column "group by" query and hands each (key, count) pair to fn.
+func (db *DB) eachCount(query string, fn func(key string, n int64)) error {
+	rows, err := db.Query(query)
+	if err != nil {
+		return err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var key string
+		var n int64
+		if err := rows.Scan(&key, &n); err != nil {
+			return err
+		}
+		fn(key, n)
+	}
+	return rows.Err()
+}
+
+// sortEcosystemStats orders by accumulated download volume, then by cache size,
+// then by name, so that ecosystems with no traffic yet still sort predictably.
+func sortEcosystemStats(stats []EcosystemStats) {
+	sort.Slice(stats, func(i, j int) bool {
+		a, b := stats[i], stats[j]
+		switch {
+		case a.DownloadedBytes != b.DownloadedBytes:
+			return a.DownloadedBytes > b.DownloadedBytes
+		case a.CacheSize != b.CacheSize:
+			return a.CacheSize > b.CacheSize
+		default:
+			return a.Ecosystem < b.Ecosystem
+		}
+	})
 }

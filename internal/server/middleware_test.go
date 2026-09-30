@@ -252,3 +252,30 @@ func TestResponseWriter_WriteHeader(t *testing.T) {
 		})
 	}
 }
+
+// Every mounted package route must map to a named ecosystem. A route that falls
+// to "other" pools its bytes with UI and health traffic in
+// proxy_response_bytes_total and in the access log.
+func TestRequestEcosystemCoversEveryMountedRoute(t *testing.T) {
+	mounts := map[string]string{
+		"/npm/x": "npm", "/cargo/x": "cargo", "/gem/x": "rubygems", "/go/x": "golang",
+		"/hex/x": "hex", "/pub/x": "pub", "/pypi/x": "pypi", "/maven/x": "maven",
+		"/gradle/x": "gradle", "/nuget/x": "nuget", "/composer/x": "packagist",
+		"/conan/x": "conan", "/conda/x": "conda", "/cran/x": "cran",
+		"/julia/x": "julia", "/swift/x": "swift", "/v2/x": "oci",
+		"/apk/x": "alpine", "/debian/x": "debian", "/rpm/x": "rpm",
+		"/helm/x": "helm", "/homebrew/x": "homebrew", "/generic/x": "generic",
+	}
+	for path, want := range mounts {
+		if got := requestEcosystem(path); got != want {
+			t.Errorf("requestEcosystem(%q) = %q, want %q", path, got, want)
+		}
+	}
+
+	// Paths that belong to no ecosystem still collapse.
+	for _, path := range []string{"/ui/", "/health", "/metrics", "/stats", "/"} {
+		if got := requestEcosystem(path); got != "other" {
+			t.Errorf("requestEcosystem(%q) = %q, want %q", path, got, "other")
+		}
+	}
+}

@@ -1,0 +1,224 @@
+{{define "runtime_metrics"}}
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 mb-8">
+    <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800">
+        <h2 class="text-lg font-semibold">Runtime</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+            Counters held in this process, not in the database: they start at zero when the
+            proxy starts and are lost on restart. Everything above comes from the database
+            instead, and survives a restart — so a low count here alongside a large one
+            above just means the proxy started recently.
+        </p>
+    </div>
+
+    <div class="p-6 space-y-8">
+        <div class="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-6 gap-4">
+            <div>
+                <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Requests</div>
+                <div class="text-xl font-semibold mt-1 tabular-nums">{{.Requests}}</div>
+            </div>
+            <div>
+                <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">In flight</div>
+                <div class="text-xl font-semibold mt-1 tabular-nums">{{.ActiveRequests}}</div>
+            </div>
+            <div>
+                <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Mean latency</div>
+                <div class="text-xl font-semibold mt-1 tabular-nums">{{.RequestMean}}</div>
+            </div>
+            <div>
+                <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Cache hit rate</div>
+                <div class="text-xl font-semibold mt-1 tabular-nums">{{if .HasCacheTraffic}}{{.CacheHitRatio}}%{{else}}—{{end}}</div>
+            </div>
+            <div>
+                <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Upstream fetches</div>
+                <div class="text-xl font-semibold mt-1 tabular-nums">{{.UpstreamFetches}}<span class="text-sm font-normal text-gray-400 dark:text-gray-500"> · {{.UpstreamFetchMean}}</span></div>
+            </div>
+            <div>
+                <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Served</div>
+                <div class="text-xl font-semibold mt-1 tabular-nums">{{.ResponseBytes}}</div>
+            </div>
+        </div>
+
+        <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-8">
+            {{template "runtime_counts" dict "Title" "Responses by status" "Rows" .StatusClasses "Empty" "No requests yet"}}
+
+            <div>
+                <h3 class="text-sm font-semibold mb-3">Cache lookups</h3>
+                <dl class="space-y-2 text-sm">
+                    <div class="flex items-center justify-between gap-4">
+                        <dt class="text-gray-500 dark:text-gray-400">hits</dt>
+                        <dd class="tabular-nums">{{.CacheHits}}</dd>
+                    </div>
+                    <div class="flex items-center justify-between gap-4">
+                        <dt class="text-gray-500 dark:text-gray-400">misses</dt>
+                        <dd class="tabular-nums">{{.CacheMisses}}</dd>
+                    </div>
+                </dl>
+            </div>
+
+            {{template "runtime_stats" dict "Title" "Storage operations" "Rows" .StorageOps "Empty" "No storage operations yet"}}
+            {{template "runtime_counts" dict "Title" "Upstream errors" "Rows" .UpstreamErrors "Empty" "None"}}
+            {{template "runtime_counts" dict "Title" "Storage errors" "Rows" .StorageErrors "Empty" "None"}}
+            {{template "runtime_counts" dict "Title" "Integrity failures" "Rows" .IntegrityFailures "Empty" "None"}}
+            {{template "runtime_counts" dict "Title" "Health probe failures" "Rows" .ProbeFailures "Empty" "None"}}
+            {{template "runtime_counts" dict "Title" "Circuit breaker trips" "Rows" .BreakerTrips "Empty" "None"}}
+
+            <div>
+                <h3 class="text-sm font-semibold mb-3">Circuit breakers</h3>
+                {{if .Breakers}}
+                <dl class="space-y-2 text-sm">
+                    {{range .Breakers}}
+                    <div class="flex items-center justify-between gap-4">
+                        <dt class="truncate text-gray-500 dark:text-gray-400">{{.Registry}}</dt>
+                        <dd>
+                            {{if .Open}}
+                            <span class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300">
+                                <i data-lucide="alert-triangle" class="w-3 h-3"></i>{{.State}}
+                            </span>
+                            {{else}}
+                            <span class="inline-flex items-center gap-1 rounded px-2 py-0.5 text-xs font-medium bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300">
+                                <i data-lucide="check" class="w-3 h-3"></i>{{.State}}
+                            </span>
+                            {{end}}
+                        </dd>
+                    </div>
+                    {{end}}
+                </dl>
+                {{else}}
+                <p class="text-sm text-gray-500 dark:text-gray-400">
+                    None reported — a breaker appears once its upstream has been fetched from.
+                </p>
+                {{end}}
+            </div>
+        </div>
+
+        <!-- Who is calling. Addresses are never metric labels: the caller set is
+             unbounded, so per-address detail lives here and in the access log. -->
+        <div class="border-t border-gray-200 dark:border-gray-800 pt-6">
+            <div class="flex flex-wrap items-baseline justify-between gap-2 mb-4">
+                <h3 class="text-sm font-semibold">Request sources</h3>
+                <p class="text-xs text-gray-500 dark:text-gray-400">
+                    {{if .TrustsForward}}Attributed by X-Forwarded-For{{else}}Attributed by peer address{{end}}
+                    {{- if .SourceCount}} · {{.SourceCount}} tracked{{end}}
+                </p>
+            </div>
+
+            <div class="grid lg:grid-cols-3 gap-8">
+                <div class="lg:col-span-2 overflow-x-auto">
+                    {{if .Sources}}
+                    <table class="w-full text-sm">
+                        <thead class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800">
+                            <tr>
+                                <th scope="col" class="text-left font-medium pb-2">Address</th>
+                                <th scope="col" class="text-left font-medium pb-2">Client</th>
+                                <th scope="col" class="text-right font-medium pb-2">Requests</th>
+                                <th scope="col" class="text-right font-medium pb-2">Downloaded</th>
+                                <th scope="col" class="text-right font-medium pb-2">Last seen</th>
+                            </tr>
+                        </thead>
+                        <tbody class="divide-y divide-gray-200 dark:divide-gray-800">
+                            {{range .Sources}}
+                            <tr class="{{if .IsOverflow}}text-gray-500 dark:text-gray-400 italic{{end}}">
+                                <th scope="row" class="py-2 text-left font-normal font-mono text-xs">{{.Addr}}</th>
+                                <td class="py-2 text-left text-gray-500 dark:text-gray-400">{{.Client}}</td>
+                                <td class="py-2 text-right tabular-nums">{{.Requests}}</td>
+                                <td class="py-2 text-right tabular-nums font-medium">{{.Bytes}}</td>
+                                <td class="py-2 text-right tabular-nums text-gray-500 dark:text-gray-400">{{.LastSeen}}</td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                    {{else}}
+                    <p class="text-sm text-gray-500 dark:text-gray-400">No requests recorded yet.</p>
+                    {{end}}
+                </div>
+
+                <div>
+                    <h4 class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 mb-3">By client</h4>
+                    {{if .Clients}}
+                    <table class="w-full text-sm">
+                        <tbody>
+                            {{range .Clients}}
+                            <tr>
+                                <th scope="row" class="py-1 text-left font-normal text-gray-500 dark:text-gray-400">{{.Client}}</th>
+                                <td class="py-1 text-right tabular-nums">{{.Requests}}</td>
+                                <td class="py-1 text-right tabular-nums font-medium">{{.Bytes}}</td>
+                            </tr>
+                            {{end}}
+                        </tbody>
+                    </table>
+                    {{else}}
+                    <p class="text-sm text-gray-500 dark:text-gray-400">None yet.</p>
+                    {{end}}
+                </div>
+            </div>
+        </div>
+
+        {{if .ScanningOn}}
+        <div class="border-t border-gray-200 dark:border-gray-800 pt-6">
+            <h3 class="text-sm font-semibold mb-4">Pre-cache scanning</h3>
+            <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-8">
+                {{template "runtime_stats" dict "Title" "Scans" "Rows" .Scans "Empty" "No scans yet"}}
+                {{template "runtime_counts" dict "Title" "Artifacts blocked" "Rows" .ScansBlocked "Empty" "None"}}
+                {{template "runtime_counts" dict "Title" "Scan errors" "Rows" .ScanErrors "Empty" "None"}}
+            </div>
+        </div>
+        {{else}}
+        <div class="border-t border-gray-200 dark:border-gray-800 pt-6">
+            <h3 class="text-sm font-semibold mb-2">Pre-cache scanning</h3>
+            <p class="text-sm text-gray-500 dark:text-gray-400">
+                Not configured. Enable it under <code class="text-xs">scanning</code> in the
+                config to have artifacts scanned before they are committed to the cache.
+            </p>
+        </div>
+        {{end}}
+    </div>
+</div>
+{{end}}
+
+{{/* runtime_counts renders a labelled counter list, tinting failure rows. */}}
+{{define "runtime_counts"}}
+<div>
+    <h3 class="text-sm font-semibold mb-3">{{.Title}}</h3>
+    {{if .Rows}}
+    <dl class="space-y-2 text-sm">
+        {{range .Rows}}
+        <div class="flex items-center justify-between gap-4">
+            <dt class="min-w-0 truncate {{if .Bad}}text-red-600 dark:text-red-400{{else}}text-gray-500 dark:text-gray-400{{end}}">{{.Label}}</dt>
+            <dd class="shrink-0 tabular-nums {{if .Bad}}text-red-600 dark:text-red-400 font-medium{{end}}">{{.Count}}</dd>
+        </div>
+        {{end}}
+    </dl>
+    {{else}}
+    <p class="text-sm text-gray-500 dark:text-gray-400">{{.Empty}}</p>
+    {{end}}
+</div>
+{{end}}
+
+{{/* runtime_stats renders a histogram list: how many observations, and their mean. */}}
+{{define "runtime_stats"}}
+<div>
+    <h3 class="text-sm font-semibold mb-3">{{.Title}}</h3>
+    {{if .Rows}}
+    <table class="w-full text-sm">
+        <thead class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">
+            <tr>
+                <th scope="col" class="text-left font-medium pb-2"></th>
+                <th scope="col" class="text-right font-medium pb-2">count</th>
+                <th scope="col" class="text-right font-medium pb-2">mean</th>
+            </tr>
+        </thead>
+        <tbody>
+            {{range .Rows}}
+            <tr>
+                <th scope="row" class="py-1 text-left font-normal text-gray-500 dark:text-gray-400 truncate">{{.Label}}</th>
+                <td class="py-1 text-right tabular-nums">{{.Count}}</td>
+                <td class="py-1 text-right tabular-nums">{{.Mean}}</td>
+            </tr>
+            {{end}}
+        </tbody>
+    </table>
+    {{else}}
+    <p class="text-sm text-gray-500 dark:text-gray-400">{{.Empty}}</p>
+    {{end}}
+</div>
+{{end}}

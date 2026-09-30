@@ -4,6 +4,7 @@ package metrics
 import (
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/git-pkgs/purl"
@@ -138,6 +139,82 @@ var (
 		[]string{"step"},
 	)
 
+	// Per-ecosystem analytics gauges. These are derived from the database
+	// rather than incremented in the request path, and are refreshed on the
+	// same interval as the cache gauges above.
+	EcosystemDownloadedBytes = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "proxy_downloaded_bytes",
+			Help: "Accumulated bytes served from cache per ecosystem (cache hits x artifact size)",
+		},
+		[]string{"ecosystem"},
+	)
+
+	EcosystemDownloads = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "proxy_artifact_downloads",
+			Help: "Accumulated artifact downloads served from cache per ecosystem",
+		},
+		[]string{"ecosystem"},
+	)
+
+	EcosystemCacheSize = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "proxy_ecosystem_cache_size_bytes",
+			Help: "Size of cached artifacts per ecosystem in bytes",
+		},
+		[]string{"ecosystem"},
+	)
+
+	EcosystemCachedArtifacts = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "proxy_ecosystem_cached_artifacts",
+			Help: "Number of cached artifacts per ecosystem",
+		},
+		[]string{"ecosystem"},
+	)
+
+	EcosystemPackages = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "proxy_ecosystem_packages",
+			Help: "Number of known packages per ecosystem",
+		},
+		[]string{"ecosystem"},
+	)
+
+	EcosystemVersions = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "proxy_ecosystem_versions",
+			Help: "Number of known package versions per ecosystem",
+		},
+		[]string{"ecosystem"},
+	)
+
+	// Response and client metrics
+	ResponseBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_response_bytes_total",
+			Help: "Total response body bytes written to clients, by ecosystem",
+		},
+		[]string{"ecosystem"},
+	)
+
+	ClientRequests = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_client_requests_total",
+			Help: "Total requests by client tool, as identified from the User-Agent",
+		},
+		[]string{"client"},
+	)
+
+	ClientResponseBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_client_response_bytes_total",
+			Help: "Total response body bytes written to clients, by client tool",
+		},
+		[]string{"client"},
+	)
+
 	// Scanning metrics
 	ScanDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -183,6 +260,15 @@ func init() {
 		ActiveRequests,
 		IntegrityFailures,
 		HealthProbeFailures,
+		EcosystemDownloadedBytes,
+		EcosystemDownloads,
+		EcosystemCacheSize,
+		EcosystemCachedArtifacts,
+		EcosystemPackages,
+		EcosystemVersions,
+		ResponseBytes,
+		ClientRequests,
+		ClientResponseBytes,
 		ScanDuration,
 		ScanBlocked,
 		ScanErrors,
@@ -201,6 +287,25 @@ func RecordRequest(ecosystem string, status int, duration time.Duration) {
 	RequestDuration.WithLabelValues(ecosystem, statusStr).Observe(duration.Seconds())
 }
 
+// RecordResponse tracks what a client actually downloaded.
+//
+// This is the served-bytes counter, distinct from proxy_downloaded_bytes: that
+// gauge is derived from the database and counts cache hits multiplied by
+// artifact size, while this counts body bytes as they are written, including
+// metadata responses and cache misses.
+//
+// client must come from a closed set — a User-Agent is attacker-controlled, so
+// passing it through raw would mint a time series per request.
+func RecordResponse(ecosystem, client string, bytes int64) {
+	ecosystem = purl.NormalizeEcosystem(ecosystem)
+	ClientRequests.WithLabelValues(client).Inc()
+	if bytes <= 0 {
+		return
+	}
+	ResponseBytes.WithLabelValues(ecosystem).Add(float64(bytes))
+	ClientResponseBytes.WithLabelValues(client).Add(float64(bytes))
+}
+
 // RecordCacheHit increments cache hit counter.
 func RecordCacheHit(ecosystem string) {
 	CacheHits.WithLabelValues(purl.NormalizeEcosystem(ecosystem)).Inc()
@@ -212,13 +317,19 @@ func RecordCacheMiss(ecosystem string) {
 }
 
 // RecordUpstreamFetch tracks upstream fetch duration.
+//
+// The ecosystem is normalized, as it is for cache, integrity and scan metrics,
+// so that every metric taking its ecosystem from a package record labels it the
+// same way. Handlers pass their own name ("composer", "gem", "go"), which would
+// otherwise describe the same ecosystem as "packagist", "rubygems" and "golang"
+// elsewhere and make the two families impossible to join.
 func RecordUpstreamFetch(ecosystem string, duration time.Duration) {
-	UpstreamFetchDuration.WithLabelValues(ecosystem).Observe(duration.Seconds())
+	UpstreamFetchDuration.WithLabelValues(purl.NormalizeEcosystem(ecosystem)).Observe(duration.Seconds())
 }
 
 // RecordUpstreamError increments upstream error counter.
 func RecordUpstreamError(ecosystem, errorType string) {
-	UpstreamErrors.WithLabelValues(ecosystem, errorType).Inc()
+	UpstreamErrors.WithLabelValues(purl.NormalizeEcosystem(ecosystem), errorType).Inc()
 }
 
 // RecordStorageOperation tracks storage operation duration.
@@ -261,6 +372,81 @@ func RecordScanError(ecosystem, scannerName, errorType string) {
 func UpdateCacheStats(sizeBytes, artifactCount int64) {
 	CacheSize.Set(float64(sizeBytes))
 	CachedArtifacts.Set(float64(artifactCount))
+}
+
+// EcosystemStats is a per-ecosystem snapshot published as gauges.
+type EcosystemStats struct {
+	Ecosystem       string
+	Packages        int64
+	Versions        int64
+	Artifacts       int64
+	CacheSize       int64
+	Downloads       int64
+	DownloadedBytes int64
+}
+
+// publishedEcosystems tracks which labels the per-ecosystem gauges currently
+// carry, so a label that disappears can be deleted individually.
+var (
+	publishedMu         sync.Mutex
+	publishedEcosystems = map[string]bool{}
+)
+
+// UpdateEcosystemStats republishes the per-ecosystem gauges from a fresh
+// snapshot.
+//
+// Rows are summed by label before anything is published, because normalizing
+// collapses aliases: a database holding both "gem" and "rubygems" rows — the
+// proxy writes the former, git-pkgs the latter — arrives as two rows belonging
+// to one label, and publishing them one at a time would leave only the last.
+//
+// The vectors are not Reset() first. Reset followed by a repopulating loop
+// leaves a window in which a scrape sees the families empty or half filled,
+// which renders as a spurious gap or dip on any panel built from them. Instead
+// each series is Set to its new value and only labels that have actually
+// disappeared are deleted.
+func UpdateEcosystemStats(stats []EcosystemStats) {
+	totals := make(map[string]EcosystemStats, len(stats))
+	for _, s := range stats {
+		ecosystem := purl.NormalizeEcosystem(s.Ecosystem)
+		t := totals[ecosystem]
+		t.Packages += s.Packages
+		t.Versions += s.Versions
+		t.Artifacts += s.Artifacts
+		t.CacheSize += s.CacheSize
+		t.Downloads += s.Downloads
+		t.DownloadedBytes += s.DownloadedBytes
+		totals[ecosystem] = t
+	}
+
+	for ecosystem, t := range totals {
+		EcosystemDownloadedBytes.WithLabelValues(ecosystem).Set(float64(t.DownloadedBytes))
+		EcosystemDownloads.WithLabelValues(ecosystem).Set(float64(t.Downloads))
+		EcosystemCacheSize.WithLabelValues(ecosystem).Set(float64(t.CacheSize))
+		EcosystemCachedArtifacts.WithLabelValues(ecosystem).Set(float64(t.Artifacts))
+		EcosystemPackages.WithLabelValues(ecosystem).Set(float64(t.Packages))
+		EcosystemVersions.WithLabelValues(ecosystem).Set(float64(t.Versions))
+	}
+
+	publishedMu.Lock()
+	defer publishedMu.Unlock()
+
+	for ecosystem := range publishedEcosystems {
+		if _, still := totals[ecosystem]; still {
+			continue
+		}
+		EcosystemDownloadedBytes.DeleteLabelValues(ecosystem)
+		EcosystemDownloads.DeleteLabelValues(ecosystem)
+		EcosystemCacheSize.DeleteLabelValues(ecosystem)
+		EcosystemCachedArtifacts.DeleteLabelValues(ecosystem)
+		EcosystemPackages.DeleteLabelValues(ecosystem)
+		EcosystemVersions.DeleteLabelValues(ecosystem)
+	}
+
+	publishedEcosystems = make(map[string]bool, len(totals))
+	for ecosystem := range totals {
+		publishedEcosystems[ecosystem] = true
+	}
 }
 
 // UpdateCircuitBreakerState updates circuit breaker state gauge.

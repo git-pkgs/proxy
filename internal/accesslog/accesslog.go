@@ -33,7 +33,19 @@ type Entry struct {
 	StatusCode int       `json:"status_code,omitempty"`
 	DurationMS int64     `json:"duration_ms"`
 	RemoteAddr string    `json:"remote_addr,omitempty"`
-	Error      string    `json:"error,omitempty"`
+	// RemoteIP is the address the request is attributed to: the TCP peer, or
+	// the leftmost X-Forwarded-For entry when that header is trusted.
+	RemoteIP string `json:"remote_ip,omitempty"`
+	// UserAgent is recorded verbatim; Client is it reduced to a known tool
+	// name, so log queries can group without parsing.
+	UserAgent string `json:"user_agent,omitempty"`
+	Client    string `json:"client,omitempty"`
+	Ecosystem string `json:"ecosystem,omitempty"`
+	// Bytes is the response body size actually written to the client. Always
+	// emitted, including as 0, so a log pipeline summing the field does not
+	// have to treat a bodyless response as null.
+	Bytes int64  `json:"bytes"`
+	Error string `json:"error,omitempty"`
 }
 
 // Logger appends complete JSON objects to a file, one per line.

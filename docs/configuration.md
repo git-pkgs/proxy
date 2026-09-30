@@ -115,11 +115,17 @@ The optional access log records client requests and each HTTP exchange with an u
 ```yaml
 access_log:
   path: "/var/log/proxy/access.jsonl"
+  trust_forwarded_for: false
 ```
 
 | Config | Environment | Flag | Description |
 |--------|-------------|------|-------------|
 | `access_log.path` | `PROXY_ACCESS_LOG_PATH` | `-access-log` | File to append JSONL records to; empty disables the log |
+| `access_log.trust_forwarded_for` | `PROXY_ACCESS_LOG_TRUST_FORWARDED_FOR` | | Attribute requests to the leftmost `X-Forwarded-For` entry instead of the TCP peer address |
+
+Each client request record carries `remote_addr` (the TCP peer), `remote_ip` (the address the request is attributed to), `user_agent`, `client` (the tool name derived from the User-Agent), `ecosystem`, and `bytes` (the response body size written to the client).
+
+Enable `trust_forwarded_for` only when the proxy sits behind a load balancer or ingress that sets the header. Any client can send `X-Forwarded-For`: behind such a hop it is the only way to see the real caller, but in front of one it lets a caller choose what address it is logged as. It can also choose a fresh one per request, which fills the analytics page's bounded source table and evicts the genuine callers from it.
 
 The parent directory must exist and be writable when the proxy starts. A newly created log file is readable and writable only by the proxy process owner.
 

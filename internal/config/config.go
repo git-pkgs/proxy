@@ -448,6 +448,15 @@ type LogConfig struct {
 type AccessLogConfig struct {
 	// Path is the file to append activity records to. Empty disables the access log.
 	Path string `json:"path" yaml:"path"`
+
+	// TrustForwardedFor attributes requests to the leftmost X-Forwarded-For
+	// entry instead of the TCP peer address.
+	//
+	// Enable this only when the proxy sits behind a load balancer or ingress
+	// that sets the header, because any client can send it: behind one it is
+	// the only way to see past the hop, in front of one it lets a caller forge
+	// its own address in the access log and the source table.
+	TrustForwardedFor bool `json:"trust_forwarded_for" yaml:"trust_forwarded_for"`
 }
 
 // UpstreamConfig configures upstream URLs for built-in routes and authentication.
@@ -881,6 +890,7 @@ func setEnvStringSlice(dst *[]string, key string) {
 //   - PROXY_LOG_LEVEL
 //   - PROXY_LOG_FORMAT
 //   - PROXY_ACCESS_LOG_PATH
+//   - PROXY_ACCESS_LOG_TRUST_FORWARDED_FOR
 //   - PROXY_UPSTREAM_SWIFT
 //   - PROXY_HEALTH_STORAGE_PROBE_INTERVAL
 func (c *Config) LoadFromEnv() {
@@ -899,6 +909,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Log.Level, "PROXY_LOG_LEVEL")
 	setEnvString(&c.Log.Format, "PROXY_LOG_FORMAT")
 	setEnvString(&c.AccessLog.Path, "PROXY_ACCESS_LOG_PATH")
+	setEnvBool(&c.AccessLog.TrustForwardedFor, "PROXY_ACCESS_LOG_TRUST_FORWARDED_FOR")
 	setEnvStringSlice(&c.Upstream.AllowPrivateHosts, "PROXY_UPSTREAM_ALLOW_PRIVATE_HOSTS")
 	setEnvBool(&c.Upstream.AllowLoopback, "PROXY_UPSTREAM_ALLOW_LOOPBACK")
 	setEnvString(&c.Upstream.NPM, "PROXY_UPSTREAM_NPM")

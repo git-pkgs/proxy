@@ -205,7 +205,10 @@ func TestGemHandler_UpstreamProxy(t *testing.T) {
 
 func TestGemHandler_CacheMiss(t *testing.T) {
 	proxy, _, _, fetcher := setupTestProxy(t)
-	fetchesBefore := histogramSampleCount(t, metrics.UpstreamFetchDuration.WithLabelValues("gem"))
+	// The handler passes "gem", but upstream metrics normalize the ecosystem
+	// so they can be joined against the cache and download metrics, which do
+	// the same. The label is therefore the canonical "rubygems".
+	fetchesBefore := histogramSampleCount(t, metrics.UpstreamFetchDuration.WithLabelValues("rubygems"))
 	fetcher.artifact = &fetch.Artifact{
 		Body:        io.NopCloser(strings.NewReader("fetched gem")),
 		ContentType: "application/octet-stream",
@@ -229,7 +232,7 @@ func TestGemHandler_CacheMiss(t *testing.T) {
 	if want := upstreamURL + path; fetcher.fetchedURL != want {
 		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
 	}
-	if diff := histogramSampleCount(t, metrics.UpstreamFetchDuration.WithLabelValues("gem")) - fetchesBefore; diff != 1 {
+	if diff := histogramSampleCount(t, metrics.UpstreamFetchDuration.WithLabelValues("rubygems")) - fetchesBefore; diff != 1 {
 		t.Errorf("upstream fetch observations delta = %d, want 1", diff)
 	}
 }
