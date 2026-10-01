@@ -43,8 +43,11 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Install golangci-lint
+        run: go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@v2.13.1
+
       - name: golangci-lint
-        run: go tool golangci-lint run ./...
+        run: golangci-lint run ./...
 
   helm:
     name: Helm chart

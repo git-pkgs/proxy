@@ -22,7 +22,7 @@ jobs:
           go-version-file: go.mod
 
       - name: Install swag
-        run: go install github.com/swaggo/swag/cmd/swag@latest
+        run: go install github.com/swaggo/swag/cmd/swag@v1.16.6
 
       - name: Generate swagger
         run: go generate ./internal/server
