@@ -44,6 +44,7 @@ storage:
 | `storage.path` | `PROXY_STORAGE_PATH` | `-storage-path` | Local path (deprecated, use url) |
 | `storage.max_size` | `PROXY_STORAGE_MAX_SIZE` | - | Max cache size (e.g., "10GB") |
 | `storage.cache_artifacts` | `PROXY_STORAGE_CACHE_ARTIFACTS` | - | Store fetched artifacts (default: true); `false` streams them from upstream |
+| `storage.direct_serve_public_url` | `PROXY_STORAGE_DIRECT_SERVE_PUBLIC_URL` | - | Anonymous bucket URL for redirects instead of presigning (see [Open URL cache](#open-url-cache)) |
 
 `storage.max_size` counts cached artifacts only. An artifact replaced by a refetch stays in storage for at least an hour, or `storage.direct_serve_ttl` if longer, so requests already reading it can finish, and storage use can exceed the limit by what was replaced in that time.
 
@@ -58,7 +59,7 @@ storage:
 
 Every download is a fresh upstream fetch, and concurrent requests for the same artifact are not combined. Artifacts with a digest known up front (OCI blobs, Swift archives, Helm charts) are verified while streaming: the response is sent chunked, and on a mismatch the connection is aborted before the response completes so the client never receives a tampered artifact as a good one. The same happens when the upstream connection fails mid-download.
 
-`cache_artifacts: false` cannot be combined with `scanning.enabled`, `storage.direct_serve` or `mirror_api`, which all need stored artifacts, and the `mirror` command refuses to run with it.
+`cache_artifacts: false` cannot be combined with `scanning.enabled`, `storage.direct_serve`, `mirror_api` or `url_proxy.enabled`, which all need stored artifacts, and the `mirror` command refuses to run with it.
 
 ### Amazon S3
 
@@ -279,6 +280,54 @@ large mutable downloads (`releases/latest/download/...`) off this route.
 
 This is the cache behind [mise](https://mise.jdx.dev)'s aqua backend; see the
 mise section in the README for the client-side `url_replacements`.
+
+### Open URL cache
+
+`/generic/` only reaches configured upstreams. For build scripts that download
+pinned source tarballs from many, changing hosts, the `/url/` route caches any
+public https URL instead:
+
+```yaml
+url_proxy:
+  enabled: true        # PROXY_URL_PROXY_ENABLED
+  direct_serve: true   # PROXY_URL_PROXY_DIRECT_SERVE
+  fetch_timeout: "9m"  # PROXY_URL_PROXY_FETCH_TIMEOUT
+storage:
+  # Optional: where the bucket serves objects anonymously.
+  direct_serve_public_url: "http://rgw.example.com:7480/bucket/prefix"
+```
+
+`GET /url/{host}/{path}?{query}` fetches `https://{host}/{path}?{query}` and
+`GET /url/sha256/{hex}/{host}/{path}` also checks the download against that
+SHA-256. Every file is treated as immutable. It is fetched once, streamed into
+the artifact cache with no size limit (unlike the metadata cache), and served
+from there without revalidation, including while its host is down.
+
+- **Digest.** Pass the expected `sha256` whenever the client knows it. A download
+  that does not match is not cached and returns 502, and a cached copy with a
+  different digest is refetched. Without a digest, a URL whose content changes
+  keeps serving the first copy until it is evicted.
+- **Redirects.** With `url_proxy.direct_serve`, GET requests get a 302 to the stored
+  object, on a cache hit and right after a miss is stored, so the bytes never
+  pass through the proxy again. The target is
+  `storage.direct_serve_public_url/{storage path}` when that is set, otherwise
+  a presigned URL valid for `storage.direct_serve_ttl`. Backends that support
+  neither are streamed. HEAD is answered from the cache record and never
+  redirected. This setting is independent of `storage.direct_serve`.
+- **Expired objects.** Before redirecting, the proxy checks that the object still
+  exists. A record whose object was removed behind its back, for example by a
+  bucket lifecycle rule, is refetched once and counted in
+  `proxy_cache_missing_objects_total`.
+- **Reachability.** Only https on port 443 is fetched. The upstream client refuses
+  loopback, private and link-local addresses on every redirect hop (subject
+  to `upstream.allow_private_hosts` and `upstream.allow_loopback`), ignores
+  `HTTPS_PROXY`, and never sends `upstream.auth` credentials.
+
+The route is still an open proxy for its clients. Anyone who can reach it can
+make the proxy download and store any public file, so expose it only to
+trusted networks and set `storage.max_size`. A cold miss sends no bytes
+until the whole file is stored, so keep `fetch_timeout` below your ingress or
+load balancer's read timeout.
 
 `upstream.oci_default` sets the registry used by unprefixed `/v2` requests,
 while `upstream.oci` selects named registries through the `upstream/{name}/`

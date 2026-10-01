@@ -75,6 +75,22 @@ storage:
   # internal Host header or the SigV4 signature will not validate.
   # direct_serve_base_url: "https://minio.example.com"
 
+  # Base URL where the bucket serves objects anonymously, including any key
+  # prefix from the storage URL. When set, redirects point here instead of at
+  # presigned URLs, so they never expire. The bucket must allow anonymous
+  # reads under it (e.g. a bucket policy on the url/ prefix).
+  # direct_serve_public_url: "http://rgw.example.com:7480/bucket/prefix"
+
+# Open URL cache at /url/{host}/{path} (see docs/configuration.md). Caches any
+# public https URL as an immutable artifact. Off by default: it is an open
+# proxy for anyone who can reach it.
+# url_proxy:
+#   enabled: true
+#   # Redirect GETs to the stored object instead of streaming it.
+#   direct_serve: true
+#   # Bound on one whole upstream download. Default: "9m".
+#   fetch_timeout: "9m"
+
 # Database configuration
 database:
   # Database driver: "sqlite" (default) or "postgres"

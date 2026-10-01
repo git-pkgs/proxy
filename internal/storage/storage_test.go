@@ -76,3 +76,17 @@ func assertLargeFileRoundTrip(t *testing.T, s Storage) {
 		t.Error("large file content mismatch")
 	}
 }
+
+func TestPublicObjectURL(t *testing.T) {
+	tests := []struct{ base, path, want string }{
+		{"http://rgw:7480/bucket/prefix", "url/example.org/abc/0123/f.tar.gz", "http://rgw:7480/bucket/prefix/url/example.org/abc/0123/f.tar.gz"},
+		{"http://rgw:7480/bucket/prefix/", "url/h/v/id/a+b.tgz", "http://rgw:7480/bucket/prefix/url/h/v/id/a+b.tgz"},
+		{"https://cdn.example", "npm/@scope/pkg/1.0.0/id/pkg 1.tgz", "https://cdn.example/npm/@scope/pkg/1.0.0/id/pkg%201.tgz"},
+		{"https://cdn.example", "x/a?b#c", "https://cdn.example/x/a%3Fb%23c"},
+	}
+	for _, tt := range tests {
+		if got := PublicObjectURL(tt.base, tt.path); got != tt.want {
+			t.Errorf("PublicObjectURL(%q, %q) = %q, want %q", tt.base, tt.path, got, tt.want)
+		}
+	}
+}

@@ -150,6 +150,10 @@ type Config struct {
 	// Disabled by default to prevent unauthenticated users from triggering downloads.
 	MirrorAPI bool `json:"mirror_api" yaml:"mirror_api"`
 
+	// URLProxy configures the open /url/ route, which caches any public
+	// https URL as an immutable artifact. Disabled by default.
+	URLProxy URLProxyConfig `json:"url_proxy" yaml:"url_proxy"`
+
 	// Gradle configures Gradle HttpBuildCache behavior.
 	Gradle GradleConfig `json:"gradle" yaml:"gradle"`
 
@@ -378,6 +382,34 @@ type StorageConfig struct {
 	// of the proxy. False is incompatible with scanning, direct_serve and
 	// mirror_api, which all depend on stored artifacts. Default: true.
 	CacheArtifacts bool `json:"cache_artifacts" yaml:"cache_artifacts"`
+	// DirectServePublicURL is the base URL under which the bucket serves
+	// stored objects anonymously, including any key prefix of the storage
+	// URL (e.g. "http://rgw:7480/bucket/prefix"). When set, redirects point
+	// at DirectServePublicURL/{storage path} instead of a presigned URL, so
+	// they never expire. The bucket must allow anonymous reads there.
+	DirectServePublicURL string `json:"direct_serve_public_url" yaml:"direct_serve_public_url"`
+}
+
+// URLProxyConfig configures the /url/ route.
+//
+// The route proxies any public https URL, so unlike upstream.generic it is an
+// open HTTP proxy for its clients: keep it on a network only trusted clients
+// reach. Fetched files are assumed immutable and cached in the artifact
+// cache, so a URL whose content changes keeps serving the first copy unless
+// the client passes the expected sha256.
+type URLProxyConfig struct {
+	// Enabled mounts the /url/ route.
+	Enabled bool `json:"enabled" yaml:"enabled"`
+
+	// DirectServe redirects GET requests to the stored object, using
+	// storage.direct_serve_public_url or, failing that, a presigned URL
+	// valid for storage.direct_serve_ttl. It applies to this route only,
+	// independently of storage.direct_serve.
+	DirectServe bool `json:"direct_serve" yaml:"direct_serve"`
+
+	// FetchTimeout bounds one whole upstream download, body included.
+	// Uses Go duration syntax. Default: "9m".
+	FetchTimeout string `json:"fetch_timeout" yaml:"fetch_timeout"`
 }
 
 // GradleConfig configures Gradle-specific features.
@@ -909,6 +941,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Storage.DirectServeTTL, "PROXY_STORAGE_DIRECT_SERVE_TTL")
 	setEnvString(&c.Storage.DirectServeBaseURL, "PROXY_STORAGE_DIRECT_SERVE_BASE_URL")
 	setEnvBool(&c.Storage.CacheArtifacts, "PROXY_STORAGE_CACHE_ARTIFACTS")
+	setEnvString(&c.Storage.DirectServePublicURL, "PROXY_STORAGE_DIRECT_SERVE_PUBLIC_URL")
 	setEnvString(&c.Database.Driver, "PROXY_DATABASE_DRIVER")
 	setEnvString(&c.Database.Path, "PROXY_DATABASE_PATH")
 	setEnvString(&c.Database.URL, "PROXY_DATABASE_URL")
@@ -953,6 +986,9 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Scanning.FetchBaseURL, "PROXY_SCANNING_FETCH_BASE_URL")
 	setEnvBool(&c.CacheMetadata, "PROXY_CACHE_METADATA")
 	setEnvBool(&c.MirrorAPI, "PROXY_MIRROR_API")
+	setEnvBool(&c.URLProxy.Enabled, "PROXY_URL_PROXY_ENABLED")
+	setEnvBool(&c.URLProxy.DirectServe, "PROXY_URL_PROXY_DIRECT_SERVE")
+	setEnvString(&c.URLProxy.FetchTimeout, "PROXY_URL_PROXY_FETCH_TIMEOUT")
 	setEnvString(&c.MetadataTTL, "PROXY_METADATA_TTL")
 	setEnvString(&c.MetadataMaxSize, "PROXY_METADATA_MAX_SIZE")
 	setEnvString(&c.HTTPTimeout, "PROXY_HTTP_TIMEOUT")
@@ -970,6 +1006,33 @@ func validateAbsoluteURL(fieldName, value string) error {
 	u, err := url.Parse(value)
 	if err != nil || u.Scheme == "" || u.Host == "" {
 		return fmt.Errorf("invalid %s %q: must be an absolute URL", fieldName, value)
+	}
+	return nil
+}
+
+// validateHTTPURL is validateAbsoluteURL restricted to http and https, with no
+// query or fragment, for URLs that object paths are appended to.
+func validateHTTPURL(fieldName, value string) error {
+	u, err := url.Parse(value)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" ||
+		u.RawQuery != "" || u.Fragment != "" {
+		return fmt.Errorf("invalid %s %q: must be an http or https URL without query or fragment", fieldName, value)
+	}
+	return nil
+}
+
+// validateURLProxy checks the /url/ route settings and the public object URL
+// its redirects use.
+func (c *Config) validateURLProxy() error {
+	if c.Storage.DirectServePublicURL != "" {
+		if err := validateHTTPURL("storage.direct_serve_public_url", c.Storage.DirectServePublicURL); err != nil {
+			return err
+		}
+	}
+	if c.URLProxy.FetchTimeout != "" {
+		if d, err := time.ParseDuration(c.URLProxy.FetchTimeout); err != nil || d <= 0 {
+			return fmt.Errorf("invalid url_proxy.fetch_timeout %q: must be a positive duration", c.URLProxy.FetchTimeout)
+		}
 	}
 	return nil
 }
@@ -1077,12 +1140,18 @@ func (c *Config) validateCacheArtifacts() error {
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with storage.direct_serve: no artifacts are stored to redirect to")
 	case c.MirrorAPI:
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror_api: mirrored artifacts would never be served")
+	case c.URLProxy.Enabled:
+		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with url_proxy.enabled: /url/ serves only stored artifacts")
 	}
 	return nil
 }
 
 func (c *Config) validateComponents() error {
 	if _, err := denylist.New(c.Denylist.Packages); err != nil {
+		return err
+	}
+
+	if err := c.validateURLProxy(); err != nil {
 		return err
 	}
 
@@ -1333,6 +1402,23 @@ func (c *Config) ParseGradleBuildCacheSweepInterval() time.Duration {
 	d, err := time.ParseDuration(c.Gradle.BuildCache.SweepInterval)
 	if err != nil || d <= 0 {
 		return defaultGradleBuildCacheSweepInterval
+	}
+	return d
+}
+
+// defaultURLProxyFetchTimeout stays under the 10 minute read timeout common
+// on ingress controllers, so a slow fetch fails here with a clear error.
+const defaultURLProxyFetchTimeout = 9 * time.Minute
+
+// ParseURLProxyFetchTimeout returns the /url/ upstream fetch timeout.
+// Returns 9 minutes if unset or invalid.
+func (c *Config) ParseURLProxyFetchTimeout() time.Duration {
+	if c.URLProxy.FetchTimeout == "" {
+		return defaultURLProxyFetchTimeout
+	}
+	d, err := time.ParseDuration(c.URLProxy.FetchTimeout)
+	if err != nil || d <= 0 {
+		return defaultURLProxyFetchTimeout
 	}
 	return d
 }
