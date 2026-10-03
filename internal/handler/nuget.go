@@ -192,7 +192,7 @@ func (h *NuGetHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // proxyUpstream forwards a request to NuGet without caching.

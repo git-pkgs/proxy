@@ -37,6 +37,7 @@ type mockStorage struct {
 	openErr   error
 	signedURL string
 	signErr   error
+	seekable  bool
 }
 
 func newMockStorage() *mockStorage {
@@ -67,8 +68,17 @@ func (s *mockStorage) Open(_ context.Context, path string) (io.ReadCloser, error
 	if !ok {
 		return nil, storage.ErrNotFound
 	}
+	if s.seekable {
+		return &mockSeekableReadCloser{Reader: bytes.NewReader(data)}, nil
+	}
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
+
+type mockSeekableReadCloser struct {
+	*bytes.Reader
+}
+
+func (r *mockSeekableReadCloser) Close() error { return nil }
 
 func (s *mockStorage) Exists(_ context.Context, path string) (bool, error) {
 	s.mu.Lock()
@@ -734,6 +744,161 @@ func TestServeArtifact_Stream(t *testing.T) {
 	}
 	if ct := w.Header().Get("Content-Type"); ct != "application/octet-stream" {
 		t.Errorf("Content-Type = %q", ct)
+	}
+}
+
+func TestServeArtifactRequestRanges(t *testing.T) {
+	const payload = "hello world"
+	tests := []struct {
+		name        string
+		rangeHeader string
+		secondRange string
+		wantStatus  int
+		wantRange   string
+		wantLength  string
+		wantBody    string
+	}{
+		{name: "bounded", rangeHeader: "bytes=1-3", wantStatus: http.StatusPartialContent, wantRange: "bytes 1-3/11", wantLength: "3", wantBody: "ell"},
+		{name: "open ended", rangeHeader: "bytes=6-", wantStatus: http.StatusPartialContent, wantRange: "bytes 6-10/11", wantLength: "5", wantBody: "world"},
+		{name: "suffix", rangeHeader: "bytes=-4", wantStatus: http.StatusPartialContent, wantRange: "bytes 7-10/11", wantLength: "4", wantBody: "orld"},
+		{name: "suffix larger than artifact", rangeHeader: "bytes=-99", wantStatus: http.StatusPartialContent, wantRange: "bytes 0-10/11", wantLength: "11", wantBody: payload},
+		{name: "unsatisfiable", rangeHeader: "bytes=11-", wantStatus: http.StatusRequestedRangeNotSatisfiable, wantRange: "bytes */11", wantLength: "0"},
+		{name: "malformed", rangeHeader: "bytes=invalid", wantStatus: http.StatusOK, wantLength: "11", wantBody: payload},
+		{name: "reversed", rangeHeader: "bytes=4-2", wantStatus: http.StatusOK, wantLength: "11", wantBody: payload},
+		{name: "multiple ranges", rangeHeader: "bytes=0-1,4-5", wantStatus: http.StatusOK, wantLength: "11", wantBody: payload},
+		{name: "multiple range fields", rangeHeader: "bytes=0-1", secondRange: "bytes=4-5", wantStatus: http.StatusOK, wantLength: "11", wantBody: payload},
+		{name: "no range", wantStatus: http.StatusOK, wantLength: "11", wantBody: payload},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			request := httptest.NewRequest(http.MethodGet, "/artifact", nil)
+			if test.rangeHeader != "" {
+				request.Header.Set("Range", test.rangeHeader)
+			}
+			if test.secondRange != "" {
+				request.Header.Add("Range", test.secondRange)
+			}
+			w := httptest.NewRecorder()
+			ServeArtifactRequest(w, request, newRangeTestResult(payload))
+
+			if w.Code != test.wantStatus {
+				t.Errorf("status = %d, want %d", w.Code, test.wantStatus)
+			}
+			if got := w.Header().Get("Content-Range"); got != test.wantRange {
+				t.Errorf("Content-Range = %q, want %q", got, test.wantRange)
+			}
+			if got := w.Header().Get(headerContentLength); got != test.wantLength {
+				t.Errorf("Content-Length = %q, want %q", got, test.wantLength)
+			}
+			if got := w.Body.String(); got != test.wantBody {
+				t.Errorf("body = %q, want %q", got, test.wantBody)
+			}
+			if got := w.Header().Get("Accept-Ranges"); got != "bytes" {
+				t.Errorf("Accept-Ranges = %q, want bytes", got)
+			}
+		})
+	}
+}
+
+func TestServeArtifactRequestIfRange(t *testing.T) {
+	const payload = "hello world"
+	tests := []struct {
+		name       string
+		ifRange    string
+		wantStatus int
+		wantRange  string
+		wantBody   string
+	}{
+		{name: "matching etag", ifRange: `"sha256-matching"`, wantStatus: http.StatusPartialContent, wantRange: "bytes 0-4/11", wantBody: "hello"},
+		{name: "mismatching etag", ifRange: `"sha256-stale"`, wantStatus: http.StatusOK, wantBody: payload},
+		{name: "weak etag", ifRange: `W/"sha256-matching"`, wantStatus: http.StatusOK, wantBody: payload},
+	}
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			result := newRangeTestResult(payload)
+			request := httptest.NewRequest(http.MethodGet, "/artifact", nil)
+			request.Header.Set("Range", "bytes=0-4")
+			if test.name == "matching etag" {
+				test.ifRange = `"` + result.Artifact.Digest.Encoded() + `"`
+			}
+			request.Header.Set("If-Range", test.ifRange)
+			w := httptest.NewRecorder()
+			ServeArtifactRequest(w, request, result)
+
+			if w.Code != test.wantStatus {
+				t.Errorf("status = %d, want %d", w.Code, test.wantStatus)
+			}
+			if got := w.Header().Get("Content-Range"); got != test.wantRange {
+				t.Errorf("Content-Range = %q, want %q", got, test.wantRange)
+			}
+			if got := w.Body.String(); got != test.wantBody {
+				t.Errorf("body = %q, want %q", got, test.wantBody)
+			}
+		})
+	}
+}
+
+func TestServeArtifactRequestHeadIgnoresRange(t *testing.T) {
+	request := httptest.NewRequest(http.MethodHead, "/artifact", nil)
+	request.Header.Set("Range", "bytes=0-1")
+	w := httptest.NewRecorder()
+	ServeArtifactRequest(w, request, newRangeTestResult("hello world"))
+
+	if w.Code != http.StatusOK {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+	if got := w.Header().Get(headerContentLength); got != "11" {
+		t.Errorf("Content-Length = %q, want 11", got)
+	}
+	if got := w.Header().Get("Content-Range"); got != "" {
+		t.Errorf("Content-Range = %q, want empty", got)
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("HEAD body = %q, want empty", w.Body.String())
+	}
+}
+
+func TestServeArtifactRequestWithoutSeekCapability(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/artifact", nil)
+	request.Header.Set("Range", "bytes=1-2")
+	w := httptest.NewRecorder()
+	ServeArtifactRequest(w, request, &CacheResult{
+		Reader:   io.NopCloser(strings.NewReader("payload")),
+		Artifact: testArtifact("payload", "pkg:npm/example@1.0.0", "example.tgz", "application/gzip"),
+	})
+
+	if w.Code != http.StatusOK || w.Body.String() != "payload" {
+		t.Errorf("response = %d %q, want 200 with full payload", w.Code, w.Body.String())
+	}
+	if got := w.Header().Get("Accept-Ranges"); got != "" {
+		t.Errorf("Accept-Ranges = %q, want empty", got)
+	}
+}
+
+func TestServeArtifactRequestRedirectDoesNotAdvertiseRanges(t *testing.T) {
+	request := httptest.NewRequest(http.MethodGet, "/artifact", nil)
+	request.Header.Set("Range", "bytes=1-2")
+	w := httptest.NewRecorder()
+	ServeArtifactRequest(w, request, &CacheResult{RedirectURL: "https://storage.example/artifact"})
+
+	if w.Code != http.StatusFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusFound)
+	}
+	if got := w.Header().Get("Accept-Ranges"); got != "" {
+		t.Errorf("Accept-Ranges = %q, want empty", got)
+	}
+}
+
+type rangeTestReadSeeker struct {
+	*bytes.Reader
+}
+
+func (r *rangeTestReadSeeker) Close() error { return nil }
+
+func newRangeTestResult(payload string) *CacheResult {
+	return &CacheResult{
+		Reader:   &rangeTestReadSeeker{Reader: bytes.NewReader([]byte(payload))},
+		Artifact: testArtifact(payload, "pkg:npm/example@1.0.0", "example.tgz", "application/gzip"),
 	}
 }
 

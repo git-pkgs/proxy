@@ -39,5 +39,5 @@ func (p *Proxy) handleFilenameDownload(w http.ResponseWriter, r *http.Request, d
 		return
 	}
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }

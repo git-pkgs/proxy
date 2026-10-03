@@ -103,7 +103,7 @@ func (h *JuliaHandler) handleRegistry(w http.ResponseWriter, r *http.Request) {
 
 	go h.refreshNamesFromRegistry(uuid, hash)
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // handlePackage serves an immutable package source tarball.
@@ -129,7 +129,7 @@ func (h *JuliaHandler) handlePackage(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // handleArtifact serves an immutable binary artifact tarball. Artifacts are
@@ -150,7 +150,7 @@ func (h *JuliaHandler) handleArtifact(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // proxyUpstream forwards a request to the upstream Pkg server without caching.

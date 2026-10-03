@@ -133,7 +133,7 @@ func (h *GenericHandler) handleReleaseAsset(w http.ResponseWriter, r *http.Reque
 	if result.Artifact.MediaType == "" {
 		result.Artifact.MediaType = "application/octet-stream"
 	}
-	serveArtifact(w, r.Method, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // handleMetadata serves any other path through the metadata cache. The query

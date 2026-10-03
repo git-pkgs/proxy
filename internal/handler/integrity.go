@@ -40,7 +40,22 @@ func newIntegrityChecks(contentHash, native string) (integrityChecks, error) {
 }
 
 func (c integrityChecks) wrap(source io.ReadCloser, onMismatch func(string)) (io.ReadCloser, error) {
-	return c.newVerifyingReader(source, onMismatch, false)
+	if len(c.algorithms) == 0 {
+		return source, nil
+	}
+	verified, err := c.newVerifyingReader(source, onMismatch, false)
+	if err != nil {
+		return nil, err
+	}
+	seeker, ok := source.(io.Seeker)
+	if !ok {
+		return verified, nil
+	}
+	return &seekableVerifyingReader{
+		source:   source,
+		verified: verified,
+		seeker:   seeker,
+	}, nil
 }
 
 // wrapFailOnMismatch is wrap for bytes that have not been checked anywhere
@@ -78,6 +93,34 @@ type verifyingReader struct {
 
 	failOnMismatch bool
 	mismatched     bool
+}
+
+// seekableVerifyingReader verifies ordinary reads until a successful seek,
+// after which reads bypass whole-object verification for range responses.
+type seekableVerifyingReader struct {
+	source   io.ReadCloser
+	verified io.ReadCloser
+	seeker   io.Seeker
+	bypass   bool
+}
+
+func (r *seekableVerifyingReader) Read(p []byte) (int, error) {
+	if r.bypass {
+		return r.source.Read(p)
+	}
+	return r.verified.Read(p)
+}
+
+func (r *seekableVerifyingReader) Seek(offset int64, whence int) (int64, error) {
+	position, err := r.seeker.Seek(offset, whence)
+	if err == nil {
+		r.bypass = true
+	}
+	return position, err
+}
+
+func (r *seekableVerifyingReader) Close() error {
+	return r.verified.Close()
 }
 
 func (r *verifyingReader) Read(p []byte) (int, error) {

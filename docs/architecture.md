@@ -62,6 +62,14 @@ Metadata is not cached - always fetched fresh. This ensures clients see new vers
    - Return reader to handler
    - Handler streams file to client
 
+Artifact handlers honor single byte ranges when the storage reader supports
+efficient seeking (currently the local filesystem reader). They advertise
+`Accept-Ranges: bytes`, return `206` or `416` as appropriate, and respect
+`If-Range`. Malformed and multi-range requests fall back to the full response.
+Non-seekable storage readers do not advertise range support, and direct-storage
+redirects rely on the destination's capabilities. Range responses cannot verify
+the full artifact digest because they read only part of the artifact.
+
 ```
 ┌────────┐  GET /npm/lodash/-/lodash-4.17.21.tgz  ┌─────────────┐
 │ Client │ ──────────────────────────────────────▶│ NPMHandler  │

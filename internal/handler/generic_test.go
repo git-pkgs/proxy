@@ -100,7 +100,8 @@ func TestGenericHandler_ReleaseAssetIsCachedAndServedWhenUpstreamDown(t *testing
 	}))
 	defer upstream.Close()
 
-	proxy, _, _, _ := setupTestProxy(t)
+	proxy, _, store, _ := setupTestProxy(t)
+	store.seekable = true
 	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
 	proxy.Fetcher = fetcher
 	t.Cleanup(func() { _ = fetcher.Close() })
@@ -120,6 +121,23 @@ func TestGenericHandler_ReleaseAssetIsCachedAndServedWhenUpstreamDown(t *testing
 
 	// Second request must be served from cache, even with the upstream down.
 	available.Store(false)
+	rangeRequest := httptest.NewRequest(http.MethodGet, "/github"+testReleaseAssetPath, nil)
+	rangeRequest.Header.Set("Range", "bytes=0-2")
+	rangeResponse := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rangeResponse, rangeRequest)
+	if rangeResponse.Code != http.StatusPartialContent {
+		t.Fatalf("range: status = %d, want 206: %s", rangeResponse.Code, rangeResponse.Body.String())
+	}
+	if got := rangeResponse.Body.String(); got != string(asset[:3]) {
+		t.Errorf("range: body = %q, want %q", got, asset[:3])
+	}
+	if got := rangeResponse.Header().Get("Content-Range"); got != "bytes 0-2/15" {
+		t.Errorf("range: Content-Range = %q, want %q", got, "bytes 0-2/15")
+	}
+	if got := upstreamRequests.Load(); got != 1 {
+		t.Errorf("upstream requests after range cache hit = %d, want 1", got)
+	}
+
 	w = serveGenericRequest(h, "/github"+testReleaseAssetPath)
 	if w.Code != http.StatusOK {
 		t.Fatalf("cached: status = %d, want 200: %s", w.Code, w.Body.String())

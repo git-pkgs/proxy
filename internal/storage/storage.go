@@ -46,6 +46,9 @@ type Storage interface {
 
 	// Open returns a reader for the content at path.
 	// The caller must close the reader when done.
+	// The reader may also implement io.Seeker when seeking is efficient for the
+	// storage backend. Backends must not expose io.Seeker when seeking requires
+	// reading and discarding the bytes before the requested position.
 	// Returns ErrNotFound if the path does not exist.
 	Open(ctx context.Context, path string) (io.ReadCloser, error)
 

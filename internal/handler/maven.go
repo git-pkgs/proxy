@@ -134,7 +134,7 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, ur
 		return
 	}
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // parsePath extracts Maven coordinates from a URL path.

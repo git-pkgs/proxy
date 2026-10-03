@@ -84,7 +84,7 @@ func (h *CondaHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // isPackageFile returns true if the filename is a Conda package.

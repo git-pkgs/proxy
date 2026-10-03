@@ -756,7 +756,21 @@ func ServeArtifact(w http.ResponseWriter, result *CacheResult) {
 	serveArtifact(w, http.MethodGet, result)
 }
 
+// ServeArtifactRequest writes a CacheResult to an HTTP response using request
+// headers such as Range and If-Range.
+func ServeArtifactRequest(w http.ResponseWriter, r *http.Request, result *CacheResult) {
+	if r == nil {
+		ServeArtifact(w, result)
+		return
+	}
+	serveArtifactResponse(w, r.Method, r, result)
+}
+
 func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
+	serveArtifactResponse(w, method, nil, result)
+}
+
+func serveArtifactResponse(w http.ResponseWriter, method string, request *http.Request, result *CacheResult) {
 	contentHash := ""
 	if result.Artifact.Digest != "" {
 		contentHash = result.Artifact.Digest.Encoded()
@@ -777,26 +791,162 @@ func serveArtifact(w http.ResponseWriter, method string, result *CacheResult) {
 	if result.Artifact.MediaType != "" {
 		w.Header().Set(headerContentType, result.Artifact.MediaType)
 	}
-	if result.Artifact.Size > 0 || (method == http.MethodHead && result.Artifact.Size == 0) {
-		w.Header().Set(headerContentLength, strconv.FormatInt(result.Artifact.Size, 10))
-	}
 	if contentHash != "" {
 		w.Header().Set(headerETag, `"`+contentHash+`"`)
 	}
 
+	var seeker io.Seeker
+	if result.Reader != nil {
+		seeker, _ = result.Reader.(io.Seeker)
+	}
+	if seeker != nil && result.Artifact.Size >= 0 {
+		w.Header().Set("Accept-Ranges", "bytes")
+		if request != nil && serveArtifactRange(w, request, result, seeker) {
+			return
+		}
+	}
+
+	if result.Artifact.Size > 0 || (method == http.MethodHead && result.Artifact.Size == 0) {
+		w.Header().Set(headerContentLength, strconv.FormatInt(result.Artifact.Size, 10))
+	}
+
 	w.WriteHeader(http.StatusOK)
 	if method != http.MethodHead && result.Reader != nil {
-		buffer := artifactCopyBufferPool.Get().(*[]byte)
-		defer artifactCopyBufferPool.Put(buffer)
-		// Hide optional ReaderFrom methods so io.CopyBuffer uses the pooled buffer.
-		written, err := io.CopyBuffer(struct{ io.Writer }{w}, result.Reader, *buffer)
-		if err != nil || (result.Artifact.Size > 0 && written != result.Artifact.Size) {
-			// Headers are already committed, so an error status is no longer
-			// possible. Aborting leaves the response unterminated and the
-			// client discards it instead of keeping a truncated or unverified
-			// artifact.
-			panic(http.ErrAbortHandler)
+		copyArtifactBody(w, result.Reader, result.Artifact.Size, false)
+	}
+}
+
+type parsedByteRange struct {
+	start int64
+	end   int64
+}
+
+func serveArtifactRange(w http.ResponseWriter, request *http.Request, result *CacheResult, seeker io.Seeker) bool {
+	if request.Method != http.MethodGet {
+		return false
+	}
+	ranges := request.Header.Values("Range")
+	if len(ranges) != 1 || !ifRangeMatches(request, w.Header().Get(headerETag)) {
+		return false
+	}
+
+	byteRange, valid, satisfiable := parseByteRange(ranges[0], result.Artifact.Size)
+	if !valid {
+		return false
+	}
+	if !satisfiable {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", result.Artifact.Size))
+		w.Header().Set(headerContentLength, "0")
+		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+		return true
+	}
+
+	if _, err := seeker.Seek(byteRange.start, io.SeekStart); err != nil {
+		w.Header().Del(headerContentType)
+		w.Header().Del(headerContentLength)
+		w.Header().Del(headerETag)
+		w.Header().Del("Accept-Ranges")
+		http.Error(w, "failed to seek cached artifact", http.StatusInternalServerError)
+		return true
+	}
+
+	length := byteRange.end - byteRange.start + 1
+	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", byteRange.start, byteRange.end, result.Artifact.Size))
+	w.Header().Set(headerContentLength, strconv.FormatInt(length, 10))
+	w.WriteHeader(http.StatusPartialContent)
+	copyArtifactBody(w, result.Reader, length, true)
+	return true
+}
+
+func ifRangeMatches(request *http.Request, etag string) bool {
+	values := request.Header.Values("If-Range")
+	if len(values) == 0 {
+		return true
+	}
+	return len(values) == 1 && etag != "" && strings.TrimSpace(values[0]) == etag
+}
+
+func parseByteRange(value string, size int64) (parsedByteRange, bool, bool) {
+	unit, spec, ok := strings.Cut(strings.TrimSpace(value), "=")
+	if !ok || !strings.EqualFold(strings.TrimSpace(unit), "bytes") {
+		return parsedByteRange{}, false, false
+	}
+	spec = strings.TrimSpace(spec)
+	if spec == "" || strings.Contains(spec, ",") {
+		return parsedByteRange{}, false, false
+	}
+	first, last, ok := strings.Cut(spec, "-")
+	if !ok {
+		return parsedByteRange{}, false, false
+	}
+
+	if first == "" {
+		suffixLength, ok := parseRangeNumber(last)
+		if !ok {
+			return parsedByteRange{}, false, false
 		}
+		if size == 0 || suffixLength == 0 {
+			return parsedByteRange{}, true, false
+		}
+		if suffixLength >= size {
+			return parsedByteRange{start: 0, end: size - 1}, true, true
+		}
+		return parsedByteRange{start: size - suffixLength, end: size - 1}, true, true
+	}
+
+	start, ok := parseRangeNumber(first)
+	if !ok {
+		return parsedByteRange{}, false, false
+	}
+	if last == "" {
+		if size == 0 || start >= size {
+			return parsedByteRange{}, true, false
+		}
+		return parsedByteRange{start: start, end: size - 1}, true, true
+	}
+	end, ok := parseRangeNumber(last)
+	if !ok || start > end {
+		return parsedByteRange{}, false, false
+	}
+	if size == 0 || start >= size {
+		return parsedByteRange{}, true, false
+	}
+	if end >= size {
+		end = size - 1
+	}
+	return parsedByteRange{start: start, end: end}, true, true
+}
+
+func parseRangeNumber(value string) (int64, bool) {
+	if value == "" {
+		return 0, false
+	}
+	for _, digit := range value {
+		if digit < '0' || digit > '9' {
+			return 0, false
+		}
+	}
+	number, err := strconv.ParseInt(value, 10, 64)
+	return number, err == nil
+}
+
+func copyArtifactBody(w http.ResponseWriter, reader io.Reader, expectedSize int64, bounded bool) {
+	buffer := artifactCopyBufferPool.Get().(*[]byte)
+	defer artifactCopyBufferPool.Put(buffer)
+
+	source := reader
+	if bounded {
+		source = io.LimitReader(reader, expectedSize)
+	}
+	// Hide optional ReaderFrom methods so io.CopyBuffer uses the pooled buffer.
+	written, err := io.CopyBuffer(struct{ io.Writer }{w}, source, *buffer)
+	if err != nil || (bounded && written != expectedSize) || (!bounded && expectedSize > 0 && written != expectedSize) {
+		// Headers are already committed, so an error status is no longer
+		// possible. Aborting leaves the response unterminated so clients discard
+		// a truncated or unverified artifact.
+		// net/http recovers ErrAbortHandler for this request and keeps the server
+		// running; on HTTP/1.x it may close this connection as well.
+		panic(http.ErrAbortHandler)
 	}
 }
 

@@ -156,7 +156,7 @@ func (h *DebianHandler) handlePackageDownload(
 	}
 
 	w.Header().Set(headerContentType, "application/vnd.debian.binary-package")
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // handleMetadata serves repository metadata files through the metadata cache,
