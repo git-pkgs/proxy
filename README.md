@@ -450,8 +450,9 @@ docker pull localhost:8080/library/nginx:latest
 #### containerd (Kubernetes, k3s, nerdctl)
 
 containerd mirrors send the original registry host in an `ns` query
-parameter, so one mirror entry can serve Docker Hub and every registry
-configured in `upstream.oci`. Create `/etc/containerd/certs.d/_default/hosts.toml`:
+parameter, so one mirror entry can serve Docker Hub and the registries
+configured in `upstream.oci` whose URL has no path. Create
+`/etc/containerd/certs.d/_default/hosts.toml`:
 
 ```toml
 [host."http://proxy.example.com:8080"]
@@ -461,7 +462,8 @@ configured in `upstream.oci`. Create `/etc/containerd/certs.d/_default/hosts.tom
 `docker.io` and the host of `upstream.oci_default` use the default registry;
 the host of each `upstream.oci` URL uses that named registry. Pulls for any
 other registry get `404 NAME_UNKNOWN`, and containerd falls back to the
-registry itself. k3s achieves the same with `mirrors: {"*": {endpoint:
+registry itself. See [docs/configuration.md](docs/configuration.md) for how
+hosts are matched and which entry wins when two share a host. k3s achieves the same with `mirrors: {"*": {endpoint:
 ["http://proxy.example.com:8080"]}}` in `/etc/rancher/k3s/registries.yaml`.
 
 ### Helm
