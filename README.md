@@ -447,6 +447,23 @@ Or pull images directly:
 docker pull localhost:8080/library/nginx:latest
 ```
 
+#### containerd (Kubernetes, k3s, nerdctl)
+
+containerd mirrors send the original registry host in an `ns` query
+parameter, so one mirror entry can serve Docker Hub and every registry
+configured in `upstream.oci`. Create `/etc/containerd/certs.d/_default/hosts.toml`:
+
+```toml
+[host."http://proxy.example.com:8080"]
+  capabilities = ["pull", "resolve"]
+```
+
+`docker.io` and the host of `upstream.oci_default` use the default registry;
+the host of each `upstream.oci` URL uses that named registry. Pulls for any
+other registry get `404 NAME_UNKNOWN`, and containerd falls back to the
+registry itself. k3s achieves the same with `mirrors: {"*": {endpoint:
+["http://proxy.example.com:8080"]}}` in `/etc/rancher/k3s/registries.yaml`.
+
 ### Helm
 
 Configure each HTTP chart repository with a name, then add the matching proxy

@@ -290,6 +290,19 @@ mise section in the README for the client-side `url_replacements`.
 while `upstream.oci` selects named registries through the `upstream/{name}/`
 repository prefix. For example, `oci://proxy.example.com/upstream/ghcr/owner/chart`
 uses the `ghcr` registry with `owner/chart` as its repository.
+
+containerd mirror requests carry the original registry host in an `ns` query
+parameter (see the containerd section in the README). The proxy only looks the
+host up and never connects to it: `docker.io`, `index.docker.io`,
+`registry-1.docker.io` and the host of `upstream.oci_default` select the default
+registry, and the host of each `upstream.oci` URL selects that named registry.
+Hosts are compared case-insensitively, and ports 80 and 443 are ignored. An
+unknown host returns `404 NAME_UNKNOWN`, so containerd falls back to its next
+host. Registry URLs with a path (for example an Artifactory repository path)
+are not reachable through `ns`, only through `upstream/{name}/`. When two
+entries share a host, the proxy logs a warning at startup; the default registry
+wins, otherwise the alphabetically first name. Pulls through `ns`,
+`upstream/{name}/` and unprefixed requests share the same cache entries.
 When the proxy uses plain HTTP (for example `localhost:8080`), pass
 `--plain-http` to Helm OCI commands.
 
