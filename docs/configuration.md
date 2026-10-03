@@ -699,6 +699,16 @@ metadata_max_size: "100MB"   # default
 
 Or via environment variable: `PROXY_METADATA_MAX_SIZE=250MB`.
 
+### Rewritten metadata cache
+
+The npm and Composer handlers rewrite every metadata document they serve, so that download URLs point at the proxy. That means decoding the whole document and encoding it again, and Composer's minified documents are also expanded, which together cost milliseconds per typical package and far more for very large ones. The proxy keeps rewritten documents in memory, so each distinct upstream document is rewritten once and requests arriving while it is being rewritten wait for that rewrite. New bytes from upstream are rewritten again. With version cooldown enabled the cache is bypassed, because cooldown filtering depends on the current time.
+
+```yaml
+metadata_rewrite_cache_size: "256MB"   # default; "0" rewrites on every request
+```
+
+Or via environment variable: `PROXY_METADATA_REWRITE_CACHE_SIZE=1GB`.
+
 ## Upstream HTTP timeout
 
 Protocol handlers use a shared HTTP client for upstream requests such as metadata fetches and pass-through file downloads. `http_timeout` sets that client's per-request timeout. Raise it if slow upstreams or large metadata responses cause `context deadline exceeded` errors.

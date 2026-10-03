@@ -940,6 +940,54 @@ func TestValidateHTTPTimeout(t *testing.T) {
 	}
 }
 
+func TestParseMetadataRewriteCacheSize(t *testing.T) {
+	tests := []struct {
+		name string
+		size string
+		want int64
+	}{
+		{"empty defaults to 256MB", "", 256 << 20},
+		{"explicit zero disables", "0", 0},
+		{"1GB", "1GB", 1 << 30},
+		{"invalid defaults to 256MB", "lots", 256 << 20},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.MetadataRewriteCacheSize = tt.size
+			if got := cfg.ParseMetadataRewriteCacheSize(); got != tt.want {
+				t.Errorf("ParseMetadataRewriteCacheSize() = %d, want %d", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestValidateMetadataRewriteCacheSize(t *testing.T) {
+	cfg := Default()
+	cfg.MetadataRewriteCacheSize = "lots"
+	if err := cfg.Validate(); err == nil {
+		t.Error("expected validation error for invalid metadata_rewrite_cache_size")
+	}
+
+	for _, ok := range []string{"512MB", "0", ""} {
+		cfg.MetadataRewriteCacheSize = ok
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("unexpected error for metadata_rewrite_cache_size %q: %v", ok, err)
+		}
+	}
+}
+
+func TestLoadMetadataRewriteCacheSizeFromEnv(t *testing.T) {
+	cfg := Default()
+	t.Setenv("PROXY_METADATA_REWRITE_CACHE_SIZE", "1GB")
+	cfg.LoadFromEnv()
+
+	if cfg.MetadataRewriteCacheSize != "1GB" {
+		t.Errorf("MetadataRewriteCacheSize = %q, want %q", cfg.MetadataRewriteCacheSize, "1GB")
+	}
+}
+
 func TestLoadHTTPTimeoutFromEnv(t *testing.T) {
 	cfg := Default()
 	t.Setenv("PROXY_HTTP_TIMEOUT", "90s")

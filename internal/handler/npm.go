@@ -188,8 +188,13 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	rewritten, err := h.rewriteMetadata(packageName, body)
+	rewritten, err := h.proxy.cachedRewrite(r.Context(), "npm", h.proxyURL, packageName, body, func(b []byte) ([]byte, error) {
+		return h.rewriteMetadata(packageName, b)
+	})
 	if err != nil {
+		if r.Context().Err() != nil {
+			return // the client left while waiting on a shared rewrite
+		}
 		if len(h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName))) != 0 {
 			JSONError(w, http.StatusBadGateway, "failed to filter package metadata")
 			return

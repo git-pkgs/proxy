@@ -197,6 +197,10 @@ type Proxy struct {
 	// upstream fetch serves every waiting caller. Keyed by artifactCoalesceKey.
 	fetchMu  sync.Mutex
 	inFlight map[string]*inflightFetch
+
+	// rewrites caches metadata documents after their handler rewrites them.
+	// Nil leaves every request to rewrite its own copy.
+	rewrites *rewriteCache
 }
 
 // NewProxy creates a new Proxy with the given dependencies.

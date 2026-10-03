@@ -155,6 +155,12 @@ type Config struct {
 	// size return ErrMetadataTooLarge. Default: "100MB".
 	MetadataMaxSize string `json:"metadata_max_size" yaml:"metadata_max_size"`
 
+	// MetadataRewriteCacheSize is how much rewritten npm and Composer
+	// metadata to keep in memory, so a document is rewritten once rather than
+	// on every request (e.g. "256MB", "1GB"). Default: "256MB". Set to "0" to
+	// rewrite on every request.
+	MetadataRewriteCacheSize string `json:"metadata_rewrite_cache_size" yaml:"metadata_rewrite_cache_size"`
+
 	// HTTPTimeout is the timeout for individual upstream HTTP requests made
 	// by protocol handlers (metadata fetches, pass-through file requests).
 	// Uses Go duration syntax (e.g. "30s", "2m"). Default: "30s".
@@ -976,6 +982,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvBool(&c.MirrorAPI, "PROXY_MIRROR_API")
 	setEnvString(&c.MetadataTTL, "PROXY_METADATA_TTL")
 	setEnvString(&c.MetadataMaxSize, "PROXY_METADATA_MAX_SIZE")
+	setEnvString(&c.MetadataRewriteCacheSize, "PROXY_METADATA_REWRITE_CACHE_SIZE")
 	setEnvString(&c.HTTPTimeout, "PROXY_HTTP_TIMEOUT")
 	setEnvBool(&c.Gradle.BuildCache.ReadOnly, "PROXY_GRADLE_BUILD_CACHE_READ_ONLY")
 	setEnvString(&c.Gradle.BuildCache.MaxUploadSize, "PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE")
@@ -1103,6 +1110,10 @@ func (c *Config) validateCacheArtifacts() error {
 }
 
 func (c *Config) validateComponents() error {
+	if err := validateMetadataRewriteCacheSize(c.MetadataRewriteCacheSize); err != nil {
+		return err
+	}
+
 	if _, err := denylist.New(c.Denylist.Packages); err != nil {
 		return err
 	}
@@ -1183,6 +1194,7 @@ const (
 	defaultHTTPTimeout                   = 30 * time.Second //nolint:mnd // sensible default
 	defaultHitFlushInterval              = time.Second
 	defaultMetadataMaxSize               = 100 << 20
+	defaultMetadataRewriteCacheSize      = 256 << 20
 	defaultGradleBuildCacheMaxUploadSize = 100 << 20
 	defaultGradleBuildCacheSweepInterval = 10 * time.Minute
 	defaultGradleMaxUploadSizeStr        = "100MB"
@@ -1229,6 +1241,36 @@ func validateMetadataMaxSize(s string) error {
 		return fmt.Errorf("invalid metadata_max_size %q: must be positive", s)
 	}
 	return nil
+}
+
+func validateMetadataRewriteCacheSize(s string) error {
+	if s == "" || s == "0" {
+		return nil
+	}
+	size, err := ParseSize(s)
+	if err != nil {
+		return fmt.Errorf("invalid metadata_rewrite_cache_size: %w", err)
+	}
+	if size < 0 {
+		return fmt.Errorf("invalid metadata_rewrite_cache_size %q: must not be negative", s)
+	}
+	return nil
+}
+
+// ParseMetadataRewriteCacheSize returns how many bytes of rewritten metadata
+// to keep in memory. Returns 256MB if unset or invalid, 0 if disabled.
+func (c *Config) ParseMetadataRewriteCacheSize() int64 {
+	if c.MetadataRewriteCacheSize == "" {
+		return defaultMetadataRewriteCacheSize
+	}
+	if c.MetadataRewriteCacheSize == "0" {
+		return 0
+	}
+	size, err := ParseSize(c.MetadataRewriteCacheSize)
+	if err != nil || size < 0 {
+		return defaultMetadataRewriteCacheSize
+	}
+	return size
 }
 
 // ParseMetadataMaxSize returns the maximum metadata response size in bytes.

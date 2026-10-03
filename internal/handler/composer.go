@@ -109,8 +109,11 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	rewritten, err := h.rewriteMetadata(body)
+	rewritten, err := h.proxy.cachedRewrite(r.Context(), "composer", h.proxyURL, packageName, body, h.rewriteMetadata)
 	if err != nil {
+		if r.Context().Err() != nil {
+			return // the client left while waiting on a shared rewrite
+		}
 		h.proxy.Logger.Warn("failed to rewrite metadata, proxying original", "error", err)
 		w.Header().Set(headerContentType, "application/json")
 		_, _ = w.Write(body)
