@@ -13,7 +13,14 @@ import (
 	"time"
 )
 
-const containerTagsCacheEcosystem = "oci-tags"
+const (
+	containerTagsCacheEcosystem = "oci-tags"
+	// containerTagsCacheFormat versions the tag-list cache identity. Rows
+	// written before it hold a Link already rewritten for the route that
+	// filled them, while this format stores the upstream Link verbatim. The
+	// two must not share rows: an older binary would serve a raw Link as is.
+	containerTagsCacheFormat = "raw-link"
+)
 
 var containerLinkTargetPattern = regexp.MustCompile(`<([^>]*)>`)
 
@@ -115,7 +122,7 @@ func (h *ContainerHandler) serveStaleTagsOrError(w http.ResponseWriter, r *http.
 }
 
 func (h *ContainerHandler) containerTagsCacheKey(registryURL, name string, query url.Values) string {
-	identity := registryURL + "\x00" + name + "\x00" + query.Encode()
+	identity := containerTagsCacheFormat + "\x00" + registryURL + "\x00" + name + "\x00" + query.Encode()
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
 }

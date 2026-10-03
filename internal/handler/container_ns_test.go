@@ -2,6 +2,9 @@ package handler
 
 import (
 	"bytes"
+	"context"
+	"crypto/sha256"
+	"encoding/hex"
 	"io"
 	"log/slog"
 	"net/http"
@@ -408,4 +411,38 @@ func TestContainerHandler_NamespaceSkipsRegistryURLsWithPath(t *testing.T) {
 			t.Errorf("missing warning for path-prefixed default registry in logs:\n%s", logs.String())
 		}
 	})
+}
+
+func TestContainerHandler_TagsListIgnoresLegacyCacheRows(t *testing.T) {
+	registry := newNSTestRegistry(t, "owner/app", "")
+	routes, h, _ := newNSTestHandler(t, "", map[string]string{"ghcr": registry.URL})
+
+	// Rows written before the raw-link format hold a Link already rewritten
+	// for the route that filled them. Seed one under the legacy identity.
+	query := url.Values{"n": {"1"}}
+	legacySum := sha256.Sum256([]byte(registry.URL + "\x00owner/app\x00" + query.Encode()))
+	legacyKey := hex.EncodeToString(legacySum[:])
+	if legacyKey == h.containerTagsCacheKey(registry.URL, "owner/app", query) {
+		t.Fatal("legacy and current tag-list cache keys are equal")
+	}
+	legacy := &cachedContainerTags{
+		body:        []byte(`{"name":"owner/app","tags":["legacy"]}`),
+		contentType: contentTypeJSON,
+		link:        `<` + nsTestProxyURL + `/v2/upstream/ghcr/owner/app/tags/list?last=legacy&n=1>; rel="next"`,
+		fetchedAt:   time.Now(),
+	}
+	if err := h.storeContainerTags(context.Background(), legacyKey, legacy); err != nil {
+		t.Fatalf("store legacy tag list: %v", err)
+	}
+
+	response := serveNS(routes, "/v2/owner/app/tags/list?n=1&ns="+registry.host())
+	if response.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+	}
+	if got, want := response.Body.String(), `{"name":"owner/app","tags":["1.0"]}`; got != want {
+		t.Errorf("body = %q, want %q (legacy row must not be served)", got, want)
+	}
+	if got := registry.requestCount(); got != 1 {
+		t.Errorf("upstream requests = %d, want 1 (legacy row must not be served)", got)
+	}
 }
