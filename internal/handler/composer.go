@@ -177,10 +177,12 @@ func expandMinifiedVersions(versionList []any) []any {
 		}
 
 		// Merge inherited fields into a new map, then overlay current fields.
-		// Deep copy values to avoid shared references between versions.
+		// Inherited values are shared between versions, not copied: the
+		// only one rewritten afterwards is dist, and rewriteDistURL copies
+		// it before changing it.
 		merged := make(map[string]any, len(inherited)+len(vmap))
 		for k, val := range inherited {
-			merged[k] = deepCopyValue(val)
+			merged[k] = val
 		}
 		for k, val := range vmap {
 			if val == composerUnset {
@@ -197,26 +199,6 @@ func expandMinifiedVersions(versionList []any) []any {
 	}
 
 	return expanded
-}
-
-// deepCopyValue returns a deep copy of JSON-like values (maps, slices, scalars).
-func deepCopyValue(v any) any {
-	switch val := v.(type) {
-	case map[string]any:
-		m := make(map[string]any, len(val))
-		for k, v := range val {
-			m[k] = deepCopyValue(v)
-		}
-		return m
-	case []any:
-		s := make([]any, len(val))
-		for i, v := range val {
-			s[i] = deepCopyValue(v)
-		}
-		return s
-	default:
-		return v
-	}
 }
 
 // filterAndRewriteVersions applies cooldown filtering and rewrites dist URLs
@@ -298,7 +280,14 @@ func (h *ComposerHandler) rewriteDistURL(vmap map[string]any, packageName, versi
 	if len(parts) == vendorPackageParts {
 		newURL := fmt.Sprintf("%s/composer/files/%s/%s/%s/%s",
 			h.proxyURL, parts[0], parts[1], version, filename)
-		dist["url"] = newURL
+		// Expanded versions can share one inherited dist map, so give this
+		// version its own before changing its URL.
+		own := make(map[string]any, len(dist))
+		for k, v := range dist {
+			own[k] = v
+		}
+		own["url"] = newURL
+		vmap["dist"] = own
 	}
 }
 
