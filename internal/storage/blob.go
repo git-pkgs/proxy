@@ -228,6 +228,17 @@ func (b *Blob) Store(ctx context.Context, path string, r io.Reader) (int64, stri
 }
 
 func (b *Blob) Open(ctx context.Context, path string) (io.ReadCloser, error) {
+	if localPath := b.localPath(path); localPath != "" {
+		r, err := os.Open(localPath)
+		if err != nil {
+			if os.IsNotExist(err) {
+				return nil, ErrNotFound
+			}
+			return nil, fmt.Errorf("opening local reader: %w", err)
+		}
+		return r, nil
+	}
+
 	r, err := b.bucket.NewReader(ctx, path, nil)
 	if err != nil {
 		if isNotExist(err) {

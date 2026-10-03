@@ -67,13 +67,20 @@ func TestBlobOpen(t *testing.T) {
 		t.Fatalf("Open failed: %v", err)
 	}
 	defer func() { _ = r.Close() }()
+	seeker, ok := r.(io.Seeker)
+	if !ok {
+		t.Fatal("local file reader does not implement io.Seeker")
+	}
+	if _, err := seeker.Seek(9, io.SeekStart); err != nil {
+		t.Fatalf("Seek failed: %v", err)
+	}
 
 	data, err := io.ReadAll(r)
 	if err != nil {
 		t.Fatalf("ReadAll failed: %v", err)
 	}
-	if string(data) != content {
-		t.Errorf("content = %q, want %q", string(data), content)
+	if string(data) != "content" {
+		t.Errorf("content after seek = %q, want %q", string(data), "content")
 	}
 }
 
@@ -529,7 +536,9 @@ func assertStoreClearsSidecar(t *testing.T, key string) {
 	}
 
 	b := openFileBlob(t, dir)
-	if _, err := b.Open(ctx, key); err == nil {
+	reader, err := b.bucket.NewReader(ctx, key, nil)
+	if err == nil {
+		_ = reader.Close()
 		t.Fatal("corrupt sidecar did not fail the read, so it is not the file fileblob reads for this key")
 	}
 
