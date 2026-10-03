@@ -1428,6 +1428,7 @@ func TestValidateCacheArtifactsDisabled(t *testing.T) {
 		{"with scanning", func(c *Config) { c.Scanning.Enabled = true }, "scanning.enabled"},
 		{"with direct_serve", func(c *Config) { c.Storage.DirectServe = true }, "storage.direct_serve"},
 		{"with mirror_api", func(c *Config) { c.MirrorAPI = true }, "mirror_api"},
+		{"with url_proxy", func(c *Config) { c.URLProxy.Enabled = true }, "url_proxy.enabled"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -1473,5 +1474,53 @@ func TestLoadCacheArtifactsFromEnv(t *testing.T) {
 
 	if cfg.Storage.CacheArtifacts {
 		t.Error("Storage.CacheArtifacts should be false")
+	}
+}
+
+func TestValidateDirectServePublicURL(t *testing.T) {
+	for _, bad := range []string{"bucket/prefix", "s3://bucket", "http://rgw/bucket?x=1", "http://rgw/bucket#f"} {
+		cfg := Default()
+		cfg.Storage.DirectServePublicURL = bad
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("direct_serve_public_url %q: expected validation error", bad)
+		}
+	}
+	cfg := Default()
+	cfg.Storage.DirectServePublicURL = "http://bucket.internal:7480/goproxy/pkgproxy"
+	if err := cfg.Validate(); err != nil {
+		t.Errorf("valid direct_serve_public_url: %v", err)
+	}
+}
+
+func TestURLProxyFetchTimeout(t *testing.T) {
+	cfg := Default()
+	if got := cfg.ParseURLProxyFetchTimeout(); got != defaultURLProxyFetchTimeout {
+		t.Errorf("default = %v", got)
+	}
+	cfg.URLProxy.FetchTimeout = "20m"
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("valid fetch_timeout: %v", err)
+	}
+	if got := cfg.ParseURLProxyFetchTimeout(); got != 20*time.Minute {
+		t.Errorf("parsed = %v", got)
+	}
+	for _, bad := range []string{"soon", "0", "-1m"} {
+		cfg.URLProxy.FetchTimeout = bad
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("fetch_timeout %q: expected validation error", bad)
+		}
+	}
+}
+
+func TestLoadFromEnvURLProxy(t *testing.T) {
+	t.Setenv("PROXY_URL_PROXY_ENABLED", "true")
+	t.Setenv("PROXY_URL_PROXY_DIRECT_SERVE", "true")
+	t.Setenv("PROXY_URL_PROXY_FETCH_TIMEOUT", "3m")
+	t.Setenv("PROXY_STORAGE_DIRECT_SERVE_PUBLIC_URL", "http://rgw:7480/b/p")
+	cfg := Default()
+	cfg.LoadFromEnv()
+	if !cfg.URLProxy.Enabled || !cfg.URLProxy.DirectServe || cfg.URLProxy.FetchTimeout != "3m" ||
+		cfg.Storage.DirectServePublicURL != "http://rgw:7480/b/p" {
+		t.Errorf("got url_proxy %+v, public url %q", cfg.URLProxy, cfg.Storage.DirectServePublicURL)
 	}
 }

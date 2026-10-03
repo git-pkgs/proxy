@@ -18,6 +18,8 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net/url"
+	"strings"
 	"time"
 )
 
@@ -117,4 +119,17 @@ func isFetchDir(name string) bool {
 		}
 	}
 	return true
+}
+
+// PublicObjectURL returns the address of storagePath under baseURL, a bucket
+// location that serves objects anonymously, such as
+// "http://rgw:7480/bucket/prefix". baseURL must include any key prefix the
+// storage URL adds, since storage paths never carry it. Each path segment is
+// escaped on its own so slashes keep separating keys.
+func PublicObjectURL(baseURL, storagePath string) string {
+	segments := strings.Split(storagePath, "/")
+	for i, segment := range segments {
+		segments[i] = url.PathEscape(segment)
+	}
+	return strings.TrimSuffix(baseURL, "/") + "/" + strings.Join(segments, "/")
 }

@@ -95,6 +95,8 @@ func packagePURLStrings(ecosystem, name, version string) (string, string, error)
 
 const contentTypeJSON = "application/json"
 
+const contentTypeOctetStream = "application/octet-stream"
+
 const (
 	headerAccept          = "Accept"
 	headerAcceptEncoding  = "Accept-Encoding"
@@ -172,8 +174,11 @@ type Proxy struct {
 	// URLs so clients receive a public address even when the proxy reaches
 	// storage at an internal one.
 	DirectServeBaseURL string
-	HTTPClient         *http.Client
-	AuthForURL         func(string) (headerName, headerValue string)
+	// DirectServePublicURL, if set, is where the bucket serves objects
+	// anonymously; redirects point under it instead of at presigned URLs.
+	DirectServePublicURL string
+	HTTPClient           *http.Client
+	AuthForURL           func(string) (headerName, headerValue string)
 
 	// StreamArtifacts streams artifacts from upstream without storing them.
 	// Each request fetches its own copy: there is no cache to check and
@@ -338,9 +343,9 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 	}
 
 	if p.DirectServe {
-		signed, err := p.Storage.SignedURL(ctx, artifact.StoragePath, p.DirectServeTTL)
+		redirect, err := p.directServeURL(ctx, artifact.StoragePath)
 		if err == nil {
-			result.RedirectURL = rewriteSignedURLHost(signed, p.DirectServeBaseURL)
+			result.RedirectURL = redirect
 			p.recordCacheHit(artifact.Ecosystem, versionPURL, filename)
 			return result, nil
 		}
@@ -377,6 +382,21 @@ func (p *Proxy) checkCache(ctx context.Context, pkgPURL, versionPURL, filename s
 	}
 	p.recordCacheHit(artifact.Ecosystem, versionPURL, filename)
 	return result, nil
+}
+
+// directServeURL returns an address clients can download storagePath from
+// directly: under DirectServePublicURL when the bucket serves it anonymously,
+// otherwise a presigned URL. It returns storage.ErrSignedURLUnsupported when
+// the backend can do neither.
+func (p *Proxy) directServeURL(ctx context.Context, storagePath string) (string, error) {
+	if p.DirectServePublicURL != "" {
+		return storage.PublicObjectURL(p.DirectServePublicURL, storagePath), nil
+	}
+	signed, err := p.Storage.SignedURL(ctx, storagePath, p.DirectServeTTL)
+	if err != nil {
+		return "", err
+	}
+	return rewriteSignedURLHost(signed, p.DirectServeBaseURL), nil
 }
 
 // rewriteSignedURLHost replaces the scheme and host of a signed URL with those
@@ -538,9 +558,10 @@ func (p *Proxy) openStoredArtifact(ctx context.Context, artifact artifacts.Artif
 	}
 
 	return &CacheResult{
-		Reader:   reader,
-		Artifact: artifact,
-		Cached:   false,
+		Reader:      reader,
+		Artifact:    artifact,
+		Cached:      false,
+		storagePath: storagePath,
 	}, nil
 }
 

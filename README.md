@@ -68,6 +68,7 @@ The proxy never uploads artifact bytes to a scanner. Each scanner is notified wi
 | Arch | Arch Linux | | ✗ |
 | Chef | Chef | | ✗ |
 | Generic | Any | | ✓ |
+| URL (open, immutable) | Any | | ✓ |
 | Helm | Kubernetes | | ✓ |
 | Vagrant | Vagrant | | ✗ |
 
@@ -912,6 +913,7 @@ Recently cached:
 | `GET /v2/homebrew/core/*` | Homebrew core bottle manifests and blobs from GHCR |
 | `GET /apk/{repository}/*` | Alpine APK repository protocol |
 | `GET /generic/{name}/*` | Generic HTTP download proxy (GitHub release assets, mise/aqua) |
+| `GET /url/[sha256/{hex}/]{host}/*` | Open cache of immutable https downloads, opt-in via `url_proxy.enabled` |
 | `GET /debian/*` | Debian/APT repository protocol (main archive) |
 | `GET /debian/{repository}/*` | Debian/APT repository protocol (named archive, e.g. security) |
 | `GET /rpm/*` | RPM/Yum repository protocol |
