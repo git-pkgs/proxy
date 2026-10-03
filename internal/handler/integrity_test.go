@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/base64"
@@ -124,6 +125,72 @@ func TestVerifyingReader(t *testing.T) {
 			}
 		})
 	}
+}
+
+func TestVerifyingReaderPreservesSeekCapability(t *testing.T) {
+	const data = "hello world"
+	t.Run("ordinary reads stay verified", func(t *testing.T) {
+		source := &seekableCloseTrackingReader{Reader: bytes.NewReader([]byte(data))}
+		var calls int
+		reader := wrapIntegrityReader(t, source, sha256Hex("different"), "", func(string) { calls++ })
+
+		got, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if string(got) != data {
+			t.Errorf("data = %q, want %q", got, data)
+		}
+		if calls != 1 {
+			t.Errorf("onMismatch called %d times, want 1", calls)
+		}
+		if err := reader.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if source.closeCount != 1 {
+			t.Errorf("source closed %d times, want 1", source.closeCount)
+		}
+	})
+
+	t.Run("seek bypasses whole-object verification", func(t *testing.T) {
+		source := &seekableCloseTrackingReader{Reader: bytes.NewReader([]byte(data))}
+		var calls int
+		reader := wrapIntegrityReader(t, source, sha256Hex("different"), "", func(string) { calls++ })
+		seeker, ok := reader.(io.Seeker)
+		if !ok {
+			t.Fatal("seekable source did not retain io.Seeker")
+		}
+		if _, err := seeker.Seek(6, io.SeekStart); err != nil {
+			t.Fatalf("Seek: %v", err)
+		}
+
+		got, err := io.ReadAll(reader)
+		if err != nil {
+			t.Fatalf("ReadAll: %v", err)
+		}
+		if string(got) != "world" {
+			t.Errorf("data after seek = %q, want %q", got, "world")
+		}
+		if calls != 0 {
+			t.Errorf("onMismatch called %d times for a partial read, want 0", calls)
+		}
+		if err := reader.Close(); err != nil {
+			t.Fatalf("Close: %v", err)
+		}
+		if source.closeCount != 1 {
+			t.Errorf("source closed %d times, want 1", source.closeCount)
+		}
+	})
+}
+
+type seekableCloseTrackingReader struct {
+	*bytes.Reader
+	closeCount int
+}
+
+func (r *seekableCloseTrackingReader) Close() error {
+	r.closeCount++
+	return nil
 }
 
 func TestVerifyingReaderUsesStrongestNativeAlgorithm(t *testing.T) {
