@@ -104,14 +104,14 @@ func (h *ContainerHandler) buildNamespaceIndex() {
 	if host, ok := namespaceHostForURL(h.registryURL); ok {
 		h.namespaces[host] = defaultNamespaceRoute
 	} else {
-		h.warn("default OCI registry is not reachable through the ns query parameter: URL has a path",
-			"url", h.registryURL)
+		h.warn("host of the default OCI registry is not indexed for ns lookups: URL has a path; Docker Hub aliases still select it",
+			"url", redactedURL(h.registryURL))
 	}
 	for _, name := range slices.Sorted(maps.Keys(h.namedRegistries)) {
 		host, ok := namespaceHostForURL(h.namedRegistries[name])
 		if !ok {
 			h.warn("OCI upstream is not reachable through the ns query parameter: URL has a path",
-				"upstream", name, "url", h.namedRegistries[name])
+				"upstream", name, "url", redactedURL(h.namedRegistries[name]))
 			continue
 		}
 		if owner, exists := h.namespaces[host]; exists {
@@ -152,6 +152,15 @@ func registryHostKey(hostport string) string {
 		return "[" + host + "]"
 	}
 	return host
+}
+
+// redactedURL returns a registry URL for logging with any password masked.
+func redactedURL(raw string) string {
+	parsed, err := url.Parse(raw)
+	if err != nil {
+		return "<invalid url>"
+	}
+	return parsed.Redacted()
 }
 
 func (h *ContainerHandler) warn(msg string, args ...any) {

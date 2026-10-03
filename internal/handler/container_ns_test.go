@@ -446,3 +446,27 @@ func TestContainerHandler_TagsListIgnoresLegacyCacheRows(t *testing.T) {
 		t.Errorf("upstream requests = %d, want 1 (legacy row must not be served)", got)
 	}
 }
+
+func TestContainerHandler_NamespaceWarningsRedactCredentials(t *testing.T) {
+	proxy, _, _, _ := setupTestProxy(t)
+	logs := &bytes.Buffer{}
+	proxy.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	NewContainerHandlerWithRegistry(proxy, nsTestProxyURL, "https://svc:s3cret@mirror.example/hub", map[string]string{
+		"art": "https://bot:hunter2@art.example/artifactory/api/docker/remote",
+	})
+
+	for _, secret := range []string{"s3cret", "hunter2"} {
+		if strings.Contains(logs.String(), secret) {
+			t.Errorf("logs contain credential %q:\n%s", secret, logs.String())
+		}
+	}
+	for _, want := range []string{
+		"svc:xxxxx@mirror.example/hub",
+		"bot:xxxxx@art.example/artifactory",
+		"Docker Hub aliases still select it",
+	} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("logs missing %q:\n%s", want, logs.String())
+		}
+	}
+}
