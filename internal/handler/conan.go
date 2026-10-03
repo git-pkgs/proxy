@@ -94,7 +94,7 @@ func (h *ConanHandler) handleRecipeFile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // handlePackageFile serves a package file, fetching and caching from upstream if needed.
@@ -131,7 +131,7 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // shouldCacheFile returns true if the file should be cached.

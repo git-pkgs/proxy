@@ -81,7 +81,7 @@ func (h *PubHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // handlePackageMetadata proxies package metadata and rewrites archive URLs.

@@ -95,7 +95,7 @@ func (h *RPMHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 	}
 
 	w.Header().Set(headerContentType, "application/x-rpm")
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // handleMetadata proxies repository metadata files (repomd.xml, primary.xml.gz, etc.).

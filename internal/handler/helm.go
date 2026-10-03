@@ -94,7 +94,7 @@ func (h *HelmHandler) handleChart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if cached != nil {
-		h.serveChart(w, repository, digest, filename, cached)
+		h.serveChart(w, r, repository, digest, filename, cached)
 		return
 	}
 
@@ -127,10 +127,10 @@ func (h *HelmHandler) handleChart(w http.ResponseWriter, r *http.Request) {
 		h.proxy.serveArtifactError(w, err, "failed to fetch chart")
 		return
 	}
-	h.serveChart(w, repository, digest, filename, result)
+	h.serveChart(w, r, repository, digest, filename, result)
 }
 
-func (h *HelmHandler) serveChart(w http.ResponseWriter, repository, digest, filename string, result *CacheResult) {
+func (h *HelmHandler) serveChart(w http.ResponseWriter, r *http.Request, repository, digest, filename string, result *CacheResult) {
 	if !strings.EqualFold(result.Artifact.Digest.Encoded(), digest) {
 		if result.Reader != nil {
 			_ = result.Reader.Close()
@@ -145,7 +145,7 @@ func (h *HelmHandler) serveChart(w http.ResponseWriter, repository, digest, file
 	if result.Artifact.MediaType == "" {
 		w.Header().Set(headerContentType, "application/gzip")
 	}
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 func (h *HelmHandler) repositoryForRequest(r *http.Request) (name, upstreamURL string, ok bool) {

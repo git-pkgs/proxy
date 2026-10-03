@@ -126,7 +126,7 @@ func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, modul
 		return
 	}
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // proxyUpstream forwards a request to proxy.golang.org without caching.

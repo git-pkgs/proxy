@@ -626,7 +626,7 @@ func (h *PyPIHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // archiveExtensions are sdist formats of the form {name}-{version}{ext}. They

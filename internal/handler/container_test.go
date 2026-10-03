@@ -665,6 +665,7 @@ func TestContainerHandler_BlobDownload_CacheHitSkipsAuth(t *testing.T) {
 	proxy, db, store, fetcher := setupTestProxy(t)
 	digest := "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd"
 	seedPackage(t, db, store, "oci", "library/nginx", digest, digest, "cached blob")
+	store.seekable = true
 
 	upstreamRequests := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -680,14 +681,18 @@ func TestContainerHandler_BlobDownload_CacheHitSkipsAuth(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodGet, "/library/nginx/blobs/"+digest, nil)
+	req.Header.Set("Range", "bytes=0-5")
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	if w.Code != http.StatusPartialContent {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusPartialContent, w.Body.String())
 	}
-	if got := w.Body.String(); got != "cached blob" {
-		t.Errorf("body = %q, want %q", got, "cached blob")
+	if got := w.Body.String(); got != "cached" {
+		t.Errorf("body = %q, want %q", got, "cached")
+	}
+	if got := w.Header().Get("Content-Range"); got != "bytes 0-5/11" {
+		t.Errorf("Content-Range = %q, want %q", got, "bytes 0-5/11")
 	}
 	if upstreamRequests != 0 {
 		t.Errorf("upstream requests = %d, want 0", upstreamRequests)

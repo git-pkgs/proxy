@@ -189,7 +189,7 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 
 	result.Artifact.MediaType = "application/zip"
 	setSwiftArchiveHeaders(w.Header(), name, version, result.Artifact.Digest.Encoded(), archiveInfo)
-	serveArtifact(w, r.Method, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 func (h *SwiftHandler) handleSourceArchiveHead(
@@ -208,7 +208,7 @@ func (h *SwiftHandler) handleSourceArchiveHead(
 	if result != nil {
 		result.Artifact.MediaType = "application/zip"
 		setSwiftArchiveHeaders(w.Header(), name, version, result.Artifact.Digest.Encoded(), archiveInfo)
-		serveArtifact(w, r.Method, result)
+		ServeArtifactRequest(w, r, result)
 		return
 	}
 

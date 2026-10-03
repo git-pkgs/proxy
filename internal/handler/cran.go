@@ -83,7 +83,7 @@ func (h *CRANHandler) handleSourceDownload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // handleBinaryDownload serves a binary package, fetching and caching from upstream.
@@ -117,7 +117,7 @@ func (h *CRANHandler) handleBinaryDownload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // parseSourceFilename extracts name and version from a CRAN source filename.

@@ -37,6 +37,7 @@ type mockStorage struct {
 	openErr   error
 	signedURL string
 	signErr   error
+	seekable  bool
 }
 
 func newMockStorage() *mockStorage {
@@ -67,8 +68,17 @@ func (s *mockStorage) Open(_ context.Context, path string) (io.ReadCloser, error
 	if !ok {
 		return nil, storage.ErrNotFound
 	}
+	if s.seekable {
+		return &mockSeekableReadCloser{Reader: bytes.NewReader(data)}, nil
+	}
 	return io.NopCloser(bytes.NewReader(data)), nil
 }
+
+type mockSeekableReadCloser struct {
+	*bytes.Reader
+}
+
+func (r *mockSeekableReadCloser) Close() error { return nil }
 
 func (s *mockStorage) Exists(_ context.Context, path string) (bool, error) {
 	s.mu.Lock()

@@ -132,7 +132,7 @@ func (h *APKHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 	if result.Artifact.MediaType == "" {
 		result.Artifact.MediaType = "application/octet-stream"
 	}
-	serveArtifact(w, r.Method, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // handleMetadata serves repository indexes and signatures through the

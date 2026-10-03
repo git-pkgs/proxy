@@ -164,7 +164,7 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 		if cached.Artifact.MediaType == "" {
 			cached.Artifact.MediaType = "application/octet-stream"
 		}
-		serveArtifact(w, r.Method, cached)
+		ServeArtifactRequest(w, r, cached)
 		return
 	}
 
@@ -208,7 +208,7 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 	if result.Artifact.MediaType == "" {
 		result.Artifact.MediaType = "application/octet-stream"
 	}
-	ServeArtifact(w, result)
+	ServeArtifactRequest(w, r, result)
 }
 
 // handleManifest serves immutable manifests from cache and revalidates mutable tags.
