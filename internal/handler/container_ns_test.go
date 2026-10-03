@@ -1,0 +1,411 @@
+package handler
+
+import (
+	"bytes"
+	"io"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"strings"
+	"sync"
+	"testing"
+	"time"
+
+	"github.com/git-pkgs/registries/fetch"
+)
+
+const (
+	nsTestBlob     = "layer bytes"
+	nsTestProxyURL = "http://proxy.example.test"
+)
+
+// nsTestRegistry is a fake OCI registry serving one repository below an
+// optional path prefix. It records every request URI it receives.
+type nsTestRegistry struct {
+	*httptest.Server
+	repository string
+
+	mu       sync.Mutex
+	requests []string
+}
+
+func newNSTestRegistry(t *testing.T, repository, pathPrefix string) *nsTestRegistry {
+	t.Helper()
+	registry := &nsTestRegistry{repository: repository}
+	manifest := nsTestManifest()
+	blobDigest := "sha256:" + sha256Hex(nsTestBlob)
+	manifestDigest := "sha256:" + sha256Hex(manifest)
+	base := pathPrefix + "/v2/" + repository
+	registry.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		registry.mu.Lock()
+		registry.requests = append(registry.requests, r.URL.RequestURI())
+		registry.mu.Unlock()
+
+		switch r.URL.Path {
+		case base + "/manifests/latest", base + "/manifests/" + manifestDigest:
+			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
+			w.Header().Set("Docker-Content-Digest", manifestDigest)
+			_, _ = io.WriteString(w, manifest)
+		case base + "/blobs/" + blobDigest:
+			w.Header().Set("Content-Type", "application/octet-stream")
+			_, _ = io.WriteString(w, nsTestBlob)
+		case base + "/tags/list":
+			w.Header().Set("Content-Type", "application/json")
+			if r.URL.Query().Get("last") == "" {
+				w.Header().Set("Link", `<`+base+`/tags/list?last=1.0&n=1>; rel="next"`)
+				_, _ = io.WriteString(w, `{"name":"`+repository+`","tags":["1.0"]}`)
+				return
+			}
+			_, _ = io.WriteString(w, `{"name":"`+repository+`","tags":["2.0"]}`)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(registry.Close)
+	return registry
+}
+
+func nsTestManifest() string {
+	return `{"schemaVersion":2,"layers":[{"digest":"sha256:` + sha256Hex(nsTestBlob) + `"}]}`
+}
+
+func (r *nsTestRegistry) host() string {
+	return strings.TrimPrefix(r.URL, "http://")
+}
+
+func (r *nsTestRegistry) requestCount() int {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return len(r.requests)
+}
+
+func (r *nsTestRegistry) lastRequest() string {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if len(r.requests) == 0 {
+		return ""
+	}
+	return r.requests[len(r.requests)-1]
+}
+
+// newNSTestHandler builds a container handler the way the server does, with a
+// real fetcher so blob downloads reach the fake registries. Warnings logged
+// while building the handler are written to the returned buffer.
+func newNSTestHandler(t *testing.T, defaultURL string, named map[string]string) (http.Handler, *ContainerHandler, *bytes.Buffer) {
+	t.Helper()
+	proxy, _, _, _ := setupTestProxy(t)
+	logs := &bytes.Buffer{}
+	proxy.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	client := &http.Client{}
+	proxy.HTTPClient = client
+	proxy.MetadataTTL = time.Hour
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(client), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+	h := NewContainerHandlerWithRegistry(proxy, nsTestProxyURL, defaultURL, named)
+	return http.StripPrefix("/v2", h.Routes()), h, logs
+}
+
+func serveNS(routes http.Handler, target string) *httptest.ResponseRecorder {
+	response := httptest.NewRecorder()
+	routes.ServeHTTP(response, httptest.NewRequest(http.MethodGet, target, nil))
+	return response
+}
+
+func assertNameUnknown(t *testing.T, response *httptest.ResponseRecorder) {
+	t.Helper()
+	if response.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404: %s", response.Code, response.Body.String())
+	}
+	if !strings.Contains(response.Body.String(), `"NAME_UNKNOWN"`) {
+		t.Errorf("body = %s, want NAME_UNKNOWN error", response.Body.String())
+	}
+}
+
+func TestContainerHandler_NamespaceSelectsDefaultRegistry(t *testing.T) {
+	registry := newNSTestRegistry(t, "library/nginx", "")
+	// The default registry is a custom oci_default, so its host is only
+	// resolvable when the index is built from the final registry URL.
+	routes, _, _ := newNSTestHandler(t, registry.URL, nil)
+
+	for _, namespace := range []string{"docker.io", "index.docker.io", "registry-1.docker.io", registry.host()} {
+		t.Run(namespace, func(t *testing.T) {
+			response := serveNS(routes, "/v2/library/nginx/manifests/latest?ns="+namespace)
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200: %s", response.Code, response.Body.String())
+			}
+			if got, want := registry.lastRequest(), "/v2/library/nginx/manifests/latest"; got != want {
+				t.Errorf("upstream request = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
+func TestContainerHandler_NamespaceSelectsNamedRegistry(t *testing.T) {
+	fallback := newNSTestRegistry(t, "owner/app", "")
+	named := newNSTestRegistry(t, "owner/app", "")
+	routes, _, _ := newNSTestHandler(t, fallback.URL, map[string]string{"ghcr": named.URL})
+	digest := "sha256:" + sha256Hex(nsTestBlob)
+
+	manifest := serveNS(routes, "/v2/owner/app/manifests/latest?ns="+named.host())
+	if manifest.Code != http.StatusOK {
+		t.Fatalf("manifest status = %d, want 200: %s", manifest.Code, manifest.Body.String())
+	}
+	blob := serveNS(routes, "/v2/owner/app/blobs/"+digest+"?ns="+named.host())
+	if blob.Code != http.StatusOK {
+		t.Fatalf("blob status = %d, want 200: %s", blob.Code, blob.Body.String())
+	}
+	if got := blob.Body.String(); got != nsTestBlob {
+		t.Errorf("blob body = %q, want %q", got, nsTestBlob)
+	}
+	if got := named.requestCount(); got != 2 {
+		t.Errorf("named registry requests = %d, want 2", got)
+	}
+	if got := fallback.requestCount(); got != 0 {
+		t.Errorf("default registry requests = %d, want 0", got)
+	}
+}
+
+func TestContainerHandler_NamespaceRejectsUnresolvableRequests(t *testing.T) {
+	registry := newNSTestRegistry(t, "owner/app", "")
+	routes, _, _ := newNSTestHandler(t, registry.URL, map[string]string{"ghcr": registry.URL})
+	digest := "sha256:" + sha256Hex(nsTestBlob)
+
+	tests := map[string]string{
+		"unknown host manifest":     "/v2/owner/app/manifests/latest?ns=quay.io",
+		"unknown host blob":         "/v2/owner/app/blobs/" + digest + "?ns=quay.io",
+		"unknown host tags":         "/v2/owner/app/tags/list?ns=quay.io",
+		"multiple ns values":        "/v2/owner/app/manifests/latest?ns=docker.io&ns=" + registry.host(),
+		"reserved prefix (default)": "/v2/upstream/ghcr/owner/app/manifests/latest?ns=docker.io",
+		"reserved prefix (named)":   "/v2/upstream/ghcr/owner/app/blobs/" + digest + "?ns=" + registry.host(),
+	}
+	for name, target := range tests {
+		t.Run(name, func(t *testing.T) {
+			assertNameUnknown(t, serveNS(routes, target))
+		})
+	}
+	if got := registry.requestCount(); got != 0 {
+		t.Errorf("upstream requests = %d, want 0", got)
+	}
+}
+
+func TestContainerHandler_NamespaceSharesCacheWithOtherRoutes(t *testing.T) {
+	digest := "sha256:" + sha256Hex(nsTestBlob)
+	manifestDigest := "sha256:" + sha256Hex(nsTestManifest())
+
+	t.Run("named registry", func(t *testing.T) {
+		registry := newNSTestRegistry(t, "owner/app", "")
+		routes, _, _ := newNSTestHandler(t, "", map[string]string{"ghcr": registry.URL})
+
+		for _, target := range []string{
+			"/v2/upstream/ghcr/owner/app/blobs/" + digest,
+			"/v2/upstream/ghcr/owner/app/manifests/" + manifestDigest,
+		} {
+			if response := serveNS(routes, target); response.Code != http.StatusOK {
+				t.Fatalf("warm %s status = %d: %s", target, response.Code, response.Body.String())
+			}
+		}
+		warmed := registry.requestCount()
+		for _, target := range []string{
+			"/v2/owner/app/blobs/" + digest + "?ns=" + registry.host(),
+			"/v2/owner/app/manifests/" + manifestDigest + "?ns=" + registry.host(),
+		} {
+			if response := serveNS(routes, target); response.Code != http.StatusOK {
+				t.Fatalf("ns %s status = %d: %s", target, response.Code, response.Body.String())
+			}
+		}
+		if got := registry.requestCount(); got != warmed {
+			t.Errorf("upstream requests after ns pulls = %d, want %d (cache hits)", got, warmed)
+		}
+	})
+
+	t.Run("default registry", func(t *testing.T) {
+		registry := newNSTestRegistry(t, "library/nginx", "")
+		routes, _, _ := newNSTestHandler(t, registry.URL, nil)
+
+		for _, target := range []string{
+			"/v2/library/nginx/blobs/" + digest + "?ns=docker.io",
+			"/v2/library/nginx/manifests/" + manifestDigest + "?ns=docker.io",
+		} {
+			if response := serveNS(routes, target); response.Code != http.StatusOK {
+				t.Fatalf("warm %s status = %d: %s", target, response.Code, response.Body.String())
+			}
+		}
+		warmed := registry.requestCount()
+		for _, target := range []string{
+			"/v2/library/nginx/blobs/" + digest,
+			"/v2/library/nginx/manifests/" + manifestDigest,
+		} {
+			if response := serveNS(routes, target); response.Code != http.StatusOK {
+				t.Fatalf("unprefixed %s status = %d: %s", target, response.Code, response.Body.String())
+			}
+		}
+		if got := registry.requestCount(); got != warmed {
+			t.Errorf("upstream requests after unprefixed pulls = %d, want %d (cache hits)", got, warmed)
+		}
+	})
+}
+
+func TestContainerHandler_NamespaceTagsList(t *testing.T) {
+	registry := newNSTestRegistry(t, "owner/app", "")
+	routes, _, _ := newNSTestHandler(t, "", map[string]string{"ghcr": registry.URL})
+
+	// The prefix route fills the shared cache entry first.
+	prefixed := serveNS(routes, "/v2/upstream/ghcr/owner/app/tags/list?n=1")
+	if prefixed.Code != http.StatusOK {
+		t.Fatalf("prefixed status = %d: %s", prefixed.Code, prefixed.Body.String())
+	}
+	const wantPrefixedLink = `<` + nsTestProxyURL + `/v2/upstream/ghcr/owner/app/tags/list?last=1.0&n=1>; rel="next"`
+	if got := prefixed.Header().Get("Link"); got != wantPrefixedLink {
+		t.Errorf("prefixed Link = %q, want %q", got, wantPrefixedLink)
+	}
+
+	namespaced := serveNS(routes, "/v2/owner/app/tags/list?n=1&ns="+registry.host())
+	if namespaced.Code != http.StatusOK {
+		t.Fatalf("ns status = %d: %s", namespaced.Code, namespaced.Body.String())
+	}
+	if got := registry.requestCount(); got != 1 {
+		t.Errorf("upstream requests = %d, want 1 (ns request served from the shared cache)", got)
+	}
+	wantNSLink := `<` + nsTestProxyURL + `/v2/owner/app/tags/list?last=1.0&n=1&ns=` + url.QueryEscape(registry.host()) + `>; rel="next"`
+	link := namespaced.Header().Get("Link")
+	if link != wantNSLink {
+		t.Fatalf("ns Link = %q, want %q", link, wantNSLink)
+	}
+
+	next := serveNS(routes, strings.TrimPrefix(strings.SplitN(link, ">", 2)[0], "<"))
+	if next.Code != http.StatusOK {
+		t.Fatalf("next page status = %d: %s", next.Code, next.Body.String())
+	}
+	if got, want := next.Body.String(), `{"name":"owner/app","tags":["2.0"]}`; got != want {
+		t.Errorf("next page body = %q, want %q", got, want)
+	}
+	if got, want := registry.lastRequest(), "/v2/owner/app/tags/list?last=1.0&n=1"; got != want {
+		t.Errorf("upstream request = %q, want %q (ns must not be forwarded)", got, want)
+	}
+}
+
+func TestContainerHandler_NamespaceDefaultBypassesRepositoryPrefixRoutes(t *testing.T) {
+	hub := newNSTestRegistry(t, "homebrew/core/jq", "")
+	brew := newNSTestRegistry(t, "homebrew/core/jq", "")
+	routes, h, _ := newNSTestHandler(t, hub.URL, nil)
+	RegisterHomebrewArtifacts(h, brew.URL)
+
+	if response := serveNS(routes, "/v2/homebrew/core/jq/manifests/latest?ns=docker.io"); response.Code != http.StatusOK {
+		t.Fatalf("ns status = %d: %s", response.Code, response.Body.String())
+	}
+	if hub.requestCount() != 1 || brew.requestCount() != 0 {
+		t.Errorf("ns request reached hub=%d brew=%d, want hub=1 brew=0", hub.requestCount(), brew.requestCount())
+	}
+
+	if response := serveNS(routes, "/v2/homebrew/core/jq/manifests/latest"); response.Code != http.StatusOK {
+		t.Fatalf("unprefixed status = %d: %s", response.Code, response.Body.String())
+	}
+	if hub.requestCount() != 1 || brew.requestCount() != 1 {
+		t.Errorf("unprefixed request reached hub=%d brew=%d, want hub=1 brew=1", hub.requestCount(), brew.requestCount())
+	}
+}
+
+func TestContainerHandler_NamespaceMatchesConfiguredHosts(t *testing.T) {
+	// Each pair is a configured registry URL and the ns value containerd
+	// sends for an image reference on that registry.
+	tests := []struct {
+		configured string
+		namespace  string
+	}{
+		{"https://GHCR.io", "ghcr.io"},
+		{"https://ghcr.io/", "GHCR.IO"},
+		{"http://[fd00::1]:5000", "[fd00::1]:5000"},
+		{"https://[fd00::1]", "[fd00::1]"},
+		{"https://reg.example:80", "reg.example:80"},
+		{"https://reg.example:443", "reg.example"},
+		{"https://reg.example", "reg.example:443"},
+		{"http://reg.example:5000", "reg.example:5000"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.configured+" "+tt.namespace, func(t *testing.T) {
+			h := NewContainerHandlerWithRegistry(nil, nsTestProxyURL, "", map[string]string{"lab": tt.configured})
+			registryURL, upstreamName, cacheName, ok := h.registryForNamespace(tt.namespace, "owner/app")
+			if !ok {
+				t.Fatalf("ns %q did not resolve for upstream %q", tt.namespace, tt.configured)
+			}
+			if registryURL != strings.TrimSuffix(tt.configured, "/") || upstreamName != "owner/app" || cacheName != "upstream/lab/owner/app" {
+				t.Errorf("route = (%q, %q, %q), want (%q, owner/app, upstream/lab/owner/app)",
+					registryURL, upstreamName, cacheName, tt.configured)
+			}
+		})
+	}
+
+	if _, _, _, ok := (NewContainerHandlerWithRegistry(nil, nsTestProxyURL, "", map[string]string{"lab": "http://reg.example:5000"})).
+		registryForNamespace("reg.example:5001", "owner/app"); ok {
+		t.Error("ns with a different port resolved, want no match")
+	}
+}
+
+func TestContainerHandler_NamespaceHostCollisions(t *testing.T) {
+	proxy, _, _, _ := setupTestProxy(t)
+	logs := &bytes.Buffer{}
+	proxy.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	h := NewContainerHandlerWithRegistry(proxy, nsTestProxyURL, "https://mirror.example", map[string]string{
+		"zeta":   "https://shared.example",
+		"alpha":  "https://Shared.example:443",
+		"mirror": "https://mirror.example",
+		"hub":    "https://registry-1.docker.io",
+	})
+
+	tests := map[string]string{
+		"shared.example":       "https://Shared.example:443",
+		"mirror.example":       "https://mirror.example",
+		"registry-1.docker.io": "https://mirror.example",
+	}
+	for namespace, want := range tests {
+		registryURL, _, cacheName, ok := h.registryForNamespace(namespace, "owner/app")
+		if !ok || registryURL != want {
+			t.Errorf("ns %q resolved to (%q, %v), want %q", namespace, registryURL, ok, want)
+		}
+		if namespace == "shared.example" && cacheName != "upstream/alpha/owner/app" {
+			t.Errorf("ns %q cache name = %q, want upstream/alpha/owner/app", namespace, cacheName)
+		}
+	}
+	for _, upstream := range []string{"upstream=zeta", "upstream=mirror", "upstream=hub"} {
+		if !strings.Contains(logs.String(), upstream) {
+			t.Errorf("missing collision warning for %s in logs:\n%s", upstream, logs.String())
+		}
+	}
+}
+
+func TestContainerHandler_NamespaceSkipsRegistryURLsWithPath(t *testing.T) {
+	registry := newNSTestRegistry(t, "owner/app", "/artifactory/api/docker/remote")
+	routes, _, logs := newNSTestHandler(t, "", map[string]string{
+		"art": registry.URL + "/artifactory/api/docker/remote",
+	})
+
+	assertNameUnknown(t, serveNS(routes, "/v2/owner/app/manifests/latest?ns="+registry.host()))
+	if got := registry.requestCount(); got != 0 {
+		t.Errorf("upstream requests via ns = %d, want 0", got)
+	}
+	if !strings.Contains(logs.String(), "upstream=art") {
+		t.Errorf("missing warning for path-prefixed upstream in logs:\n%s", logs.String())
+	}
+
+	if response := serveNS(routes, "/v2/upstream/art/owner/app/manifests/latest"); response.Code != http.StatusOK {
+		t.Fatalf("prefix route status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+
+	t.Run("default registry", func(t *testing.T) {
+		mirror := newNSTestRegistry(t, "library/nginx", "/hub")
+		routes, _, logs := newNSTestHandler(t, mirror.URL+"/hub", nil)
+
+		assertNameUnknown(t, serveNS(routes, "/v2/library/nginx/manifests/latest?ns="+mirror.host()))
+		if got := mirror.requestCount(); got != 0 {
+			t.Errorf("upstream requests via ns host = %d, want 0", got)
+		}
+		if response := serveNS(routes, "/v2/library/nginx/manifests/latest?ns=docker.io"); response.Code != http.StatusOK {
+			t.Fatalf("ns=docker.io status = %d, want 200: %s", response.Code, response.Body.String())
+		}
+		if !strings.Contains(logs.String(), "default OCI registry") {
+			t.Errorf("missing warning for path-prefixed default registry in logs:\n%s", logs.String())
+		}
+	})
+}

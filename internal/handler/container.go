@@ -4,8 +4,12 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"maps"
+	"net"
 	"net/http"
+	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 )
 
@@ -15,7 +19,16 @@ const (
 	manifestMatchCount    = 3 // full match + name + reference
 	tagsListMatchCount    = 2 // full match + name
 	registrySelectorParts = 3 // upstream + name + repository
+
+	// namespaceQueryParam is the query parameter containerd appends to mirror
+	// requests to name the registry the image reference points at.
+	namespaceQueryParam = "ns"
+	// defaultNamespaceRoute marks namespace hosts served by the default registry.
+	defaultNamespaceRoute = ""
 )
+
+// dockerHubNamespaces are the registry hosts clients use for Docker Hub.
+var dockerHubNamespaces = []string{"docker.io", "index.docker.io", "registry-1.docker.io"} //nolint:gochecknoglobals // fixed alias list
 
 // ContainerHandler handles OCI/Docker container registry protocol requests.
 // It implements the OCI Distribution Spec for pulling images.
@@ -26,6 +39,9 @@ type ContainerHandler struct {
 	proxyURL        string
 	namedRegistries map[string]string
 	registries      []containerRegistry
+	// namespaces maps normalized registry hosts from containerd's ns query
+	// parameter to a named upstream, or to defaultNamespaceRoute.
+	namespaces map[string]string
 }
 
 type containerRegistry struct {
@@ -38,18 +54,7 @@ type containerRegistry struct {
 // upstream/{name}/, leaving unprefixed requests compatible with the Docker Hub
 // mirror behavior.
 func NewContainerHandler(proxy *Proxy, proxyURL string, namedRegistries ...map[string]string) *ContainerHandler {
-	h := &ContainerHandler{
-		proxy:       proxy,
-		registryURL: dockerHubRegistry,
-		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
-	}
-	if len(namedRegistries) > 0 {
-		h.namedRegistries = make(map[string]string, len(namedRegistries[0]))
-		for name, registryURL := range namedRegistries[0] {
-			h.namedRegistries[name] = strings.TrimSuffix(registryURL, "/")
-		}
-	}
-	return h
+	return newContainerHandler(proxy, proxyURL, dockerHubRegistry, namedRegistries...)
 }
 
 // NewContainerHandlerWithRegistry creates a container handler with a custom
@@ -59,9 +64,100 @@ func NewContainerHandlerWithRegistry(
 	proxyURL, registryURL string,
 	namedRegistries ...map[string]string,
 ) *ContainerHandler {
-	h := NewContainerHandler(proxy, proxyURL, namedRegistries...)
-	h.registryURL = configuredUpstreamURL(registryURL, dockerHubRegistry)
+	return newContainerHandler(proxy, proxyURL, configuredUpstreamURL(registryURL, dockerHubRegistry), namedRegistries...)
+}
+
+func newContainerHandler(
+	proxy *Proxy,
+	proxyURL, registryURL string,
+	namedRegistries ...map[string]string,
+) *ContainerHandler {
+	h := &ContainerHandler{
+		proxy:       proxy,
+		registryURL: registryURL,
+		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
+	}
+	if len(namedRegistries) > 0 {
+		h.namedRegistries = make(map[string]string, len(namedRegistries[0]))
+		for name, registryURL := range namedRegistries[0] {
+			h.namedRegistries[name] = strings.TrimSuffix(registryURL, "/")
+		}
+	}
+	// The index needs the final default registry URL, so build it last.
+	h.buildNamespaceIndex()
 	return h
+}
+
+// buildNamespaceIndex maps the registry hosts containerd may send in the ns
+// query parameter to the configured routes. The index is closed-world: a host
+// is only ever looked up, never dialed. Docker Hub aliases and the default
+// registry's host select the default route; hosts of upstream.oci entries
+// select their named upstream. Registry URLs with a path are skipped because
+// ns names the registry at the root of that host, not a repository mounted
+// below it. On collisions the default route wins, then the alphabetically
+// first upstream name.
+func (h *ContainerHandler) buildNamespaceIndex() {
+	h.namespaces = make(map[string]string, len(dockerHubNamespaces)+1+len(h.namedRegistries))
+	for _, host := range dockerHubNamespaces {
+		h.namespaces[host] = defaultNamespaceRoute
+	}
+	if host, ok := namespaceHostForURL(h.registryURL); ok {
+		h.namespaces[host] = defaultNamespaceRoute
+	} else {
+		h.warn("default OCI registry is not reachable through the ns query parameter: URL has a path",
+			"url", h.registryURL)
+	}
+	for _, name := range slices.Sorted(maps.Keys(h.namedRegistries)) {
+		host, ok := namespaceHostForURL(h.namedRegistries[name])
+		if !ok {
+			h.warn("OCI upstream is not reachable through the ns query parameter: URL has a path",
+				"upstream", name, "url", h.namedRegistries[name])
+			continue
+		}
+		if owner, exists := h.namespaces[host]; exists {
+			if owner == defaultNamespaceRoute {
+				owner = "default registry"
+			}
+			h.warn("OCI upstream shares its registry host with another route; ns requests use the other route",
+				"upstream", name, "host", host, "route", owner)
+			continue
+		}
+		h.namespaces[host] = name
+	}
+}
+
+// namespaceHostForURL returns the ns lookup key for a registry URL. It reports
+// false for URLs that are not a bare registry root.
+func namespaceHostForURL(registryURL string) (string, bool) {
+	parsed, err := url.Parse(registryURL)
+	if err != nil || parsed.Host == "" || (parsed.Path != "" && parsed.Path != "/") {
+		return "", false
+	}
+	return registryHostKey(parsed.Host), true
+}
+
+// registryHostKey normalizes a registry host[:port] for ns lookups. Hosts are
+// case-insensitive and ports 80 and 443 are dropped because ns carries no
+// scheme. The same function normalizes both configured URLs and ns values.
+func registryHostKey(hostport string) string {
+	host, port, err := net.SplitHostPort(hostport)
+	if err != nil {
+		host, port = strings.TrimSuffix(strings.TrimPrefix(hostport, "["), "]"), ""
+	}
+	host = strings.ToLower(host)
+	if port != "" && port != "80" && port != "443" {
+		return net.JoinHostPort(host, port)
+	}
+	if strings.Contains(host, ":") {
+		return "[" + host + "]"
+	}
+	return host
+}
+
+func (h *ContainerHandler) warn(msg string, args ...any) {
+	if h.proxy != nil && h.proxy.Logger != nil {
+		h.proxy.Logger.Warn(msg, args...)
+	}
 }
 
 // RegisterRegistry routes a repository and its descendants to a specific OCI
@@ -144,7 +240,7 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	registryURL, upstreamName, cacheName, ok := h.registryForName(name)
+	registryURL, upstreamName, cacheName, ok := h.registryForRequest(r, name)
 	if !ok {
 		h.containerError(w, http.StatusNotFound, "NAME_UNKNOWN", "unknown upstream registry")
 		return
@@ -225,7 +321,7 @@ func (h *ContainerHandler) handleManifest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	registryURL, upstreamName, _, ok := h.registryForName(name)
+	registryURL, upstreamName, _, ok := h.registryForRequest(r, name)
 	if !ok {
 		h.containerError(w, http.StatusNotFound, "NAME_UNKNOWN", "unknown upstream registry")
 		return
@@ -248,7 +344,7 @@ func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	registryURL, upstreamName, _, ok := h.registryForName(name)
+	registryURL, upstreamName, _, ok := h.registryForRequest(r, name)
 	if !ok {
 		h.containerError(w, http.StatusNotFound, "NAME_UNKNOWN", "unknown upstream registry")
 		return
@@ -284,6 +380,47 @@ func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request,
 			dst.Set("Docker-Content-Digest", digest)
 		}
 	})
+}
+
+// registryForRequest resolves the repository name of a request. containerd
+// mirror requests name the target registry in the ns query parameter; without
+// it the name is routed by registryForName.
+func (h *ContainerHandler) registryForRequest(r *http.Request, name string) (registryURL, upstreamName, cacheName string, ok bool) {
+	namespaces := r.URL.Query()[namespaceQueryParam]
+	switch {
+	case len(namespaces) == 0 || (len(namespaces) == 1 && namespaces[0] == ""):
+		return h.registryForName(name)
+	case len(namespaces) > 1:
+		return "", "", "", false
+	}
+	return h.registryForNamespace(namespaces[0], name)
+}
+
+// registryForNamespace resolves a repository name verbatim against the registry
+// named by ns. The reserved upstream/ prefix is rejected so ns requests cannot
+// address cache entries of another route. Cache names match the unprefixed and
+// upstream/{name}/ routes, so all routes to one registry share blobs.
+func (h *ContainerHandler) registryForNamespace(namespace, name string) (registryURL, upstreamName, cacheName string, ok bool) {
+	if strings.HasPrefix(name, "upstream/") {
+		return "", "", "", false
+	}
+	route, ok := h.namespaces[registryHostKey(namespace)]
+	if !ok {
+		return "", "", "", false
+	}
+	if route == defaultNamespaceRoute {
+		// ns explicitly names the default registry, so repository prefix
+		// routes such as Homebrew's do not apply.
+		if h.registryURL == "" {
+			return "", "", "", false
+		}
+		return h.registryURL, name, name, true
+	}
+	registryURL = h.namedRegistries[route]
+	if registryURL == "" {
+		return "", "", "", false
+	}
+	return registryURL, name, "upstream/" + route + "/" + name, true
 }
 
 // registryForName resolves a client-visible OCI repository name to an upstream
