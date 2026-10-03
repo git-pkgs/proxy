@@ -914,7 +914,11 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 // replayed as sent. The ProxyCached path uses "identity" for signed indexes and
 // "gzip" where both hops should stay compressed.
 // validate, when supplied, runs before caching or serving a document. Validation
-// failures follow the same stale-cache fallback path as upstream failures.
+// failures follow the same stale-cache fallback path as upstream failures. It
+// runs for every caller, including one that shares another caller's fetch, so
+// it can also decode the document into request-local state; a caller that
+// joined a fetch gets its own validation error directly. It must not modify the
+// body, which joined callers share.
 func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, acceptEncoding string, validate func([]byte) error, acceptHeaders ...string) ([]byte, string, string, error) {
 	if containsPathTraversal(cacheKey) {
 		return nil, "", "", fmt.Errorf("invalid cache key: %q", cacheKey)
@@ -940,7 +944,7 @@ func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 // fetch among concurrent callers with the same key.
 func (p *Proxy) coalescedMetadataMiss(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding string, validate func([]byte) error) metadataResult {
 	key := metadataCoalesceKey(ecosystem, cacheKey, upstreamURL, accept, acceptEncoding, validate != nil)
-	return p.coalesceMetadata(ctx, key, func(fetchCtx context.Context) metadataResult {
+	res, shared := p.coalesceMetadata(ctx, key, func(fetchCtx context.Context) metadataResult {
 		// The caller's lookup ran before it took the key, so a fetch that
 		// finished in between has already refreshed the row. Recheck it
 		// rather than fetching again, and revalidate against the row as it
@@ -951,6 +955,14 @@ func (p *Proxy) coalescedMetadataMiss(ctx context.Context, ecosystem, cacheKey, 
 		}
 		return p.fetchMetadataFromUpstream(fetchCtx, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding, validate, entry)
 	})
+	// The fetch ran the first caller's validate. A caller that joined it runs
+	// its own on the shared bytes, since validate may also decode them for it.
+	if shared && res.err == nil && validate != nil {
+		if err := validate(res.body); err != nil {
+			return metadataResult{err: err}
+		}
+	}
+	return res
 }
 
 // cachedMetadataState reads the cache row for a metadata lookup. hit is set
@@ -1049,13 +1061,14 @@ func metadataCoalesceKey(ecosystem, cacheKey, upstreamURL, accept, acceptEncodin
 }
 
 // coalesceMetadata runs fetch at most once for concurrent callers sharing key
-// and gives each the result. It follows coalesceFetch with one difference:
+// and gives each the result, reporting whether this caller joined another's
+// fetch rather than running it. It follows coalesceFetch with one difference:
 // fetch runs on a context detached from the first caller's cancellation. A
 // metadata fetch has no scan or mirror that depends on the caller aborting it,
 // and CI jobs asking for the same Composer or npm metadata would otherwise all
 // fail when the first of them disconnects. It stays bounded by the HTTP
 // client's timeout. Waiters still leave when their own context ends.
-func (p *Proxy) coalesceMetadata(ctx context.Context, key string, fetch func(context.Context) metadataResult) metadataResult {
+func (p *Proxy) coalesceMetadata(ctx context.Context, key string, fetch func(context.Context) metadataResult) (metadataResult, bool) {
 	p.metaMu.Lock()
 	if p.inFlightMeta == nil {
 		p.inFlightMeta = make(map[string]*inflightMetadata)
@@ -1072,9 +1085,9 @@ func (p *Proxy) coalesceMetadata(ctx context.Context, key string, fetch func(con
 	if joined {
 		select {
 		case <-ctx.Done():
-			return metadataResult{err: ctx.Err()}
+			return metadataResult{err: ctx.Err()}, true
 		case <-f.done:
-			return f.res
+			return f.res, true
 		}
 	}
 
@@ -1088,7 +1101,7 @@ func (p *Proxy) coalesceMetadata(ctx context.Context, key string, fetch func(con
 		close(f.done)
 	}()
 	f.res = fetch(context.WithoutCancel(ctx))
-	return f.res
+	return f.res, false
 }
 
 func (p *Proxy) readCachedMetadata(ctx context.Context, entry *database.MetadataCacheEntry, validate func([]byte) error) ([]byte, string, error) {

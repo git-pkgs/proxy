@@ -3,12 +3,15 @@ package handler
 import (
 	"bytes"
 	"compress/gzip"
+	"crypto/sha256"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -167,6 +170,57 @@ func TestNuGetCooldownColdDownload(t *testing.T) {
 				t.Errorf("artifact fetch called = %v", fetcher.fetchCalled)
 			}
 		})
+	}
+}
+
+// TestNuGetCooldownConcurrentDownloads asserts that a download which joins
+// another request's metadata fetch still applies the cooldown. Each caller
+// decodes the leaf in its own validate callback, so a waiter on the shared
+// fetch must run its own rather than finding no document and allowing it.
+func TestNuGetCooldownConcurrentDownloads(t *testing.T) {
+	p, db, store, fetcher := setupTestProxy(t)
+	p.Cooldown = &cooldown.Config{Default: "14d"}
+	seedPackage(t, db, store, "nuget", "testpkg", "2.0.0", "testpkg.2.0.0.nupkg", "cached package")
+	entered, release := make(chan struct{}), make(chan struct{})
+	var enteredOnce, releaseOnce sync.Once
+	releaseUpstream := func() { releaseOnce.Do(func() { close(release) }) }
+	var calls atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls.Add(1)
+		enteredOnce.Do(func() { close(entered) })
+		<-release
+		_ = json.NewEncoder(w).Encode(map[string]string{"published": time.Now().Add(-time.Hour).Format(time.RFC3339)})
+	}))
+	// Cleanups run last first: release the held request before closing the
+	// server, so a failed wait can't hang the test.
+	t.Cleanup(upstream.Close)
+	t.Cleanup(releaseUpstream)
+	routes := NewNuGetHandlerWithUpstreams(p, "http://proxy.test", upstream.URL, upstream.URL).Routes()
+
+	statuses := make(chan int, 2)
+	download := func() {
+		w := httptest.NewRecorder()
+		routes.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/v3-flatcontainer/testpkg/2.0.0/testpkg.2.0.0.nupkg", nil))
+		statuses <- w.Code
+	}
+	go download()
+	<-entered
+	go download()
+	target := upstream.URL + nugetRegistrationPath + "testpkg/2.0.0.json"
+	key := metadataCoalesceKey("nuget", fmt.Sprintf("_cooldown/%x", sha256.Sum256([]byte(target))), target, contentTypeJSON, "", true)
+	waitForMetadataWaiters(t, p, key, 1)
+	releaseUpstream()
+
+	for range 2 {
+		if status := <-statuses; status != http.StatusNotFound {
+			t.Errorf("download status = %d, want %d", status, http.StatusNotFound)
+		}
+	}
+	if got := calls.Load(); got != 1 {
+		t.Errorf("upstream metadata requests = %d, want 1", got)
+	}
+	if fetcher.fetchCalled {
+		t.Error("blocked downloads must not fetch artifacts")
 	}
 }
 
