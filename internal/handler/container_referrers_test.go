@@ -337,6 +337,12 @@ func TestContainerHandler_ReferrersRouteKeepsManifestPaths(t *testing.T) {
 	var upstreamPaths []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamPaths = append(upstreamPaths, r.URL.Path)
+		// Both handlers build the same upstream path here, so tell them apart
+		// by Accept: only the referrers handler asks for the index type alone.
+		if r.Header.Get("Accept") == containerReferrersMediaType {
+			http.Error(w, "reached the referrers handler", http.StatusBadRequest)
+			return
+		}
 		w.Header().Set("Content-Type", containerReferrersMediaType)
 		_, _ = io.WriteString(w, testReferrersIndex)
 	}))
