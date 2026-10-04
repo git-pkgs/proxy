@@ -248,9 +248,12 @@ func TestContainerHandler_ReferrersNamedRegistryRewritesLink(t *testing.T) {
 			return
 		}
 		w.Header().Set("Content-Type", containerReferrersMediaType)
-		if r.URL.Query().Get("last") == "" {
+		switch r.URL.Query().Get("last") {
+		case "":
 			w.Header().Add("Link", `</v2/owner/img/referrers/`+testReferrersSubject+`?last=abc>; rel="next"`)
 			w.Header().Add("Link", `<https://elsewhere.example.test/docs>; rel="help"`)
+		case "abc":
+			w.Header().Set("Link", `<`+upstream.URL+`/v2/owner/img/referrers/`+testReferrersSubject+`?last=def>; rel="next"`)
 		}
 		_, _ = io.WriteString(w, testReferrersIndex)
 	}))
@@ -280,8 +283,9 @@ func TestContainerHandler_ReferrersNamedRegistryRewritesLink(t *testing.T) {
 	if next.Code != http.StatusOK {
 		t.Fatalf("next page status = %d, want 200: %s", next.Code, next.Body.String())
 	}
-	if got := next.Header().Get("Link"); got != "" {
-		t.Errorf("last page Link = %q, want none", got)
+	wantNextLink := `<http://proxy.example.test/v2/upstream/test/owner/img/referrers/` + testReferrersSubject + `?last=def>; rel="next"`
+	if got := next.Header().Get("Link"); got != wantNextLink {
+		t.Errorf("next page Link = %q, want absolute upstream link rewritten to %q", got, wantNextLink)
 	}
 	if upstreamRequests != 2 {
 		t.Errorf("upstream requests = %d, want 2 (pages are separate rows)", upstreamRequests)
