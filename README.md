@@ -447,6 +447,16 @@ Or pull images directly:
 docker pull localhost:8080/library/nginx:latest
 ```
 
+SBOMs, signatures and attestations attached to an image are found through the
+OCI 1.1 referrers API (`GET /v2/{name}/referrers/{digest}`), which tools such as
+`oras discover`, `notation verify` and `cosign` use. The proxy forwards these
+requests and caches the returned index with the same TTL as other metadata, so
+they keep working offline. It does not filter by `artifactType`; it returns the
+full list and the client filters it, as the spec allows. Registries without the
+referrers API (GHCR, for example) answer 404, and clients then look up the
+`sha256-<digest>` tag instead, which the proxy serves like any other manifest.
+The proxy is pull-only, so attaching new artifacts through it is not supported.
+
 #### containerd (Kubernetes, k3s, nerdctl)
 
 containerd mirrors send the original registry host in an `ns` query
