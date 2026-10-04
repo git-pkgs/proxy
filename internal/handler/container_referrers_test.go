@@ -121,7 +121,7 @@ func TestContainerHandler_ReferrersRevalidatesWithETag(t *testing.T) {
 		t.Fatalf("first status = %d, want 200", first.Code)
 	}
 	// Age the row past the TTL so the next request has to revalidate.
-	cacheKey := h.containerReferrersCacheKey(upstream.URL, "library/nginx", testReferrersSubject, "")
+	cacheKey := h.containerManifestCacheKey(upstream.URL, "library/nginx", testReferrersSubject, "")
 	entry, err := proxy.DB.GetMetadataCache(containerReferrersCacheEcosystem, cacheKey)
 	if err != nil || entry == nil {
 		t.Fatalf("cached row = %v, %v, want one", entry, err)

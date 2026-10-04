@@ -3,8 +3,6 @@ package handler
 import (
 	"cmp"
 	"context"
-	"crypto/sha256"
-	"encoding/hex"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -76,7 +74,9 @@ func (h *ContainerHandler) serveReferrers(w http.ResponseWriter, r *http.Request
 	// response, clients filter the index themselves, as the spec requires.
 	query := r.URL.Query()
 	query.Del("artifactType")
-	cacheKey := h.containerReferrersCacheKey(registryURL, name, digest, query.Encode())
+	// Same identity shape as manifests (registry, name, reference, variant);
+	// the oci-referrers ecosystem keeps the rows apart.
+	cacheKey := h.containerManifestCacheKey(registryURL, name, digest, query.Encode())
 	cached, err := h.loadContainerReferrers(r.Context(), cacheKey)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to read cached container referrers", "error", err)
@@ -168,12 +168,6 @@ func (h *ContainerHandler) serveStaleReferrersOrFallback(w http.ResponseWriter, 
 	}
 	h.proxy.Logger.Warn("upstream referrers fetch failed, answering without referrers API", "error", err)
 	h.containerError(w, http.StatusNotFound, "UNSUPPORTED", "referrers unavailable from upstream")
-}
-
-func (h *ContainerHandler) containerReferrersCacheKey(registryURL, name, digest, query string) string {
-	identity := strings.Join([]string{registryURL, name, digest, query}, "\x00")
-	sum := sha256.Sum256([]byte(identity))
-	return hex.EncodeToString(sum[:])
 }
 
 func (h *ContainerHandler) containerReferrersFresh(referrers *cachedContainerReferrers) bool {
