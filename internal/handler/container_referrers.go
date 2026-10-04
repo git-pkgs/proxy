@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"cmp"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -180,38 +181,20 @@ func (h *ContainerHandler) containerReferrersFresh(referrers *cachedContainerRef
 }
 
 func (h *ContainerHandler) loadContainerReferrers(ctx context.Context, cacheKey string) (*cachedContainerReferrers, error) {
-	if h.proxy.DB == nil || h.proxy.Storage == nil {
-		return nil, nil
-	}
-	entry, err := h.proxy.DB.GetMetadataCache(containerReferrersCacheEcosystem, cacheKey)
+	entry, body, err := h.loadContainerMetadata(ctx, containerReferrersCacheEcosystem, cacheKey)
 	if err != nil || entry == nil {
 		return nil, err
 	}
-	reader, err := h.proxy.Storage.Open(ctx, entry.StoragePath)
-	if err != nil {
-		return nil, nil
-	}
-	defer func() { _ = reader.Close() }()
-	body, err := h.proxy.ReadMetadata(reader)
-	if err != nil {
-		return nil, err
-	}
-
-	referrers := &cachedContainerReferrers{body: body, contentType: containerReferrersMediaType, size: int64(len(body))}
-	if entry.ContentType.Valid {
-		referrers.contentType = entry.ContentType.String
-	}
-	if entry.ETag.Valid {
-		referrers.etag = entry.ETag.String
-	}
-	if entry.Link.Valid {
-		referrers.link = entry.Link.String
+	referrers := &cachedContainerReferrers{
+		body:        body,
+		contentType: cmp.Or(entry.ContentType.String, containerReferrersMediaType),
+		etag:        entry.ETag.String,
+		link:        entry.Link.String,
+		size:        int64(len(body)),
+		fetchedAt:   entry.FetchedAt.Time,
 	}
 	if entry.Size.Valid {
 		referrers.size = entry.Size.Int64
-	}
-	if entry.FetchedAt.Valid {
-		referrers.fetchedAt = entry.FetchedAt.Time
 	}
 	return referrers, nil
 }

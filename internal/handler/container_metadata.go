@@ -37,3 +37,25 @@ func (h *ContainerHandler) storeContainerMetadata(ctx context.Context, ecosystem
 	}
 	return size, nil
 }
+
+// loadContainerMetadata returns a cached metadata row and its body, or nil
+// when nothing usable is cached.
+func (h *ContainerHandler) loadContainerMetadata(ctx context.Context, ecosystem, cacheKey string) (*database.MetadataCacheEntry, []byte, error) {
+	if h.proxy.DB == nil || h.proxy.Storage == nil {
+		return nil, nil, nil
+	}
+	entry, err := h.proxy.DB.GetMetadataCache(ecosystem, cacheKey)
+	if err != nil || entry == nil {
+		return nil, nil, err
+	}
+	reader, err := h.proxy.Storage.Open(ctx, entry.StoragePath)
+	if err != nil {
+		return nil, nil, nil
+	}
+	defer func() { _ = reader.Close() }()
+	body, err := h.proxy.ReadMetadata(reader)
+	if err != nil {
+		return nil, nil, err
+	}
+	return entry, body, nil
+}
