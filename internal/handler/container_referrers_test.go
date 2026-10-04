@@ -99,9 +99,11 @@ func TestContainerHandler_ReferrersCachesIndexForEveryFilter(t *testing.T) {
 
 func TestContainerHandler_ReferrersRevalidatesWithETag(t *testing.T) {
 	upstreamRequests := 0
+	notModified := 0
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		upstreamRequests++
 		if r.Header.Get("If-None-Match") == `"referrers-etag"` {
+			notModified++
 			w.WriteHeader(http.StatusNotModified)
 			return
 		}
@@ -125,8 +127,8 @@ func TestContainerHandler_ReferrersRevalidatesWithETag(t *testing.T) {
 	if got := second.Header().Get("Warning"); got != "" {
 		t.Errorf("Warning = %q, want none after 304", got)
 	}
-	if upstreamRequests != 2 {
-		t.Errorf("upstream requests = %d, want 2", upstreamRequests)
+	if upstreamRequests != 2 || notModified != 1 {
+		t.Errorf("upstream requests = %d with %d answered 304, want 2 with 1", upstreamRequests, notModified)
 	}
 }
 
