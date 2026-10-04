@@ -174,24 +174,73 @@ func TestContainerHandler_NamespaceSelectsNamedRegistry(t *testing.T) {
 
 func TestContainerHandler_NamespaceRejectsUnresolvableRequests(t *testing.T) {
 	registry := newNSTestRegistry(t, "owner/app", "")
-	routes, _, _ := newNSTestHandler(t, registry.URL, map[string]string{"ghcr": registry.URL})
+	other := newNSTestRegistry(t, "owner/app", "")
+	routes, _, _ := newNSTestHandler(t, registry.URL, map[string]string{"ghcr": registry.URL, "quay": other.URL})
 	digest := "sha256:" + sha256Hex(nsTestBlob)
 
 	tests := map[string]string{
-		"unknown host manifest":     "/v2/owner/app/manifests/latest?ns=quay.io",
-		"unknown host blob":         "/v2/owner/app/blobs/" + digest + "?ns=quay.io",
-		"unknown host tags":         "/v2/owner/app/tags/list?ns=quay.io",
-		"multiple ns values":        "/v2/owner/app/manifests/latest?ns=docker.io&ns=" + registry.host(),
-		"reserved prefix (default)": "/v2/upstream/ghcr/owner/app/manifests/latest?ns=docker.io",
-		"reserved prefix (named)":   "/v2/upstream/ghcr/owner/app/blobs/" + digest + "?ns=" + registry.host(),
+		"unknown host manifest":              "/v2/owner/app/manifests/latest?ns=quay.io",
+		"unknown host blob":                  "/v2/owner/app/blobs/" + digest + "?ns=quay.io",
+		"unknown host tags":                  "/v2/owner/app/tags/list?ns=quay.io",
+		"multiple ns values":                 "/v2/owner/app/manifests/latest?ns=docker.io&ns=" + registry.host(),
+		"prefix route with default ns":       "/v2/upstream/ghcr/owner/app/manifests/latest?ns=docker.io",
+		"prefix route with other upstream":   "/v2/upstream/ghcr/owner/app/blobs/" + digest + "?ns=" + other.host(),
+		"prefix route with unknown upstream": "/v2/upstream/nope/owner/app/manifests/latest?ns=" + registry.host(),
+		"prefix route without repository":    "/v2/upstream/ghcr/manifests/latest?ns=" + registry.host(),
 	}
 	for name, target := range tests {
 		t.Run(name, func(t *testing.T) {
 			assertNameUnknown(t, serveNS(routes, target))
 		})
 	}
-	if got := registry.requestCount(); got != 0 {
+	if got := registry.requestCount() + other.requestCount(); got != 0 {
 		t.Errorf("upstream requests = %d, want 0", got)
+	}
+}
+
+func TestContainerHandler_NamespaceAcceptsPrefixRouteForOwnHost(t *testing.T) {
+	// Per-registry containerd mirrors with override_path address the
+	// upstream/{name}/ prefix and still send ns. They must keep working and
+	// share the prefix route's cache entries.
+	registry := newNSTestRegistry(t, "owner/app", "")
+	routes, _, _ := newNSTestHandler(t, "", map[string]string{"ghcr": registry.URL})
+	digest := "sha256:" + sha256Hex(nsTestBlob)
+
+	for _, target := range []string{
+		"/v2/upstream/ghcr/owner/app/manifests/latest?ns=" + registry.host(),
+		"/v2/upstream/ghcr/owner/app/blobs/" + digest + "?ns=" + registry.host(),
+	} {
+		if response := serveNS(routes, target); response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d: %s", target, response.Code, response.Body.String())
+		}
+	}
+	if got, want := registry.lastRequest(), "/v2/owner/app/blobs/"+digest; got != want {
+		t.Errorf("upstream request = %q, want %q", got, want)
+	}
+	warmed := registry.requestCount()
+
+	for _, target := range []string{
+		"/v2/upstream/ghcr/owner/app/manifests/latest",
+		"/v2/upstream/ghcr/owner/app/blobs/" + digest,
+	} {
+		if response := serveNS(routes, target); response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d: %s", target, response.Code, response.Body.String())
+		}
+	}
+	if got := registry.requestCount(); got != warmed {
+		t.Errorf("upstream requests after prefix pulls without ns = %d, want %d (cache hits)", got, warmed)
+	}
+
+	tags := serveNS(routes, "/v2/upstream/ghcr/owner/app/tags/list?n=1&ns="+registry.host())
+	if tags.Code != http.StatusOK {
+		t.Fatalf("tags status = %d: %s", tags.Code, tags.Body.String())
+	}
+	wantLink := `<` + nsTestProxyURL + `/v2/upstream/ghcr/owner/app/tags/list?last=1.0&n=1&ns=` + url.QueryEscape(registry.host()) + `>; rel="next"`
+	if got := tags.Header().Get("Link"); got != wantLink {
+		t.Errorf("Link = %q, want %q", got, wantLink)
+	}
+	if got, want := registry.lastRequest(), "/v2/owner/app/tags/list?n=1"; got != want {
+		t.Errorf("upstream tags request = %q, want %q (ns must not be forwarded)", got, want)
 	}
 }
 
@@ -482,6 +531,13 @@ func TestContainerHandler_NamespaceSkipsRegistryURLsWithPath(t *testing.T) {
 		t.Errorf("missing warning for path-prefixed upstream in logs:\n%s", logs.String())
 	}
 
+	// Per-registry mirrors with override_path reach it with ns attached.
+	if response := serveNS(routes, "/v2/upstream/art/owner/app/manifests/latest?ns="+registry.host()); response.Code != http.StatusOK {
+		t.Fatalf("prefix route with ns status = %d, want 200: %s", response.Code, response.Body.String())
+	}
+	if got := registry.requestCount(); got != 1 {
+		t.Errorf("upstream requests via prefix route with ns = %d, want 1", got)
+	}
 	if response := serveNS(routes, "/v2/upstream/art/owner/app/manifests/latest"); response.Code != http.StatusOK {
 		t.Fatalf("prefix route status = %d, want 200: %s", response.Code, response.Body.String())
 	}

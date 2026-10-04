@@ -306,6 +306,10 @@ are not reachable through `ns`, only through `upstream/{name}/`. When two
 entries share a host, the proxy logs a warning at startup; the default registry
 wins, otherwise the alphabetically first name. Pulls through `ns`,
 `upstream/{name}/` and unprefixed requests share the same cache entries.
+Requests that combine the `upstream/{name}/` prefix with `ns`, as per-registry
+containerd mirrors with `override_path = true` send them, are accepted when
+`ns` names that upstream's host, also for upstreams whose URL has a path, and
+rejected otherwise.
 When the proxy uses plain HTTP (for example `localhost:8080`), pass
 `--plain-http` to Helm OCI commands.
 

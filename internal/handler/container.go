@@ -148,21 +148,27 @@ func (h *ContainerHandler) indexNamespace(route, registryURL string) bool {
 // scheme-default port is optional in image references, so such a URL is
 // indexed both without and with the port. Any other port is kept as is, which
 // keeps https://host:80 and https://host apart. It reports false for URLs
-// that are not a bare registry root.
+// that are not a bare registry root; namespaceKeysForHost serves those.
 func namespaceKeysForURL(registryURL string) ([]string, bool) {
 	parsed, err := url.Parse(registryURL)
 	if err != nil || parsed.Host == "" || (parsed.Path != "" && parsed.Path != "/") {
 		return nil, false
 	}
+	return namespaceKeysForHost(parsed), true
+}
+
+// namespaceKeysForHost returns the lookup keys of a URL's host, ignoring its
+// path.
+func namespaceKeysForHost(parsed *url.URL) []string {
 	host, port := splitNamespaceHost(parsed.Host)
 	defaultPort := schemeDefaultPorts[strings.ToLower(parsed.Scheme)]
 	switch {
 	case port != "" && port != defaultPort:
-		return []string{namespaceKey(host, port)}, true
+		return []string{namespaceKey(host, port)}
 	case defaultPort == "":
-		return []string{namespaceKey(host, "")}, true
+		return []string{namespaceKey(host, "")}
 	default:
-		return []string{namespaceKey(host, ""), namespaceKey(host, defaultPort)}, true
+		return []string{namespaceKey(host, ""), namespaceKey(host, defaultPort)}
 	}
 }
 
@@ -449,12 +455,19 @@ func (h *ContainerHandler) registryForRequest(r *http.Request, name string) (reg
 }
 
 // registryForNamespace resolves a repository name verbatim against the registry
-// named by ns. The reserved upstream/ prefix is rejected so ns requests cannot
-// address cache entries of another route. Cache names match the unprefixed and
-// upstream/{name}/ routes, so all routes to one registry share blobs.
+// named by ns. Cache names match the unprefixed and upstream/{name}/ routes,
+// so all routes to one registry share blobs.
+//
+// Per-registry containerd mirrors with override_path address the reserved
+// upstream/{name}/ prefix and still send ns. Such requests are served like
+// the prefix route without ns, but only when ns names that upstream's own
+// host, so an ns request can never mint cache entries of another registry.
 func (h *ContainerHandler) registryForNamespace(namespace, name string) (registryURL, upstreamName, cacheName string, ok bool) {
 	if strings.HasPrefix(name, "upstream/") {
-		return "", "", "", false
+		if !h.namespaceNamesPrefixUpstream(namespace, name) {
+			return "", "", "", false
+		}
+		return h.registryForName(name)
 	}
 	route, ok := h.namespaces[namespaceKeyForRequest(namespace)]
 	if !ok {
@@ -473,6 +486,19 @@ func (h *ContainerHandler) registryForNamespace(namespace, name string) (registr
 		return "", "", "", false
 	}
 	return registryURL, name, "upstream/" + route + "/" + name, true
+}
+
+// namespaceNamesPrefixUpstream reports whether ns names the host of the
+// upstream an upstream/{name}/ repository selects. The URL's path is
+// irrelevant here because the prefix already picks the upstream.
+func (h *ContainerHandler) namespaceNamesPrefixUpstream(namespace, name string) bool {
+	rest, _ := strings.CutPrefix(name, "upstream/")
+	upstream, _, _ := strings.Cut(rest, "/")
+	parsed, err := url.Parse(h.namedRegistries[upstream])
+	if err != nil || parsed.Host == "" {
+		return false
+	}
+	return slices.Contains(namespaceKeysForHost(parsed), namespaceKeyForRequest(namespace))
 }
 
 // registryForName resolves a client-visible OCI repository name to an upstream
