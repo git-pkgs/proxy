@@ -17,6 +17,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/artifacts"
+	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/denylist"
 	"github.com/git-pkgs/proxy/internal/metrics"
@@ -210,6 +211,7 @@ type Proxy struct {
 // CooldownPolicy supplies version-age filtering and package-specific durations.
 type CooldownPolicy interface {
 	IsAllowed(ecosystem, packagePURL string, publishedAt time.Time) bool
+	Evaluate(ecosystem, packagePURL string, publishedAt, evaluatedAt time.Time) cooldown.Decision
 	For(ecosystem, packagePURL string) time.Duration
 	Enabled() bool
 }

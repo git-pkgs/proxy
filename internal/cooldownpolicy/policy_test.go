@@ -165,3 +165,36 @@ func TestNewRejectsInvalidDuration(t *testing.T) {
 		t.Fatal("invalid duration accepted")
 	}
 }
+
+func TestEvaluate(t *testing.T) {
+	policy, err := New(&cooldown.Config{
+		Default:    "48h",
+		Ecosystems: map[string]string{"npm": "72h"},
+		Packages:   map[string]string{"pkg:npm/%40example/exact": "0"},
+	}, map[string]string{"pkg:npm/@example/*": "7d"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	published := time.Date(2026, time.October, 1, 0, 0, 0, 0, time.UTC)
+	eligible := published.Add(7 * 24 * time.Hour)
+	for _, tc := range []struct {
+		name, ecosystem, purl string
+		published, at         time.Time
+		want                  cooldown.Decision
+	}{
+		{"waiting", "npm", "pkg:npm/%40example/widget", published, eligible.Add(-time.Nanosecond), cooldown.Decision{Cooldown: 7 * 24 * time.Hour, AvailableAt: eligible, Reason: cooldown.ReasonWaiting}},
+		{"boundary", "npm", "pkg:npm/%40example/widget", published, eligible, cooldown.Decision{Allowed: true, Cooldown: 7 * 24 * time.Hour, AvailableAt: eligible, Reason: cooldown.ReasonElapsed}},
+		{"elapsed", "npm", "pkg:npm/%40example/widget", published, eligible.Add(time.Hour), cooldown.Decision{Allowed: true, Cooldown: 7 * 24 * time.Hour, AvailableAt: eligible, Reason: cooldown.ReasonElapsed}},
+		{"unknown publication", "npm", "pkg:npm/%40example/widget", time.Time{}, eligible, cooldown.Decision{Allowed: true, Cooldown: 7 * 24 * time.Hour, Reason: cooldown.ReasonUnknownPublicationTime}},
+		{"exact exemption", "npm", "pkg:npm/%40example/exact", published, published, cooldown.Decision{Allowed: true, AvailableAt: published, Reason: cooldown.ReasonDisabled}},
+		{"exemption without publication", "npm", "pkg:npm/%40example/exact", time.Time{}, eligible, cooldown.Decision{Allowed: true, Reason: cooldown.ReasonUnknownPublicationTime}},
+		{"ecosystem fallback", "npm", "pkg:npm/other", published, published, cooldown.Decision{Cooldown: 72 * time.Hour, AvailableAt: published.Add(72 * time.Hour), Reason: cooldown.ReasonWaiting}},
+		{"global fallback", "cargo", "pkg:cargo/serde", published, published, cooldown.Decision{Cooldown: 48 * time.Hour, AvailableAt: published.Add(48 * time.Hour), Reason: cooldown.ReasonWaiting}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := policy.Evaluate(tc.ecosystem, tc.purl, tc.published, tc.at); got != tc.want {
+				t.Errorf("Evaluate = %+v, want %+v", got, tc.want)
+			}
+		})
+	}
+}

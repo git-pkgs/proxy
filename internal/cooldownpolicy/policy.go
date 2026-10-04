@@ -21,6 +21,7 @@ type Policy struct {
 type pattern struct {
 	glob     string
 	duration time.Duration
+	config   *cooldown.Config
 }
 
 // New creates a Policy using the supplied exact and pattern overrides.
@@ -54,8 +55,9 @@ func New(base *cooldown.Config, packagePatterns map[string]string) (*Policy, err
 			continue
 		}
 		seen[canonicalGlob] = pattern{glob: glob, duration: duration}
-		patterns = append(patterns, pattern{glob: canonicalGlob, duration: duration})
-		enabled = enabled || duration > 0
+		config := &cooldown.Config{Default: value}
+		enabled = config.Enabled() || enabled
+		patterns = append(patterns, pattern{glob: canonicalGlob, duration: duration, config: config})
 	}
 	sort.Slice(patterns, func(i, j int) bool {
 		left, right := literalLength(patterns[i].glob), literalLength(patterns[j].glob)
@@ -74,8 +76,12 @@ func literalLength(glob string) int {
 
 // For returns the duration, with exact overrides taking precedence over patterns.
 func (p *Policy) For(ecosystem, packagePURL string) time.Duration {
+	return p.configFor(packagePURL).For(ecosystem, packagePURL)
+}
+
+func (p *Policy) configFor(packagePURL string) *cooldown.Config {
 	if _, exact := p.base.Packages[packagePURL]; exact {
-		return p.base.For(ecosystem, packagePURL)
+		return p.base
 	}
 
 	for _, candidate := range p.patterns {
@@ -83,16 +89,20 @@ func (p *Policy) For(ecosystem, packagePURL string) time.Duration {
 		if !matched {
 			continue
 		}
-		return candidate.duration
+		return candidate.config
 	}
 
-	return p.base.For(ecosystem, packagePURL)
+	return p.base
 }
 
 // IsAllowed reports whether the package version has completed its cooldown.
 func (p *Policy) IsAllowed(ecosystem, packagePURL string, publishedAt time.Time) bool {
-	duration := p.For(ecosystem, packagePURL)
-	return duration == 0 || publishedAt.IsZero() || time.Since(publishedAt) >= duration
+	return p.Evaluate(ecosystem, packagePURL, publishedAt, time.Now()).Allowed
+}
+
+// Evaluate returns the cooldown decision at the supplied evaluation time.
+func (p *Policy) Evaluate(ecosystem, packagePURL string, publishedAt, evaluatedAt time.Time) cooldown.Decision {
+	return p.configFor(packagePURL).Evaluate(ecosystem, packagePURL, publishedAt, evaluatedAt)
 }
 
 // Enabled reports whether any configured cooldown can filter a package version.
