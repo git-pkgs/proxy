@@ -27,8 +27,11 @@ const (
 	defaultNamespaceRoute = ""
 )
 
-// dockerHubNamespaces are the registry hosts clients use for Docker Hub.
-var dockerHubNamespaces = []string{"docker.io", "index.docker.io", "registry-1.docker.io"} //nolint:gochecknoglobals // fixed alias list
+// dockerHubNamespaces are the registry URLs clients use for Docker Hub.
+var dockerHubNamespaces = []string{"https://docker.io", "https://index.docker.io", "https://registry-1.docker.io"} //nolint:gochecknoglobals // fixed alias list
+
+// schemeDefaultPorts are the ports an image reference may leave out.
+var schemeDefaultPorts = map[string]string{"https": "443", "http": "80"} //nolint:gochecknoglobals // fixed table
 
 // ContainerHandler handles OCI/Docker container registry protocol requests.
 // It implements the OCI Distribution Spec for pulling images.
@@ -97,61 +100,101 @@ func newContainerHandler(
 // below it. On collisions the default route wins, then the alphabetically
 // first upstream name.
 func (h *ContainerHandler) buildNamespaceIndex() {
-	h.namespaces = make(map[string]string, len(dockerHubNamespaces)+1+len(h.namedRegistries))
-	for _, host := range dockerHubNamespaces {
-		h.namespaces[host] = defaultNamespaceRoute
+	h.namespaces = make(map[string]string)
+	for _, registryURL := range dockerHubNamespaces {
+		h.indexNamespace(defaultNamespaceRoute, registryURL)
 	}
-	if host, ok := namespaceHostForURL(h.registryURL); ok {
-		h.namespaces[host] = defaultNamespaceRoute
-	} else {
+	if !h.indexNamespace(defaultNamespaceRoute, h.registryURL) {
 		h.warn("host of the default OCI registry is not indexed for ns lookups: URL has a path; Docker Hub aliases still select it",
 			"url", redactedURL(h.registryURL))
 	}
 	for _, name := range slices.Sorted(maps.Keys(h.namedRegistries)) {
-		host, ok := namespaceHostForURL(h.namedRegistries[name])
-		if !ok {
+		if !h.indexNamespace(name, h.namedRegistries[name]) {
 			h.warn("OCI upstream is not reachable through the ns query parameter: URL has a path",
 				"upstream", name, "url", redactedURL(h.namedRegistries[name]))
-			continue
 		}
-		if owner, exists := h.namespaces[host]; exists {
+	}
+}
+
+// indexNamespace maps the ns lookup keys of registryURL to route. Keys that
+// another route already owns stay with that route and are reported once. It
+// reports false when the URL is not a bare registry root.
+func (h *ContainerHandler) indexNamespace(route, registryURL string) bool {
+	keys, ok := namespaceKeysForURL(registryURL)
+	if !ok {
+		return false
+	}
+	var taken []string
+	for _, key := range keys {
+		owner, exists := h.namespaces[key]
+		switch {
+		case !exists:
+			h.namespaces[key] = route
+		case owner != route:
 			if owner == defaultNamespaceRoute {
 				owner = "default registry"
 			}
-			h.warn("OCI upstream shares its registry host with another route; ns requests use the other route",
-				"upstream", name, "host", host, "route", owner)
-			continue
+			taken = append(taken, key+"="+owner)
 		}
-		h.namespaces[host] = name
 	}
+	if len(taken) > 0 {
+		h.warn("OCI upstream shares a registry host with another route; ns requests for it use the other route",
+			"upstream", route, "hosts", strings.Join(taken, ", "))
+	}
+	return true
 }
 
-// namespaceHostForURL returns the ns lookup key for a registry URL. It reports
-// false for URLs that are not a bare registry root.
-func namespaceHostForURL(registryURL string) (string, bool) {
+// namespaceKeysForURL returns the ns lookup keys of a registry URL. The
+// scheme-default port is optional in image references, so such a URL is
+// indexed both without and with the port. Any other port is kept as is, which
+// keeps https://host:80 and https://host apart. It reports false for URLs
+// that are not a bare registry root.
+func namespaceKeysForURL(registryURL string) ([]string, bool) {
 	parsed, err := url.Parse(registryURL)
 	if err != nil || parsed.Host == "" || (parsed.Path != "" && parsed.Path != "/") {
-		return "", false
+		return nil, false
 	}
-	return registryHostKey(parsed.Host), true
+	host, port := splitNamespaceHost(parsed.Host)
+	defaultPort := schemeDefaultPorts[strings.ToLower(parsed.Scheme)]
+	switch {
+	case port != "" && port != defaultPort:
+		return []string{namespaceKey(host, port)}, true
+	case defaultPort == "":
+		return []string{namespaceKey(host, "")}, true
+	default:
+		return []string{namespaceKey(host, ""), namespaceKey(host, defaultPort)}, true
+	}
 }
 
-// registryHostKey normalizes a registry host[:port] for ns lookups. Hosts are
-// case-insensitive and ports 80 and 443 are dropped because ns carries no
-// scheme. The same function normalizes both configured URLs and ns values.
-func registryHostKey(hostport string) string {
+// namespaceKeyForRequest normalizes the ns value of a request. containerd
+// sends the registry host of the image reference, with or without a port, so
+// the value is matched as sent apart from case and IPv6 bracket form.
+func namespaceKeyForRequest(namespace string) string {
+	host, port := splitNamespaceHost(namespace)
+	return namespaceKey(host, port)
+}
+
+// splitNamespaceHost splits host[:port], accepting bracketed and bare IPv6
+// hosts without a port.
+func splitNamespaceHost(hostport string) (host, port string) {
 	host, port, err := net.SplitHostPort(hostport)
 	if err != nil {
-		host, port = strings.TrimSuffix(strings.TrimPrefix(hostport, "["), "]"), ""
+		return strings.TrimSuffix(strings.TrimPrefix(hostport, "["), "]"), ""
 	}
+	return host, port
+}
+
+// namespaceKey builds a lookup key from a host and an optional port: the host
+// lowercased, IPv6 literals in brackets.
+func namespaceKey(host, port string) string {
 	host = strings.ToLower(host)
-	if port != "" && port != "80" && port != "443" {
-		return net.JoinHostPort(host, port)
-	}
 	if strings.Contains(host, ":") {
-		return "[" + host + "]"
+		host = "[" + host + "]"
 	}
-	return host
+	if port == "" {
+		return host
+	}
+	return host + ":" + port
 }
 
 // redactedURL returns a registry URL for logging with any password masked.
@@ -413,7 +456,7 @@ func (h *ContainerHandler) registryForNamespace(namespace, name string) (registr
 	if strings.HasPrefix(name, "upstream/") {
 		return "", "", "", false
 	}
-	route, ok := h.namespaces[registryHostKey(namespace)]
+	route, ok := h.namespaces[namespaceKeyForRequest(namespace)]
 	if !ok {
 		return "", "", "", false
 	}

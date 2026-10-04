@@ -5,8 +5,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -311,9 +313,10 @@ func TestContainerHandler_NamespaceDefaultBypassesRepositoryPrefixRoutes(t *test
 }
 
 func TestContainerHandler_NamespaceMatchesConfiguredHosts(t *testing.T) {
-	// Each pair is a configured registry URL and the ns value containerd
-	// sends for an image reference on that registry.
-	tests := []struct {
+	// Each pair is a configured registry URL and an ns value containerd sends
+	// for an image reference on that registry. The scheme-default port may be
+	// spelled out or left out on either side; any other port must match.
+	matches := []struct {
 		configured string
 		namespace  string
 	}{
@@ -321,12 +324,15 @@ func TestContainerHandler_NamespaceMatchesConfiguredHosts(t *testing.T) {
 		{"https://ghcr.io/", "GHCR.IO"},
 		{"http://[fd00::1]:5000", "[fd00::1]:5000"},
 		{"https://[fd00::1]", "[fd00::1]"},
+		{"https://[fd00::1]", "[fd00::1]:443"},
 		{"https://reg.example:80", "reg.example:80"},
 		{"https://reg.example:443", "reg.example"},
 		{"https://reg.example", "reg.example:443"},
+		{"http://reg.example:80", "reg.example"},
+		{"http://reg.example", "reg.example:80"},
 		{"http://reg.example:5000", "reg.example:5000"},
 	}
-	for _, tt := range tests {
+	for _, tt := range matches {
 		t.Run(tt.configured+" "+tt.namespace, func(t *testing.T) {
 			h := NewContainerHandlerWithRegistry(nil, nsTestProxyURL, "", map[string]string{"lab": tt.configured})
 			registryURL, upstreamName, cacheName, ok := h.registryForNamespace(tt.namespace, "owner/app")
@@ -340,9 +346,69 @@ func TestContainerHandler_NamespaceMatchesConfiguredHosts(t *testing.T) {
 		})
 	}
 
-	if _, _, _, ok := (NewContainerHandlerWithRegistry(nil, nsTestProxyURL, "", map[string]string{"lab": "http://reg.example:5000"})).
-		registryForNamespace("reg.example:5001", "owner/app"); ok {
-		t.Error("ns with a different port resolved, want no match")
+	mismatches := []struct {
+		configured string
+		namespace  string
+	}{
+		{"http://reg.example:5000", "reg.example:5001"},
+		{"https://reg.example:80", "reg.example"},
+		{"https://reg.example", "reg.example:80"},
+		{"http://reg.example:443", "reg.example"},
+	}
+	for _, tt := range mismatches {
+		t.Run("mismatch "+tt.configured+" "+tt.namespace, func(t *testing.T) {
+			h := NewContainerHandlerWithRegistry(nil, nsTestProxyURL, "", map[string]string{"lab": tt.configured})
+			if _, _, _, ok := h.registryForNamespace(tt.namespace, "owner/app"); ok {
+				t.Errorf("ns %q resolved for upstream %q, want no match", tt.namespace, tt.configured)
+			}
+		})
+	}
+}
+
+func TestContainerHandler_NamespaceKeepsNonDefaultPorts(t *testing.T) {
+	// Two registries on one host that differ only in the port, one of them on
+	// the scheme-default port. Tests cannot listen on ports 80 or 443, so the
+	// dialer maps those addresses to the fake registries.
+	onDefaultPort := newNSTestRegistry(t, "owner/app", "")
+	onOtherPort := newNSTestRegistry(t, "owner/app", "")
+	routes, h, _ := newNSTestHandler(t, "", map[string]string{
+		"std": "http://registry.example",
+		"alt": "http://registry.example:443",
+	})
+	endpoints := map[string]string{
+		"registry.example:80":  onDefaultPort.Listener.Addr().String(),
+		"registry.example:443": onOtherPort.Listener.Addr().String(),
+	}
+	transport := &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		target, ok := endpoints[addr]
+		if !ok {
+			return nil, fmt.Errorf("unexpected dial to %s", addr)
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, target)
+	}}
+	t.Cleanup(transport.CloseIdleConnections)
+	h.proxy.HTTPClient = &http.Client{Transport: transport}
+
+	// Every request below misses the cache: a different registry or a
+	// different endpoint than the request before it.
+	tests := []struct {
+		target      string
+		wantDefault int
+		wantOther   int
+	}{
+		{"/v2/owner/app/manifests/latest?ns=registry.example:80", 1, 0},
+		{"/v2/owner/app/manifests/latest?ns=registry.example:443", 1, 1},
+		{"/v2/owner/app/tags/list?ns=registry.example", 2, 1},
+	}
+	for _, tt := range tests {
+		response := serveNS(routes, tt.target)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%s status = %d: %s", tt.target, response.Code, response.Body.String())
+		}
+		if onDefaultPort.requestCount() != tt.wantDefault || onOtherPort.requestCount() != tt.wantOther {
+			t.Errorf("after %s: requests default-port=%d other-port=%d, want %d/%d",
+				tt.target, onDefaultPort.requestCount(), onOtherPort.requestCount(), tt.wantDefault, tt.wantOther)
+		}
 	}
 }
 
@@ -374,6 +440,30 @@ func TestContainerHandler_NamespaceHostCollisions(t *testing.T) {
 	for _, upstream := range []string{"upstream=zeta", "upstream=mirror", "upstream=hub"} {
 		if !strings.Contains(logs.String(), upstream) {
 			t.Errorf("missing collision warning for %s in logs:\n%s", upstream, logs.String())
+		}
+	}
+}
+
+func TestContainerHandler_NamespaceCollisionWarningNamesEachOwner(t *testing.T) {
+	// r's two keys end up with two different owners; the warning has to
+	// name both, or an admin fixing one entry misses the other.
+	proxy, _, _, _ := setupTestProxy(t)
+	logs := &bytes.Buffer{}
+	proxy.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	h := NewContainerHandlerWithRegistry(proxy, nsTestProxyURL, "", map[string]string{
+		"p": "http://h.example",
+		"q": "http://h.example:443",
+		"r": "https://h.example",
+	})
+
+	for namespace, want := range map[string]string{"h.example": "p", "h.example:80": "p", "h.example:443": "q"} {
+		if got := h.namespaces[namespace]; got != want {
+			t.Errorf("index[%q] = %q, want %q", namespace, got, want)
+		}
+	}
+	for _, want := range []string{"upstream=r", "h.example=p", "h.example:443=q"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("logs missing %q:\n%s", want, logs.String())
 		}
 	}
 }

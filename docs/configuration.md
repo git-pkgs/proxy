@@ -296,7 +296,10 @@ parameter (see the containerd section in the README). The proxy only looks the
 host up and never connects to it: `docker.io`, `index.docker.io`,
 `registry-1.docker.io` and the host of `upstream.oci_default` select the default
 registry, and the host of each `upstream.oci` URL selects that named registry.
-Hosts are compared case-insensitively, and ports 80 and 443 are ignored. An
+Hosts are compared case-insensitively. The scheme's default port (443 for
+`https`, 80 for `http`) may be spelled out or left out in the image reference;
+any other port must match exactly, so `https://registry.example:80` and
+`https://registry.example` are two different registries. An
 unknown host returns `404 NAME_UNKNOWN`, so containerd falls back to its next
 host. Registry URLs with a path (for example an Artifactory repository path)
 are not reachable through `ns`, only through `upstream/{name}/`. When two
