@@ -114,18 +114,34 @@ func TestContainerHandler_ReferrersRevalidatesWithETag(t *testing.T) {
 	defer upstream.Close()
 
 	h, proxy := newReferrersTestHandler(t, upstream)
-	proxy.MetadataTTL = 0
+	proxy.MetadataTTL = time.Hour
 	target := "/library/nginx/referrers/" + testReferrersSubject
 
 	if first := serveReferrersRequest(h, http.MethodGet, target); first.Code != http.StatusOK {
 		t.Fatalf("first status = %d, want 200", first.Code)
 	}
+	// Age the row past the TTL so the next request has to revalidate.
+	cacheKey := h.containerReferrersCacheKey(upstream.URL, "library/nginx", testReferrersSubject, "")
+	entry, err := proxy.DB.GetMetadataCache(containerReferrersCacheEcosystem, cacheKey)
+	if err != nil || entry == nil {
+		t.Fatalf("cached row = %v, %v, want one", entry, err)
+	}
+	entry.FetchedAt.Time = time.Now().Add(-2 * time.Hour)
+	if err := proxy.DB.UpsertMetadataCache(entry); err != nil {
+		t.Fatalf("ageing cached row: %v", err)
+	}
+
 	second := serveReferrersRequest(h, http.MethodGet, target)
 	if second.Code != http.StatusOK || second.Body.String() != testReferrersIndex {
 		t.Fatalf("revalidated = %d %q, want cached index", second.Code, second.Body.String())
 	}
 	if got := second.Header().Get("Warning"); got != "" {
 		t.Errorf("Warning = %q, want none after 304", got)
+	}
+
+	// The 304 starts the TTL again, so this one stays in the cache.
+	if third := serveReferrersRequest(h, http.MethodGet, target); third.Code != http.StatusOK {
+		t.Fatalf("third status = %d, want 200", third.Code)
 	}
 	if upstreamRequests != 2 || notModified != 1 {
 		t.Errorf("upstream requests = %d with %d answered 304, want 2 with 1", upstreamRequests, notModified)
