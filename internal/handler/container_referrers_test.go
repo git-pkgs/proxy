@@ -262,7 +262,9 @@ func TestContainerHandler_ReferrersNamedRegistryRewritesLink(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
 	proxy.HTTPClient = upstream.Client()
 	proxy.MetadataTTL = time.Hour
-	h := NewContainerHandler(proxy, "http://proxy.example.test", map[string]string{"test": upstream.URL})
+	// The default registry is the same upstream, so upstream/test/owner/img
+	// and owner/img share one cache row.
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example.test", upstream.URL, map[string]string{"test": upstream.URL})
 	routes := http.StripPrefix("/v2", h.Routes())
 
 	first := httptest.NewRecorder()
@@ -275,6 +277,20 @@ func TestContainerHandler_ReferrersNamedRegistryRewritesLink(t *testing.T) {
 		`?last=abc>; rel="next", <https://elsewhere.example.test/docs>; rel="help"`
 	if got := first.Header().Get("Link"); got != wantLink {
 		t.Fatalf("Link = %q, want %q", got, wantLink)
+	}
+
+	shared := httptest.NewRecorder()
+	routes.ServeHTTP(shared, httptest.NewRequest(http.MethodGet, "/v2/owner/img/referrers/"+testReferrersSubject, nil))
+	if shared.Code != http.StatusOK {
+		t.Fatalf("shared row status = %d, want 200: %s", shared.Code, shared.Body.String())
+	}
+	wantSharedLink := `<http://proxy.example.test/v2/owner/img/referrers/` + testReferrersSubject +
+		`?last=abc>; rel="next", <https://elsewhere.example.test/docs>; rel="help"`
+	if got := shared.Header().Get("Link"); got != wantSharedLink {
+		t.Errorf("shared row Link = %q, want it rewritten for the second path %q", got, wantSharedLink)
+	}
+	if upstreamRequests != 1 {
+		t.Fatalf("upstream requests after shared row hit = %d, want 1", upstreamRequests)
 	}
 
 	nextURL := strings.TrimPrefix(strings.SplitN(first.Header().Get("Link"), ">", 2)[0], "<")
