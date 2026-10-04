@@ -98,7 +98,7 @@ func TestCargoDenylistWithoutTimestamps(t *testing.T) {
 	setTestDenylist(t, p, "pkg:cargo/demo@1.0.0")
 	h := &CargoHandler{proxy: p}
 	input := "{\"name\":\"demo\",\"vers\":\"1.0.0\"}\n{\"name\":\"demo\",\"vers\":\"2.0.0\"}\n"
-	for _, cd := range []*cooldown.Config{nil, {Default: "3d"}} {
+	for _, cd := range []CooldownPolicy{nil, &cooldown.Config{Default: "3d"}} {
 		p.Cooldown = cd
 		w := httptest.NewRecorder()
 		h.applyCooldownFiltering(w, []byte(input))

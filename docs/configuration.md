@@ -458,6 +458,8 @@ cooldown:
   packages:
     "pkg:npm/lodash": "0"
     "pkg:npm/@babel/core": "14d"
+  package_patterns:
+    "pkg:npm/@example/*": "0"
 ```
 
 | Config | Environment | Description |
@@ -465,12 +467,17 @@ cooldown:
 | `cooldown.default` | `PROXY_COOLDOWN_DEFAULT` | Global default cooldown |
 | `cooldown.ecosystems` | - | Per-ecosystem overrides |
 | `cooldown.packages` | - | Per-package overrides (keyed by PURL) |
+| `cooldown.package_patterns` | - | Per-package glob overrides (keyed by PURL glob) |
 
 Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to disable.
 
 Package PURL keys are normalized to canonical form before matching, so `pkg:npm/@babel/core` and `pkg:npm/%40babel/core` are equivalent, as are `pkg:pypi/Django` and `pkg:pypi/django`. If both forms configure the same package, the canonical entry wins.
 
-Resolution order: package override, then ecosystem override, then global default. This lets you set a conservative default while exempting trusted packages.
+`package_patterns` uses Go path globs against canonical, versionless PURLs. `*` and `?` do not cross `/` separators. For example, `"pkg:npm/@example/*"` matches packages under the `@example` npm scope. Patterns accept `@` as an alias for `%40`; other characters must use their canonical PURL form. Equivalent patterns with different durations are rejected at startup. Equal durations, such as `1d` and `24h`, are accepted.
+
+Exact `packages` entries take precedence over patterns. When several patterns match, longer patterns win after excluding `*` and `?` from the length. Ties use lexical order of the normalized patterns.
+
+Resolution order: exact package override, then package pattern, then ecosystem override, then global default. This lets you set a conservative default while exempting trusted package families.
 
 Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyGems, and Hex. These ecosystems include publish timestamps in their metadata.
 

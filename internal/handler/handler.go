@@ -17,7 +17,6 @@ import (
 	"time"
 
 	"github.com/git-pkgs/artifacts"
-	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/denylist"
 	"github.com/git-pkgs/proxy/internal/metrics"
@@ -156,7 +155,7 @@ type Proxy struct {
 	Fetcher             fetch.FetcherInterface
 	Resolver            *fetch.Resolver
 	Logger              *slog.Logger
-	Cooldown            *cooldown.Config
+	Cooldown            CooldownPolicy
 	Denylist            *denylist.Policy
 	CacheMetadata       bool
 	MetadataTTL         time.Duration
@@ -206,6 +205,13 @@ type Proxy struct {
 	// rewrites caches metadata documents after their handler rewrites them.
 	// Nil leaves every request to rewrite its own copy.
 	rewrites *rewriteCache
+}
+
+// CooldownPolicy supplies version-age filtering and package-specific durations.
+type CooldownPolicy interface {
+	IsAllowed(ecosystem, packagePURL string, publishedAt time.Time) bool
+	For(ecosystem, packagePURL string) time.Duration
+	Enabled() bool
 }
 
 // NewProxy creates a new Proxy with the given dependencies.

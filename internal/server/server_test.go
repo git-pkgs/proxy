@@ -196,9 +196,15 @@ func testStartUsesConfiguredLoopbackUpstreams(t *testing.T) {
 		case "/pypi/simple/ruff/":
 			w.Header().Set("Content-Type", "application/vnd.pypi.simple.v1+json")
 			_, _ = io.WriteString(w, `{"meta":{"api-version":"1.4"},"name":"ruff","files":[{"filename":"ruff-1.0.0.tar.gz","url":"ruff-1.0.0.tar.gz"},{"filename":"ruff-2.0.0.tar.gz","url":"ruff-2.0.0.tar.gz"}]}`)
+		case "/pypi/pypi/ruff/json":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = io.WriteString(w, `{"releases":{}}`)
 		case "/v2/library/demo/manifests/latest":
 			w.Header().Set("Content-Type", "application/vnd.oci.image.manifest.v1+json")
 			_, _ = io.WriteString(w, `{"schemaVersion":2}`)
+		case "/npm/@example/widget", "/npm/@example/exact", "/npm/other":
+			w.Header().Set("Content-Type", "application/json")
+			_, _ = fmt.Fprintf(w, `{"time":{"1.0.0":"2020-01-01T00:00:00Z","2.0.0":%q},"versions":{"1.0.0":{},"2.0.0":{}}}`, time.Now().Add(-time.Hour).Format(time.RFC3339))
 		default:
 			t.Errorf("unexpected upstream path: %q", r.URL.Path)
 			http.NotFound(w, r)
@@ -223,6 +229,12 @@ func testStartUsesConfiguredLoopbackUpstreams(t *testing.T) {
 	cfg.Upstream.PyPIDownload = upstream.URL + "/pypi"
 	cfg.Upstream.OCIDefault = upstream.URL
 	cfg.Upstream.AllowLoopback = true
+	cfg.Upstream.NPM = upstream.URL + "/npm"
+	cfg.Cooldown = config.CooldownConfig{
+		Default:         "7d",
+		Packages:        map[string]string{"pkg:npm/@example/exact": "7d"},
+		PackagePatterns: map[string]string{"pkg:npm/@example/*": "0"},
+	}
 	cfg.Denylist.Packages = []string{"pkg:pypi/ruff@1.0.0"}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("validating config: %v", err)
@@ -293,6 +305,27 @@ func testStartUsesConfiguredLoopbackUpstreams(t *testing.T) {
 	}
 	if !strings.Contains(string(body), `"schemaVersion":2`) {
 		t.Fatalf("OCI response body = %s, want manifest", body)
+	}
+	assertCooldownPatternMetadata(t, client, cfg.BaseURL)
+}
+
+func assertCooldownPatternMetadata(t *testing.T, client *http.Client, baseURL string) {
+	t.Helper()
+	for _, name := range []string{"@example/widget", "@example/exact", "other"} {
+		resp, err := client.Get(baseURL + "/npm/" + url.PathEscape(name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		var metadata struct{ Versions map[string]json.RawMessage }
+		err = json.NewDecoder(resp.Body).Decode(&metadata)
+		_ = resp.Body.Close()
+		if err != nil || resp.StatusCode != http.StatusOK {
+			t.Fatalf("metadata for %s: status %d, error %v", name, resp.StatusCode, err)
+		}
+		_, recent := metadata.Versions["2.0.0"]
+		if recent != (name == "@example/widget") || metadata.Versions["1.0.0"] == nil {
+			t.Errorf("pattern policy for %s: versions %v", name, metadata.Versions)
+		}
 	}
 }
 

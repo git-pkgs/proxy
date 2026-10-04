@@ -332,6 +332,10 @@ cooldown:
   #   "pkg:npm/lodash": "0"
   #   "pkg:npm/@babel/core": "14d"
 
+  # Per-package glob overrides, after exact packages and before ecosystems.
+  # package_patterns:
+  #   "pkg:npm/@example/*": "0"
+
 # Exact versions to deny, independently of cooldown and scanning.
 # Metadata filtering: npm, PyPI and Cargo. Shared artifact downloads, including
 # cache hits, are blocked with 403; signed APT metadata is left unchanged.
