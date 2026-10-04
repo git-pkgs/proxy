@@ -148,6 +148,35 @@ func TestContainerHandler_ReferrersRevalidatesWithETag(t *testing.T) {
 	}
 }
 
+func TestContainerHandler_ReferrersDefaultsMissingContentType(t *testing.T) {
+	upstreamRequests := 0
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		upstreamRequests++
+		// A nil value stops net/http from sniffing a Content-Type.
+		w.Header()["Content-Type"] = nil
+		_, _ = io.WriteString(w, testReferrersIndex)
+	}))
+	defer upstream.Close()
+
+	h, proxy := newReferrersTestHandler(t, upstream)
+	proxy.MetadataTTL = time.Hour
+	target := "/library/nginx/referrers/" + testReferrersSubject
+
+	// oras-go only accepts the exact image index type, both fresh and cached.
+	for _, label := range []string{"fetched", "cached"} {
+		got := serveReferrersRequest(h, http.MethodGet, target)
+		if got.Code != http.StatusOK {
+			t.Fatalf("%s status = %d, want 200", label, got.Code)
+		}
+		if ct := got.Header().Get("Content-Type"); ct != containerReferrersMediaType {
+			t.Errorf("%s Content-Type = %q, want %q", label, ct, containerReferrersMediaType)
+		}
+	}
+	if upstreamRequests != 1 {
+		t.Errorf("upstream requests = %d, want 1", upstreamRequests)
+	}
+}
+
 func TestContainerHandler_ReferrersRelaysUpstreamErrorsWithoutCaching(t *testing.T) {
 	tests := []struct {
 		name      string
