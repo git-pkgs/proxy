@@ -25,15 +25,6 @@ var (
 	referrersDigestPattern = regexp.MustCompile(`^(sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$`)
 )
 
-type cachedContainerReferrers struct {
-	body        []byte
-	contentType string
-	etag        string
-	link        string
-	size        int64
-	fetchedAt   time.Time
-}
-
 // parseReferrersPath extracts repository name and subject digest from a
 // referrers path.
 func (h *ContainerHandler) parseReferrersPath(path string) (name, digest string) {
@@ -82,7 +73,7 @@ func (h *ContainerHandler) serveReferrers(w http.ResponseWriter, r *http.Request
 		h.proxy.Logger.Warn("failed to read cached container referrers", "error", err)
 		cached = nil
 	}
-	if cached != nil && h.containerReferrersFresh(cached) {
+	if cached != nil && h.containerTagsFresh(cached) {
 		h.writeContainerReferrers(w, r, registryURL, cached, false)
 		return
 	}
@@ -137,7 +128,7 @@ func (h *ContainerHandler) serveReferrers(w http.ResponseWriter, r *http.Request
 		h.serveStaleReferrersOrFallback(w, r, registryURL, cached, errors.New("upstream referrers response is not JSON"))
 		return
 	}
-	referrers := &cachedContainerReferrers{
+	referrers := &cachedContainerTags{
 		body:        body,
 		contentType: resp.Header.Get(headerContentType),
 		etag:        resp.Header.Get(headerETag),
@@ -160,7 +151,7 @@ func (h *ContainerHandler) serveReferrers(w http.ResponseWriter, r *http.Request
 // answer. Without one it returns 404, the signal clients already got before
 // the proxy served this endpoint: they fall back to the tag schema, whose
 // manifests may well be cached.
-func (h *ContainerHandler) serveStaleReferrersOrFallback(w http.ResponseWriter, r *http.Request, registryURL string, cached *cachedContainerReferrers, err error) {
+func (h *ContainerHandler) serveStaleReferrersOrFallback(w http.ResponseWriter, r *http.Request, registryURL string, cached *cachedContainerTags, err error) {
 	if cached != nil {
 		h.proxy.Logger.Warn("upstream referrers fetch failed, serving stale cache", "error", err)
 		h.writeContainerReferrers(w, r, registryURL, cached, true)
@@ -170,16 +161,12 @@ func (h *ContainerHandler) serveStaleReferrersOrFallback(w http.ResponseWriter, 
 	h.containerError(w, http.StatusNotFound, "UNSUPPORTED", "referrers unavailable from upstream")
 }
 
-func (h *ContainerHandler) containerReferrersFresh(referrers *cachedContainerReferrers) bool {
-	return h.proxy.MetadataTTL > 0 && !referrers.fetchedAt.IsZero() && time.Since(referrers.fetchedAt) < h.proxy.MetadataTTL
-}
-
-func (h *ContainerHandler) loadContainerReferrers(ctx context.Context, cacheKey string) (*cachedContainerReferrers, error) {
+func (h *ContainerHandler) loadContainerReferrers(ctx context.Context, cacheKey string) (*cachedContainerTags, error) {
 	entry, body, err := h.loadContainerMetadata(ctx, containerReferrersCacheEcosystem, cacheKey)
 	if err != nil || entry == nil {
 		return nil, err
 	}
-	referrers := &cachedContainerReferrers{
+	referrers := &cachedContainerTags{
 		body:        body,
 		contentType: cmp.Or(entry.ContentType.String, containerReferrersMediaType),
 		etag:        entry.ETag.String,
@@ -193,7 +180,7 @@ func (h *ContainerHandler) loadContainerReferrers(ctx context.Context, cacheKey 
 	return referrers, nil
 }
 
-func (h *ContainerHandler) storeContainerReferrers(ctx context.Context, cacheKey string, referrers *cachedContainerReferrers) error {
+func (h *ContainerHandler) storeContainerReferrers(ctx context.Context, cacheKey string, referrers *cachedContainerTags) error {
 	size, err := h.storeContainerMetadata(ctx, containerReferrersCacheEcosystem, cacheKey, referrers.body,
 		referrers.etag, referrers.link, referrers.contentType, "", time.Time{}, referrers.fetchedAt)
 	if err != nil {
@@ -203,7 +190,7 @@ func (h *ContainerHandler) storeContainerReferrers(ctx context.Context, cacheKey
 	return nil
 }
 
-func (h *ContainerHandler) writeContainerReferrers(w http.ResponseWriter, r *http.Request, registryURL string, referrers *cachedContainerReferrers, stale bool) {
+func (h *ContainerHandler) writeContainerReferrers(w http.ResponseWriter, r *http.Request, registryURL string, referrers *cachedContainerTags, stale bool) {
 	w.Header().Set(headerContentType, referrers.contentType)
 	w.Header().Set(headerContentLength, strconv.FormatInt(referrers.size, 10))
 	if referrers.etag != "" {
