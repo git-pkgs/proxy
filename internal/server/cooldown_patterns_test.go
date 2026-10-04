@@ -12,6 +12,9 @@ func TestStartRejectsInvalidCooldownPatterns(t *testing.T) {
 		message  string
 	}{
 		{"glob", map[string]string{"pkg:npm/[": "0"}, "invalid cooldown package pattern"},
+		{"class containing scope alias", map[string]string{"pkg:npm/[@a]*": "0"}, "character classes and escapes are not supported"},
+		{"character class", map[string]string{"pkg:npm/[abcdef]*": "0"}, "character classes and escapes are not supported"},
+		{"escaped wildcard", map[string]string{`pkg:npm/\*`: "0"}, "character classes and escapes are not supported"},
 		{"duration", map[string]string{"pkg:npm/*": "invalid"}, "invalid cooldown duration"},
 		{"aliases", map[string]string{"pkg:npm/@example/*": "0", "pkg:npm/%40example/*": "7d"}, "conflicting cooldown package patterns"},
 	} {

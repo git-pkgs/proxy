@@ -40,6 +40,9 @@ func New(base *cooldown.Config, packagePatterns map[string]string) (*Policy, err
 	enabled := base.Enabled()
 	for _, glob := range keys {
 		value := packagePatterns[glob]
+		if strings.ContainsAny(glob, "[\\") {
+			return nil, fmt.Errorf("invalid cooldown package pattern %q: character classes and escapes are not supported", glob)
+		}
 		canonicalGlob := strings.ReplaceAll(glob, "@", "%40")
 		if _, err := path.Match(canonicalGlob, ""); err != nil {
 			return nil, fmt.Errorf("invalid cooldown package pattern %q: %w", glob, err)

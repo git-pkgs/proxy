@@ -473,7 +473,7 @@ Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to
 
 Package PURL keys are normalized to canonical form before matching, so `pkg:npm/@babel/core` and `pkg:npm/%40babel/core` are equivalent, as are `pkg:pypi/Django` and `pkg:pypi/django`. If both forms configure the same package, the canonical entry wins.
 
-`package_patterns` uses Go path globs against canonical, versionless PURLs. `*` and `?` do not cross `/` separators. For example, `"pkg:npm/@example/*"` matches packages under the `@example` npm scope. Patterns accept `@` as an alias for `%40`; other characters must use their canonical PURL form. Equivalent patterns with different durations are rejected at startup. Equal durations, such as `1d` and `24h`, are accepted.
+`package_patterns` matches canonical, versionless PURLs using `*` for zero or more characters and `?` for one character. Neither wildcard crosses `/` separators. Character classes (`[...]`) and backslash escapes are rejected at startup. For example, `"pkg:npm/@example/*"` matches packages under the `@example` npm scope. Patterns accept `@` as an alias for `%40`; other characters must use their canonical PURL form. Equivalent patterns with different durations are rejected at startup. Equal durations, such as `1d` and `24h`, are accepted.
 
 Exact `packages` entries take precedence over patterns. When several patterns match, longer patterns win after excluding `*` and `?` from the length. Ties use lexical order of the normalized patterns.
 

@@ -59,8 +59,31 @@ func TestMoreSpecificPatternTakesPrecedence(t *testing.T) {
 }
 
 func TestNewRejectsInvalidPattern(t *testing.T) {
-	if _, err := New(&cooldown.Config{}, map[string]string{"pkg:npm/[": "0"}); err == nil {
-		t.Fatal("New should reject an invalid package pattern")
+	for _, glob := range []string{"pkg:npm/[", "pkg:npm/[@a]*", "pkg:npm/[abcdef]*", `pkg:npm/\*`, `pkg:npm/\@example/*`} {
+		t.Run(glob, func(t *testing.T) {
+			if _, err := New(nil, map[string]string{glob: "0"}); err == nil || !strings.Contains(err.Error(), "character classes and escapes are not supported") {
+				t.Fatalf("unsupported pattern %q: error = %v", glob, err)
+			}
+		})
+	}
+}
+
+func TestQuestionMarkPattern(t *testing.T) {
+	policy, err := New(&cooldown.Config{Default: "7d"}, map[string]string{"pkg:npm/@example/widget-?": "0"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		purl string
+		want time.Duration
+	}{
+		{"pkg:npm/%40example/widget-a", 0},
+		{"pkg:npm/%40example/widget-ab", 7 * 24 * time.Hour},
+		{"pkg:npm/%40example/widget-/", 7 * 24 * time.Hour},
+	} {
+		if got := policy.For("npm", tc.purl); got != tc.want {
+			t.Errorf("For(%q) = %s, want %s", tc.purl, got, tc.want)
+		}
 	}
 }
 
