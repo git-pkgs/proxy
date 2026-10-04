@@ -376,6 +376,8 @@ func TestContainerHandler_ReferrersRejectsInvalidRequests(t *testing.T) {
 	}{
 		{name: "post", method: http.MethodPost, path: "/library/nginx/referrers/" + testReferrersSubject, wantStatus: http.StatusMethodNotAllowed},
 		{name: "short digest", method: http.MethodGet, path: "/library/nginx/referrers/sha256:abc", wantStatus: http.StatusBadRequest, wantCode: "DIGEST_INVALID"},
+		{name: "trailing characters", method: http.MethodGet, path: "/library/nginx/referrers/" + testReferrersSubject + "x", wantStatus: http.StatusBadRequest, wantCode: "DIGEST_INVALID"},
+		{name: "leading characters", method: http.MethodGet, path: "/library/nginx/referrers/x" + testReferrersSubject, wantStatus: http.StatusBadRequest, wantCode: "DIGEST_INVALID"},
 		{name: "unknown algorithm", method: http.MethodGet, path: "/library/nginx/referrers/md5:" + strings.Repeat("a", 32), wantStatus: http.StatusBadRequest, wantCode: "DIGEST_INVALID"},
 		{name: "unknown named upstream", method: http.MethodGet, path: "/upstream/missing/owner/img/referrers/" + testReferrersSubject, wantStatus: http.StatusNotFound, wantCode: "NAME_UNKNOWN"},
 	}
