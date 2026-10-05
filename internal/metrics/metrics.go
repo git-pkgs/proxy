@@ -131,6 +131,14 @@ var (
 		[]string{"ecosystem"},
 	)
 
+	MissingObjects = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_cache_missing_objects_total",
+			Help: "Cache records whose stored object was gone, so the artifact was refetched",
+		},
+		[]string{"ecosystem"},
+	)
+
 	HealthProbeFailures = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "proxy_health_probe_failures_total",
@@ -258,6 +266,7 @@ func init() {
 		StorageErrors,
 		ActiveRequests,
 		IntegrityFailures,
+		MissingObjects,
 		HealthProbeFailures,
 		EcosystemDownloadedBytes,
 		EcosystemDownloads,
@@ -332,6 +341,11 @@ func RecordStorageOperation(operation string, duration time.Duration) {
 // RecordIntegrityFailure increments the integrity failure counter.
 func RecordIntegrityFailure(ecosystem string) {
 	IntegrityFailures.WithLabelValues(ecosystem).Inc()
+}
+
+// RecordMissingObject counts a cache record found without its stored object.
+func RecordMissingObject(ecosystem string) {
+	MissingObjects.WithLabelValues(ecosystem).Inc()
 }
 
 // RecordHealthProbeFailure increments the health probe failure counter.

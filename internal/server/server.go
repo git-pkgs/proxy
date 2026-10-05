@@ -268,6 +268,7 @@ func (s *Server) serve(listener net.Listener) error {
 	proxy.DirectServeTTL = s.cfg.ParseDirectServeTTL()
 	proxy.DirectServeBaseURL = s.cfg.Storage.DirectServeBaseURL
 	proxy.StreamArtifacts = !s.cfg.Storage.CacheArtifacts
+	proxy.DirectServePublicURL = s.cfg.Storage.DirectServePublicURL
 
 	// Create router with Chi
 	r := chi.NewRouter()
@@ -470,6 +471,38 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 	r.Mount("/generic", http.StripPrefix("/generic", genericHandler.Routes()))
+
+	if s.cfg.URLProxy.Enabled {
+		urlHandler := handler.NewURLHandler(s.newURLProxy(proxy), s.cfg.URLProxy.DirectServe, s.cfg.ParseURLProxyFetchTimeout())
+		r.Mount("/url", http.StripPrefix("/url", urlHandler.Routes()))
+	}
+}
+
+// newURLProxy returns a Proxy sharing proxy's cache and policies, but
+// fetching through a client fit for arbitrary hosts: the same safehttp dial
+// gate (no loopback, private or link-local targets, checked on every redirect
+// hop), no configured upstream credentials or OCI token exchange, no
+// environment HTTP proxy that would bypass the gate, and the /url/ fetch
+// timeout.
+func (s *Server) newURLProxy(proxy *handler.Proxy) *handler.Proxy {
+	client := newUpstreamClient(s.cfg.Upstream)
+	if transport, ok := client.Transport.(*http.Transport); ok {
+		transport.Proxy = nil
+	}
+	if s.accessLog != nil {
+		client.Transport = upstreamhttp.NewAccessLogTransport(client.Transport, s.accessLog, s.logger)
+	}
+	client.Timeout = s.cfg.ParseURLProxyFetchTimeout()
+
+	urlProxy := handler.NewProxy(s.db, s.storage, fetch.NewFetcher(fetch.WithHTTPClient(client)), proxy.Resolver, s.logger)
+	urlProxy.Denylist = proxy.Denylist
+	urlProxy.Scanners = proxy.Scanners
+	urlProxy.ScanSigningKey = proxy.ScanSigningKey
+	urlProxy.ScanFetchBaseURL = proxy.ScanFetchBaseURL
+	urlProxy.DirectServeTTL = proxy.DirectServeTTL
+	urlProxy.DirectServeBaseURL = proxy.DirectServeBaseURL
+	urlProxy.DirectServePublicURL = proxy.DirectServePublicURL
+	return urlProxy
 }
 
 // configureScanning builds the scanner group from cfg and wires it into

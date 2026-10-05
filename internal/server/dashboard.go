@@ -152,6 +152,7 @@ func supportedEcosystems() []string {
 		"pypi",
 		"rpm",
 		"swift",
+		"url",
 	}
 }
 
