@@ -29,6 +29,7 @@ func (t *Templates) load() error {
 			"sub":                 func(a, b int) int { return a - b },
 			"supportedEcosystems": supportedEcosystems,
 			"ecosystemBadgeClass": ecosystemBadgeClasses,
+			"ecosystemPillClass":  ecosystemPillClasses,
 			"ecosystemBadgeLabel": ecosystemBadgeLabel,
 			"dict":                templateDict,
 		}

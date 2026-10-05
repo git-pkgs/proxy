@@ -1035,6 +1035,41 @@ func (db *DB) ListCachedPackages(ecosystem string, sortBy string, limit int, off
 	return packages, nil
 }
 
+// CountCachedPackagesByEcosystem counts packages with at least one stored artifact.
+func (db *DB) CountCachedPackagesByEcosystem() (map[string]int64, error) {
+	hasArtifacts, err := db.HasTable("artifacts")
+	if err != nil {
+		return nil, err
+	}
+	counts := make(map[string]int64)
+	if !hasArtifacts {
+		return counts, nil
+	}
+
+	rows, err := db.Query(`
+		SELECT p.ecosystem, COUNT(DISTINCT p.purl)
+		FROM packages p
+		JOIN versions v ON v.package_purl = p.purl
+		JOIN artifacts a ON a.version_purl = v.purl
+		WHERE a.storage_path IS NOT NULL
+		GROUP BY p.ecosystem
+	`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	for rows.Next() {
+		var ecosystem string
+		var count int64
+		if err := rows.Scan(&ecosystem, &count); err != nil {
+			return nil, err
+		}
+		counts[ecosystem] = count
+	}
+	return counts, rows.Err()
+}
+
 func (db *DB) CountCachedPackages(ecosystem string) (int64, error) {
 	hasArtifacts, err := db.HasTable("artifacts")
 	if err != nil {

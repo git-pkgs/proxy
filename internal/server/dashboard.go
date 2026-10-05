@@ -2,6 +2,7 @@ package server
 
 import (
 	"html/template"
+	"sort"
 	"strings"
 
 	"github.com/git-pkgs/proxy/internal/database"
@@ -110,13 +111,21 @@ type SearchResultItem struct {
 // PackagesListPageData contains data for rendering the packages list page.
 type PackagesListPageData struct {
 	Layout
-	Ecosystem  string
-	SortBy     string
-	Results    []SearchResultItem
-	Count      int
-	Page       int
-	PerPage    int
-	TotalPages int
+	Ecosystem        string
+	SortBy           string
+	Results          []SearchResultItem
+	Count            int
+	TotalPackages    int64
+	EcosystemFilters []EcosystemFilter
+	Page             int
+	PerPage          int
+	TotalPages       int
+}
+
+// EcosystemFilter represents an ecosystem filter pill with a package count.
+type EcosystemFilter struct {
+	Ecosystem string
+	Count     int64
 }
 
 func supportedEcosystems() []string {
@@ -157,49 +166,82 @@ func ecosystemBadgeLabel(ecosystem string) string {
 	}
 }
 
-func ecosystemBadgeClasses(ecosystem string) string {
-	base := "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium"
-
+func ecosystemColorClasses(ecosystem string) string {
 	switch ecosystem {
 	case "npm", "maven":
-		return base + " bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300"
+		return "bg-red-100 text-red-700 dark:bg-red-900/50 dark:text-red-300"
 	case "cargo":
-		return base + " bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300"
+		return "bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300"
 	case "gem":
-		return base + " bg-pink-100 text-pink-700 dark:bg-pink-900/50 dark:text-pink-300"
-	case "go":
-		return base + " bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300"
+		return "bg-pink-100 text-pink-700 dark:bg-pink-900/50 dark:text-pink-300"
+	case "go", "golang":
+		return "bg-cyan-100 text-cyan-700 dark:bg-cyan-900/50 dark:text-cyan-300"
 	case "hex":
-		return base + " bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300"
+		return "bg-purple-100 text-purple-700 dark:bg-purple-900/50 dark:text-purple-300"
 	case "pub":
-		return base + " bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
+		return "bg-blue-100 text-blue-700 dark:bg-blue-900/50 dark:text-blue-300"
 	case "pypi":
-		return base + " bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-300"
+		return "bg-yellow-100 text-yellow-700 dark:bg-yellow-900/50 dark:text-yellow-300"
 	case "nuget":
-		return base + " bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300"
+		return "bg-indigo-100 text-indigo-700 dark:bg-indigo-900/50 dark:text-indigo-300"
 	case "composer":
-		return base + " bg-violet-100 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300"
+		return "bg-violet-100 text-violet-700 dark:bg-violet-900/50 dark:text-violet-300"
 	case "conan":
-		return base + " bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300"
+		return "bg-teal-100 text-teal-700 dark:bg-teal-900/50 dark:text-teal-300"
 	case "conda":
-		return base + " bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300"
+		return "bg-green-100 text-green-700 dark:bg-green-900/50 dark:text-green-300"
 	case "cran":
-		return base + " bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
+		return "bg-slate-100 text-slate-700 dark:bg-slate-800 dark:text-slate-300"
 	case "julia":
-		return base + " bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
+		return "bg-emerald-100 text-emerald-700 dark:bg-emerald-900/50 dark:text-emerald-300"
 	case "swift":
-		return base + " bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300"
+		return "bg-orange-100 text-orange-700 dark:bg-orange-900/50 dark:text-orange-300"
 	case "oci":
-		return base + " bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300"
+		return "bg-sky-100 text-sky-700 dark:bg-sky-900/50 dark:text-sky-300"
 	case "deb":
-		return base + " bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300"
+		return "bg-red-100 text-red-800 dark:bg-red-900/50 dark:text-red-300"
 	case "rpm":
-		return base + " bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300"
+		return "bg-amber-100 text-amber-800 dark:bg-amber-900/50 dark:text-amber-300"
 	case "alpine":
-		return base + " bg-lime-100 text-lime-800 dark:bg-lime-900/50 dark:text-lime-300"
+		return "bg-lime-100 text-lime-800 dark:bg-lime-900/50 dark:text-lime-300"
 	default:
-		return base + " bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"
+		return "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"
 	}
+}
+
+func ecosystemBadgeClasses(ecosystem string) string {
+	return "inline-flex items-center px-2 py-0.5 rounded text-xs font-medium " + ecosystemColorClasses(ecosystem)
+}
+
+func ecosystemPillClasses(ecosystem string) string {
+	return "inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-medium hover:opacity-90 " + ecosystemColorClasses(ecosystem)
+}
+
+func buildEcosystemFilters(counts map[string]int64) []EcosystemFilter {
+	var filters []EcosystemFilter
+	seen := make(map[string]bool, len(counts))
+
+	for _, eco := range supportedEcosystems() {
+		count := counts[eco]
+		if count > 0 {
+			filters = append(filters, EcosystemFilter{Ecosystem: eco, Count: count})
+			seen[eco] = true
+		}
+	}
+
+	var extra []string
+	for eco, count := range counts {
+		if count > 0 && !seen[eco] {
+			extra = append(extra, eco)
+		}
+	}
+	sort.Strings(extra)
+
+	for _, eco := range extra {
+		filters = append(filters, EcosystemFilter{Ecosystem: eco, Count: counts[eco]})
+	}
+
+	return filters
 }
 
 func getRegistryConfigs(baseURL string) []RegistryConfig {

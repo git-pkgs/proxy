@@ -2,11 +2,56 @@ package database
 
 import (
 	"database/sql"
+	"maps"
 	"testing"
 	"time"
 )
 
 const testEcosystemNPM = "npm"
+
+func TestCountCachedPackagesByEcosystem(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		counts, err := db.CountCachedPackagesByEcosystem()
+		if err != nil || len(counts) != 0 {
+			t.Fatalf("empty cache counts = %v, error = %v", counts, err)
+		}
+
+		seedArtifact(t, db, "npm", "express", "1.0.0", 100, 1)
+		seedArtifact(t, db, "npm", "express", "2.0.0", 200, 1)
+		seedArtifact(t, db, "npm", "lodash", "1.0.0", 100, 1)
+		seedArtifact(t, db, "cargo", "serde", "1.0.0", 100, 1)
+		seedArtifact(t, db, "pypi", "evicted", "1.0.0", 100, 1)
+		if _, err := db.Exec(`UPDATE artifacts SET storage_path = NULL WHERE version_purl = 'pkg:pypi/evicted@1.0.0'`); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.UpsertPackage(&Package{PURL: "pkg:gem/metadata-only", Ecosystem: "gem", Name: "metadata-only"}); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.UpsertArtifact(&Artifact{
+			VersionPURL: "pkg:npm/express@1.0.0",
+			Filename:    "extra.tgz",
+			UpstreamURL: "https://example.test/extra.tgz",
+			StoragePath: sql.NullString{String: "extra.tgz", Valid: true},
+		}); err != nil {
+			t.Fatal(err)
+		}
+
+		counts, err = db.CountCachedPackagesByEcosystem()
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := map[string]int64{"npm": 2, "cargo": 1}
+		if !maps.Equal(counts, want) {
+			t.Fatalf("counts = %v, want %v", counts, want)
+		}
+		for ecosystem, count := range counts {
+			listed, err := db.CountCachedPackages(ecosystem)
+			if err != nil || count != listed {
+				t.Errorf("%s count = %d, list count = %d, error = %v", ecosystem, count, listed, err)
+			}
+		}
+	})
+}
 
 func setupListCachedPackagesDB(t *testing.T) *DB {
 	t.Helper()

@@ -821,10 +821,19 @@ func (s *Server) handlePackagesList(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	total, err := s.db.CountCachedPackages(ecosystem)
+	counts, err := s.db.CountCachedPackagesByEcosystem()
 	if err != nil {
 		s.logger.Error("failed to count packages", "error", err)
-		total = 0
+		http.Error(w, "failed to count packages", http.StatusInternalServerError)
+		return
+	}
+	var totalPackages int64
+	for _, count := range counts {
+		totalPackages += count
+	}
+	total := totalPackages
+	if ecosystem != "" {
+		total = counts[ecosystem]
 	}
 
 	items := make([]SearchResultItem, len(packages))
@@ -860,14 +869,16 @@ func (s *Server) handlePackagesList(w http.ResponseWriter, r *http.Request) {
 	totalPages := int((total + int64(limit) - 1) / int64(limit))
 
 	data := PackagesListPageData{
-		Layout:     s.layoutFor(r),
-		Ecosystem:  ecosystem,
-		SortBy:     sortBy,
-		Results:    items,
-		Count:      int(total),
-		Page:       page,
-		PerPage:    limit,
-		TotalPages: totalPages,
+		Layout:           s.layoutFor(r),
+		Ecosystem:        ecosystem,
+		SortBy:           sortBy,
+		Results:          items,
+		Count:            int(total),
+		TotalPackages:    totalPackages,
+		EcosystemFilters: buildEcosystemFilters(counts),
+		Page:             page,
+		PerPage:          limit,
+		TotalPages:       totalPages,
 	}
 
 	if err := s.templates.Render(w, "packages_list", data); err != nil {
