@@ -183,7 +183,7 @@ func TestContainerHandler_NamespaceRejectsUnresolvableRequests(t *testing.T) {
 		"unknown host blob":                  "/v2/owner/app/blobs/" + digest + "?ns=quay.io",
 		"unknown host tags":                  "/v2/owner/app/tags/list?ns=quay.io",
 		"multiple ns values":                 "/v2/owner/app/manifests/latest?ns=docker.io&ns=" + registry.host(),
-		"prefix route with default ns":       "/v2/upstream/ghcr/owner/app/manifests/latest?ns=docker.io",
+		"prefix route with default host":     "/v2/upstream/quay/owner/app/manifests/latest?ns=" + registry.host(),
 		"prefix route with other upstream":   "/v2/upstream/ghcr/owner/app/blobs/" + digest + "?ns=" + other.host(),
 		"prefix route with unknown upstream": "/v2/upstream/nope/owner/app/manifests/latest?ns=" + registry.host(),
 		"prefix route without repository":    "/v2/upstream/ghcr/manifests/latest?ns=" + registry.host(),
@@ -278,6 +278,22 @@ func TestContainerHandler_NamespacePrefixRouteAcceptsDockerHubAliases(t *testing
 	if got := other.requestCount(); got != 0 {
 		t.Errorf("other registry requests = %d, want 0", got)
 	}
+
+	t.Run("Docker Hub mirror as named upstream", func(t *testing.T) {
+		// The upstream is a Docker Hub mirror on some other host (mirror.gcr.io,
+		// an Artifactory remote); nodes still pull docker.io/... through
+		// /v2/upstream/hub, so ns says docker.io.
+		mirror := newNSTestRegistry(t, "library/nginx", "")
+		routes, _, _ := newNSTestHandler(t, "", map[string]string{"hub": mirror.URL})
+
+		response := serveNS(routes, "/v2/upstream/hub/library/nginx/manifests/latest?ns=docker.io")
+		if response.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+		}
+		if got, want := mirror.lastRequest(), "/v2/library/nginx/manifests/latest"; got != want {
+			t.Errorf("upstream request = %q, want %q", got, want)
+		}
+	})
 }
 
 func TestContainerHandler_NamespacePrefixRouteTrustsUnknownHosts(t *testing.T) {

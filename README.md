@@ -494,7 +494,8 @@ even while CRI still has no `config_path`.
 `docker.io` and the host of `upstream.oci_default` use the default registry;
 the host of each `upstream.oci` URL uses that named registry. Pulls for any
 other registry get `404 NAME_UNKNOWN`, and containerd falls back to the
-registry itself. Existing per-registry `hosts.toml` files that point at
+registry itself; only an image path that itself starts with `upstream/{name}/`
+always selects that upstream. Existing per-registry `hosts.toml` files that point at
 `/v2/upstream/{name}` with `override_path = true` keep working, also when
 that upstream is a mirror of the registry the nodes pull from. See [docs/configuration.md](docs/configuration.md) for how
 hosts are matched and which entry wins when two share a host. k3s generates

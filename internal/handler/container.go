@@ -154,7 +154,7 @@ func (h *ContainerHandler) indexNamespace(route, registryURL string) bool {
 		}
 	}
 	if len(taken) > 0 {
-		h.warn("OCI upstream shares a registry host with another route; ns requests for it use the other route",
+		h.warn("OCI upstream shares a registry host with another route; unprefixed ns requests for it go to the other route",
 			"upstream", route, "hosts", strings.Join(taken, ", "))
 	}
 	return true
@@ -507,12 +507,14 @@ func (h *ContainerHandler) registryForNamespace(namespace, name string) (registr
 // namespaceNamesPrefixUpstream decides whether an upstream/{name}/ request
 // may carry the given ns. The prefix already picks the upstream and the
 // cache entries, so ns cannot change where content comes from; the check
-// only refuses an ns that contradicts the prefix. It passes for the
-// upstream's own host (the Docker Hub aliases count as one host, and the
-// URL's path is irrelevant) and for a host this proxy does not know, which
-// is a per-registry mirror entry for a registry the upstream mirrors, say an
-// Artifactory remote for ghcr.io. It fails for a host that belongs to another
-// route.
+// only refuses an ns that contradicts the prefix, meaning a host this proxy
+// knows that belongs to another route. It passes for the upstream's own
+// host (the URL's path is irrelevant), for a host this proxy does not know,
+// which is a per-registry mirror entry for a registry the upstream mirrors,
+// say an Artifactory remote for ghcr.io, and always for Docker Hub: its
+// repository names have two path components, so docker.io/upstream/... is
+// never a real image and a Docker Hub mirror behind any prefix stays
+// reachable.
 func (h *ContainerHandler) namespaceNamesPrefixUpstream(namespace, name string) bool {
 	rest, _ := strings.CutPrefix(name, "upstream/")
 	upstream, _, _ := strings.Cut(rest, "/")
@@ -521,8 +523,7 @@ func (h *ContainerHandler) namespaceNamesPrefixUpstream(namespace, name string) 
 		return false
 	}
 	key := namespaceKeyForRequest(namespace)
-	hosts := namespaceKeysForHost(parsed)
-	if slices.Contains(hosts, key) || (isDockerHubKey(key) && slices.ContainsFunc(hosts, isDockerHubKey)) {
+	if isDockerHubKey(key) || slices.Contains(namespaceKeysForHost(parsed), key) {
 		return true
 	}
 	_, known := h.namespaces[key]
