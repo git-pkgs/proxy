@@ -495,7 +495,8 @@ even while CRI still has no `config_path`.
 the host of each `upstream.oci` URL uses that named registry. Pulls for any
 other registry get `404 NAME_UNKNOWN`, and containerd falls back to the
 registry itself. Existing per-registry `hosts.toml` files that point at
-`/v2/upstream/{name}` with `override_path = true` keep working. See [docs/configuration.md](docs/configuration.md) for how
+`/v2/upstream/{name}` with `override_path = true` keep working, also when
+that upstream is a mirror of the registry the nodes pull from. See [docs/configuration.md](docs/configuration.md) for how
 hosts are matched and which entry wins when two share a host. k3s generates
 the hosts directory itself from `/etc/rancher/k3s/registries.yaml`; `mirrors:
 {"*": {endpoint: ["http://proxy.example.com:8080"]}}` produces the same

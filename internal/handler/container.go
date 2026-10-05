@@ -33,6 +33,22 @@ var dockerHubNamespaces = []string{"https://docker.io", "https://index.docker.io
 // schemeDefaultPorts are the ports an image reference may leave out.
 var schemeDefaultPorts = map[string]string{"https": "443", "http": "80"} //nolint:gochecknoglobals // fixed table
 
+// dockerHubNamespaceKeys are the ns lookup keys of the Docker Hub aliases.
+var dockerHubNamespaceKeys = dockerHubKeys() //nolint:gochecknoglobals // fixed table
+
+func dockerHubKeys() []string {
+	var keys []string
+	for _, registryURL := range dockerHubNamespaces {
+		hostKeys, _ := namespaceKeysForURL(registryURL)
+		keys = append(keys, hostKeys...)
+	}
+	return keys
+}
+
+func isDockerHubKey(key string) bool {
+	return slices.Contains(dockerHubNamespaceKeys, key)
+}
+
 // ContainerHandler handles OCI/Docker container registry protocol requests.
 // It implements the OCI Distribution Spec for pulling images.
 // Reference: https://github.com/opencontainers/distribution-spec/blob/main/spec.md
@@ -460,8 +476,8 @@ func (h *ContainerHandler) registryForRequest(r *http.Request, name string) (reg
 //
 // Per-registry containerd mirrors with override_path address the reserved
 // upstream/{name}/ prefix and still send ns. Such requests are served like
-// the prefix route without ns, but only when ns names that upstream's own
-// host, so an ns request can never mint cache entries of another registry.
+// the prefix route without ns unless ns contradicts the prefix, see
+// namespaceNamesPrefixUpstream.
 func (h *ContainerHandler) registryForNamespace(namespace, name string) (registryURL, upstreamName, cacheName string, ok bool) {
 	if strings.HasPrefix(name, "upstream/") {
 		if !h.namespaceNamesPrefixUpstream(namespace, name) {
@@ -488,9 +504,15 @@ func (h *ContainerHandler) registryForNamespace(namespace, name string) (registr
 	return registryURL, name, "upstream/" + route + "/" + name, true
 }
 
-// namespaceNamesPrefixUpstream reports whether ns names the host of the
-// upstream an upstream/{name}/ repository selects. The URL's path is
-// irrelevant here because the prefix already picks the upstream.
+// namespaceNamesPrefixUpstream decides whether an upstream/{name}/ request
+// may carry the given ns. The prefix already picks the upstream and the
+// cache entries, so ns cannot change where content comes from; the check
+// only refuses an ns that contradicts the prefix. It passes for the
+// upstream's own host (the Docker Hub aliases count as one host, and the
+// URL's path is irrelevant) and for a host this proxy does not know, which
+// is a per-registry mirror entry for a registry the upstream mirrors, say an
+// Artifactory remote for ghcr.io. It fails for a host that belongs to another
+// route.
 func (h *ContainerHandler) namespaceNamesPrefixUpstream(namespace, name string) bool {
 	rest, _ := strings.CutPrefix(name, "upstream/")
 	upstream, _, _ := strings.Cut(rest, "/")
@@ -498,7 +520,13 @@ func (h *ContainerHandler) namespaceNamesPrefixUpstream(namespace, name string) 
 	if err != nil || parsed.Host == "" {
 		return false
 	}
-	return slices.Contains(namespaceKeysForHost(parsed), namespaceKeyForRequest(namespace))
+	key := namespaceKeyForRequest(namespace)
+	hosts := namespaceKeysForHost(parsed)
+	if slices.Contains(hosts, key) || (isDockerHubKey(key) && slices.ContainsFunc(hosts, isDockerHubKey)) {
+		return true
+	}
+	_, known := h.namespaces[key]
+	return !known
 }
 
 // registryForName resolves a client-visible OCI repository name to an upstream

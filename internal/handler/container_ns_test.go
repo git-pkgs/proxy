@@ -244,6 +244,67 @@ func TestContainerHandler_NamespaceAcceptsPrefixRouteForOwnHost(t *testing.T) {
 	}
 }
 
+func TestContainerHandler_NamespacePrefixRouteAcceptsDockerHubAliases(t *testing.T) {
+	// upstream.oci.hub points at Docker Hub and a docker.io hosts.toml mirror
+	// with override_path addresses /v2/upstream/hub, so containerd sends
+	// ns=docker.io. The dialer stands in for registry-1.docker.io.
+	hub := newNSTestRegistry(t, "library/nginx", "")
+	other := newNSTestRegistry(t, "library/nginx", "")
+	routes, h, _ := newNSTestHandler(t, "", map[string]string{
+		"hub":  "http://registry-1.docker.io",
+		"quay": other.URL,
+	})
+	transport := &http.Transport{DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+		if addr != "registry-1.docker.io:80" {
+			return nil, fmt.Errorf("unexpected dial to %s", addr)
+		}
+		return (&net.Dialer{}).DialContext(ctx, network, hub.Listener.Addr().String())
+	}}
+	t.Cleanup(transport.CloseIdleConnections)
+	h.proxy.HTTPClient = &http.Client{Transport: transport}
+
+	for _, query := range []string{"?ns=docker.io", "?ns=index.docker.io", "?ns=registry-1.docker.io", "?ns=docker.io:443", ""} {
+		response := serveNS(routes, "/v2/upstream/hub/library/nginx/manifests/latest"+query)
+		if response.Code != http.StatusOK {
+			t.Fatalf("%q status = %d: %s", query, response.Code, response.Body.String())
+		}
+	}
+	if got := hub.requestCount(); got != 1 {
+		t.Errorf("hub requests = %d, want 1 (the rest are cache hits)", got)
+	}
+
+	// A known host of another route still contradicts the prefix.
+	assertNameUnknown(t, serveNS(routes, "/v2/upstream/hub/library/nginx/manifests/latest?ns="+other.host()))
+	if got := other.requestCount(); got != 0 {
+		t.Errorf("other registry requests = %d, want 0", got)
+	}
+}
+
+func TestContainerHandler_NamespacePrefixRouteTrustsUnknownHosts(t *testing.T) {
+	// The upstream is a mirror of ghcr.io, nodes keep pulling ghcr.io/... and
+	// their ghcr.io hosts.toml points at /v2/upstream/ghcr, so ns says
+	// ghcr.io while the upstream host is something else. Only a mirror entry
+	// of the client can lead here, so the prefix wins.
+	tests := map[string]string{
+		"plain mirror host":  "",
+		"artifactory remote": "/artifactory/api/docker/ghcr-remote",
+	}
+	for name, pathPrefix := range tests {
+		t.Run(name, func(t *testing.T) {
+			mirror := newNSTestRegistry(t, "owner/app", pathPrefix)
+			routes, _, _ := newNSTestHandler(t, "", map[string]string{"ghcr": mirror.URL + pathPrefix})
+
+			response := serveNS(routes, "/v2/upstream/ghcr/owner/app/manifests/latest?ns=ghcr.io")
+			if response.Code != http.StatusOK {
+				t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+			}
+			if got, want := mirror.lastRequest(), pathPrefix+"/v2/owner/app/manifests/latest"; got != want {
+				t.Errorf("upstream request = %q, want %q", got, want)
+			}
+		})
+	}
+}
+
 func TestContainerHandler_NamespaceSharesCacheWithOtherRoutes(t *testing.T) {
 	digest := "sha256:" + sha256Hex(nsTestBlob)
 	manifestDigest := "sha256:" + sha256Hex(nsTestManifest())
