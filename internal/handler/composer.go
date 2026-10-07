@@ -98,6 +98,12 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 
 	upstreamURL := fmt.Sprintf("%s/p2/%s/%s.json", h.repoURL, vendor, pkg)
 
+	if rewritten, ok := h.proxy.storedRewrite("composer", packageName, h.proxyURL, packageName); ok {
+		w.Header().Set(headerContentType, "application/json")
+		_, _ = w.Write(rewritten)
+		return
+	}
+
 	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "composer", packageName, upstreamURL)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
