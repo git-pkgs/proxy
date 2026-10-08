@@ -54,15 +54,16 @@ func TestComposerRewriteMetadata(t *testing.T) {
 	}
 }
 
-func TestComposerRewriteMetadataExpandsMinified(t *testing.T) {
+func TestComposerRewriteMetadataMinifiedInheritance(t *testing.T) {
 	h := &ComposerHandler{
 		proxy:    testProxy(),
 		proxyURL: "http://localhost:8080",
 	}
 
 	// Minified format: first version has all fields, subsequent versions
-	// only include fields that changed. The proxy must expand this so every
-	// version has all fields (including "name").
+	// only include fields that changed. The proxy keeps the format, so once
+	// Composer expands it every version still has all fields (including
+	// "name").
 	input := `{
 		"minified": "composer/2.0",
 		"packages": {
@@ -97,16 +98,14 @@ func TestComposerRewriteMetadataExpandsMinified(t *testing.T) {
 		t.Fatalf("failed to parse output: %v", err)
 	}
 
-	// The minified key should be removed from output
-	if _, ok := result["minified"]; ok {
-		t.Error("expected minified key to be removed from output")
+	if result["minified"] != "composer/2.0" {
+		t.Errorf("minified = %v, want the format kept", result["minified"])
 	}
 
-	packages := result["packages"].(map[string]any)
-	versions := packages["symfony/console"].([]any)
+	versions := composerVersions(t, output, "symfony/console")
 
 	// Second version should have inherited the "name" and "description" fields
-	v1 := versions[1].(map[string]any)
+	v1 := versions[1]
 	if v1["name"] != "symfony/console" {
 		t.Errorf("second version name = %v, want %q", v1["name"], "symfony/console")
 	}
@@ -154,13 +153,7 @@ func TestComposerRewriteMetadataMinifiedDevReset(t *testing.T) {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
 
-	var result map[string]any
-	if err := json.Unmarshal(output, &result); err != nil {
-		t.Fatalf("failed to parse output: %v", err)
-	}
-
-	packages := result["packages"].(map[string]any)
-	versions := packages["symfony/console"].([]any)
+	versions := composerVersions(t, output, "symfony/console")
 
 	if len(versions) != 2 {
 		t.Fatalf("expected 2 versions, got %d", len(versions))
@@ -168,7 +161,7 @@ func TestComposerRewriteMetadataMinifiedDevReset(t *testing.T) {
 
 	// Dev version should NOT have inherited "license" or "description"
 	// from the tagged version (the ~dev sentinel resets inheritance).
-	devVersion := versions[1].(map[string]any)
+	devVersion := versions[1]
 	if devVersion["version"] != "dev-main" {
 		t.Errorf("dev version = %v, want %q", devVersion["version"], "dev-main")
 	}
@@ -221,19 +214,13 @@ func TestComposerRewriteMetadataUnset(t *testing.T) {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
 
-	var result map[string]any
-	if err := json.Unmarshal(output, &result); err != nil {
-		t.Fatalf("failed to parse output: %v", err)
-	}
-
-	versions := result["packages"].(map[string]any)["venturecraft/revisionable"].([]any)
+	versions := composerVersions(t, output, "venturecraft/revisionable")
 	if len(versions) != 4 {
 		t.Fatalf("expected 4 versions, got %d", len(versions))
 	}
 
 	byVersion := map[string]map[string]any{}
-	for _, v := range versions {
-		vmap := v.(map[string]any)
+	for _, vmap := range versions {
 		byVersion[vmap["version"].(string)] = vmap
 	}
 
@@ -270,7 +257,7 @@ func TestComposerRewriteMetadataCooldownPreservesNames(t *testing.T) {
 
 	// Minified format where "name" only appears in first version.
 	// When cooldown filters the first version, remaining versions must
-	// still have the "name" field after expansion.
+	// still have the "name" field once Composer expands them.
 	input := `{
 		"minified": "composer/2.0",
 		"packages": {
@@ -301,13 +288,7 @@ func TestComposerRewriteMetadataCooldownPreservesNames(t *testing.T) {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
 
-	var result map[string]any
-	if err := json.Unmarshal(output, &result); err != nil {
-		t.Fatalf("failed to parse output: %v", err)
-	}
-
-	packages := result["packages"].(map[string]any)
-	versions := packages["symfony/console"].([]any)
+	versions := composerVersions(t, output, "symfony/console")
 
 	// v7.0.0 should be filtered by cooldown, leaving v6.0.0 and v5.0.0
 	if len(versions) != 2 {
@@ -315,8 +296,7 @@ func TestComposerRewriteMetadataCooldownPreservesNames(t *testing.T) {
 	}
 
 	// Both remaining versions must have the "name" field
-	for _, v := range versions {
-		vmap := v.(map[string]any)
+	for _, vmap := range versions {
 		if vmap["name"] != "symfony/console" {
 			t.Errorf("version %v missing name field, got %v", vmap["version"], vmap["name"])
 		}
@@ -332,20 +312,11 @@ func TestComposerRewriteDistURLGitHubZipball(t *testing.T) {
 		proxyURL: "http://localhost:8080",
 	}
 
-	vmap := map[string]any{
-		"version": "v7.4.8",
-		"dist": map[string]any{
-			"url":       "https://api.github.com/repos/symfony/asset/zipball/d2e2f014ccd6ec9fae8dbe6336a4164346a2a856",
-			"type":      "zip",
-			"shasum":    "",
-			"reference": "d2e2f014ccd6ec9fae8dbe6336a4164346a2a856",
-		},
+	url, ok := h.proxyDistURL("symfony/asset", "v7.4.8",
+		"https://api.github.com/repos/symfony/asset/zipball/d2e2f014ccd6ec9fae8dbe6336a4164346a2a856", "zip")
+	if !ok {
+		t.Fatal("dist URL was not rewritten")
 	}
-
-	h.rewriteDistURL(vmap, "symfony/asset", "v7.4.8")
-
-	dist := vmap["dist"].(map[string]any)
-	url := dist["url"].(string)
 
 	// The rewritten URL's filename must have a .zip extension
 	if !strings.HasSuffix(url, ".zip") {
@@ -399,16 +370,16 @@ func TestComposerRewriteMetadataGitHubZipballFilenames(t *testing.T) {
 
 func TestComposerExpandMinifiedSharedDistReferences(t *testing.T) {
 	// When a minified version inherits the dist field from a previous version
-	// (i.e. it doesn't include its own dist), expanding + rewriting must not
-	// corrupt the dist URLs via shared map references.
+	// (i.e. it doesn't include its own dist), rewriting must still give each
+	// version a dist URL naming its own version.
 	h := &ComposerHandler{
 		proxy:    testProxy(),
 		proxyURL: "http://localhost:8080",
 	}
 
 	// In this minified payload, v5.3.0 does NOT include a dist field,
-	// so it inherits v5.4.0's dist. After expansion and URL rewriting,
-	// each version must have its own correct dist URL.
+	// so it inherits v5.4.0's dist. After URL rewriting, each version must
+	// have its own correct dist URL.
 	input := `{
 		"minified": "composer/2.0",
 		"packages": {
@@ -434,25 +405,13 @@ func TestComposerExpandMinifiedSharedDistReferences(t *testing.T) {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
 
-	var result map[string]any
-	if err := json.Unmarshal(output, &result); err != nil {
-		t.Fatalf("failed to parse output: %v", err)
-	}
-
-	packages := result["packages"].(map[string]any)
-	versions := packages["vendor/pkg"].([]any)
+	versions := composerVersions(t, output, "vendor/pkg")
 	if len(versions) != 2 {
 		t.Fatalf("expected 2 versions, got %d", len(versions))
 	}
 
-	v1 := versions[0].(map[string]any)
-	v2 := versions[1].(map[string]any)
-
-	dist1 := v1["dist"].(map[string]any)
-	dist2 := v2["dist"].(map[string]any)
-
-	url1 := dist1["url"].(string)
-	url2 := dist2["url"].(string)
+	url1 := distURL(t, versions[0])
+	url2 := distURL(t, versions[1])
 
 	// Each version must have its own URL with its own version in the path
 	if !strings.Contains(url1, "/5.4.0/") {

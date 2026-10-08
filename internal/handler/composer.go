@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"strings"
@@ -14,9 +16,13 @@ import (
 const (
 	composerUpstream   = "https://packagist.org"
 	composerRepo       = "https://repo.packagist.org"
+	composerMinified   = "composer/2.0"
 	composerUnset      = "__unset"
+	composerDevReset   = "~dev"
 	vendorPackageParts = 2
 )
+
+var composerUnsetJSON = []byte(`"` + composerUnset + `"`)
 
 // ComposerHandler handles Composer/Packagist registry protocol requests.
 type ComposerHandler struct {
@@ -131,118 +137,148 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 }
 
 // rewriteMetadata rewrites dist URLs in Composer metadata to point at this proxy.
-// If the metadata uses the minified Composer v2 format, it is expanded first so
-// that every version entry contains all fields. If cooldown is enabled, versions
-// published too recently are filtered out.
+// If cooldown is enabled, versions published too recently are filtered out.
+//
+// The document is never decoded as a whole. Packagist serves large packages
+// as minified lists of thousands of versions, and expanding them into generic
+// maps took many times the document's size for every rewrite. Instead each
+// version list is walked in place and the response is assembled from slices
+// of the original bytes: only dist values are written fresh, and minified
+// metadata stays minified.
 func (h *ComposerHandler) rewriteMetadata(body []byte) ([]byte, error) {
-	var metadata map[string]any
-	if err := json.Unmarshal(body, &metadata); err != nil {
+	if !json.Valid(body) {
+		return nil, errors.New("composer metadata is not valid JSON")
+	}
+	format, _, err := lookupJSONString(body, "minified")
+	if err != nil {
 		return nil, err
 	}
+	minified := format == composerMinified
 
-	packages, ok := metadata["packages"].(map[string]any)
-	if !ok {
-		return body, nil
-	}
-
-	minified := metadata["minified"] == "composer/2.0"
-
-	for packageName, versions := range packages {
-		versionList, ok := versions.([]any)
-		if !ok {
-			continue
+	var out bytes.Buffer
+	out.Grow(len(body) + len(body)/8)
+	err = rewriteJSONMembers(&out, body, func(out *bytes.Buffer, m jsonMember) (bool, error) {
+		packages := m.value(body)
+		if !jsonKeyIs(m.key(body), "packages") || packages[0] != '{' {
+			return false, nil
 		}
-
-		if minified {
-			versionList = expandMinifiedVersions(versionList)
-		}
-
-		packages[packageName] = h.filterAndRewriteVersions(packageName, versionList)
-	}
-
-	delete(metadata, "minified")
-
-	return json.Marshal(metadata)
-}
-
-// expandMinifiedVersions expands the Composer v2 minified format where each
-// version entry only contains fields that differ from the previous entry.
-// The "~dev" sentinel string resets the inheritance chain, and the "__unset"
-// value removes a field from the inherited state.
-func expandMinifiedVersions(versionList []any) []any {
-	expanded := make([]any, 0, len(versionList))
-	inherited := map[string]any{}
-
-	for _, v := range versionList {
-		// The "~dev" sentinel resets the inheritance chain for dev versions.
-		if s, ok := v.(string); ok && s == "~dev" {
-			inherited = map[string]any{}
-			continue
-		}
-
-		vmap, ok := v.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		// Merge inherited fields into a new map, then overlay current fields.
-		// Inherited values are shared between versions, not copied: the
-		// only one rewritten afterwards is dist, and rewriteDistURL copies
-		// it before changing it.
-		merged := make(map[string]any, len(inherited)+len(vmap))
-		for k, val := range inherited {
-			merged[k] = val
-		}
-		for k, val := range vmap {
-			if val == composerUnset {
-				delete(merged, k)
-				continue
+		return true, rewriteJSONMembers(out, packages, func(out *bytes.Buffer, p jsonMember) (bool, error) {
+			versions := p.value(packages)
+			if versions[0] != '[' {
+				return false, nil
 			}
-			merged[k] = val
-		}
-
-		// Update inherited state for next iteration.
-		inherited = merged
-
-		expanded = append(expanded, merged)
+			packageName, err := jsonKey(p.key(packages))
+			if err != nil {
+				return false, err
+			}
+			return true, h.writeVersions(out, packageName, versions, minified)
+		})
+	})
+	if err != nil {
+		return nil, err
 	}
-
-	return expanded
+	return out.Bytes(), nil
 }
 
-// filterAndRewriteVersions applies cooldown filtering and rewrites dist URLs
-// for a single package's version list.
-func (h *ComposerHandler) filterAndRewriteVersions(packageName string, versionList []any) []any {
+// writeVersions writes one package's version list without the versions in
+// cooldown and with each dist pointing at this proxy.
+//
+// Minified lists stay minified. Each version written carries the fields that
+// differ from what the client has expanded so far, which is the upstream
+// entry itself unless filtered versions were dropped before it; then it also
+// carries the changes those versions made. Every version gets its own dist,
+// since the proxied URL names the version.
+func (h *ComposerHandler) writeVersions(out *bytes.Buffer, packageName string, versions []byte, minified bool) error {
 	packagePURL := canonicalPackagePURL("composer", packageName)
+	upstream, written := newComposerFields(), newComposerFields()
+	devReset, first := false, true
 
-	filtered := versionList[:0]
-	for _, v := range versionList {
-		vmap, ok := v.(map[string]any)
-		if !ok {
-			continue
+	out.WriteByte('[')
+	err := forEachJSONElement(versions, func(entry []byte) error {
+		if minified && jsonStringIs(entry, composerDevReset) {
+			upstream.reset()
+			written.reset()
+			devReset = true
+			return nil
+		}
+		if entry[0] != '{' {
+			return nil
+		}
+		if !minified {
+			upstream.reset()
+			written.reset()
+		}
+		if err := upstream.apply(entry, minified); err != nil {
+			return err
 		}
 
-		version, _ := vmap["version"].(string)
-
-		if h.shouldFilterVersion(packagePURL, packageName, version, vmap) {
-			continue
+		version := upstream.string("version")
+		if h.shouldFilterVersion(packagePURL, packageName, version, upstream.get("time")) {
+			return nil
 		}
 
-		h.rewriteDistURL(vmap, packageName, version)
-		filtered = append(filtered, v)
+		if !first {
+			out.WriteByte(',')
+		}
+		first = false
+		if devReset {
+			out.WriteString(`"` + composerDevReset + `",`)
+			devReset = false
+		}
+		h.writeVersion(out, packageName, version, upstream, written)
+		return nil
+	})
+	out.WriteByte(']')
+	return err
+}
+
+// writeVersion writes the fields of upstream that differ from written, with
+// dist pointing at this proxy, and "__unset" for those written has and
+// upstream lacks. written is then what the client expands this version to.
+func (h *ComposerHandler) writeVersion(out *bytes.Buffer, packageName, version string, upstream, written *composerFields) {
+	out.WriteByte('{')
+	first := true
+	writeMember := func(key, value []byte) {
+		if !first {
+			out.WriteByte(',')
+		}
+		first = false
+		out.Write(key)
+		out.WriteByte(':')
+		out.Write(value)
 	}
 
-	return filtered
+	for _, f := range upstream.fields {
+		value := f.value
+		if value == nil {
+			continue
+		}
+		if f.name == "dist" {
+			value = h.rewriteDist(packageName, version, value)
+		}
+		if bytes.Equal(value, written.get(f.name)) {
+			continue
+		}
+		writeMember(f.key, value)
+		written.set(f.name, f.key, value)
+	}
+	for _, f := range written.fields {
+		if f.value != nil && upstream.get(f.name) == nil {
+			writeMember(f.key, composerUnsetJSON)
+			written.set(f.name, f.key, nil)
+		}
+	}
+	out.WriteByte('}')
 }
 
 // shouldFilterVersion returns true if the version should be excluded due to cooldown.
-func (h *ComposerHandler) shouldFilterVersion(packagePURL, packageName, version string, vmap map[string]any) bool {
+func (h *ComposerHandler) shouldFilterVersion(packagePURL, packageName, version string, published []byte) bool {
 	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
 		return false
 	}
 
-	timeStr, ok := vmap["time"].(string)
-	if !ok {
+	var timeStr string
+	if err := json.Unmarshal(published, &timeStr); err != nil {
 		return false
 	}
 
@@ -260,44 +296,133 @@ func (h *ComposerHandler) shouldFilterVersion(packagePURL, packageName, version 
 	return false
 }
 
-// rewriteDistURL rewrites the dist URL in a version entry to point at this proxy.
-func (h *ComposerHandler) rewriteDistURL(vmap map[string]any, packageName, version string) {
-	dist, ok := vmap["dist"].(map[string]any)
-	if !ok {
-		return
+// rewriteDist returns a version's dist object with its url pointing at this
+// proxy. A dist without a string url is returned unchanged.
+func (h *ComposerHandler) rewriteDist(packageName, version string, dist []byte) []byte {
+	urlMember, ok, err := findJSONMember(dist, "url")
+	if err != nil || !ok || dist[urlMember.valStart] != '"' {
+		return dist
 	}
+	var upstreamURL string
+	if err := json.Unmarshal(urlMember.value(dist), &upstreamURL); err != nil {
+		return dist
+	}
+	distType, _, _ := lookupJSONString(dist, "type")
 
-	url, ok := dist["url"].(string)
-	if !ok || url == "" {
-		return
+	proxyURL, ok := h.proxyDistURL(packageName, version, upstreamURL, distType)
+	if !ok {
+		return dist
+	}
+	encoded, err := json.Marshal(proxyURL)
+	if err != nil {
+		return dist
+	}
+	rewritten := make([]byte, 0, len(dist)-len(urlMember.value(dist))+len(encoded))
+	rewritten = append(rewritten, dist[:urlMember.valStart]...)
+	rewritten = append(rewritten, encoded...)
+	return append(rewritten, dist[urlMember.valEnd:]...)
+}
+
+// proxyDistURL returns the URL this proxy serves a version's archive at, or
+// false when the upstream URL or package name gives nothing to build it from.
+func (h *ComposerHandler) proxyDistURL(packageName, version, upstreamURL, distType string) (string, bool) {
+	if upstreamURL == "" {
+		return "", false
 	}
 
 	filename := "package.zip"
-	if idx := strings.LastIndex(url, "/"); idx >= 0 {
-		filename = url[idx+1:]
+	if idx := strings.LastIndex(upstreamURL, "/"); idx >= 0 {
+		filename = upstreamURL[idx+1:]
 	}
 
 	// GitHub zipball URLs end with a bare commit hash (no extension).
 	// Append .zip so the archives library can detect the format.
-	if path.Ext(filename) == "" {
-		if distType, _ := dist["type"].(string); distType == "zip" {
-			filename += ".zip"
-		}
+	if path.Ext(filename) == "" && distType == "zip" {
+		filename += ".zip"
 	}
 
 	parts := strings.SplitN(packageName, "/", vendorPackageParts)
-	if len(parts) == vendorPackageParts {
-		newURL := fmt.Sprintf("%s/composer/files/%s/%s/%s/%s",
-			h.proxyURL, parts[0], parts[1], version, filename)
-		// Expanded versions can share one inherited dist map, so give this
-		// version its own before changing its URL.
-		own := make(map[string]any, len(dist))
-		for k, v := range dist {
-			own[k] = v
-		}
-		own["url"] = newURL
-		vmap["dist"] = own
+	if len(parts) != vendorPackageParts {
+		return "", false
 	}
+	return fmt.Sprintf("%s/composer/files/%s/%s/%s/%s",
+		h.proxyURL, parts[0], parts[1], version, filename), true
+}
+
+// composerFields holds one version's fields as Composer sees them after
+// expanding the minified format: raw values under their decoded names, in the
+// order the names first appeared. A removed field keeps its slot with a nil
+// value, so the order stays stable when it comes back.
+type composerFields struct {
+	fields []composerField
+	index  map[string]int
+}
+
+type composerField struct {
+	name       string
+	key, value []byte
+}
+
+func newComposerFields() *composerFields {
+	return &composerFields{index: map[string]int{}}
+}
+
+func (f *composerFields) reset() {
+	f.fields = f.fields[:0]
+	clear(f.index)
+}
+
+// get returns the raw value of the named field, or nil when it is not set.
+func (f *composerFields) get(name string) []byte {
+	if i, ok := f.index[name]; ok {
+		return f.fields[i].value
+	}
+	return nil
+}
+
+// string returns the named field when it is a string, or "".
+func (f *composerFields) string(name string) string {
+	raw := f.get(name)
+	if len(raw) == 0 || raw[0] != '"' {
+		return ""
+	}
+	var s string
+	_ = json.Unmarshal(raw, &s)
+	return s
+}
+
+// set stores value under name, written with the quoted key. A nil value
+// removes the field.
+func (f *composerFields) set(name string, key, value []byte) {
+	if i, ok := f.index[name]; ok {
+		f.fields[i].key, f.fields[i].value = key, value
+		return
+	}
+	f.index[name] = len(f.fields)
+	f.fields = append(f.fields, composerField{name: name, key: key, value: value})
+}
+
+// apply overlays the members of a version entry. In minified metadata the
+// value "__unset" removes the field instead.
+func (f *composerFields) apply(entry []byte, minified bool) error {
+	return forEachJSONMember(entry, func(m jsonMember) error {
+		key, value := m.key(entry), m.value(entry)
+		if minified && jsonStringIs(value, composerUnset) {
+			value = nil
+		}
+		if bytes.IndexByte(key, '\\') < 0 {
+			if i, ok := f.index[string(key[1:len(key)-1])]; ok {
+				f.fields[i].key, f.fields[i].value = key, value
+				return nil
+			}
+		}
+		name, err := jsonKey(key)
+		if err != nil {
+			return err
+		}
+		f.set(name, key, value)
+		return nil
+	})
 }
 
 // handleDownload serves a package file, fetching and caching from upstream if needed.
@@ -407,62 +532,66 @@ func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaU
 		return "", nil
 	}
 
-	var metadata map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&metadata); err != nil {
+	body, err := io.ReadAll(resp.Body)
+	if err != nil {
 		return "", err
 	}
 
-	// Expand minified Composer v2 format so that inherited fields (including
-	// dist) are present on every version entry. Without this, versions that
-	// inherit dist from a previous entry will appear to have no download URL.
-	if metadata["minified"] == "composer/2.0" {
-		h.proxy.Logger.Debug("expanding minified metadata", "url", metaURL)
-		if packages, ok := metadata["packages"].(map[string]any); ok {
-			for pkgName, versions := range packages {
-				versionList, ok := versions.([]any)
-				if !ok {
-					continue
-				}
-				packages[pkgName] = expandMinifiedVersions(versionList)
-			}
-		}
+	url, err := composerDistURL(body, packageName, version)
+	if err != nil {
+		return "", err
 	}
-
-	url := h.findDownloadURL(metadata, packageName, version)
 	h.proxy.Logger.Debug("download URL lookup result",
 		"url", metaURL, "package", packageName, "version", version,
 		"download_url", url)
 	return url, nil
 }
 
-// findDownloadURL finds the dist URL for a specific version in metadata.
-func (h *ComposerHandler) findDownloadURL(metadata map[string]any, packageName, version string) string {
-	packages, ok := metadata["packages"].(map[string]any)
-	if !ok {
-		return ""
+// composerDistURL returns the upstream dist URL of version from Composer
+// metadata, or "" when the package has no such version or it has no dist URL.
+// It walks the version list in place, expanding only as much of the minified
+// format as it needs, since it runs on each archive the proxy has not cached
+// yet.
+func composerDistURL(body []byte, packageName, version string) (string, error) {
+	format, _, err := lookupJSONString(body, "minified")
+	if err != nil {
+		return "", err
 	}
-
-	versions, ok := packages[packageName].([]any)
-	if !ok {
-		return ""
+	versions, err := lookupJSON(body, "packages", packageName)
+	if err != nil || len(versions) == 0 || versions[0] != '[' {
+		return "", err
 	}
+	minified := format == composerMinified
 
-	for _, v := range versions {
-		vmap, ok := v.(map[string]any)
-		if !ok {
-			continue
+	fields := newComposerFields()
+	var url string
+	err = forEachJSONElement(versions, func(entry []byte) error {
+		if minified && jsonStringIs(entry, composerDevReset) {
+			fields.reset()
+			return nil
 		}
-
-		if vmap["version"] == version {
-			if dist, ok := vmap["dist"].(map[string]any); ok {
-				if url, ok := dist["url"].(string); ok {
-					return url
-				}
-			}
+		if entry[0] != '{' {
+			return nil
 		}
+		if !minified {
+			fields.reset()
+		}
+		if err := fields.apply(entry, minified); err != nil {
+			return err
+		}
+		if !jsonStringIs(fields.get("version"), version) {
+			return nil
+		}
+		url, _, _ = lookupJSONString(fields.get("dist"), "url")
+		if url != "" {
+			return errStopScan
+		}
+		return nil
+	})
+	if errors.Is(err, errStopScan) {
+		err = nil
 	}
-
-	return ""
+	return url, err
 }
 
 // proxyUpstream forwards a request to packagist.org without caching.
