@@ -4,9 +4,13 @@ import (
 	"container/list"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"strings"
 	"sync"
+	"time"
+
+	"github.com/git-pkgs/proxy/internal/metrics"
 )
 
 // rewriteCache keeps metadata documents after a handler has rewritten them.
@@ -68,7 +72,28 @@ func newRewriteCache(maxBytes int64) *rewriteCache {
 // handler rewrites for, the package, and the exact upstream bytes.
 func rewriteCacheKey(ecosystem, proxyURL, name string, in []byte) string {
 	sum := sha256.Sum256(in)
-	return strings.Join([]string{ecosystem, proxyURL, name, string(sum[:])}, "\x00")
+	return rewriteCacheKeyForDigest(ecosystem, proxyURL, name, "sha256:"+hex.EncodeToString(sum[:]))
+}
+
+// rewriteCacheKeyForDigest is rewriteCacheKey for upstream bytes known only by
+// their digest, in the form the metadata cache records it.
+func rewriteCacheKeyForDigest(ecosystem, proxyURL, name, digest string) string {
+	return strings.Join([]string{ecosystem, proxyURL, name, digest}, "\x00")
+}
+
+// get returns the cached rewrite for key, if there is one.
+func (c *rewriteCache) get(key string) ([]byte, bool) {
+	if c == nil {
+		return nil, false
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	el, ok := c.entries[key]
+	if !ok {
+		return nil, false
+	}
+	c.order.MoveToFront(el)
+	return el.Value.(*rewriteEntry).out, true
 }
 
 // rewrite returns rewrite(in), from the cache when it can. Callers must treat
@@ -151,6 +176,33 @@ func (p *Proxy) cachedRewrite(ctx context.Context, ecosystem, proxyURL, name str
 		return rewrite(in)
 	}
 	return p.rewrites.rewrite(ctx, rewriteCacheKey(ecosystem, proxyURL, name, in), in, rewrite)
+}
+
+// storedRewrite returns the cached rewrite of the metadata stored for
+// ecosystem and cacheKey, when that metadata is still within its TTL and a
+// rewrite of it is cached. It reads only the cache row, never the stored
+// document, so a repeated request for a large packument costs a database
+// lookup instead of reading and hashing the whole document again. When it
+// reports false the caller takes the usual fetch and rewrite path.
+func (p *Proxy) storedRewrite(ecosystem, cacheKey, proxyURL, name string) ([]byte, bool) {
+	if p.rewrites == nil || (p.Cooldown != nil && p.Cooldown.Enabled()) {
+		return nil, false
+	}
+	if !p.CacheMetadata || p.DB == nil || p.MetadataTTL <= 0 {
+		return nil, false
+	}
+	entry, err := p.DB.GetMetadataCache(ecosystem, cacheKey)
+	if err != nil || entry == nil || !entry.ContentDigest.Valid || entry.ContentEncoding.String != "" {
+		return nil, false
+	}
+	if !entry.FetchedAt.Valid || time.Since(entry.FetchedAt.Time) >= p.MetadataTTL {
+		return nil, false
+	}
+	out, ok := p.rewrites.get(rewriteCacheKeyForDigest(ecosystem, proxyURL, name, entry.ContentDigest.String))
+	if ok {
+		metrics.RecordCacheHit(ecosystem)
+	}
+	return out, ok
 }
 
 // SetMetadataRewriteCacheSize enables the cache of rewritten metadata with

@@ -1383,7 +1383,7 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 		return
 	}
 
-	size, _, err := p.Storage.Store(ctx, storagePath, bytes.NewReader(meta.body))
+	size, hash, err := p.Storage.Store(ctx, storagePath, bytes.NewReader(meta.body))
 	if err != nil {
 		p.Logger.Warn("failed to cache metadata", "ecosystem", ecosystem, "key", cacheKey, "error", err)
 		return
@@ -1396,9 +1396,12 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 		ETag:            sql.NullString{String: meta.etag, Valid: meta.etag != ""},
 		ContentType:     sql.NullString{String: meta.contentType, Valid: meta.contentType != ""},
 		ContentEncoding: sql.NullString{String: meta.contentEncoding, Valid: meta.contentEncoding != ""},
-		Size:            sql.NullInt64{Int64: size, Valid: true},
-		LastModified:    sql.NullTime{Time: meta.lastModified, Valid: !meta.lastModified.IsZero()},
-		FetchedAt:       sql.NullTime{Time: time.Now(), Valid: true},
+		// The digest identifies the stored bytes, so a rewrite cached for them
+		// can be found without reading them back (see storedRewrite).
+		ContentDigest: sql.NullString{String: "sha256:" + hash, Valid: hash != ""},
+		Size:          sql.NullInt64{Int64: size, Valid: true},
+		LastModified:  sql.NullTime{Time: meta.lastModified, Valid: !meta.lastModified.IsZero()},
+		FetchedAt:     sql.NullTime{Time: time.Now(), Valid: true},
 	})
 	if err != nil {
 		// The blob is written but the row describing it is not, so a later
