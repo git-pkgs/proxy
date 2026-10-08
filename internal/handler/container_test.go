@@ -367,6 +367,196 @@ func TestContainerHandler_registryURLForUsesLongestRepositoryPrefix(t *testing.T
 	}
 }
 
+func TestContainerHandler_NSRouting(t *testing.T) {
+	// Test that ns query parameter routes to the correct registry
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/library/nginx/tags/list" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"name":"library/nginx","tags":["1.0"]}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example.test", upstream.URL, map[string]string{"ghcr": upstream.URL})
+
+	// Test ns=docker.io routes to default registry
+	req := httptest.NewRequest(http.MethodGet, "/library/nginx/tags/list?ns=docker.io", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ns=docker.io status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	// Test ns=ghcr routes to named registry
+	req = httptest.NewRequest(http.MethodGet, "/library/nginx/tags/list?ns=ghcr", nil)
+	w = httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ns=ghcr status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	// Test unknown ns returns 404
+	req = httptest.NewRequest(http.MethodGet, "/library/nginx/tags/list?ns=unknown.registry.io", nil)
+	w = httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("unknown ns status = %d, want 404: %s", w.Code, w.Body.String())
+	}
+
+	// Test ns with upstream/ prefix is rejected
+	req = httptest.NewRequest(http.MethodGet, "/upstream/ghcr/library/nginx/tags/list?ns=ghcr", nil)
+	w = httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusNotFound {
+		t.Fatalf("ns with upstream prefix status = %d, want 404: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestContainerHandler_NSStrippedFromUpstreamQuery(t *testing.T) {
+	// Test that ns is stripped before forwarding to upstream
+	var receivedQuery string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		receivedQuery = r.URL.RawQuery
+		if r.URL.Path != "/v2/library/nginx/tags/list" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"name":"library/nginx","tags":["1.0"]}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example.test", upstream.URL, map[string]string{"ghcr": upstream.URL})
+
+	req := httptest.NewRequest(http.MethodGet, "/library/nginx/tags/list?ns=ghcr&n=10", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+	// ns should be stripped, only n=10 should remain
+	if receivedQuery != "n=10" {
+		t.Errorf("upstream query = %q, want 'n=10' (ns stripped)", receivedQuery)
+	}
+}
+
+func TestContainerHandler_NSCaseInsensitive(t *testing.T) {
+	// Test that ns matching is case-insensitive
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/library/nginx/tags/list" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"name":"library/nginx","tags":["1.0"]}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example.test", upstream.URL, map[string]string{"ghcr": upstream.URL})
+
+	// Test ns=GHCR (uppercase) routes to named registry
+	req := httptest.NewRequest(http.MethodGet, "/library/nginx/tags/list?ns=GHCR", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ns=GHCR status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestContainerHandler_NSDockerHubAliases(t *testing.T) {
+	// Test that Docker Hub aliases resolve to default registry
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/library/nginx/tags/list" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"name":"library/nginx","tags":["1.0"]}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example.test", upstream.URL)
+
+	// Test all Docker Hub aliases
+	for _, alias := range []string{"docker.io", "index.docker.io", "registry-1.docker.io"} {
+		req := httptest.NewRequest(http.MethodGet, "/library/nginx/tags/list?ns="+alias, nil)
+		w := httptest.NewRecorder()
+		h.Routes().ServeHTTP(w, req)
+		if w.Code != http.StatusOK {
+			t.Fatalf("ns=%s status = %d, want 200: %s", alias, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestContainerHandler_NSCustomDefaultRegistry(t *testing.T) {
+	// Test that custom oci_default host is used for Docker Hub aliases
+	customRegistry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/library/nginx/tags/list" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"name":"library/nginx","tags":["1.0"]}`)
+	}))
+	defer customRegistry.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = customRegistry.Client()
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example.test", customRegistry.URL)
+
+	// Test ns=docker.io routes to custom default registry
+	req := httptest.NewRequest(http.MethodGet, "/library/nginx/tags/list?ns=docker.io", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ns=docker.io with custom registry status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestContainerHandler_NSCacheSharing(t *testing.T) {
+	// Test that cache is shared across ns, upstream/{name}/, and unprefixed routes
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/library/nginx/tags/list" {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = io.WriteString(w, `{"name":"library/nginx","tags":["1.0"]}`)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	proxy.MetadataTTL = time.Hour
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example.test", upstream.URL, map[string]string{"ghcr": upstream.URL})
+
+	// Warm cache via ns route
+	req := httptest.NewRequest(http.MethodGet, "/library/nginx/tags/list?ns=ghcr", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("ns route status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+
+	// Same request should hit cache (no additional upstream request)
+	req = httptest.NewRequest(http.MethodGet, "/library/nginx/tags/list?ns=ghcr", nil)
+	w = httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusOK {
+		t.Fatalf("cached ns route status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestContainerHandler_BlobDownload_DiscoversBearerChallenge(t *testing.T) {
 	blob := "upstream blob"
 	digest := sha256Digest([]byte(blob))

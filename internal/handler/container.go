@@ -8,6 +8,22 @@ import (
 	"regexp"
 	"strings"
 )
+// stripNS removes the ns query parameter from a URL query string.
+// It returns the query string with ns removed, preserving all other parameters.
+func stripNS(query string) string {
+	if query == "" {
+		return ""
+	}
+	parts := strings.Split(query, "&")
+	result := make([]string, 0, len(parts))
+	for _, part := range parts {
+		if !strings.HasPrefix(part, "ns=") {
+			result = append(result, part)
+		}
+	}
+	return strings.Join(result, "&")
+}
+
 
 const (
 	dockerHubRegistry     = "https://registry-1.docker.io"
@@ -26,6 +42,7 @@ type ContainerHandler struct {
 	proxyURL        string
 	namedRegistries map[string]string
 	registries      []containerRegistry
+	nsHostIndex     map[string]string // ns query parameter -> registryURL
 }
 
 type containerRegistry struct {
@@ -42,6 +59,7 @@ func NewContainerHandler(proxy *Proxy, proxyURL string, namedRegistries ...map[s
 		proxy:       proxy,
 		registryURL: dockerHubRegistry,
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
+		nsHostIndex: make(map[string]string),
 	}
 	if len(namedRegistries) > 0 {
 		h.namedRegistries = make(map[string]string, len(namedRegistries[0]))
@@ -49,6 +67,7 @@ func NewContainerHandler(proxy *Proxy, proxyURL string, namedRegistries ...map[s
 			h.namedRegistries[name] = strings.TrimSuffix(registryURL, "/")
 		}
 	}
+	h.buildNSHostIndex()
 	return h
 }
 
@@ -61,7 +80,40 @@ func NewContainerHandlerWithRegistry(
 ) *ContainerHandler {
 	h := NewContainerHandler(proxy, proxyURL, namedRegistries...)
 	h.registryURL = configuredUpstreamURL(registryURL, dockerHubRegistry)
+	// Rebuild ns host index after registryURL is overridden
+	h.buildNSHostIndex()
 	return h
+}
+
+// buildNSHostIndex constructs the ns query parameter -> registryURL mapping.
+// It must be called after NewContainerHandlerWithRegistry overrides the default
+// registry URL, otherwise a custom oci_default host would 404.
+func (h *ContainerHandler) buildNSHostIndex() {
+	h.nsHostIndex = make(map[string]string)
+	// Docker Hub aliases resolve to the default route
+	for _, alias := range []string{"docker.io", "index.docker.io", "registry-1.docker.io"} {
+		h.nsHostIndex[alias] = h.registryURL
+	}
+	// Named upstreams resolve to their registry URL
+	for name, registryURL := range h.namedRegistries {
+		h.nsHostIndex[name] = registryURL
+	}
+}
+
+// nsRegistryForHost resolves an ns query parameter value to a registry URL.
+// Returns ok=false for unknown ns values so the caller can return NAME_UNKNOWN.
+func (h *ContainerHandler) nsRegistryForHost(ns string) (registryURL string, ok bool) {
+	if ns == "" {
+		return "", false
+	}
+	// Case-insensitive host matching
+	lowerNS := strings.ToLower(ns)
+	for host, url := range h.nsHostIndex {
+		if strings.ToLower(host) == lowerNS {
+			return url, true
+		}
+	}
+	return "", false
 }
 
 // RegisterRegistry routes a repository and its descendants to a specific OCI
@@ -103,6 +155,15 @@ func (h *ContainerHandler) Routes() http.Handler {
 		// Set standard Docker registry header on all responses
 		w.Header().Set("Docker-Distribution-Api-Version", "registry/2.0")
 
+		// Capture ns before stripping it from the query
+		ns := r.URL.Query().Get("ns")
+		// Strip ns from query before forwarding to upstream
+		if ns != "" {
+			q := r.URL.Query()
+			q.Del("ns")
+			r.URL.RawQuery = q.Encode()
+		}
+
 		// Handle different endpoints
 		switch {
 		case path == "" || path == "/":
@@ -110,13 +171,13 @@ func (h *ContainerHandler) Routes() http.Handler {
 			h.handleVersionCheck(w, r)
 		case strings.HasSuffix(path, "/blobs/"+r.URL.Query().Get("digest")) || strings.Contains(path, "/blobs/sha256:"):
 			// Blob download: GET /v2/{name}/blobs/{digest}
-			h.handleBlobDownload(w, r, path)
+			h.handleBlobDownload(w, r, path, ns)
 		case strings.Contains(path, "/manifests/"):
 			// Manifest: GET /v2/{name}/manifests/{reference}
-			h.handleManifest(w, r, path)
+			h.handleManifest(w, r, path, ns)
 		case strings.Contains(path, "/tags/list"):
 			// Tags list: GET /v2/{name}/tags/list
-			h.handleTagsList(w, r, path)
+			h.handleTagsList(w, r, path, ns)
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
@@ -132,7 +193,7 @@ func (h *ContainerHandler) handleVersionCheck(w http.ResponseWriter, _ *http.Req
 // handleBlobDownload fetches and caches container layer blobs.
 // Path format: {name}/blobs/{digest}
 // Example: library/nginx/blobs/sha256:abc123...
-func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Request, path string) {
+func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Request, path, ns string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -144,7 +205,7 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 		return
 	}
 
-	registryURL, upstreamName, cacheName, ok := h.registryForName(name)
+	registryURL, upstreamName, cacheName, ok := h.registryForName(name, ns)
 	if !ok {
 		h.containerError(w, http.StatusNotFound, "NAME_UNKNOWN", "unknown upstream registry")
 		return
@@ -213,7 +274,7 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 
 // handleManifest serves immutable manifests from cache and revalidates mutable tags.
 // Path format: {name}/manifests/{reference}
-func (h *ContainerHandler) handleManifest(w http.ResponseWriter, r *http.Request, path string) {
+func (h *ContainerHandler) handleManifest(w http.ResponseWriter, r *http.Request, path, ns string) {
 	if r.Method != http.MethodGet && r.Method != http.MethodHead {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -225,7 +286,7 @@ func (h *ContainerHandler) handleManifest(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	registryURL, upstreamName, _, ok := h.registryForName(name)
+	registryURL, upstreamName, _, ok := h.registryForName(name, ns)
 	if !ok {
 		h.containerError(w, http.StatusNotFound, "NAME_UNKNOWN", "unknown upstream registry")
 		return
@@ -236,7 +297,7 @@ func (h *ContainerHandler) handleManifest(w http.ResponseWriter, r *http.Request
 }
 
 // handleTagsList caches tag list responses for offline OCI pulls.
-func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request, path string) {
+func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request, path, ns string) {
 	if r.Method != http.MethodGet {
 		http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 		return
@@ -248,7 +309,7 @@ func (h *ContainerHandler) handleTagsList(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	registryURL, upstreamName, _, ok := h.registryForName(name)
+	registryURL, upstreamName, _, ok := h.registryForName(name, ns)
 	if !ok {
 		h.containerError(w, http.StatusNotFound, "NAME_UNKNOWN", "unknown upstream registry")
 		return
@@ -290,7 +351,20 @@ func (h *ContainerHandler) proxyBlobHead(w http.ResponseWriter, r *http.Request,
 // registry and its repository name. Named upstreams use upstream/{name}/ as a
 // reserved prefix. Other names are matched against registered repository
 // prefixes, falling back to Docker Hub when no prefix matches.
-func (h *ContainerHandler) registryForName(name string) (registryURL, upstreamName, cacheName string, ok bool) {
+// When ns is non-empty, it takes precedence as a closed-world lookup key.
+func (h *ContainerHandler) registryForName(name, ns string) (registryURL, upstreamName, cacheName string, ok bool) {
+	// ns query parameter: closed-world lookup, never a dial target
+	if ns != "" {
+		registryURL, ok = h.nsRegistryForHost(ns)
+		if !ok {
+			return "", "", "", false
+		}
+		// Reject reserved upstream/ prefix on ns route
+		if strings.HasPrefix(name, "upstream/") {
+			return "", "", "", false
+		}
+		return registryURL, name, name, true
+	}
 	parts := strings.SplitN(name, "/", registrySelectorParts)
 	if len(parts) >= 2 && parts[0] == "upstream" {
 		if len(parts) != registrySelectorParts || parts[2] == "" {
