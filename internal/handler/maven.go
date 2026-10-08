@@ -157,8 +157,12 @@ func (h *MavenHandler) parsePath(urlPath string) (group, artifact, version, file
 
 // isArtifactFile returns true if the filename looks like a Maven artifact.
 func (h *MavenHandler) isArtifactFile(filename string) bool {
-	// Common artifact extensions
-	extensions := []string{".jar", ".war", ".ear", ".pom", ".aar", ".klib", ".module"}
+	// Common artifact extensions, and the archives distributions such as
+	// apache-maven-{version}-bin.tar.gz are published as.
+	extensions := []string{
+		".jar", ".war", ".ear", ".pom", ".aar", ".klib", ".module",
+		".zip", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz",
+	}
 	for _, ext := range extensions {
 		if strings.HasSuffix(filename, ext) {
 			return true
