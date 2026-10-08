@@ -180,10 +180,8 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		accept = contentTypeJSON
 	}
 
-	if rewritten, ok := h.proxy.storedRewrite("npm", packageName, h.proxyURL, packageName); ok {
-		w.Header().Set(headerContentType, contentTypeJSON)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(rewritten)
+	if stored, ok := h.proxy.storedRewrite("npm", packageName, h.proxyURL, packageName); ok {
+		serveRewrittenMetadata(w, r, stored)
 		return
 	}
 
@@ -198,7 +196,7 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	rewritten, err := h.proxy.cachedRewrite(r.Context(), "npm", h.proxyURL, packageName, body, func(b []byte) ([]byte, error) {
+	rewritten, etag, err := h.proxy.cachedRewrite(r.Context(), "npm", h.proxyURL, packageName, body, func(b []byte) ([]byte, error) {
 		return h.rewriteMetadata(packageName, b)
 	})
 	if err != nil {
@@ -217,9 +215,7 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	w.Header().Set(headerContentType, contentTypeJSON)
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(rewritten)
+	serveRewrittenMetadata(w, r, h.proxy.rewrittenMetadataFor("npm", packageName, rewritten, etag))
 }
 
 // rewriteMetadata rewrites tarball URLs in npm package metadata to point at this proxy.

@@ -104,9 +104,8 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 
 	upstreamURL := fmt.Sprintf("%s/p2/%s/%s.json", h.repoURL, vendor, pkg)
 
-	if rewritten, ok := h.proxy.storedRewrite("composer", packageName, h.proxyURL, packageName); ok {
-		w.Header().Set(headerContentType, "application/json")
-		_, _ = w.Write(rewritten)
+	if stored, ok := h.proxy.storedRewrite("composer", packageName, h.proxyURL, packageName); ok {
+		serveRewrittenMetadata(w, r, stored)
 		return
 	}
 
@@ -121,7 +120,7 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	rewritten, err := h.proxy.cachedRewrite(r.Context(), "composer", h.proxyURL, packageName, body, h.rewriteMetadata)
+	rewritten, etag, err := h.proxy.cachedRewrite(r.Context(), "composer", h.proxyURL, packageName, body, h.rewriteMetadata)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return // the client left while waiting on a shared rewrite
@@ -132,8 +131,7 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	w.Header().Set(headerContentType, "application/json")
-	_, _ = w.Write(rewritten)
+	serveRewrittenMetadata(w, r, h.proxy.rewrittenMetadataFor("composer", packageName, rewritten, etag))
 }
 
 // rewriteMetadata rewrites dist URLs in Composer metadata to point at this proxy.
