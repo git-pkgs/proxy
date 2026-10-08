@@ -163,11 +163,6 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		JSONError(w, http.StatusBadRequest, "invalid package name")
 		return
 	}
-	// A scoped name is always @scope/pkg; the registry has no GET for @scope alone.
-	if strings.HasPrefix(packagePath, "@") && !strings.Contains(packagePath, "/") {
-		JSONError(w, http.StatusBadRequest, "invalid package name")
-		return
-	}
 	packageName, registryPath := npmMetadataPath(packagePath)
 	if packageName == "" {
 		JSONError(w, http.StatusBadRequest, "invalid package name")

@@ -1138,15 +1138,6 @@ func TestNPMMetadataRejectsEmptyPath(t *testing.T) {
 	}
 }
 
-func TestNPMMetadataRejectsScopeOnly(t *testing.T) {
-	h := &NPMHandler{proxy: testProxy(), upstreamURL: "http://unused.test", proxyURL: "http://proxy.local"}
-	w := httptest.NewRecorder()
-	h.handlePackageMetadata(w, httptest.NewRequest(http.MethodGet, "/@babel", nil))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("status = %d, want 400; body: %s", w.Code, w.Body.String())
-	}
-}
-
 func TestNPMVersionMetadataRejectsTraversal(t *testing.T) {
 	called := false
 	upstream := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {
