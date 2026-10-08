@@ -1328,6 +1328,40 @@ func TestValidateNamedUpstreams(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "generic artifact patterns",
+			modify: func(cfg *Config) {
+				cfg.Upstream.Generic = map[string]string{"apache": "https://archive.apache.org"}
+				cfg.Upstream.GenericArtifacts = map[string][]string{
+					"apache": {`dist/(?P<name>maven)/maven-3/(?P<version>[^/]+)/binaries/(?P<file>[^/]+)`},
+				}
+			},
+		},
+		{
+			name: "generic artifact patterns for an unknown upstream",
+			modify: func(cfg *Config) {
+				cfg.Upstream.GenericArtifacts = map[string][]string{
+					"apache": {`(?P<version>[^/]+)/(?P<file>[^/]+)`},
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "generic artifact pattern does not compile",
+			modify: func(cfg *Config) {
+				cfg.Upstream.Generic = map[string]string{"apache": "https://archive.apache.org"}
+				cfg.Upstream.GenericArtifacts = map[string][]string{"apache": {`(?P<version>[^/]+/(?P<file>[^/]+)`}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "generic artifact pattern without a file group",
+			modify: func(cfg *Config) {
+				cfg.Upstream.Generic = map[string]string{"apache": "https://archive.apache.org"}
+				cfg.Upstream.GenericArtifacts = map[string][]string{"apache": {`(?P<version>[^/]+)/[^/]+`}}
+			},
+			wantErr: true,
+		},
+		{
 			name: "generic upstream URL is not absolute",
 			modify: func(cfg *Config) {
 				cfg.Upstream.Generic = map[string]string{"github": "github.com"}

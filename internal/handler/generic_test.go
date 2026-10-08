@@ -3,11 +3,13 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"regexp"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/config"
 	upstreamhttp "github.com/git-pkgs/proxy/internal/httpclient"
 	"github.com/git-pkgs/registries/fetch"
 )
@@ -48,6 +50,129 @@ func TestParseGitHubReleaseAsset(t *testing.T) {
 		if ok != tt.ok || got != tt.want {
 			t.Errorf("parseGitHubReleaseAsset(%q) = (%+v, %v), want (%+v, %v)", tt.path, got, ok, tt.want, tt.ok)
 		}
+	}
+}
+
+const testMavenPattern = `dist/(?P<name>maven)/maven-3/(?P<version>[^/]+)/binaries/(?P<file>[^/]+)`
+
+func TestMatchArtifactPattern(t *testing.T) {
+	named, err := config.CompileGenericArtifactPattern(testMavenPattern)
+	if err != nil {
+		t.Fatal(err)
+	}
+	unnamed, err := config.CompileGenericArtifactPattern(`dist/v(?P<version>[^/]+)/(?P<file>.+)`)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	tests := []struct {
+		name    string
+		pattern *regexp.Regexp
+		path    string
+		want    genericArtifact
+		ok      bool
+	}{
+		{
+			"name group",
+			named,
+			"dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz",
+			genericArtifact{name: "maven", version: "3.9.9", filename: "apache-maven-3.9.9-bin.tar.gz"},
+			true,
+		},
+		{
+			"name defaults to upstream",
+			unnamed,
+			"dist/v20.15.0/node-v20.15.0-linux-x64.tar.xz",
+			genericArtifact{name: "apache", version: "20.15.0", filename: "node-v20.15.0-linux-x64.tar.xz"},
+			true,
+		},
+		// Patterns match whole paths only.
+		{"prefix only", named, "dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz/extra", genericArtifact{}, false},
+		{"suffix only", named, "mirror/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz", genericArtifact{}, false},
+		{"directory listing", named, "dist/maven/maven-3/3.9.9/binaries/", genericArtifact{}, false},
+		// A file group spanning segments would nest storage paths.
+		{"file with slash", unnamed, "dist/v20.15.0/win-x64/node.exe", genericArtifact{}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := matchArtifactPattern(tt.pattern, "apache", tt.path)
+			if ok != tt.ok || got != tt.want {
+				t.Errorf("matchArtifactPattern(%q) = (%+v, %v), want (%+v, %v)", tt.path, got, ok, tt.want, tt.ok)
+			}
+		})
+	}
+}
+
+func TestGenericHandler_ArtifactPatternIsCachedAndOtherPathsAreNot(t *testing.T) {
+	const (
+		artifactPath = "/dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz"
+		listingPath  = "/dist/maven/maven-3/3.9.9/binaries/"
+	)
+	tarball := []byte("maven tarball bytes")
+	var available atomic.Bool
+	available.Store(true)
+	var artifactRequests, listingRequests atomic.Int32
+
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !available.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		switch r.URL.Path {
+		case artifactPath:
+			artifactRequests.Add(1)
+			_, _ = w.Write(tarball)
+		case listingPath:
+			listingRequests.Add(1)
+			_, _ = w.Write([]byte("<html>listing</html>"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer upstream.Close()
+
+	proxy, db, store, _ := setupTestProxy(t)
+	store.seekable = true
+	proxy.HTTPClient = upstream.Client()
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+
+	h := NewGenericHandler(proxy,
+		map[string]string{"apache": upstream.URL},
+		map[string][]string{"apache": {testMavenPattern}})
+
+	w := serveGenericRequest(h, "/apache"+artifactPath)
+	if w.Code != http.StatusOK || w.Body.String() != string(tarball) {
+		t.Fatalf("status = %d, body = %q, want 200 %q", w.Code, w.Body.String(), tarball)
+	}
+
+	pkg, err := db.GetPackageByEcosystemName(genericEcosystem, "maven")
+	if err != nil || pkg == nil {
+		t.Fatalf("package generic/maven = %v, %v; want a cached package", pkg, err)
+	}
+	versions, err := db.GetVersionsByPackagePURL(pkg.PURL)
+	if err != nil || len(versions) != 1 || !strings.HasSuffix(versions[0].PURL, "@3.9.9") {
+		t.Fatalf("versions = %+v, %v; want one @3.9.9", versions, err)
+	}
+
+	available.Store(false)
+	w = serveGenericRequest(h, "/apache"+artifactPath)
+	if w.Code != http.StatusOK || w.Body.String() != string(tarball) {
+		t.Fatalf("cached: status = %d, body = %q, want 200 %q", w.Code, w.Body.String(), tarball)
+	}
+	if got := artifactRequests.Load(); got != 1 {
+		t.Errorf("artifact upstream requests = %d, want 1", got)
+	}
+
+	// Paths the pattern does not match keep going through the metadata route.
+	available.Store(true)
+	for range 2 {
+		serveGenericRequest(h, "/apache"+listingPath)
+	}
+	if got := listingRequests.Load(); got != 2 {
+		t.Errorf("listing upstream requests = %d, want 2 with metadata caching off", got)
 	}
 }
 

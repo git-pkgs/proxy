@@ -243,6 +243,15 @@ upstream:
   # generic:
   #   github: "https://github.com"
   #   github-api: "https://api.github.com"
+  #   apache: "https://archive.apache.org"
+
+  # Version-pinned paths of generic upstreams, cached immutably like GitHub
+  # release assets. Each pattern must match the whole path after
+  # /generic/{name}/ and have `version` and `file` named groups; an optional
+  # `name` group names the package.
+  # generic_artifacts:
+  #   apache:
+  #     - 'dist/(?P<name>maven)/maven-3/(?P<version>[^/]+)/binaries/(?P<file>[^/]+)'
 
   # Authentication for upstream registries
   # Keys are absolute URL scopes. Scheme, host, effective port, and path
