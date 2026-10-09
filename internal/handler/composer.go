@@ -109,8 +109,8 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "composer", packageName, upstreamURL)
-	if err != nil {
+	upstream := h.proxy.fetchMetadataDocument(r.Context(), "composer", packageName, upstreamURL, contentTypeJSON)
+	if err := upstream.err; err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
@@ -120,18 +120,18 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	rewritten, etag, err := h.proxy.cachedRewrite(r.Context(), "composer", h.proxyURL, packageName, body, h.rewriteMetadata)
+	rewritten, etag, err := h.proxy.cachedRewrite(r.Context(), "composer", h.proxyURL, packageName, upstream.body, upstream.digest, h.rewriteMetadataKeeping)
 	if err != nil {
 		if r.Context().Err() != nil {
 			return // the client left while waiting on a shared rewrite
 		}
 		h.proxy.Logger.Warn("failed to rewrite metadata, proxying original", "error", err)
 		w.Header().Set(headerContentType, "application/json")
-		_, _ = w.Write(body)
+		_, _ = w.Write(upstream.body)
 		return
 	}
 
-	serveRewrittenMetadata(w, r, h.proxy.rewrittenMetadataFor("composer", packageName, rewritten, etag))
+	serveRewrittenMetadata(w, r, h.proxy.rewrittenMetadataFor(rewritten, etag, upstream.lastModified))
 }
 
 // rewriteMetadata rewrites dist URLs in Composer metadata to point at this proxy.
@@ -144,16 +144,24 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 // of the original bytes: only dist values are written fresh, and minified
 // metadata stays minified.
 func (h *ComposerHandler) rewriteMetadata(body []byte) ([]byte, error) {
+	out, _, err := h.rewriteMetadataKeeping(body)
+	return out, err
+}
+
+// rewriteMetadataKeeping is rewriteMetadata that also reports the versions
+// it kept, each as its package name and version.
+func (h *ComposerHandler) rewriteMetadataKeeping(body []byte) ([]byte, []string, error) {
 	if !json.Valid(body) {
-		return nil, errors.New("composer metadata is not valid JSON")
+		return nil, nil, errors.New("composer metadata is not valid JSON")
 	}
 	format, _, err := lookupJSONString(body, "minified")
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	minified := format == composerMinified
 
 	var out bytes.Buffer
+	var kept []string
 	out.Grow(len(body) + len(body)/8)
 	err = rewriteJSONMembers(&out, body, func(out *bytes.Buffer, m jsonMember) (bool, error) {
 		packages := m.value(body)
@@ -169,24 +177,25 @@ func (h *ComposerHandler) rewriteMetadata(body []byte) ([]byte, error) {
 			if err != nil {
 				return false, err
 			}
-			return true, h.writeVersions(out, packageName, versions, minified)
+			return true, h.writeVersions(out, packageName, versions, minified, &kept)
 		})
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return out.Bytes(), nil
+	return out.Bytes(), kept, nil
 }
 
 // writeVersions writes one package's version list without the versions in
-// cooldown and with each dist pointing at this proxy.
+// cooldown and with each dist pointing at this proxy, and appends each version
+// it writes to kept as its package name and version.
 //
 // Minified lists stay minified. Each version written carries the fields that
 // differ from what the client has expanded so far, which is the upstream
 // entry itself unless filtered versions were dropped before it; then it also
 // carries the changes those versions made. Every version gets its own dist,
 // since the proxied URL names the version.
-func (h *ComposerHandler) writeVersions(out *bytes.Buffer, packageName string, versions []byte, minified bool) error {
+func (h *ComposerHandler) writeVersions(out *bytes.Buffer, packageName string, versions []byte, minified bool, kept *[]string) error {
 	packagePURL := canonicalPackagePURL("composer", packageName)
 	upstream, written := newComposerFields(), newComposerFields()
 	devReset, first := false, true
@@ -224,6 +233,7 @@ func (h *ComposerHandler) writeVersions(out *bytes.Buffer, packageName string, v
 			devReset = false
 		}
 		h.writeVersion(out, packageName, version, upstream, written)
+		*kept = append(*kept, packageName+"\x00"+version)
 		return nil
 	})
 	out.WriteByte(']')

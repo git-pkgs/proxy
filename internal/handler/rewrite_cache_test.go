@@ -31,6 +31,11 @@ func (r *countingRewrite) fn(in []byte) ([]byte, error) {
 	return []byte(strings.ToUpper(string(in))), nil
 }
 
+func (r *countingRewrite) keeping(in []byte) ([]byte, []string, error) {
+	out, err := r.fn(in)
+	return out, nil, err
+}
+
 func TestRewriteCache_RepeatServesCachedRewrite(t *testing.T) {
 	c := newRewriteCache(1 << 20)
 	var r countingRewrite
@@ -185,7 +190,7 @@ func TestCachedRewrite_DisabledRewritesEveryTime(t *testing.T) {
 	var r countingRewrite
 
 	for range 2 {
-		_, _, _ = proxy.cachedRewrite(context.Background(), "npm", "http://proxy", "left-pad", []byte("doc"), r.fn)
+		_, _, _ = proxy.cachedRewrite(context.Background(), "npm", "http://proxy", "left-pad", []byte("doc"), "", r.keeping)
 	}
 	if got := r.calls.Load(); got != 2 {
 		t.Errorf("rewrites = %d, want 2", got)
@@ -202,7 +207,7 @@ func TestCachedRewrite_CooldownBypassesCache(t *testing.T) {
 	var r countingRewrite
 
 	for range 2 {
-		_, _, _ = proxy.cachedRewrite(context.Background(), "npm", "http://proxy", "left-pad", []byte("doc"), r.fn)
+		_, _, _ = proxy.cachedRewrite(context.Background(), "npm", "http://proxy", "left-pad", []byte("doc"), "", r.keeping)
 	}
 	if got := r.calls.Load(); got != 2 {
 		t.Errorf("rewrites = %d, want 2", got)
