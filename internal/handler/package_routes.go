@@ -64,7 +64,11 @@ func (r packageRoute) cacheKey(packageName string) string {
 	return "routes/" + r.id + "/" + packageName
 }
 
-// cacheFilename qualifies an artifact filename the same way as cacheKey.
-func (r packageRoute) cacheFilename(filename string) string {
-	return r.id + "/" + filename
+// cacheFilename qualifies a routed package's artifact filename the same way as
+// cacheKey, and leaves other packages' filenames unchanged.
+func (r packageRoutes) cacheFilename(packageName, filename string) string {
+	if route, routed := r.match(packageName); routed {
+		return route.id + "/" + filename
+	}
+	return filename
 }

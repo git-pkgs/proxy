@@ -508,11 +508,7 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 		"package", packageName, "version", version,
 		"download_url", downloadURL)
 
-	cacheFilename := filename
-	if route, routed := h.routes.match(packageName); routed {
-		cacheFilename = route.cacheFilename(filename)
-	}
-
+	cacheFilename := h.routes.cacheFilename(packageName, filename)
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "composer", packageName, version, cacheFilename, downloadURL)
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to fetch package")

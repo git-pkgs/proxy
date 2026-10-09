@@ -634,10 +634,7 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *NPMHandler) getTarball(r *http.Request, registryURL, packageName, version, filename string, metadata func() ([]byte, error)) (*CacheResult, error) {
-	cacheFilename := filename
-	if route, routed := h.routes.match(packageName); routed {
-		cacheFilename = route.cacheFilename(filename)
-	}
+	cacheFilename := h.routes.cacheFilename(packageName, filename)
 	if cached, err := h.proxy.GetCachedArtifact(r.Context(), "npm", packageName, version, cacheFilename); err != nil || cached != nil {
 		return cached, err
 	}
