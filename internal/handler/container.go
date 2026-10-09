@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
 )
 
 const (
@@ -25,6 +26,13 @@ const (
 	namespaceQueryParam = "ns"
 	// defaultNamespaceRoute marks namespace hosts served by the default registry.
 	defaultNamespaceRoute = ""
+	// maxReportedNamespaceRefusals bounds the upstream/ns pairs remembered
+	// for logging refusals once; past it every refusal is logged again.
+	maxReportedNamespaceRefusals = 1024
+	// maxNamespaceLength is the longest ns a registry host can produce: a
+	// 253-character DNS name plus ":65535". Longer values are refused before
+	// they are logged or remembered.
+	maxNamespaceLength = 259
 )
 
 // dockerHubNamespaces are the registry URLs clients use for Docker Hub.
@@ -64,6 +72,10 @@ type ContainerHandler struct {
 	// mirrorKeys holds, per named upstream, the ns lookup keys of the
 	// registries it is configured to mirror.
 	mirrorKeys map[string][]string
+
+	refusalsMu sync.Mutex
+	// refusals remembers upstream/ns pairs whose refusal was already logged.
+	refusals map[string]struct{}
 }
 
 type containerRegistry struct {
@@ -507,6 +519,9 @@ func (h *ContainerHandler) registryForRequest(r *http.Request, name string) (reg
 // the prefix route without ns unless ns contradicts the prefix, see
 // namespaceNamesPrefixUpstream.
 func (h *ContainerHandler) registryForNamespace(namespace, name string) (registryURL, upstreamName, cacheName string, ok bool) {
+	if len(namespace) > maxNamespaceLength {
+		return "", "", "", false
+	}
 	if strings.HasPrefix(name, "upstream/") {
 		if !h.namespaceNamesPrefixUpstream(namespace, name) {
 			return "", "", "", false
@@ -554,11 +569,32 @@ func (h *ContainerHandler) namespaceNamesPrefixUpstream(namespace, name string) 
 		slices.Contains(h.mirrorKeys[upstream], key) {
 		return true
 	}
-	// containerd falls back to the registry itself on this 404 without
-	// reporting anything, so this line is all an operator gets to see.
+	h.reportNamespaceRefusal(upstream, key, namespace)
+	return false
+}
+
+// reportNamespaceRefusal logs a refused ns on a prefix route. containerd
+// falls back to the registry itself on that 404 without reporting anything,
+// so this line is all an operator gets to see. Each upstream/ns pair is
+// logged once, since a misconfigured node repeats the same request for every
+// layer; ns comes from the client, so the set is bounded and overlong values
+// never get here (see maxNamespaceLength).
+func (h *ContainerHandler) reportNamespaceRefusal(upstream, key, namespace string) {
+	pair := upstream + "\x00" + key
+	h.refusalsMu.Lock()
+	_, seen := h.refusals[pair]
+	if !seen && len(h.refusals) < maxReportedNamespaceRefusals {
+		if h.refusals == nil {
+			h.refusals = make(map[string]struct{})
+		}
+		h.refusals[pair] = struct{}{}
+	}
+	h.refusalsMu.Unlock()
+	if seen {
+		return
+	}
 	h.warn("refusing ns on OCI upstream prefix; if the upstream mirrors this registry, list it in upstream.oci_mirrors",
 		"upstream", upstream, "ns", namespace)
-	return false
 }
 
 // registryForName resolves a client-visible OCI repository name to an upstream

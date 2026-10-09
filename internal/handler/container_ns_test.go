@@ -302,7 +302,7 @@ func TestContainerHandler_NamespacePrefixRouteRejectsUnknownHosts(t *testing.T) 
 	// request. Serving it would hand out owner/app from the mirror upstream
 	// instead of letting containerd fall back to unconfigured.example.
 	mirror := newNSTestRegistry(t, "owner/app", "")
-	routes, _, logs := newNSTestHandler(t, "", map[string]string{"mirror": mirror.URL})
+	routes, h, logs := newNSTestHandler(t, "", map[string]string{"mirror": mirror.URL})
 
 	for _, namespace := range []string{"unconfigured.example", "ghcr.io"} {
 		assertNameUnknown(t, serveNS(routes, "/v2/upstream/mirror/owner/app/manifests/latest?ns="+namespace))
@@ -315,6 +315,22 @@ func TestContainerHandler_NamespacePrefixRouteRejectsUnknownHosts(t *testing.T) 
 		if !strings.Contains(logs.String(), want) {
 			t.Errorf("logs missing %q:\n%s", want, logs.String())
 		}
+	}
+
+	// A node repeats the refused request for every pull; one line per
+	// upstream/ns pair is enough. An ns longer than any registry host is
+	// refused before it is logged or remembered.
+	assertNameUnknown(t, serveNS(routes, "/v2/upstream/mirror/owner/app/manifests/latest?ns=GHCR.io"))
+	long := strings.Repeat("a", 300) + ".example"
+	assertNameUnknown(t, serveNS(routes, "/v2/upstream/mirror/owner/app/manifests/latest?ns="+long))
+	if got := strings.Count(logs.String(), "upstream.oci_mirrors"); got != 2 {
+		t.Errorf("refusal warnings = %d, want 2 (one per upstream/ns pair):\n%s", got, logs.String())
+	}
+	if strings.Contains(logs.String(), "aaaa") {
+		t.Errorf("logs mention the overlong ns, want it refused silently:\n%s", logs.String())
+	}
+	if got := len(h.refusals); got != 2 {
+		t.Errorf("remembered refusals = %d, want 2", got)
 	}
 }
 
