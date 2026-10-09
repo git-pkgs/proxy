@@ -302,13 +302,19 @@ func TestContainerHandler_NamespacePrefixRouteRejectsUnknownHosts(t *testing.T) 
 	// request. Serving it would hand out owner/app from the mirror upstream
 	// instead of letting containerd fall back to unconfigured.example.
 	mirror := newNSTestRegistry(t, "owner/app", "")
-	routes, _, _ := newNSTestHandler(t, "", map[string]string{"mirror": mirror.URL})
+	routes, _, logs := newNSTestHandler(t, "", map[string]string{"mirror": mirror.URL})
 
 	for _, namespace := range []string{"unconfigured.example", "ghcr.io"} {
 		assertNameUnknown(t, serveNS(routes, "/v2/upstream/mirror/owner/app/manifests/latest?ns="+namespace))
 	}
 	if got := mirror.requestCount(); got != 0 {
 		t.Errorf("upstream requests = %d, want 0", got)
+	}
+	// containerd swallows the 404, so the refusal has to show up in the log.
+	for _, want := range []string{"upstream.oci_mirrors", "upstream=mirror", "ns=ghcr.io"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("logs missing %q:\n%s", want, logs.String())
+		}
 	}
 }
 

@@ -549,9 +549,16 @@ func (h *ContainerHandler) namespaceNamesPrefixUpstream(namespace, name string) 
 		return false
 	}
 	key := namespaceKeyForRequest(namespace)
-	return isDockerHubKey(key) ||
+	if isDockerHubKey(key) ||
 		slices.Contains(namespaceKeysForHost(parsed), key) ||
-		slices.Contains(h.mirrorKeys[upstream], key)
+		slices.Contains(h.mirrorKeys[upstream], key) {
+		return true
+	}
+	// containerd falls back to the registry itself on this 404 without
+	// reporting anything, so this line is all an operator gets to see.
+	h.warn("refusing ns on OCI upstream prefix; if the upstream mirrors this registry, list it in upstream.oci_mirrors",
+		"upstream", upstream, "ns", namespace)
+	return false
 }
 
 // registryForName resolves a client-visible OCI repository name to an upstream
