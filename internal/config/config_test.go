@@ -1384,6 +1384,29 @@ func TestValidateNamedUpstreams(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "OCI mirror host listed for two upstreams with an empty port",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"art": "https://art.example", "nexus": "https://nexus.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"art": {"ghcr.io"}, "nexus": {"ghcr.io:"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI mirror IPv6 host listed for two upstreams",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"art": "https://art.example", "nexus": "https://nexus.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"art": {"[::1]"}, "nexus": {"[::1]:"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI mirror hosts that differ only in a non-default port",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"art": "https://art.example", "nexus": "https://nexus.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"art": {"registry.example"}, "nexus": {"registry.example:5000"}}
+			},
+		},
+		{
 			name: "OCI mirror host is empty",
 			modify: func(cfg *Config) {
 				cfg.Upstream.OCI = map[string]string{"ghcr": "https://mirror.example"}

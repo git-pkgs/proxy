@@ -63,6 +63,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -738,7 +739,7 @@ func validateOCIMirrors(mirrors map[string][]string, upstreams map[string]string
 			if host == "" || err != nil || parsed.Host != host {
 				return fmt.Errorf("invalid upstream.oci_mirrors.%s host %q: must be a registry host such as ghcr.io or registry.example:5000", name, host)
 			}
-			key := strings.TrimSuffix(strings.ToLower(host), ":443")
+			key := ociMirrorHostKey(host)
 			if owner, taken := owners[key]; taken && owner != name {
 				return fmt.Errorf("invalid upstream.oci_mirrors.%s host %q: already listed for %s", name, host, owner)
 			}
@@ -746,6 +747,25 @@ func validateOCIMirrors(mirrors map[string][]string, upstreams map[string]string
 		}
 	}
 	return nil
+}
+
+// ociMirrorHostKey normalizes an upstream.oci_mirrors host the way the
+// container handler builds its ns lookup keys: lowercase, IPv6 literals in
+// brackets, an empty or default https port dropped. Two entries with the same
+// key would select the same route.
+func ociMirrorHostKey(host string) string {
+	name, port, err := net.SplitHostPort(host)
+	if err != nil {
+		name, port = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]"), ""
+	}
+	name = strings.ToLower(name)
+	if strings.Contains(name, ":") {
+		name = "[" + name + "]"
+	}
+	if port == "" || port == "443" {
+		return name
+	}
+	return name + ":" + port
 }
 
 func validateNamedUpstreams(field string, upstreams map[string]string) error {
