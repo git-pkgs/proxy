@@ -385,7 +385,8 @@ func (s *Server) serve(listener net.Listener) error {
 // mountProtocolHandlers constructs every ecosystem handler and mounts it on
 // r under its protocol prefix.
 func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
-	npmHandler := handler.NewNPMHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.NPM)
+	npmHandler := handler.NewNPMHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.NPM).
+		WithPackageRoutes(s.cfg.Upstream.NPMRoutes)
 	cargoHandler := handler.NewCargoHandler(
 		proxy,
 		s.cfg.BaseURL,

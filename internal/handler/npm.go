@@ -38,6 +38,7 @@ type NPMHandler struct {
 	proxy       *Proxy
 	upstreamURL string
 	proxyURL    string // URL where this proxy is hosted
+	routes      packageRoutes
 }
 
 // NewNPMHandler creates a new npm protocol handler.
@@ -51,6 +52,13 @@ func NewNPMHandler(proxy *Proxy, proxyURL, upstreamURL string) *NPMHandler {
 		upstreamURL: strings.TrimSuffix(upstreamURL, "/"),
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 	}
+}
+
+// WithPackageRoutes sends packages matching a pattern to a dedicated npm
+// registry instead of the default one. See packageRoutes.
+func (h *NPMHandler) WithPackageRoutes(routes map[string]string) *NPMHandler {
+	h.routes = newPackageRoutes(routes)
+	return h
 }
 
 // Routes returns the HTTP handler for npm requests.
@@ -156,6 +164,15 @@ func (h *NPMHandler) handleSecurity(w http.ResponseWriter, r *http.Request) {
 	h.proxy.relayResponse(w, r, resp, nil)
 }
 
+// sourceFor returns the registry serving a package and the key its metadata is
+// cached under.
+func (h *NPMHandler) sourceFor(packageName string) (registryURL, cacheKey string) {
+	if route, routed := h.routes.match(packageName); routed {
+		return route.url, route.cacheKey(packageName)
+	}
+	return h.upstreamURL, packageName
+}
+
 // handlePackageMetadata proxies package metadata from upstream and rewrites tarball URLs.
 func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Request) {
 	packageName := h.extractPackageName(r)
@@ -166,7 +183,8 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 
 	h.proxy.Logger.Info("npm metadata request", "package", packageName)
 
-	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, url.PathEscape(packageName))
+	registryURL, cacheKey := h.sourceFor(packageName)
+	upstreamURL := fmt.Sprintf("%s/%s", registryURL, url.PathEscape(packageName))
 
 	// Prefer the smaller abbreviated packument format but include application/json
 	// as a fallback so upstreams that reject the abbreviated type (e.g. JFrog
@@ -180,14 +198,14 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		accept = contentTypeJSON
 	}
 
-	if rewritten, ok := h.proxy.storedRewrite("npm", packageName, h.proxyURL, packageName); ok {
+	if rewritten, ok := h.proxy.storedRewrite("npm", cacheKey, h.proxyURL, cacheKey); ok {
 		w.Header().Set(headerContentType, contentTypeJSON)
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write(rewritten)
 		return
 	}
 
-	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "npm", packageName, upstreamURL, accept)
+	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "npm", cacheKey, upstreamURL, accept)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			JSONError(w, http.StatusNotFound, "package not found")
@@ -198,7 +216,7 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	rewritten, err := h.proxy.cachedRewrite(r.Context(), "npm", h.proxyURL, packageName, body, func(b []byte) ([]byte, error) {
+	rewritten, err := h.proxy.cachedRewrite(r.Context(), "npm", h.proxyURL, cacheKey, body, func(b []byte) ([]byte, error) {
 		return h.rewriteMetadata(packageName, b)
 	})
 	if err != nil {
@@ -585,9 +603,10 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		JSONError(w, http.StatusForbidden, ErrVersionDenied.Error()+": "+canonicalVersionPURL("npm", packageName, version))
 		return
 	}
+	registryURL, cacheKey := h.sourceFor(packageName)
 	metadata := sync.OnceValues(func() ([]byte, error) {
-		upstreamURL := h.upstreamURL + "/" + url.PathEscape(packageName)
-		body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "npm", packageName, upstreamURL, contentTypeJSON)
+		upstreamURL := registryURL + "/" + url.PathEscape(packageName)
+		body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "npm", cacheKey, upstreamURL, contentTypeJSON)
 		return body, err
 	})
 	if h.versionInCooldown(packageName, version, metadata) {
@@ -597,7 +616,7 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	result, err := h.getTarball(r, packageName, version, filename, metadata)
+	result, err := h.getTarball(r, registryURL, packageName, version, filename, metadata)
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrUpstreamNotFound):
@@ -614,21 +633,25 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	ServeArtifactRequest(w, r, result)
 }
 
-func (h *NPMHandler) getTarball(r *http.Request, packageName, version, filename string, metadata func() ([]byte, error)) (*CacheResult, error) {
-	if cached, err := h.proxy.GetCachedArtifact(r.Context(), "npm", packageName, version, filename); err != nil || cached != nil {
+func (h *NPMHandler) getTarball(r *http.Request, registryURL, packageName, version, filename string, metadata func() ([]byte, error)) (*CacheResult, error) {
+	cacheFilename := filename
+	if route, routed := h.routes.match(packageName); routed {
+		cacheFilename = route.cacheFilename(filename)
+	}
+	if cached, err := h.proxy.GetCachedArtifact(r.Context(), "npm", packageName, version, cacheFilename); err != nil || cached != nil {
 		return cached, err
 	}
-	downloadURL := fmt.Sprintf("%s/%s/-/%s", h.upstreamURL, escapeNPMDownloadPackage(packageName), url.PathEscape(filename))
+	downloadURL := fmt.Sprintf("%s/%s/-/%s", registryURL, escapeNPMDownloadPackage(packageName), url.PathEscape(filename))
 	body, err := metadata()
 	if err == nil {
 		if tarball := npmVersionTarball(body, version); tarball != "" {
-			downloadURL, err = h.validateTarballURL(tarball)
+			downloadURL, err = validateTarballURL(tarball, registryURL)
 			if err != nil {
 				return nil, err
 			}
 		}
 	}
-	return h.proxy.GetOrFetchArtifactFromURL(r.Context(), "npm", packageName, version, filename, downloadURL)
+	return h.proxy.GetOrFetchArtifactFromURL(r.Context(), "npm", packageName, version, cacheFilename, downloadURL)
 }
 
 // npmVersionTarball returns versions[version].dist.tarball from a packument,
@@ -639,12 +662,12 @@ func npmVersionTarball(body []byte, version string) string {
 	return tarball
 }
 
-func (h *NPMHandler) validateTarballURL(raw string) (string, error) {
+func validateTarballURL(raw, registryURL string) (string, error) {
 	tarball, err := url.Parse(raw)
 	if err != nil {
 		return "", fmt.Errorf("parsing npm tarball URL: %w", err)
 	}
-	upstream, err := url.Parse(h.upstreamURL)
+	upstream, err := url.Parse(registryURL)
 	if err != nil {
 		return "", fmt.Errorf("parsing npm upstream URL: %w", err)
 	}

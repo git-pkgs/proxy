@@ -513,6 +513,13 @@ type UpstreamConfig struct {
 	// Default: false (the abbreviated format is preferred).
 	NPMFullMetadata bool `json:"npm_full_metadata" yaml:"npm_full_metadata"`
 
+	// NPMRoutes maps package name patterns to npm registry URLs. A package
+	// whose name matches a pattern is fetched only from that registry, never
+	// from upstream.npm, so a public package cannot stand in for it. Patterns
+	// use path.Match syntax, e.g. "@example/*"; the longest matching pattern
+	// wins.
+	NPMRoutes map[string]string `json:"npm_routes" yaml:"npm_routes"`
+
 	// Cargo is the upstream cargo index URL.
 	// Default: https://index.crates.io
 	Cargo string `json:"cargo" yaml:"cargo"`
@@ -702,6 +709,9 @@ func (u *UpstreamConfig) Validate() error {
 		return err
 	}
 	if err := validatePackageRoutes("upstream.composer_routes", u.ComposerRoutes); err != nil {
+		return err
+	}
+	if err := validatePackageRoutes("upstream.npm_routes", u.NPMRoutes); err != nil {
 		return err
 	}
 	if err := validateNamedUpstreams("upstream.apk", u.APK); err != nil {

@@ -27,6 +27,7 @@ func TestMountProtocolHandlersAppliesPackageRoutes(t *testing.T) {
 	cfg.Upstream.ComposerRepository = "http://default.invalid"
 	cfg.Upstream.NPM = "http://default.invalid"
 	cfg.Upstream.ComposerRoutes = map[string]string{"example/*": private.URL + "/composer"}
+	cfg.Upstream.NPMRoutes = map[string]string{"@example/*": private.URL + "/npm"}
 
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
 	proxy := handler.NewProxy(nil, nil, fetch.NewFetcher(), fetch.NewResolver(), logger)
@@ -37,6 +38,7 @@ func TestMountProtocolHandlersAppliesPackageRoutes(t *testing.T) {
 
 	for path, wantUpstreamPath := range map[string]string{
 		"/composer/p2/example/library.json": "/composer/p2/example/library.json",
+		"/npm/@example%2fwidgets":           "/npm/@example/widgets",
 	} {
 		r.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, path, nil))
 		select {

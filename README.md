@@ -161,6 +161,8 @@ therefore come from upstream's database, not from the proxy's own vulnerability
 data, and versions withheld by [cooldown](#version-cooldown) are not excluded
 from the report.
 
+To serve private packages through the same registry URL, see [Private package routes](docs/configuration.md#private-package-routes).
+
 ### Cargo
 
 Create or edit `~/.cargo/config.toml`:

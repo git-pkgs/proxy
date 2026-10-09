@@ -140,6 +140,11 @@ upstream:
   # gate on publish age, e.g. Yarn's npmMinimalAgeGate. Default: false.
   # npm_full_metadata: true
 
+  # npm packages served only from a private registry, by name pattern.
+  # Matching packages are never looked up on the npm registry above.
+  # npm_routes:
+  #   "@example/*": "https://npm.example.com/registry"
+
   # Cargo sparse index URL
   cargo: "https://index.crates.io"
 
