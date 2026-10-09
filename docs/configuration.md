@@ -334,6 +334,12 @@ a port. Those hosts select the upstream for unprefixed `ns` requests and are
 accepted as `ns` on its `upstream/{name}/` prefix. A host that is also the host
 of a configured registry URL stays with that registry for unprefixed requests;
 the proxy logs a warning at startup.
+
+A host that is accepted on a prefix route gives up image paths of the form
+`<host>/upstream/{name}/...` under a `_default` mirror: with `ghcr: ["ghcr.io"]`,
+a pull of `ghcr.io/upstream/ghcr/owner/app` is answered with `owner/app` from
+the `ghcr` upstream, because containerd sends the same request for it as a
+per-registry mirror does. The same applies to the upstream's own host.
 When the proxy uses plain HTTP (for example `localhost:8080`), pass
 `--plain-http` to Helm OCI commands.
 
