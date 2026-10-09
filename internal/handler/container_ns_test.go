@@ -334,6 +334,28 @@ func TestContainerHandler_NamespacePrefixRouteRejectsUnknownHosts(t *testing.T) 
 	}
 }
 
+func TestContainerHandler_NamespaceRefusalLogIsBounded(t *testing.T) {
+	mirror := newNSTestRegistry(t, "owner/app", "")
+	routes, h, logs := newNSTestHandler(t, "", map[string]string{"mirror": mirror.URL})
+	h.refusals = make(map[string]struct{}, maxReportedNamespaceRefusals)
+	for i := range maxReportedNamespaceRefusals {
+		h.refusals[fmt.Sprintf("mirror\x00filler-%d.example", i)] = struct{}{}
+	}
+
+	for _, namespace := range []string{"filler-0.example", "first.example", "second.example"} {
+		assertNameUnknown(t, serveNS(routes, "/v2/upstream/mirror/owner/app/manifests/latest?ns="+namespace))
+	}
+	if got := strings.Count(logs.String(), "further refusals are not logged"); got != 1 {
+		t.Errorf("limit notices = %d, want 1:\n%s", got, logs.String())
+	}
+	if strings.Contains(logs.String(), "refusing ns") {
+		t.Errorf("refusal logged past the limit:\n%s", logs.String())
+	}
+	if got := len(h.refusals); got != maxReportedNamespaceRefusals {
+		t.Errorf("remembered refusals = %d, want %d", got, maxReportedNamespaceRefusals)
+	}
+}
+
 func TestContainerHandler_NamespaceMirroredRegistries(t *testing.T) {
 	// The upstream mirrors ghcr.io, and upstream.oci_mirrors says so. Nodes
 	// keep pulling ghcr.io/..., either through a ghcr.io hosts.toml pointing
