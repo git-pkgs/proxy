@@ -727,7 +727,7 @@ func validateOCIMirrors(mirrors map[string][]string, upstreams map[string]string
 		}
 		for _, host := range hosts {
 			parsed, err := url.Parse("https://" + host)
-			if host == "" || err != nil || parsed.Host != host || parsed.User != nil {
+			if host == "" || err != nil || parsed.Host != host {
 				return fmt.Errorf("invalid upstream.oci_mirrors.%s host %q: must be a registry host such as ghcr.io or registry.example:5000", name, host)
 			}
 		}

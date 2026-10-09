@@ -1368,6 +1368,14 @@ func TestValidateNamedUpstreams(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "OCI mirror host with credentials",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://mirror.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"ghcr": {"user@ghcr.io"}}
+			},
+			wantErr: true,
+		},
+		{
 			name: "OCI mirror host is empty",
 			modify: func(cfg *Config) {
 				cfg.Upstream.OCI = map[string]string{"ghcr": "https://mirror.example"}
