@@ -302,7 +302,8 @@ any other port must match exactly, so `https://registry.example:80` and
 `https://registry.example` are two different registries. An
 unknown host returns `404 NAME_UNKNOWN`, so containerd falls back to its next
 host. Registry URLs with a path (for example an Artifactory repository path)
-are not reachable through `ns`, only through `upstream/{name}/`. When two
+are not reachable through their own host in `ns`, only through
+`upstream/{name}/` or through `upstream.oci_mirrors`. When two
 entries share a host, the proxy logs a warning at startup; the default registry
 wins, otherwise the alphabetically first name. Pulls through `ns`,
 `upstream/{name}/` and unprefixed requests share the same cache entries.
@@ -312,8 +313,27 @@ prefix. They are refused only when `ns` names a host that belongs to another
 configured route. Docker Hub (`docker.io` and its aliases) is always accepted
 there, because Docker Hub repository names have two path components and can
 never start with `upstream/`, so a Docker Hub mirror behind any prefix stays
-reachable. A host the proxy does not know is accepted as well, for example
-`ghcr.io` when the upstream is a mirror of it.
+reachable. Any other host gets `404 NAME_UNKNOWN`: a containerd `_default`
+mirror sends the same request for an image such as
+`unconfigured.example/upstream/ghcr/owner/app`, and that pull must not be
+answered from the `ghcr` upstream.
+
+When a named upstream mirrors another registry, for example an Artifactory
+remote of `ghcr.io`, say so in `upstream.oci_mirrors`:
+
+```yaml
+upstream:
+  oci:
+    ghcr: "https://artifactory.example.com/artifactory/api/docker/ghcr-remote"
+  oci_mirrors:
+    ghcr: ["ghcr.io"]
+```
+
+Each entry lists bare registry hosts as containerd sends them, optionally with
+a port. Those hosts select the upstream for unprefixed `ns` requests and are
+accepted as `ns` on its `upstream/{name}/` prefix. A host that is also the host
+of a configured registry URL stays with that registry for unprefixed requests;
+the proxy logs a warning at startup.
 When the proxy uses plain HTTP (for example `localhost:8080`), pass
 `--plain-http` to Helm OCI commands.
 

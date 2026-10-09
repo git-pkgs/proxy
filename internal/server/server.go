@@ -429,6 +429,7 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 		s.cfg.Upstream.OCIDefault,
 		s.cfg.Upstream.OCI,
 	)
+	containerHandler.SetMirroredRegistries(s.cfg.Upstream.OCIMirrors)
 	handler.RegisterHomebrewArtifacts(containerHandler, s.cfg.Upstream.HomebrewArtifact)
 	helmHandler := handler.NewHelmHandlerWithOCIRegistries(
 		proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm, s.cfg.Upstream.OCIDefault, s.cfg.Upstream.OCI)

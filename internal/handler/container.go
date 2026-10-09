@@ -61,6 +61,9 @@ type ContainerHandler struct {
 	// namespaces maps normalized registry hosts from containerd's ns query
 	// parameter to a named upstream, or to defaultNamespaceRoute.
 	namespaces map[string]string
+	// mirrorKeys holds, per named upstream, the ns lookup keys of the
+	// registries it is configured to mirror.
+	mirrorKeys map[string][]string
 }
 
 type containerRegistry struct {
@@ -128,6 +131,31 @@ func (h *ContainerHandler) buildNamespaceIndex() {
 		if !h.indexNamespace(name, h.namedRegistries[name]) {
 			h.warn("OCI upstream is not reachable through the ns query parameter: URL has a path",
 				"upstream", name, "url", redactedURL(h.namedRegistries[name]))
+		}
+	}
+}
+
+// SetMirroredRegistries records which registry hosts each named upstream
+// mirrors, for example "ghcr" -> ["ghcr.io"] for an Artifactory remote of
+// ghcr.io. Those hosts select the upstream in ns lookups and are accepted as
+// ns on its upstream/{name}/ prefix. They rank below every host taken from a
+// configured URL, so they are indexed after the constructor's index.
+func (h *ContainerHandler) SetMirroredRegistries(mirrors map[string][]string) {
+	h.mirrorKeys = make(map[string][]string, len(mirrors))
+	for _, name := range slices.Sorted(maps.Keys(mirrors)) {
+		if _, ok := h.namedRegistries[name]; !ok {
+			h.warn("OCI mirror entry has no upstream of that name", "upstream", name)
+			continue
+		}
+		for _, host := range mirrors[name] {
+			registryURL := "https://" + host
+			keys, ok := namespaceKeysForURL(registryURL)
+			if !ok {
+				h.warn("OCI mirror host is not a registry host", "upstream", name, "host", host)
+				continue
+			}
+			h.mirrorKeys[name] = append(h.mirrorKeys[name], keys...)
+			h.indexNamespace(name, registryURL)
 		}
 	}
 }
@@ -505,16 +533,14 @@ func (h *ContainerHandler) registryForNamespace(namespace, name string) (registr
 }
 
 // namespaceNamesPrefixUpstream decides whether an upstream/{name}/ request
-// may carry the given ns. The prefix already picks the upstream and the
-// cache entries, so ns cannot change where content comes from; the check
-// only refuses an ns that contradicts the prefix, meaning a host this proxy
-// knows that belongs to another route. It passes for the upstream's own
-// host (the URL's path is irrelevant), for a host this proxy does not know,
-// which is a per-registry mirror entry for a registry the upstream mirrors,
-// say an Artifactory remote for ghcr.io, and always for Docker Hub: its
-// repository names have two path components, so docker.io/upstream/... is
-// never a real image and a Docker Hub mirror behind any prefix stays
-// reachable.
+// may carry the given ns. A per-registry mirror with override_path and a
+// _default wildcard pull of <ns>/upstream/{name}/... send the same request,
+// so ns has to name a registry the upstream is known to serve: its own host
+// (the URL's path is irrelevant), a host listed for it in upstream.oci_mirrors,
+// or Docker Hub. Docker Hub repository names have two path components, so
+// docker.io/upstream/... is never a real image and a Docker Hub mirror behind
+// any prefix stays reachable. Any other ns gets a 404 and containerd falls
+// back to the registry the image actually names.
 func (h *ContainerHandler) namespaceNamesPrefixUpstream(namespace, name string) bool {
 	rest, _ := strings.CutPrefix(name, "upstream/")
 	upstream, _, _ := strings.Cut(rest, "/")
@@ -523,11 +549,9 @@ func (h *ContainerHandler) namespaceNamesPrefixUpstream(namespace, name string) 
 		return false
 	}
 	key := namespaceKeyForRequest(namespace)
-	if isDockerHubKey(key) || slices.Contains(namespaceKeysForHost(parsed), key) {
-		return true
-	}
-	_, known := h.namespaces[key]
-	return !known
+	return isDockerHubKey(key) ||
+		slices.Contains(namespaceKeysForHost(parsed), key) ||
+		slices.Contains(h.mirrorKeys[upstream], key)
 }
 
 // registryForName resolves a client-visible OCI repository name to an upstream

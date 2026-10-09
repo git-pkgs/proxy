@@ -1337,6 +1337,45 @@ func TestValidateNamedUpstreams(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "OCI mirrors for a configured upstream",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://artifactory.example/api/docker/ghcr-remote"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"ghcr": {"ghcr.io", "registry.example:5000"}}
+			},
+		},
+		{
+			name: "OCI mirrors for an unknown upstream",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://ghcr.io"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"quay": {"quay.io"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI mirror given as URL",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://mirror.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"ghcr": {"https://ghcr.io"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI mirror with a path",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://mirror.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"ghcr": {"ghcr.io/owner"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI mirror host is empty",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://mirror.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"ghcr": {""}}
+			},
+			wantErr: true,
+		},
+		{
 			name: "OCI upstream URL is not absolute",
 			modify: func(cfg *Config) {
 				cfg.Upstream.OCI = map[string]string{"private": "registry.example.com"}

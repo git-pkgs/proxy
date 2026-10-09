@@ -630,6 +630,12 @@ type UpstreamConfig struct {
 	// oci://proxy.example.com/upstream/ghcr/owner/chart.
 	OCI map[string]string `json:"oci" yaml:"oci"`
 
+	// OCIMirrors lists, per upstream.oci name, the registry hosts that
+	// upstream mirrors, for example {"ghcr": ["ghcr.io"]} for an Artifactory
+	// remote of ghcr.io. containerd requests whose ns query parameter names
+	// one of these hosts are served by that upstream.
+	OCIMirrors map[string][]string `json:"oci_mirrors" yaml:"oci_mirrors"`
+
 	// Generic maps names to plain HTTP upstream base URLs, served at
 	// /generic/{name}/. The remaining request path and query string are
 	// appended to the upstream URL. GitHub release asset paths
@@ -687,6 +693,9 @@ func (u *UpstreamConfig) Validate() error {
 	if err := validateNamedUpstreams("upstream.oci", u.OCI); err != nil {
 		return err
 	}
+	if err := validateOCIMirrors(u.OCIMirrors, u.OCI); err != nil {
+		return err
+	}
 	if err := validateNamedUpstreams("upstream.generic", u.Generic); err != nil {
 		return err
 	}
@@ -707,6 +716,24 @@ func (u *UpstreamConfig) Validate() error {
 // debianReservedRepositoryNames are the upstream.debian archive's own root
 // paths, which a repository of the same name would shadow.
 var debianReservedRepositoryNames = []string{"pool", "dists"}
+
+// validateOCIMirrors checks that every upstream.oci_mirrors entry belongs to
+// an upstream.oci name and lists bare registry hosts, the form containerd
+// sends in the ns query parameter.
+func validateOCIMirrors(mirrors map[string][]string, upstreams map[string]string) error {
+	for name, hosts := range mirrors {
+		if _, ok := upstreams[name]; !ok {
+			return fmt.Errorf("invalid upstream.oci_mirrors name %q: no upstream.oci entry of that name", name)
+		}
+		for _, host := range hosts {
+			parsed, err := url.Parse("https://" + host)
+			if host == "" || err != nil || parsed.Host != host || parsed.User != nil {
+				return fmt.Errorf("invalid upstream.oci_mirrors.%s host %q: must be a registry host such as ghcr.io or registry.example:5000", name, host)
+			}
+		}
+	}
+	return nil
+}
 
 func validateNamedUpstreams(field string, upstreams map[string]string) error {
 	for name, upstreamURL := range upstreams {

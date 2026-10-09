@@ -229,6 +229,12 @@ upstream:
   # oci:
   #   ghcr: "https://ghcr.io"
 
+  # Registries a named OCI upstream mirrors, e.g. when ghcr above points at
+  # an Artifactory remote of ghcr.io. containerd mirror requests whose ns
+  # parameter names one of these hosts are served by that upstream.
+  # oci_mirrors:
+  #   ghcr: ["ghcr.io"]
+
   # Named Alpine APK repositories (used by /apk/{name}/).
   # Defaults to {"alpine": "https://dl-cdn.alpinelinux.org/alpine"} when empty;
   # configuring any entry replaces that default.

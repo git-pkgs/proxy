@@ -296,11 +296,26 @@ func TestContainerHandler_NamespacePrefixRouteAcceptsDockerHubAliases(t *testing
 	})
 }
 
-func TestContainerHandler_NamespacePrefixRouteTrustsUnknownHosts(t *testing.T) {
-	// The upstream is a mirror of ghcr.io, nodes keep pulling ghcr.io/... and
-	// their ghcr.io hosts.toml points at /v2/upstream/ghcr, so ns says
-	// ghcr.io while the upstream host is something else. Only a mirror entry
-	// of the client can lead here, so the prefix wins.
+func TestContainerHandler_NamespacePrefixRouteRejectsUnknownHosts(t *testing.T) {
+	// A _default wildcard mirror turns a pull of
+	// unconfigured.example/upstream/mirror/owner/app into exactly this
+	// request. Serving it would hand out owner/app from the mirror upstream
+	// instead of letting containerd fall back to unconfigured.example.
+	mirror := newNSTestRegistry(t, "owner/app", "")
+	routes, _, _ := newNSTestHandler(t, "", map[string]string{"mirror": mirror.URL})
+
+	for _, namespace := range []string{"unconfigured.example", "ghcr.io"} {
+		assertNameUnknown(t, serveNS(routes, "/v2/upstream/mirror/owner/app/manifests/latest?ns="+namespace))
+	}
+	if got := mirror.requestCount(); got != 0 {
+		t.Errorf("upstream requests = %d, want 0", got)
+	}
+}
+
+func TestContainerHandler_NamespaceMirroredRegistries(t *testing.T) {
+	// The upstream mirrors ghcr.io, and upstream.oci_mirrors says so. Nodes
+	// keep pulling ghcr.io/..., either through a ghcr.io hosts.toml pointing
+	// at /v2/upstream/ghcr or through the _default wildcard mirror.
 	tests := map[string]string{
 		"plain mirror host":  "",
 		"artifactory remote": "/artifactory/api/docker/ghcr-remote",
@@ -308,16 +323,59 @@ func TestContainerHandler_NamespacePrefixRouteTrustsUnknownHosts(t *testing.T) {
 	for name, pathPrefix := range tests {
 		t.Run(name, func(t *testing.T) {
 			mirror := newNSTestRegistry(t, "owner/app", pathPrefix)
-			routes, _, _ := newNSTestHandler(t, "", map[string]string{"ghcr": mirror.URL + pathPrefix})
+			routes, h, _ := newNSTestHandler(t, "", map[string]string{"ghcr": mirror.URL + pathPrefix})
+			h.SetMirroredRegistries(map[string][]string{"ghcr": {"ghcr.io"}})
 
-			response := serveNS(routes, "/v2/upstream/ghcr/owner/app/manifests/latest?ns=ghcr.io")
-			if response.Code != http.StatusOK {
-				t.Fatalf("status = %d: %s", response.Code, response.Body.String())
+			for _, target := range []string{
+				"/v2/upstream/ghcr/owner/app/manifests/latest?ns=ghcr.io",
+				"/v2/upstream/ghcr/owner/app/manifests/latest?ns=GHCR.io:443",
+				"/v2/owner/app/manifests/latest?ns=ghcr.io",
+			} {
+				before := mirror.requestCount()
+				response := serveNS(routes, target)
+				if response.Code != http.StatusOK {
+					t.Fatalf("GET %s status = %d: %s", target, response.Code, response.Body.String())
+				}
+				// The manifest is cached after the first request, so only
+				// the first one may reach the upstream.
+				if before == 0 {
+					if got, want := mirror.lastRequest(), pathPrefix+"/v2/owner/app/manifests/latest"; got != want {
+						t.Errorf("upstream request = %q, want %q", got, want)
+					}
+				}
 			}
-			if got, want := mirror.lastRequest(), pathPrefix+"/v2/owner/app/manifests/latest"; got != want {
-				t.Errorf("upstream request = %q, want %q", got, want)
+			if got := mirror.requestCount(); got != 1 {
+				t.Errorf("upstream requests = %d, want 1 (all routes share the cache)", got)
 			}
+
+			assertNameUnknown(t, serveNS(routes, "/v2/upstream/ghcr/owner/app/manifests/latest?ns=quay.io"))
 		})
+	}
+}
+
+func TestContainerHandler_NamespaceMirrorHostsRankBelowConfiguredURLs(t *testing.T) {
+	proxy, _, _, _ := setupTestProxy(t)
+	logs := &bytes.Buffer{}
+	proxy.Logger = slog.New(slog.NewTextHandler(logs, nil))
+	h := NewContainerHandlerWithRegistry(proxy, nsTestProxyURL, "", map[string]string{
+		"ghcr": "https://ghcr.io",
+		"art":  "https://artifactory.example/api/docker/ghcr-remote",
+	})
+	h.SetMirroredRegistries(map[string][]string{"art": {"ghcr.io"}, "missing": {"quay.io"}})
+
+	if got := h.namespaces["ghcr.io"]; got != "ghcr" {
+		t.Errorf("index[ghcr.io] = %q, want ghcr (configured URL wins over a mirror entry)", got)
+	}
+	if !h.namespaceNamesPrefixUpstream("ghcr.io", "upstream/art/owner/app") {
+		t.Error("ns ghcr.io refused on upstream/art/, want accepted as its mirrored registry")
+	}
+	if _, ok := h.namespaces["quay.io"]; ok {
+		t.Error("index has quay.io from a mirror entry without upstream")
+	}
+	for _, want := range []string{"ghcr.io=ghcr", "upstream=missing"} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("logs missing %q:\n%s", want, logs.String())
+		}
 	}
 }
 

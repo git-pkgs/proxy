@@ -492,12 +492,15 @@ is no substitute for this check: it reads the directory itself and succeeds
 even while CRI still has no `config_path`.
 
 `docker.io` and the host of `upstream.oci_default` use the default registry;
-the host of each `upstream.oci` URL uses that named registry. Pulls for any
-other registry get `404 NAME_UNKNOWN`, and containerd falls back to the
-registry itself; only an image path that itself starts with `upstream/{name}/`
-always selects that upstream. Existing per-registry `hosts.toml` files that point at
-`/v2/upstream/{name}` with `override_path = true` keep working, also when
-that upstream is a mirror of the registry the nodes pull from. See [docs/configuration.md](docs/configuration.md) for how
+the host of each `upstream.oci` URL uses that named registry, and so do the
+hosts listed for it in `upstream.oci_mirrors`. Pulls for any other registry get
+`404 NAME_UNKNOWN`, and containerd falls back to the registry itself. Existing
+per-registry `hosts.toml` files that point at `/v2/upstream/{name}` with
+`override_path = true` keep working for that upstream's own host and for
+Docker Hub. If the upstream is a mirror of the registry the nodes pull from,
+say an Artifactory remote of `ghcr.io`, list that registry in
+`upstream.oci_mirrors` (`ghcr: ["ghcr.io"]`); otherwise those pulls get the
+404 as well. See [docs/configuration.md](docs/configuration.md) for how
 hosts are matched and which entry wins when two share a host. k3s generates
 the hosts directory itself from `/etc/rancher/k3s/registries.yaml`; `mirrors:
 {"*": {endpoint: ["http://proxy.example.com:8080"]}}` produces the same
