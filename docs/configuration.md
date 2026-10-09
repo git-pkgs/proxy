@@ -330,7 +330,7 @@ upstream:
 ```
 
 Each entry lists bare registry hosts as containerd sends them, optionally with
-a port. Those hosts select the upstream for unprefixed `ns` requests and are
+a port. A host can be listed for one upstream only. Those hosts select the upstream for unprefixed `ns` requests and are
 accepted as `ns` on its `upstream/{name}/` prefix. A host that is also the host
 of a configured registry URL stays with that registry for unprefixed requests;
 the proxy logs a warning at startup.

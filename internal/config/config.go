@@ -719,17 +719,30 @@ var debianReservedRepositoryNames = []string{"pool", "dists"}
 
 // validateOCIMirrors checks that every upstream.oci_mirrors entry belongs to
 // an upstream.oci name and lists bare registry hosts, the form containerd
-// sends in the ns query parameter.
+// sends in the ns query parameter. A host may belong to one upstream only;
+// otherwise both prefixes would take it while unprefixed requests silently
+// went to one of them.
 func validateOCIMirrors(mirrors map[string][]string, upstreams map[string]string) error {
-	for name, hosts := range mirrors {
+	names := make([]string, 0, len(mirrors))
+	for name := range mirrors {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	owners := make(map[string]string)
+	for _, name := range names {
 		if _, ok := upstreams[name]; !ok {
 			return fmt.Errorf("invalid upstream.oci_mirrors name %q: no upstream.oci entry of that name", name)
 		}
-		for _, host := range hosts {
+		for _, host := range mirrors[name] {
 			parsed, err := url.Parse("https://" + host)
 			if host == "" || err != nil || parsed.Host != host {
 				return fmt.Errorf("invalid upstream.oci_mirrors.%s host %q: must be a registry host such as ghcr.io or registry.example:5000", name, host)
 			}
+			key := strings.TrimSuffix(strings.ToLower(host), ":443")
+			if owner, taken := owners[key]; taken && owner != name {
+				return fmt.Errorf("invalid upstream.oci_mirrors.%s host %q: already listed for %s", name, host, owner)
+			}
+			owners[key] = name
 		}
 	}
 	return nil
