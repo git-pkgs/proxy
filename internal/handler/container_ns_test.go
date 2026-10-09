@@ -358,8 +358,9 @@ func TestContainerHandler_NamespaceMirrorHostsRankBelowConfiguredURLs(t *testing
 	logs := &bytes.Buffer{}
 	proxy.Logger = slog.New(slog.NewTextHandler(logs, nil))
 	h := NewContainerHandlerWithRegistry(proxy, nsTestProxyURL, "", map[string]string{
-		"ghcr": "https://ghcr.io",
-		"art":  "https://artifactory.example/api/docker/ghcr-remote",
+		"ghcr":  "https://ghcr.io",
+		"art":   "https://artifactory.example/api/docker/ghcr-remote",
+		"other": "https://other.example",
 	})
 	h.SetMirroredRegistries(map[string][]string{"art": {"ghcr.io"}, "missing": {"quay.io"}})
 
@@ -368,6 +369,9 @@ func TestContainerHandler_NamespaceMirrorHostsRankBelowConfiguredURLs(t *testing
 	}
 	if !h.namespaceNamesPrefixUpstream("ghcr.io", "upstream/art/owner/app") {
 		t.Error("ns ghcr.io refused on upstream/art/, want accepted as its mirrored registry")
+	}
+	if h.namespaceNamesPrefixUpstream("ghcr.io", "upstream/other/owner/app") {
+		t.Error("ns ghcr.io accepted on upstream/other/, want refused: only art lists it")
 	}
 	if _, ok := h.namespaces["quay.io"]; ok {
 		t.Error("index has quay.io from a mirror entry without upstream")
