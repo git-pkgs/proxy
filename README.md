@@ -344,6 +344,8 @@ Or set globally:
 composer config -g repositories.proxy composer http://localhost:8080/composer
 ```
 
+To serve private packages through the same URL, see [Private package routes](docs/configuration.md#private-package-routes).
+
 ### Conan (C/C++)
 
 Add the proxy as a remote:

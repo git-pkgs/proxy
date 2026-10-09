@@ -66,6 +66,7 @@ import (
 	"net"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
 	"sort"
 	"strconv"
@@ -573,6 +574,14 @@ type UpstreamConfig struct {
 	// Default: https://repo.packagist.org
 	ComposerRepository string `json:"composer_repository" yaml:"composer_repository"`
 
+	// ComposerRoutes maps package name patterns to Composer repository URLs
+	// (the base that serves /p2/{vendor}/{package}.json). A package whose
+	// name matches a pattern is fetched only from that repository, never
+	// from upstream.composer_repository, so a public package cannot stand in
+	// for it. Patterns use path.Match syntax, e.g. "example/*"; the longest
+	// matching pattern wins.
+	ComposerRoutes map[string]string `json:"composer_routes" yaml:"composer_routes"`
+
 	// Conan is the upstream Conan registry URL.
 	// Default: https://center.conan.io
 	Conan string `json:"conan" yaml:"conan"`
@@ -692,6 +701,9 @@ func (u *UpstreamConfig) Validate() error {
 	if err := validateNamedUpstreams("upstream.helm", u.Helm); err != nil {
 		return err
 	}
+	if err := validatePackageRoutes("upstream.composer_routes", u.ComposerRoutes); err != nil {
+		return err
+	}
 	if err := validateNamedUpstreams("upstream.apk", u.APK); err != nil {
 		return err
 	}
@@ -778,6 +790,18 @@ func validateNamedUpstreams(field string, upstreams map[string]string) error {
 			return fmt.Errorf("invalid %s name %q", field, name)
 		}
 		if err := validateAbsoluteURL(field+"."+name, upstreamURL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePackageRoutes(field string, routes map[string]string) error {
+	for pattern, upstreamURL := range routes {
+		if _, err := path.Match(pattern, ""); pattern == "" || err != nil {
+			return fmt.Errorf("invalid %s pattern %q", field, pattern)
+		}
+		if err := validateAbsoluteURL(field+"."+pattern, upstreamURL); err != nil {
 			return err
 		}
 	}

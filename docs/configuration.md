@@ -229,6 +229,31 @@ upstream:
 
 `upstream.hex_api` is used for cooldown timestamps and must expose Hex's `/api/packages/{name}` JSON endpoint.
 
+### Private package routes
+
+Clients that use the proxy as their only registry can still install private packages. A package route sends every package whose name matches a pattern to a private registry, and never to the default upstream:
+
+```yaml
+upstream:
+  composer_routes:
+    "example/*": "https://composer.example.com/packages"
+  allow_private_hosts:
+    - "composer.example.com"
+  auth:
+    "https://composer.example.com":
+      type: bearer
+      token: "${PRIVATE_REGISTRY_TOKEN}"
+```
+
+- Patterns use Go's [`path.Match`](https://pkg.go.dev/path#Match) syntax and are matched case-insensitively. `*` does not cross `/`, so `example/*` matches `example/library` but not `example-fork/library`. The longest matching pattern wins.
+- A Composer route URL is the repository base that serves `/p2/{vendor}/{package}.json`.
+- A routed package is not looked up anywhere else. If the private registry does not have it, the client gets a 404. If the registry fails or rejects the credentials, the client gets a 502. A package with the same name on the public registry is never served in its place (dependency confusion).
+- Metadata and artifacts of routed packages are cached under keys that include the route's URL. Entries cached from the public registry before a route was added are never served for a routed package.
+- Composer metadata of routed packages carries an empty `notification-url`, so Composer does not report their installs to the default upstream's `notify-batch` endpoint.
+- Use `upstream.auth` for the registry's credentials. The proxy has no authentication of its own, so every client that can reach it can download routed packages.
+- Search (`/composer/search.json`) and the package list (`/composer/packages/list.json`) still come from the default upstream only.
+- Routes can only be set in the configuration file, not with environment variables.
+
 Helm HTTP repositories and additional OCI registries are configured as named maps:
 
 ```yaml

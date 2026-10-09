@@ -185,6 +185,11 @@ upstream:
   # Packagist repository URL
   composer_repository: "https://repo.packagist.org"
 
+  # Composer packages served only from a private repository, by name pattern.
+  # Matching packages are never looked up on composer_repository.
+  # composer_routes:
+  #   "example/*": "https://composer.example.com/packages"
+
   # Conan registry URL
   conan: "https://center.conan.io"
 
