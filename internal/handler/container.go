@@ -27,7 +27,7 @@ const (
 	// defaultNamespaceRoute marks namespace hosts served by the default registry.
 	defaultNamespaceRoute = ""
 	// maxReportedNamespaceRefusals bounds the upstream/ns pairs remembered
-	// for logging refusals once; past it every refusal is logged again.
+	// for logging refusals once; past it further refusals are not logged.
 	maxReportedNamespaceRefusals = 1024
 	// maxNamespaceLength is the longest ns a registry host can produce: a
 	// 253-character DNS name plus ":65535". Longer values are refused before
@@ -76,6 +76,9 @@ type ContainerHandler struct {
 	refusalsMu sync.Mutex
 	// refusals remembers upstream/ns pairs whose refusal was already logged.
 	refusals map[string]struct{}
+	// refusalsFull is set once the refusals set reached its limit and that
+	// was logged.
+	refusalsFull bool
 }
 
 type containerRegistry struct {
@@ -577,22 +580,31 @@ func (h *ContainerHandler) namespaceNamesPrefixUpstream(namespace, name string) 
 // falls back to the registry itself on that 404 without reporting anything,
 // so this line is all an operator gets to see. Each upstream/ns pair is
 // logged once, since a misconfigured node repeats the same request for every
-// layer; ns comes from the client, so the set is bounded and overlong values
+// layer. ns comes from the client, so the set is bounded: once it is full,
+// that is logged one time and later refusals stay quiet. Overlong values
 // never get here (see maxNamespaceLength).
 func (h *ContainerHandler) reportNamespaceRefusal(upstream, key, namespace string) {
 	pair := upstream + "\x00" + key
 	h.refusalsMu.Lock()
-	_, seen := h.refusals[pair]
-	if !seen && len(h.refusals) < maxReportedNamespaceRefusals {
-		if h.refusals == nil {
-			h.refusals = make(map[string]struct{})
-		}
-		h.refusals[pair] = struct{}{}
-	}
-	h.refusalsMu.Unlock()
-	if seen {
+	if _, seen := h.refusals[pair]; seen {
+		h.refusalsMu.Unlock()
 		return
 	}
+	if len(h.refusals) >= maxReportedNamespaceRefusals {
+		announce := !h.refusalsFull
+		h.refusalsFull = true
+		h.refusalsMu.Unlock()
+		if announce {
+			h.warn("too many different ns values refused on OCI upstream prefixes; further refusals are not logged",
+				"limit", maxReportedNamespaceRefusals)
+		}
+		return
+	}
+	if h.refusals == nil {
+		h.refusals = make(map[string]struct{})
+	}
+	h.refusals[pair] = struct{}{}
+	h.refusalsMu.Unlock()
 	h.warn("refusing ns on OCI upstream prefix; if the upstream mirrors this registry, list it in upstream.oci_mirrors",
 		"upstream", upstream, "ns", namespace)
 }
