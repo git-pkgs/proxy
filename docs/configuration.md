@@ -310,10 +310,10 @@ wins, otherwise the alphabetically first name. Pulls through `ns`,
 Requests that combine the `upstream/{name}/` prefix with `ns`, as per-registry
 containerd mirrors with `override_path = true` send them, are routed by the
 prefix. They are accepted only when `ns` is the upstream's own host, a host
-listed for it in `upstream.oci_mirrors`, or Docker Hub. Docker Hub (`docker.io`
-and its aliases) is always accepted there, because Docker Hub repository names
-have two path components and can never start with `upstream/`, so a Docker Hub
-mirror behind any prefix stays reachable. Any other host gets `404 NAME_UNKNOWN`: a containerd `_default`
+listed for it in `upstream.oci_mirrors`, or Docker Hub (`docker.io` and its
+aliases). Docker Hub repository names have two path components and can never
+start with `upstream/`, so a Docker Hub mirror behind any prefix stays
+reachable. Any other host gets `404 NAME_UNKNOWN`: a containerd `_default`
 mirror sends the same request for an image such as
 `unconfigured.example/upstream/ghcr/owner/app`, and that pull must not be
 answered from the `ghcr` upstream.
@@ -330,10 +330,11 @@ upstream:
 ```
 
 Each entry lists bare registry hosts as containerd sends them, optionally with
-a port. A host can be listed for one upstream only. Those hosts select the upstream for unprefixed `ns` requests and are
-accepted as `ns` on its `upstream/{name}/` prefix. A host that is also the host
-of a configured registry URL stays with that registry for unprefixed requests;
-the proxy logs a warning at startup.
+a port. A host can be listed for one upstream only. Those hosts select the
+upstream for unprefixed `ns` requests and are accepted as `ns` on its
+`upstream/{name}/` prefix. A host that is also the host of a configured
+registry URL stays with that registry for unprefixed requests; the proxy logs a
+warning at startup.
 
 A host that is accepted on a prefix route gives up image paths of the form
 `<host>/upstream/{name}/...` under a `_default` mirror: with `ghcr: ["ghcr.io"]`,
