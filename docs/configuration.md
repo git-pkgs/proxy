@@ -309,11 +309,11 @@ wins, otherwise the alphabetically first name. Pulls through `ns`,
 `upstream/{name}/` and unprefixed requests share the same cache entries.
 Requests that combine the `upstream/{name}/` prefix with `ns`, as per-registry
 containerd mirrors with `override_path = true` send them, are routed by the
-prefix. They are refused only when `ns` names a host that belongs to another
-configured route. Docker Hub (`docker.io` and its aliases) is always accepted
-there, because Docker Hub repository names have two path components and can
-never start with `upstream/`, so a Docker Hub mirror behind any prefix stays
-reachable. Any other host gets `404 NAME_UNKNOWN`: a containerd `_default`
+prefix. They are accepted only when `ns` is the upstream's own host, a host
+listed for it in `upstream.oci_mirrors`, or Docker Hub. Docker Hub (`docker.io`
+and its aliases) is always accepted there, because Docker Hub repository names
+have two path components and can never start with `upstream/`, so a Docker Hub
+mirror behind any prefix stays reachable. Any other host gets `404 NAME_UNKNOWN`: a containerd `_default`
 mirror sends the same request for an image such as
 `unconfigured.example/upstream/ghcr/owner/app`, and that pull must not be
 answered from the `ghcr` upstream.
