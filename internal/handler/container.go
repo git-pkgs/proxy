@@ -330,6 +330,9 @@ func (h *ContainerHandler) Routes() http.Handler {
 		case strings.Contains(path, "/tags/list"):
 			// Tags list: GET /v2/{name}/tags/list
 			h.handleTagsList(w, r, path)
+		case referrersPathPattern.MatchString(path):
+			// Referrers: GET /v2/{name}/referrers/{digest}
+			h.handleReferrers(w, r, path)
 		default:
 			http.Error(w, "not found", http.StatusNotFound)
 		}
