@@ -447,6 +447,65 @@ Or pull images directly:
 docker pull localhost:8080/library/nginx:latest
 ```
 
+#### containerd (Kubernetes, k3s, nerdctl)
+
+containerd mirrors send the original registry host in an `ns` query
+parameter, so one mirror entry can serve Docker Hub and the registries
+configured in `upstream.oci` whose URL has no path. Point containerd's CRI
+plugin at a hosts directory in `/etc/containerd/config.toml` and restart
+containerd. For containerd 2.x:
+
+```toml
+version = 3
+
+[plugins."io.containerd.cri.v1.images".registry]
+  config_path = "/etc/containerd/certs.d"
+```
+
+For containerd 1.x:
+
+```toml
+version = 2
+
+[plugins."io.containerd.grpc.v1.cri".registry]
+  config_path = "/etc/containerd/certs.d"
+```
+
+Then create `/etc/containerd/certs.d/_default/hosts.toml`:
+
+```toml
+[host."http://proxy.example.com:8080"]
+  capabilities = ["pull", "resolve"]
+```
+
+To check that CRI picked up the directory, confirm the setting containerd
+runs with and pull through CRI (on k3s use `k3s crictl`):
+
+```bash
+containerd config dump | grep config_path
+crictl pull docker.io/library/nginx:latest
+```
+
+The proxy logs a `container manifest request` line for the pull and, when
+`access_log.path` is set, an access-log entry. `ctr images pull --hosts-dir`
+is no substitute for this check: it reads the directory itself and succeeds
+even while CRI still has no `config_path`.
+
+`docker.io` and the host of `upstream.oci_default` use the default registry;
+the host of each `upstream.oci` URL uses that named registry, and so do the
+hosts listed for it in `upstream.oci_mirrors`. Pulls for any other registry get
+`404 NAME_UNKNOWN`, and containerd falls back to the registry itself. Existing
+per-registry `hosts.toml` files that point at `/v2/upstream/{name}` with
+`override_path = true` keep working for that upstream's own host and for
+Docker Hub. If the upstream is a mirror of the registry the nodes pull from,
+say an Artifactory remote of `ghcr.io`, list that registry in
+`upstream.oci_mirrors` (`ghcr: ["ghcr.io"]`); otherwise those pulls get the
+404 as well. See [docs/configuration.md](docs/configuration.md) for how
+hosts are matched and which entry wins when two share a host. k3s generates
+the hosts directory itself from `/etc/rancher/k3s/registries.yaml`; `mirrors:
+{"*": {endpoint: ["http://proxy.example.com:8080"]}}` produces the same
+`_default` entry.
+
 ### Helm
 
 Configure each HTTP chart repository with a name, then add the matching proxy

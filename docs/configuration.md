@@ -290,6 +290,57 @@ mise section in the README for the client-side `url_replacements`.
 while `upstream.oci` selects named registries through the `upstream/{name}/`
 repository prefix. For example, `oci://proxy.example.com/upstream/ghcr/owner/chart`
 uses the `ghcr` registry with `owner/chart` as its repository.
+
+containerd mirror requests carry the original registry host in an `ns` query
+parameter (see the containerd section in the README). The proxy only looks the
+host up and never connects to it: `docker.io`, `index.docker.io`,
+`registry-1.docker.io` and the host of `upstream.oci_default` select the default
+registry, and the host of each `upstream.oci` URL selects that named registry.
+Hosts are compared case-insensitively. The scheme's default port (443 for
+`https`, 80 for `http`) may be spelled out or left out in the image reference;
+any other port must match exactly, so `https://registry.example:80` and
+`https://registry.example` are two different registries. An
+unknown host returns `404 NAME_UNKNOWN`, so containerd falls back to its next
+host. Registry URLs with a path (for example an Artifactory repository path)
+are not reachable through their own host in `ns`, only through
+`upstream/{name}/` or through `upstream.oci_mirrors`. When two
+entries share a host, the proxy logs a warning at startup; the default registry
+wins, otherwise the alphabetically first name. Pulls through `ns`,
+`upstream/{name}/` and unprefixed requests share the same cache entries.
+Requests that combine the `upstream/{name}/` prefix with `ns`, as per-registry
+containerd mirrors with `override_path = true` send them, are routed by the
+prefix. They are accepted only when `ns` is the upstream's own host, a host
+listed for it in `upstream.oci_mirrors`, or Docker Hub (`docker.io` and its
+aliases). Docker Hub repository names have two path components and can never
+start with `upstream/`, so a Docker Hub mirror behind any prefix stays
+reachable. Any other host gets `404 NAME_UNKNOWN`: a containerd `_default`
+mirror sends the same request for an image such as
+`unconfigured.example/upstream/ghcr/owner/app`, and that pull must not be
+answered from the `ghcr` upstream.
+
+When a named upstream mirrors another registry, for example an Artifactory
+remote of `ghcr.io`, say so in `upstream.oci_mirrors`:
+
+```yaml
+upstream:
+  oci:
+    ghcr: "https://artifactory.example.com/artifactory/api/docker/ghcr-remote"
+  oci_mirrors:
+    ghcr: ["ghcr.io"]
+```
+
+Each entry lists bare registry hosts as containerd sends them, optionally with
+a port. A host can be listed for one upstream only. Those hosts select the
+upstream for unprefixed `ns` requests and are accepted as `ns` on its
+`upstream/{name}/` prefix. A host that is also the host of a configured
+registry URL stays with that registry for unprefixed requests; the proxy logs a
+warning at startup.
+
+A host that is accepted on a prefix route gives up image paths of the form
+`<host>/upstream/{name}/...` under a `_default` mirror: with `ghcr: ["ghcr.io"]`,
+a pull of `ghcr.io/upstream/ghcr/owner/app` is answered with `owner/app` from
+the `ghcr` upstream, because containerd sends the same request for it as a
+per-registry mirror does. The same applies to the upstream's own host.
 When the proxy uses plain HTTP (for example `localhost:8080`), pass
 `--plain-http` to Helm OCI commands.
 

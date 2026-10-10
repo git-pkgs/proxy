@@ -63,6 +63,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -634,6 +635,12 @@ type UpstreamConfig struct {
 	// oci://proxy.example.com/upstream/ghcr/owner/chart.
 	OCI map[string]string `json:"oci" yaml:"oci"`
 
+	// OCIMirrors lists, per upstream.oci name, the registry hosts that
+	// upstream mirrors, for example {"ghcr": ["ghcr.io"]} for an Artifactory
+	// remote of ghcr.io. containerd requests whose ns query parameter names
+	// one of these hosts are served by that upstream.
+	OCIMirrors map[string][]string `json:"oci_mirrors" yaml:"oci_mirrors"`
+
 	// Generic maps names to plain HTTP upstream base URLs, served at
 	// /generic/{name}/. The remaining request path and query string are
 	// appended to the upstream URL. GitHub release asset paths
@@ -691,6 +698,9 @@ func (u *UpstreamConfig) Validate() error {
 	if err := validateNamedUpstreams("upstream.oci", u.OCI); err != nil {
 		return err
 	}
+	if err := validateOCIMirrors(u.OCIMirrors, u.OCI); err != nil {
+		return err
+	}
 	if err := validateNamedUpstreams("upstream.generic", u.Generic); err != nil {
 		return err
 	}
@@ -711,6 +721,56 @@ func (u *UpstreamConfig) Validate() error {
 // debianReservedRepositoryNames are the upstream.debian archive's own root
 // paths, which a repository of the same name would shadow.
 var debianReservedRepositoryNames = []string{"pool", "dists"}
+
+// validateOCIMirrors checks that every upstream.oci_mirrors entry belongs to
+// an upstream.oci name and lists bare registry hosts, the form containerd
+// sends in the ns query parameter. A host may belong to one upstream only;
+// otherwise both prefixes would take it while unprefixed requests silently
+// went to one of them.
+func validateOCIMirrors(mirrors map[string][]string, upstreams map[string]string) error {
+	names := make([]string, 0, len(mirrors))
+	for name := range mirrors {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	owners := make(map[string]string)
+	for _, name := range names {
+		if _, ok := upstreams[name]; !ok {
+			return fmt.Errorf("invalid upstream.oci_mirrors name %q: no upstream.oci entry of that name", name)
+		}
+		for _, host := range mirrors[name] {
+			parsed, err := url.Parse("https://" + host)
+			if host == "" || err != nil || parsed.Host != host {
+				return fmt.Errorf("invalid upstream.oci_mirrors.%s host %q: must be a registry host such as ghcr.io or registry.example:5000", name, host)
+			}
+			key := ociMirrorHostKey(host)
+			if owner, taken := owners[key]; taken && owner != name {
+				return fmt.Errorf("invalid upstream.oci_mirrors.%s host %q: already listed for %s", name, host, owner)
+			}
+			owners[key] = name
+		}
+	}
+	return nil
+}
+
+// ociMirrorHostKey normalizes an upstream.oci_mirrors host the way the
+// container handler builds its ns lookup keys: lowercase, IPv6 literals in
+// brackets, an empty or default https port dropped. Two entries with the same
+// key would select the same route.
+func ociMirrorHostKey(host string) string {
+	name, port, err := net.SplitHostPort(host)
+	if err != nil {
+		name, port = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]"), ""
+	}
+	name = strings.ToLower(name)
+	if strings.Contains(name, ":") {
+		name = "[" + name + "]"
+	}
+	if port == "" || port == "443" {
+		return name
+	}
+	return name + ":" + port
+}
 
 func validateNamedUpstreams(field string, upstreams map[string]string) error {
 	for name, upstreamURL := range upstreams {
