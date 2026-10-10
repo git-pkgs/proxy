@@ -46,6 +46,8 @@ storage:
 | `storage.path` | `PROXY_STORAGE_PATH` | `-storage-path` | Local path (deprecated, use url) |
 | `storage.max_size` | `PROXY_STORAGE_MAX_SIZE` | - | Max cache size (e.g., "10GB") |
 | `storage.cache_artifacts` | `PROXY_STORAGE_CACHE_ARTIFACTS` | - | Store fetched artifacts (default: true); `false` streams them from upstream |
+| `storage.retention.default` | `PROXY_STORAGE_RETENTION_DEFAULT` | - | Evict artifacts not served for this long (e.g. "30d"); see [Retention](#retention) |
+| `storage.retention.sweep_interval` | `PROXY_STORAGE_RETENTION_SWEEP_INTERVAL` | - | How often expired artifacts are looked for (default: "10m") |
 
 `storage.max_size` counts cached artifacts only. An artifact replaced by a refetch stays in storage for at least an hour, or `storage.direct_serve_ttl` if longer, so requests already reading it can finish, and storage use can exceed the limit by what was replaced in that time.
 
@@ -61,6 +63,55 @@ storage:
 Every download is a fresh upstream fetch, and concurrent requests for the same artifact are not combined. Artifacts with a digest known up front (OCI blobs, Swift archives, Helm charts) are verified while streaming: the response is sent chunked, and on a mismatch the connection is aborted before the response completes so the client never receives a tampered artifact as a good one. The same happens when the upstream connection fails mid-download.
 
 `cache_artifacts: false` cannot be combined with `scanning.enabled`, `storage.direct_serve` or `mirror_api`, which all need stored artifacts, and the `mirror` command refuses to run with it.
+
+### Retention
+
+Retention evicts cached artifacts that nobody has downloaded for a while. It works alongside `storage.max_size`: retention removes what has gone unused, and the size limit still applies to whatever is left.
+
+```yaml
+storage:
+  retention:
+    default: "30d"
+    ecosystems:
+      npm: "14d"
+      maven: "0"
+    packages:
+      "pkg:npm/lodash": "0"
+    sweep_interval: "10m"
+```
+
+Each artifact (each version of a package) ages on its own, counted from the last time the proxy served it, or from when it was fetched if it has not been served since. A newer release of the same package does not shorten the life of older versions. Durations take a `d` suffix for days, and `"0"` or an empty value means never evict by age. With no retention configured nothing changes: artifacts stay until `max_size` evicts them.
+
+A package rule wins over an ecosystem rule, which wins over `default`. Package rules are keyed by package PURL without a version. The ecosystems and package rules can only name ecosystems that support retention in the running version; anything else, including a typo, stops the proxy at startup with an error naming the setting. `default` applies only to supported ecosystems. Support is added one ecosystem at a time, so a later release can make an existing `default` cover more ecosystems. On startup the proxy logs which ecosystems retention covers (`covered`) and which ones `default` does not reach yet (`default_not_applied`).
+
+| Ecosystem key | Retention supported | Package rule form |
+|---------------|---------------------|-------------------|
+| `alpine` | no | - |
+| `cargo` | no | - |
+| `composer` | no | - |
+| `conan` | no | - |
+| `conda` | no | - |
+| `cran` | no | - |
+| `deb` | no | - |
+| `gem` | no | - |
+| `golang` | no | - |
+| `helm` | no | - |
+| `hex` | no | - |
+| `julia` | no | - |
+| `maven` | no | - |
+| `npm` | no | - |
+| `nuget` | no | - |
+| `oci` | no | - |
+| `pub` | no | - |
+| `pypi` | no | - |
+| `rpm` | no | - |
+| `swift` | no | - |
+
+An evicted artifact is fetched again from upstream on the next request. Packages preloaded with `proxy mirror` age from the time they were mirrored, so an unused mirrored package is evicted like any other. A registry that removes old releases (Linux distribution archives in particular) cannot serve an evicted version again, so set those ecosystems' rules with that in mind.
+
+Expired artifacts are not deleted right away. Their records are cleared and the files wait in the same queue a replaced artifact goes through, for at least an hour (or `storage.direct_serve_ttl` if longer), so downloads already in progress can finish. `storage.max_size` counts the space as free from the moment the record is cleared. One sweep clears at most 10,000 artifacts, so the first sweep over a large, old cache spreads its evictions, and the downloads that bring popular artifacts back, over several intervals.
+
+With several proxies sharing one database and `database.hit_flush_interval` set, a proxy's sweep cannot see downloads another proxy has not written yet. Keep retention durations well above the flush interval.
 
 ### Amazon S3
 
@@ -490,7 +541,7 @@ gradle:
 |--------|-------------|-------------|
 | `gradle.build_cache.read_only` | `PROXY_GRADLE_BUILD_CACHE_READ_ONLY` | Disable PUT uploads and keep GET/HEAD read-only |
 | `gradle.build_cache.max_upload_size` | `PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE` | Maximum accepted PUT body size (must be > 0) |
-| `gradle.build_cache.max_age` | `PROXY_GRADLE_BUILD_CACHE_MAX_AGE` | Delete entries older than this duration (default `168h`, set `0` to disable) |
+| `gradle.build_cache.max_age` | `PROXY_GRADLE_BUILD_CACHE_MAX_AGE` | Delete entries older than this duration (default `168h`, also accepts days such as `7d`; set `0` to disable) |
 | `gradle.build_cache.max_size` | `PROXY_GRADLE_BUILD_CACHE_MAX_SIZE` | Total size cap for `_gradle/http-build-cache`, deleting oldest first (`0` disables) |
 | `gradle.build_cache.sweep_interval` | `PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL` | Frequency for background eviction sweeps |
 

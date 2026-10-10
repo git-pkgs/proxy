@@ -74,6 +74,20 @@ storage:
   # Empty or "0" means unlimited
   max_size: ""
 
+  # Evict artifacts that have not been served for longer than a duration
+  # ("30d", "72h"), independent of max_size. Resolution order: package rule,
+  # then ecosystem rule, then default. "0" or empty means never evict by age.
+  # The default only applies to ecosystems that support retention; naming an
+  # ecosystem or package that does not is a configuration error. See
+  # docs/configuration.md for the supported ecosystems.
+  retention:
+    default: ""
+    # ecosystems:
+    #   npm: "30d"
+    # packages:
+    #   "pkg:npm/lodash": "0"
+    sweep_interval: "10m"
+
   # Store fetched artifacts. Set to false to stream every download from
   # upstream without storing it; metadata filtering, cooldown and the
   # denylist still apply. Useful when another cache sits in front of the

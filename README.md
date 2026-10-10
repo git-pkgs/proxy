@@ -718,6 +718,8 @@ base_url: "http://localhost:8080"
 storage:
   url: "file:///var/cache/proxy/artifacts"
   max_size: "10GB"  # Optional: evict LRU when exceeded
+  retention:
+    default: "30d"  # Optional: evict artifacts not downloaded for 30 days
 
 database:
   driver: "sqlite"
@@ -1191,6 +1193,7 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 | `proxy_cache_misses_total` | counter | `ecosystem` | Cache misses |
 | `proxy_cache_size_bytes` | gauge | | Total size of cached artifacts |
 | `proxy_cached_artifacts_total` | gauge | | Number of cached artifacts |
+| `proxy_artifacts_evicted_total` | counter | `reason`, `ecosystem` | Artifacts evicted by the size limit (`lru`) or by age (`retention`) |
 | `proxy_upstream_fetch_duration_seconds` | histogram | `ecosystem` | Time spent fetching from upstream |
 | `proxy_upstream_errors_total` | counter | `ecosystem`, `error_type` | Upstream fetch failures |
 | `proxy_storage_operation_duration_seconds` | histogram | `operation` | Storage read/write latency |
@@ -1253,7 +1256,7 @@ The same figures are available as JSON from `GET /stats`, which reports `downloa
 
 `ecosystem` means three slightly different things across `/metrics`, and queries that join across them need to know which.
 
-**From the package record, normalized.** The six `proxy_ecosystem_*` gauges, `proxy_cache_hits_total`, `proxy_cache_misses_total`, `proxy_integrity_failures_total` and the scan metrics. Aliases collapse here: `gem` reads as `rubygems`, `composer` as `packagist`, `go` as `golang`.
+**From the package record, normalized.** The six `proxy_ecosystem_*` gauges, `proxy_cache_hits_total`, `proxy_cache_misses_total`, `proxy_artifacts_evicted_total`, `proxy_integrity_failures_total` and the scan metrics. Aliases collapse here: `gem` reads as `rubygems`, `composer` as `packagist`, `go` as `golang`.
 
 **From the request path.** `proxy_requests_total`, `proxy_request_duration_seconds` and `proxy_response_bytes_total`. The names mostly coincide with the normalized ones -- these also report `rubygems`, `packagist` and `golang` -- but the Debian route reports `debian` where the package record says `deb`, and any path that is not a package endpoint reports `other`, which corresponds to no ecosystem at all.
 
