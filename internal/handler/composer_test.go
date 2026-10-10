@@ -583,6 +583,7 @@ func TestComposerDownloadPinnedBranchCommit(t *testing.T) {
 		name, distPath, filename string
 	}{
 		{"github zipball", "/repos/v/p/zipball/%s", "%s.zip"},
+		{"github zipball without .zip", "/repos/v/p/zipball/%s", "%s"},
 		{"bitbucket archive", "/v/p/get/%s.zip", "%s.zip"},
 	}
 	for _, tt := range tests {
@@ -621,7 +622,6 @@ func TestComposerDownloadUnlistedFile(t *testing.T) {
 		{"gitlab archive", "/api/v4/projects/v%2Fp/repository/archive.zip?sha=" + composerCommitB,
 			"archive.zip?sha=" + composerCommitB, "archive.zip?sha=" + composerCommitA},
 		{"branch name for a commit", "/repos/v/p/zipball/" + composerCommitB, composerCommitB + ".zip", "master.zip"},
-		{"commit without zip extension", "/repos/v/p/zipball/" + composerCommitB, composerCommitB + ".zip", composerCommitA},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -655,6 +655,8 @@ func TestComposerUpstreamDistURL(t *testing.T) {
 		{"listed file", zipball + composerCommitB, "zip", composerCommitB + ".zip", zipball + composerCommitB},
 		{"older commit", zipball + composerCommitB, "zip", composerCommitA + ".zip", zipball + composerCommitA},
 		{"sha256 commit", zipball + composerCommitB, "zip", sha256A + ".zip", zipball + sha256A},
+		{"bare listed commit", zipball + composerCommitB, "zip", composerCommitB, zipball + composerCommitB},
+		{"bare older commit", zipball + composerCommitB, "zip", composerCommitA, zipball + composerCommitA},
 		{"tar dist keeps bare name", zipball + composerCommitB, "tar", composerCommitA, zipball + composerCommitA},
 		{"short hash", zipball + composerCommitB, "zip", "1111111.zip", ""},
 		{"upper-case hash", zipball + composerCommitB, "zip", strings.ToUpper(sha256A) + ".zip", ""},

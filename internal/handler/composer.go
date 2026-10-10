@@ -365,6 +365,11 @@ var composerCommitPattern = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
 // does not have.
 func upstreamDistURL(listedURL, distType, filename string) (string, bool) {
 	listed := distFilename(listedURL, distType)
+	// Proxy versions before the .zip suffix handed out bare commit names,
+	// and lock files written back then still ask for them.
+	if bare := distFilename(listedURL, ""); listed != bare && path.Ext(filename) == "" {
+		filename += listed[len(bare):]
+	}
 	if filename == listed {
 		return listedURL, true
 	}
