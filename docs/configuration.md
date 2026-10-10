@@ -96,7 +96,7 @@ A package rule wins over an ecosystem rule, which wins over `default`. Package r
 | `cran` | no | - |
 | `deb` | no | - |
 | `gem` | no | - |
-| `golang` | no | - |
+| `golang` | yes | `pkg:golang/github.com/stretchr/testify`, the module path as in `go.mod`; case doesn't matter. A major version like `/v2` (or `.v3` on gopkg.in) is a module of its own and needs its own rule. The `!`-escaped form from proxy URLs and the module cache (`github.com/!azure/...`) is refused. |
 | `helm` | no | - |
 | `hex` | no | - |
 | `julia` | no | - |
