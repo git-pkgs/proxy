@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/git-pkgs/proxy/internal/retention"
 )
 
 const (
@@ -32,6 +34,12 @@ const (
 	// body be refused before the upstream request starts.
 	npmSecurityMaxBody = 16 << 20
 )
+
+// npm tarballs are stored under pkg:npm/{name} as purl builds it, so package
+// rules use the default key mapping.
+func init() {
+	retention.Default.Register(retention.Spec{Key: "npm", CanonicalPackage: retention.DefaultCanonical("npm")})
+}
 
 // NPMHandler handles npm registry protocol requests.
 type NPMHandler struct {

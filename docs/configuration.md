@@ -101,7 +101,7 @@ A package rule wins over an ecosystem rule, which wins over `default`. Package r
 | `hex` | no | - |
 | `julia` | no | - |
 | `maven` | no | - |
-| `npm` | no | - |
+| `npm` | yes | `pkg:npm/lodash`, `pkg:npm/@babel/core` |
 | `nuget` | no | - |
 | `oci` | no | - |
 | `pub` | no | - |
