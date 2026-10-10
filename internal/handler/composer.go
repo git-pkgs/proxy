@@ -359,11 +359,11 @@ var composerCommitPattern = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
 
 // upstreamDistURL returns the upstream URL of the archive served as filename,
 // given the dist URL the version's metadata lists now. A branch version only
-// lists its current head while lock files pin older commits, so a dist URL
-// ending in a commit hash is rebuilt for the requested commit. Any other name
-// gives false: fetching the listed archive would cache it under a name it
-// does not have.
-func upstreamDistURL(listedURL, distType, filename string) (string, bool) {
+// lists its current head while lock files pin older commits, so for a branch
+// a dist URL ending in a commit hash is rebuilt for the requested commit. A
+// tagged release has to ask for the listed name. Any other name gives false:
+// fetching the listed archive would cache it under a name it does not have.
+func upstreamDistURL(listedURL, distType, filename string, branch bool) (string, bool) {
 	listed := distFilename(listedURL, distType)
 	// Proxy versions before the .zip suffix handed out bare commit names,
 	// and lock files written back then still ask for them.
@@ -376,7 +376,7 @@ func upstreamDistURL(listedURL, distType, filename string) (string, bool) {
 	ext := path.Ext(listed)
 	commit := strings.TrimSuffix(listed, ext)
 	requested, ok := strings.CutSuffix(filename, ext)
-	if !ok || !composerCommitPattern.MatchString(commit) || !composerCommitPattern.MatchString(requested) {
+	if !branch || !ok || !composerCommitPattern.MatchString(commit) || !composerCommitPattern.MatchString(requested) {
 		return "", false
 	}
 	idx := strings.LastIndex(listedURL, commit)
@@ -512,7 +512,7 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 		requested += "?" + r.URL.RawQuery
 	}
 	listedURL := downloadURL
-	downloadURL, ok := upstreamDistURL(listedURL, distType, requested)
+	downloadURL, ok := upstreamDistURL(listedURL, distType, requested, isDevVersion(version))
 	if !ok {
 		h.proxy.Logger.Info("composer file not in upstream metadata",
 			"package", packageName, "version", version,

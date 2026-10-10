@@ -530,14 +530,15 @@ const (
 )
 
 // setupComposerBranch returns a caching Composer handler whose upstream lists
-// distPath as the dist of v/p's dev-master and serves archives by request URI.
+// distPath as the dist of v/p's dev-master and 1.0.0 and serves archives by
+// request URI.
 func setupComposerBranch(t *testing.T, distPath string, archives map[string]string) (http.Handler, *Proxy) {
 	t.Helper()
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/p2/v/p~dev.json" {
-			_, _ = fmt.Fprintf(w, `{"packages":{"v/p":[{"version":"dev-master","dist":{"url":%q,"type":"zip"}}]}}`,
-				srv.URL+distPath)
+		if r.URL.Path == "/p2/v/p.json" || r.URL.Path == "/p2/v/p~dev.json" {
+			dist := fmt.Sprintf(`"dist":{"url":%q,"type":"zip"}`, srv.URL+distPath)
+			_, _ = fmt.Fprintf(w, `{"packages":{"v/p":[{"version":"dev-master",%s},{"version":"1.0.0",%s}]}}`, dist, dist)
 			return
 		}
 		body, ok := archives[r.URL.RequestURI()]
@@ -646,6 +647,33 @@ func TestComposerDownloadUnlistedFile(t *testing.T) {
 	}
 }
 
+// TestComposerDownloadTaggedReleaseCommit checks that a tagged release is only
+// served as the commit its metadata lists, so a client cannot have another
+// commit stored as that release.
+func TestComposerDownloadTaggedReleaseCommit(t *testing.T) {
+	zipball := "/repos/v/p/zipball/"
+	h, proxy := setupComposerBranch(t, zipball+composerCommitB, map[string]string{
+		zipball + composerCommitA: "commit A",
+		zipball + composerCommitB: "commit B",
+	})
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/files/v/p/1.0.0/"+composerCommitA+".zip", nil))
+	if w.Code != http.StatusNotFound {
+		t.Errorf("other commit: status %d, body %q, want 404", w.Code, w.Body.String())
+	}
+	cached, err := proxy.GetCachedArtifact(context.Background(), "composer", "v/p", "1.0.0", composerCommitA+".zip")
+	if err != nil || cached != nil {
+		t.Errorf("other commit cached as 1.0.0: %v, %v", cached, err)
+	}
+
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/files/v/p/1.0.0/"+composerCommitB+".zip", nil))
+	if w.Code != http.StatusOK || w.Body.String() != "commit B" {
+		t.Errorf("listed commit: status %d, body %q, want 200 %q", w.Code, w.Body.String(), "commit B")
+	}
+}
+
 func TestComposerUpstreamDistURL(t *testing.T) {
 	const zipball = "https://api.github.com/repos/v/p/zipball/"
 	sha256A := strings.Repeat("a", 64)
@@ -664,11 +692,14 @@ func TestComposerUpstreamDistURL(t *testing.T) {
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got, ok := upstreamDistURL(tt.listed, tt.distType, tt.filename)
+			got, ok := upstreamDistURL(tt.listed, tt.distType, tt.filename, true)
 			if got != tt.want || ok != (tt.want != "") {
 				t.Errorf("upstreamDistURL(%q, %q) = %q, %v; want %q", tt.listed, tt.filename, got, ok, tt.want)
 			}
 		})
+	}
+	if got, ok := upstreamDistURL(zipball+composerCommitB, "zip", composerCommitA+".zip", false); ok {
+		t.Errorf("tagged release rebuilt to %q, want only the listed archive", got)
 	}
 }
 
