@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/url"
 	"reflect"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -180,15 +181,13 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		accept = contentTypeJSON
 	}
 
-	if rewritten, ok := h.proxy.storedRewrite("npm", packageName, h.proxyURL, packageName); ok {
-		w.Header().Set(headerContentType, contentTypeJSON)
-		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(rewritten)
+	if stored, ok := h.proxy.storedRewrite("npm", packageName, h.proxyURL, packageName); ok {
+		serveRewrittenMetadata(w, r, stored)
 		return
 	}
 
-	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "npm", packageName, upstreamURL, accept)
-	if err != nil {
+	upstream := h.proxy.fetchMetadataDocument(r.Context(), "npm", packageName, upstreamURL, accept)
+	if err := upstream.err; err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			JSONError(w, http.StatusNotFound, "package not found")
 			return
@@ -198,8 +197,8 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	rewritten, err := h.proxy.cachedRewrite(r.Context(), "npm", h.proxyURL, packageName, body, func(b []byte) ([]byte, error) {
-		return h.rewriteMetadata(packageName, b)
+	rewritten, err := h.proxy.cachedRewrite(r.Context(), "npm", h.proxyURL, packageName, upstream.body, upstream.digest, func(b []byte) ([]byte, []string, error) {
+		return h.rewriteMetadataKeeping(packageName, b)
 	})
 	if err != nil {
 		if r.Context().Err() != nil {
@@ -213,13 +212,11 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		h.proxy.Logger.Warn("failed to rewrite metadata, proxying original", "error", err)
 		w.Header().Set(headerContentType, contentTypeJSON)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(body)
+		_, _ = w.Write(upstream.body)
 		return
 	}
 
-	w.Header().Set(headerContentType, contentTypeJSON)
-	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(rewritten)
+	serveRewrittenMetadata(w, r, rewritten)
 }
 
 // rewriteMetadata rewrites tarball URLs in npm package metadata to point at this proxy.
@@ -233,17 +230,24 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 // map and dist-tags when filtering changed them, are written fresh. Everything
 // else reaches the client byte for byte as upstream sent it.
 func (h *NPMHandler) rewriteMetadata(packageName string, body []byte) ([]byte, error) {
+	out, _, err := h.rewriteMetadataKeeping(packageName, body)
+	return out, err
+}
+
+// rewriteMetadataKeeping is rewriteMetadata that also reports the versions it
+// kept.
+func (h *NPMHandler) rewriteMetadataKeeping(packageName string, body []byte) ([]byte, []string, error) {
 	doc, err := indexNPMPackument(body)
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 
 	versionsRaw := doc.value(doc.versionsAt)
 	if len(versionsRaw) == 0 || versionsRaw[0] != '{' {
 		if len(h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName))) != 0 {
-			return nil, errors.New("npm metadata has no versions object")
+			return nil, nil, errors.New("npm metadata has no versions object")
 		}
-		return body, nil // No versions to rewrite
+		return body, nil, nil // No versions to rewrite
 	}
 
 	// The filters only look at which versions exist, so they run on a map of
@@ -254,7 +258,7 @@ func (h *NPMHandler) rewriteMetadata(packageName string, body []byte) ([]byte, e
 		versions[version] = nil
 		return err
 	}); err != nil {
-		return nil, err
+		return nil, nil, err
 	}
 	metadata := map[string]any{}
 	timeMap := doc.decodeObject(doc.timeAt, metadata, "time")
@@ -267,7 +271,7 @@ func (h *NPMHandler) rewriteMetadata(packageName string, body []byte) ([]byte, e
 
 	// Untouched members are copied as they are; the three the filters
 	// handled are written from their filtered state, and only when it changed.
-	return doc.write(func(out *bytes.Buffer, i int) error {
+	out, err := doc.write(func(out *bytes.Buffer, i int) error {
 		switch {
 		case i == doc.versionsAt:
 			return h.writeNPMVersions(out, packageName, versionsRaw, versions)
@@ -285,6 +289,7 @@ func (h *NPMHandler) rewriteMetadata(packageName string, body []byte) ([]byte, e
 			return nil
 		}
 	})
+	return out, slices.Collect(maps.Keys(versions)), err
 }
 
 // npmPackument is a packument's top-level members as offsets into its bytes,

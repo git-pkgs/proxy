@@ -31,13 +31,18 @@ func (r *countingRewrite) fn(in []byte) ([]byte, error) {
 	return []byte(strings.ToUpper(string(in))), nil
 }
 
+func (r *countingRewrite) keeping(in []byte) ([]byte, []string, error) {
+	out, err := r.fn(in)
+	return out, nil, err
+}
+
 func TestRewriteCache_RepeatServesCachedRewrite(t *testing.T) {
 	c := newRewriteCache(1 << 20)
 	var r countingRewrite
 	key := rewriteCacheKey("npm", "http://proxy", "left-pad", []byte("doc"))
 
 	for range 3 {
-		out, err := c.rewrite(context.Background(), key, []byte("doc"), r.fn)
+		out, _, err := c.rewrite(context.Background(), key, []byte("doc"), r.fn)
 		if err != nil || string(out) != "DOC" {
 			t.Fatalf("rewrite = %q, %v", out, err)
 		}
@@ -53,7 +58,7 @@ func TestRewriteCache_NewUpstreamBytesRewriteAgain(t *testing.T) {
 
 	for _, doc := range []string{"v1", "v2"} {
 		key := rewriteCacheKey("npm", "http://proxy", "left-pad", []byte(doc))
-		out, err := c.rewrite(context.Background(), key, []byte(doc), r.fn)
+		out, _, err := c.rewrite(context.Background(), key, []byte(doc), r.fn)
 		if err != nil || string(out) != strings.ToUpper(doc) {
 			t.Fatalf("rewrite(%s) = %q, %v", doc, out, err)
 		}
@@ -75,7 +80,7 @@ func TestRewriteCache_ConcurrentRequestsShareRewrite(t *testing.T) {
 
 	outs := make(chan string, n)
 	run := func() {
-		out, err := c.rewrite(context.Background(), key, []byte("doc"), r.fn)
+		out, _, err := c.rewrite(context.Background(), key, []byte("doc"), r.fn)
 		if err != nil {
 			t.Error(err)
 		}
@@ -108,20 +113,20 @@ func TestRewriteCache_WaiterLeavingKeepsRewrite(t *testing.T) {
 
 	first := make(chan error, 1)
 	go func() {
-		_, err := c.rewrite(context.Background(), key, []byte("doc"), r.fn)
+		_, _, err := c.rewrite(context.Background(), key, []byte("doc"), r.fn)
 		first <- err
 	}()
 	<-r.entered
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
-	if _, err := c.rewrite(ctx, key, []byte("doc"), r.fn); !errors.Is(err, context.Canceled) {
+	if _, _, err := c.rewrite(ctx, key, []byte("doc"), r.fn); !errors.Is(err, context.Canceled) {
 		t.Errorf("waiter err = %v, want context.Canceled", err)
 	}
 	close(r.release)
 	if err := <-first; err != nil {
 		t.Fatal(err)
 	}
-	if out, err := c.rewrite(context.Background(), key, []byte("doc"), r.fn); err != nil || string(out) != "DOC" {
+	if out, _, err := c.rewrite(context.Background(), key, []byte("doc"), r.fn); err != nil || string(out) != "DOC" {
 		t.Errorf("cached rewrite = %q, %v", out, err)
 	}
 	if got := r.calls.Load(); got != 1 {
@@ -135,18 +140,18 @@ func TestRewriteCache_EvictsLeastRecentlyUsed(t *testing.T) {
 	keyFor := func(doc string) string { return rewriteCacheKey("npm", "http://proxy", doc, []byte(doc)) }
 
 	for _, doc := range []string{"aaa", "bbb"} {
-		_, _ = c.rewrite(context.Background(), keyFor(doc), []byte(doc), r.fn)
+		_, _, _ = c.rewrite(context.Background(), keyFor(doc), []byte(doc), r.fn)
 	}
-	_, _ = c.rewrite(context.Background(), keyFor("aaa"), []byte("aaa"), r.fn) // aaa is now the most recent
-	_, _ = c.rewrite(context.Background(), keyFor("ccc"), []byte("ccc"), r.fn) // evicts bbb
+	_, _, _ = c.rewrite(context.Background(), keyFor("aaa"), []byte("aaa"), r.fn) // aaa is now the most recent
+	_, _, _ = c.rewrite(context.Background(), keyFor("ccc"), []byte("ccc"), r.fn) // evicts bbb
 
 	before := r.calls.Load()
-	_, _ = c.rewrite(context.Background(), keyFor("aaa"), []byte("aaa"), r.fn)
-	_, _ = c.rewrite(context.Background(), keyFor("ccc"), []byte("ccc"), r.fn)
+	_, _, _ = c.rewrite(context.Background(), keyFor("aaa"), []byte("aaa"), r.fn)
+	_, _, _ = c.rewrite(context.Background(), keyFor("ccc"), []byte("ccc"), r.fn)
 	if got := r.calls.Load() - before; got != 0 {
 		t.Errorf("aaa and ccc rewritten %d times, want both still cached", got)
 	}
-	_, _ = c.rewrite(context.Background(), keyFor("bbb"), []byte("bbb"), r.fn)
+	_, _, _ = c.rewrite(context.Background(), keyFor("bbb"), []byte("bbb"), r.fn)
 	if got := r.calls.Load() - before; got != 1 {
 		t.Errorf("bbb should have been evicted and rewritten")
 	}
@@ -157,7 +162,7 @@ func TestRewriteCache_OutputLargerThanCacheIsNotStored(t *testing.T) {
 	var r countingRewrite
 	key := rewriteCacheKey("npm", "http://proxy", "big", []byte("big"))
 
-	_, _ = c.rewrite(context.Background(), key, []byte("big"), r.fn)
+	_, _, _ = c.rewrite(context.Background(), key, []byte("big"), r.fn)
 	if c.len() != 0 {
 		t.Errorf("cached %d entries, want 0", c.len())
 	}
@@ -170,7 +175,7 @@ func TestRewriteCache_ErrorsAreNotCached(t *testing.T) {
 	key := rewriteCacheKey("npm", "http://proxy", "broken", []byte("doc"))
 
 	for range 2 {
-		if _, err := c.rewrite(context.Background(), key, []byte("doc"), failing); err == nil {
+		if _, _, err := c.rewrite(context.Background(), key, []byte("doc"), failing); err == nil {
 			t.Fatal("expected the rewrite error")
 		}
 	}
@@ -185,7 +190,7 @@ func TestCachedRewrite_DisabledRewritesEveryTime(t *testing.T) {
 	var r countingRewrite
 
 	for range 2 {
-		_, _ = proxy.cachedRewrite(context.Background(), "npm", "http://proxy", "left-pad", []byte("doc"), r.fn)
+		_, _ = proxy.cachedRewrite(context.Background(), "npm", "http://proxy", "left-pad", []byte("doc"), "", r.keeping)
 	}
 	if got := r.calls.Load(); got != 2 {
 		t.Errorf("rewrites = %d, want 2", got)
@@ -202,7 +207,7 @@ func TestCachedRewrite_CooldownBypassesCache(t *testing.T) {
 	var r countingRewrite
 
 	for range 2 {
-		_, _ = proxy.cachedRewrite(context.Background(), "npm", "http://proxy", "left-pad", []byte("doc"), r.fn)
+		_, _ = proxy.cachedRewrite(context.Background(), "npm", "http://proxy", "left-pad", []byte("doc"), "", r.keeping)
 	}
 	if got := r.calls.Load(); got != 2 {
 		t.Errorf("rewrites = %d, want 2", got)

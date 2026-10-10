@@ -1078,24 +1078,35 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 // joined a fetch gets its own validation error directly. It must not modify the
 // body, which joined callers share.
 func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, acceptEncoding string, validate func([]byte) error, acceptHeaders ...string) ([]byte, string, string, error) {
+	accept := contentTypeJSON
+	if len(acceptHeaders) > 0 && acceptHeaders[0] != "" {
+		accept = acceptHeaders[0]
+	}
+	res := p.lookupMetadata(ctx, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding, validate)
+	return res.body, res.contentType, res.contentEncoding, res.err
+}
+
+// fetchMetadataDocument is FetchOrCacheMetadata for callers that rewrite the
+// document and need to know which one they got: the result carries its
+// digest along with the body.
+func (p *Proxy) fetchMetadataDocument(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept string) metadataResult {
+	return p.lookupMetadata(ctx, ecosystem, cacheKey, upstreamURL, accept, "", nil)
+}
+
+// lookupMetadata implements fetchOrCacheMetadata and fetchMetadataDocument.
+func (p *Proxy) lookupMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding string, validate func([]byte) error) metadataResult {
 	if containsPathTraversal(cacheKey) {
-		return nil, "", "", fmt.Errorf("invalid cache key: %q", cacheKey)
+		return metadataResult{err: fmt.Errorf("invalid cache key: %q", cacheKey)}
 	}
 
 	// Serve from cache if within TTL (skip upstream entirely)
 	if _, hit := p.cachedMetadataState(ctx, ecosystem, cacheKey, validate); hit != nil {
 		metrics.RecordCacheHit(ecosystem)
-		return hit.body, hit.contentType, hit.contentEncoding, nil
+		return *hit
 	}
 	p.recordMetadataCacheMiss(ecosystem)
 
-	accept := contentTypeJSON
-	if len(acceptHeaders) > 0 && acceptHeaders[0] != "" {
-		accept = acceptHeaders[0]
-	}
-
-	res := p.coalescedMetadataMiss(ctx, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding, validate)
-	return res.body, res.contentType, res.contentEncoding, res.err
+	return p.coalescedMetadataMiss(ctx, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding, validate)
 }
 
 // coalescedMetadataMiss handles a metadata cache miss, sharing one upstream
@@ -1136,7 +1147,8 @@ func (p *Proxy) cachedMetadataState(ctx context.Context, ecosystem, cacheKey str
 	if entry != nil && p.MetadataTTL > 0 && entry.FetchedAt.Valid && time.Since(entry.FetchedAt.Time) < p.MetadataTTL {
 		data, ct, err := p.readCachedMetadata(ctx, entry, validate)
 		if err == nil {
-			return entry, &metadataResult{body: data, contentType: ct, contentEncoding: entry.ContentEncoding.String}
+			hit := metadataResult{body: data, contentType: ct, contentEncoding: entry.ContentEncoding.String}.describedBy(entry)
+			return entry, &hit
 		}
 		if validate != nil {
 			return nil, nil
@@ -1159,10 +1171,11 @@ func (p *Proxy) fetchMetadataFromUpstream(ctx context.Context, ecosystem, cacheK
 		err = validate(meta.body)
 	}
 	if err == nil {
+		var digest string
 		if p.CacheMetadata {
-			p.cacheMetadataBlob(ctx, ecosystem, cacheKey, metadataStoragePath(ecosystem, cacheKey), meta)
+			digest = p.cacheMetadataBlob(ctx, ecosystem, cacheKey, metadataStoragePath(ecosystem, cacheKey), meta)
 		}
-		return metadataResult{body: meta.body, contentType: meta.contentType, contentEncoding: meta.contentEncoding}
+		return metadataResult{body: meta.body, contentType: meta.contentType, contentEncoding: meta.contentEncoding, digest: digest}
 	}
 
 	// Upstream failed -- fall back to cache if available
@@ -1185,7 +1198,7 @@ func (p *Proxy) fetchMetadataFromUpstream(ctx context.Context, ecosystem, cacheK
 
 	p.Logger.Info("serving metadata from cache",
 		"ecosystem", ecosystem, "key", cacheKey)
-	return metadataResult{body: data, contentType: ct, contentEncoding: entry.ContentEncoding.String}
+	return metadataResult{body: data, contentType: ct, contentEncoding: entry.ContentEncoding.String}.describedBy(entry)
 }
 
 // metadataResult is what a metadata lookup hands back. A shared fetch gives
@@ -1194,7 +1207,19 @@ type metadataResult struct {
 	body            []byte
 	contentType     string
 	contentEncoding string
-	err             error
+	// digest identifies body when the metadata cache stored it, and is
+	// empty otherwise.
+	digest string
+	err    error
+}
+
+// describedBy returns res with the digest that entry, the cache row its body
+// was read for, records.
+func (res metadataResult) describedBy(entry *database.MetadataCacheEntry) metadataResult {
+	if entry.ContentDigest.Valid {
+		res.digest = entry.ContentDigest.String
+	}
+	return res
 }
 
 // inflightMetadata is one metadata fetch that concurrent callers share. res is
@@ -1377,16 +1402,22 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 	return meta, nil
 }
 
-// cacheMetadataBlob stores metadata bytes in storage and updates the database.
-func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, storagePath string, meta *upstreamMetadata) {
+// cacheMetadataBlob stores metadata bytes in storage and updates the
+// database. It returns the digest it recorded for the bytes, or "" when they
+// were not cached.
+func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, storagePath string, meta *upstreamMetadata) string {
 	if p.DB == nil || p.Storage == nil {
-		return
+		return ""
 	}
 
 	size, hash, err := p.Storage.Store(ctx, storagePath, bytes.NewReader(meta.body))
 	if err != nil {
 		p.Logger.Warn("failed to cache metadata", "ecosystem", ecosystem, "key", cacheKey, "error", err)
-		return
+		return ""
+	}
+	var digest string
+	if hash != "" {
+		digest = "sha256:" + hash
 	}
 
 	err = p.DB.UpsertMetadataCache(&database.MetadataCacheEntry{
@@ -1398,7 +1429,7 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 		ContentEncoding: sql.NullString{String: meta.contentEncoding, Valid: meta.contentEncoding != ""},
 		// The digest identifies the stored bytes, so a rewrite cached for them
 		// can be found without reading them back (see storedRewrite).
-		ContentDigest: sql.NullString{String: "sha256:" + hash, Valid: hash != ""},
+		ContentDigest: sql.NullString{String: digest, Valid: digest != ""},
 		Size:          sql.NullInt64{Int64: size, Valid: true},
 		LastModified:  sql.NullTime{Time: meta.lastModified, Valid: !meta.lastModified.IsZero()},
 		FetchedAt:     sql.NullTime{Time: time.Now(), Valid: true},
@@ -1412,7 +1443,9 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 		if delErr := p.Storage.Delete(ctx, storagePath); delErr != nil {
 			p.Logger.Warn("failed to discard metadata blob", "ecosystem", ecosystem, "key", cacheKey, "error", delErr)
 		}
+		return ""
 	}
+	return digest
 }
 
 // currentMetadataEntry re-reads the metadata cache row and returns it, or
