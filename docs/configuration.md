@@ -100,7 +100,7 @@ A package rule wins over an ecosystem rule, which wins over `default`. Package r
 | `helm` | no | - |
 | `hex` | no | - |
 | `julia` | no | - |
-| `maven` | no | - |
+| `maven` | yes | `pkg:maven/com.google.guava/guava`, group and artifact as published, case included. Gradle build cache entries are not covered; they use `gradle.build_cache.max_age`. |
 | `npm` | no | - |
 | `nuget` | no | - |
 | `oci` | no | - |
