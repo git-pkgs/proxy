@@ -62,7 +62,10 @@ func (s Spec) dbEcosystems() []string {
 
 // DefaultCanonical returns a CanonicalPackage for ecosystems that store the
 // package PURL exactly as purl.MakePURLString builds it from the PURL's full
-// name.
+// name. It accepts a PURL only when building it back that way gives the same
+// package, so for an ecosystem that stores a different form, such as one
+// with a default namespace, it refuses the key instead of producing one
+// that never matches. Such ecosystems need their own CanonicalPackage.
 func DefaultCanonical(key string) func(p *purl.PURL) (string, bool) {
 	purlType := purl.EcosystemToPURLType(key)
 	return func(p *purl.PURL) (string, bool) {
@@ -70,7 +73,11 @@ func DefaultCanonical(key string) func(p *purl.PURL) (string, bool) {
 			return "", false
 		}
 		canonical := purl.MakePURLString(key, p.FullName(), "")
-		return canonical, canonical != ""
+		if canonical == "" {
+			return "", false
+		}
+		given := purl.New(p.Type, p.Namespace, p.Name, "", nil).String()
+		return canonical, canonical == given
 	}
 }
 

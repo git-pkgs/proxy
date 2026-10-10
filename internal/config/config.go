@@ -431,8 +431,8 @@ type RetentionConfig struct {
 	// package PURL.
 	Packages map[string]string `json:"packages" yaml:"packages"`
 
-	// SweepInterval is how often expired artifacts are looked for.
-	// Default: "10m".
+	// SweepInterval is how often expired artifacts are looked for, at least
+	// one minute. Default: "10m".
 	SweepInterval string `json:"sweep_interval" yaml:"sweep_interval"`
 }
 
@@ -1302,6 +1302,7 @@ const (
 	defaultGradleSweepIntervalStr        = "10m"
 	defaultRetentionSweepInterval        = 10 * time.Minute
 	defaultRetentionSweepIntervalStr     = "10m"
+	minRetentionSweepInterval            = time.Minute
 	maxDurationDays                      = 36500
 	defaultScanningTimeoutStr            = "30s"
 )

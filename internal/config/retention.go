@@ -60,8 +60,9 @@ func (c *Config) RetentionRules(reg *retention.Registry) (retention.Rules, error
 		if err != nil {
 			return retention.Rules{}, fmt.Errorf("invalid storage.retention.sweep_interval: %w", err)
 		}
-		if d <= 0 {
-			return retention.Rules{}, fmt.Errorf("invalid storage.retention.sweep_interval %q: must be > 0", r.SweepInterval)
+		if d < minRetentionSweepInterval {
+			return retention.Rules{}, fmt.Errorf("invalid storage.retention.sweep_interval %q: must be at least %s",
+				r.SweepInterval, minRetentionSweepInterval)
 		}
 	}
 
@@ -137,7 +138,7 @@ func (c *Config) ParseRetentionSweepInterval() time.Duration {
 		return defaultRetentionSweepInterval
 	}
 	d, err := parseDayDuration(c.Storage.Retention.SweepInterval)
-	if err != nil || d <= 0 {
+	if err != nil || d < minRetentionSweepInterval {
 		return defaultRetentionSweepInterval
 	}
 	return d

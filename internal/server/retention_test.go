@@ -10,8 +10,10 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/proxy/internal/storage"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 const retentionDay = 24 * time.Hour
@@ -283,5 +285,95 @@ func TestReclaimDueRespectsBudget(t *testing.T) {
 
 	if got := queuedPaths(t, db); len(got) != 1 {
 		t.Errorf("queue = %v, want the entry kept with no budget", got)
+	}
+}
+
+// A hit that lands after the scan but before the clear keeps the artifact:
+// the clear re-checks the artifact against its own rule's cutoff.
+func TestClearIfExpiredRechecksAgainstItsRule(t *testing.T) {
+	db, store := setupEvictionTest(t)
+	now := time.Now()
+	old := now.Add(-30 * retentionDay)
+	seedAgedArtifact(t, db, store, "npm", "npm", "racing", old, old)
+	rules := retention.Rules{Ecosystems: map[string]time.Duration{"npm": retentionDay}}
+
+	candidates, err := db.GetRetentionCandidates(0, 10, now.Add(-retentionDay))
+	if err != nil || len(candidates) != 1 {
+		t.Fatalf("GetRetentionCandidates = %v, %v, want one candidate", candidates, err)
+	}
+	if err := db.RecordArtifactHit("pkg:npm/racing@1.0.0", "racing-1.0.0.tgz"); err != nil {
+		t.Fatalf("RecordArtifactHit: %v", err)
+	}
+
+	if clearIfExpired(db, discardLogger(), retentionRegistry(), rules, now.Add(time.Minute), candidates[0]) {
+		t.Error("cleared an artifact served after the scan")
+	}
+	if !isCached(t, db, "npm", "racing") {
+		t.Error("artifact served after the scan is no longer cached")
+	}
+}
+
+// When buffered hits cannot be written, the sweep must not run on the stale
+// access times they would have replaced.
+func TestSweepRetentionSkipsWhenHitsCannotBeWritten(t *testing.T) {
+	db, store := setupEvictionTest(t)
+	now := time.Now()
+	old := now.Add(-30 * retentionDay)
+	seedAgedArtifact(t, db, store, "npm", "npm", "busy", old, old)
+	db.BatchHits(time.Hour, nil)
+	if err := db.RecordArtifactHit("pkg:npm/busy@1.0.0", "busy-1.0.0.tgz"); err != nil {
+		t.Fatalf("RecordArtifactHit: %v", err)
+	}
+	// Refuse hit writes only; clearing a record leaves hit_count alone.
+	if _, err := db.Exec(`CREATE TRIGGER refuse_hits BEFORE UPDATE ON artifacts
+		WHEN NEW.hit_count > OLD.hit_count BEGIN SELECT RAISE(ABORT, 'hits refused'); END`); err != nil {
+		t.Fatalf("creating trigger: %v", err)
+	}
+
+	rules := retention.Rules{Ecosystems: map[string]time.Duration{"npm": retentionDay}}
+	sweepRetention(context.Background(), db, discardLogger(), retentionRegistry(), rules, now)
+
+	if !isCached(t, db, "npm", "busy") {
+		t.Error("sweep cleared an artifact whose buffered hit could not be written")
+	}
+	if _, err := db.Exec(`DROP TRIGGER refuse_hits`); err != nil {
+		t.Fatalf("dropping trigger: %v", err)
+	}
+}
+
+func TestEvictionsAreCounted(t *testing.T) {
+	db, store := setupEvictionTest(t)
+	ctx := context.Background()
+	now := time.Now()
+	old := now.Add(-30 * retentionDay)
+
+	retained := testutil.ToFloat64(metrics.ArtifactsEvicted.WithLabelValues("retention", "rubygems"))
+	seedAgedArtifact(t, db, store, "gem", "gem", "expired", old, old)
+	rules := retention.Rules{Ecosystems: map[string]time.Duration{"gem": retentionDay}}
+	sweepRetention(ctx, db, discardLogger(), retentionRegistry(), rules, now)
+	if got := testutil.ToFloat64(metrics.ArtifactsEvicted.WithLabelValues("retention", "rubygems")) - retained; got != 1 {
+		t.Errorf("retention evictions counted = %v, want 1", got)
+	}
+
+	lru := testutil.ToFloat64(metrics.ArtifactsEvicted.WithLabelValues("lru", "npm"))
+	seedArtifact(t, ctx, db, store, "big", 500, now)
+	evictLRU(ctx, db, store, discardLogger(), 100)
+	if got := testutil.ToFloat64(metrics.ArtifactsEvicted.WithLabelValues("lru", "npm")) - lru; got != 1 {
+		t.Errorf("lru evictions counted = %v, want 1", got)
+	}
+}
+
+func TestReclaimDueStopsAfterAFailedDelete(t *testing.T) {
+	db, store := setupEvictionTest(t)
+	queued := reclaimBatch * 2
+	for i := range queued {
+		storeQueued(t, db, store, fmt.Sprintf("npm/old/1.0.0/%d/old.tgz", i))
+	}
+
+	undeletable := &undeletableStorage{Storage: store}
+	reclaimDue(context.Background(), db, undeletable, discardLogger(), time.Now().Add(time.Hour), time.Minute)
+
+	if got := undeletable.deletes.Load(); got != reclaimBatch {
+		t.Errorf("delete attempts = %d, want one batch of %d during an outage", got, reclaimBatch)
 	}
 }

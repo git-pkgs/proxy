@@ -86,6 +86,7 @@ storage:
     #   npm: "30d"
     # packages:
     #   "pkg:npm/lodash": "0"
+    # How often to look for expired artifacts; at least "1m".
     sweep_interval: "10m"
 
   # Store fetched artifacts. Set to false to stream every download from

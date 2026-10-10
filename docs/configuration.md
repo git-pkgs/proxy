@@ -47,7 +47,7 @@ storage:
 | `storage.max_size` | `PROXY_STORAGE_MAX_SIZE` | - | Max cache size (e.g., "10GB") |
 | `storage.cache_artifacts` | `PROXY_STORAGE_CACHE_ARTIFACTS` | - | Store fetched artifacts (default: true); `false` streams them from upstream |
 | `storage.retention.default` | `PROXY_STORAGE_RETENTION_DEFAULT` | - | Evict artifacts not served for this long (e.g. "30d"); see [Retention](#retention) |
-| `storage.retention.sweep_interval` | `PROXY_STORAGE_RETENTION_SWEEP_INTERVAL` | - | How often expired artifacts are looked for (default: "10m") |
+| `storage.retention.sweep_interval` | `PROXY_STORAGE_RETENTION_SWEEP_INTERVAL` | - | How often expired artifacts are looked for (default: "10m", at least "1m") |
 
 `storage.max_size` counts cached artifacts only. An artifact replaced by a refetch stays in storage for at least an hour, or `storage.direct_serve_ttl` if longer, so requests already reading it can finish, and storage use can exceed the limit by what was replaced in that time.
 
@@ -68,6 +68,8 @@ Every download is a fresh upstream fetch, and concurrent requests for the same a
 
 Retention evicts cached artifacts that nobody has downloaded for a while. It works alongside `storage.max_size`: retention removes what has gone unused, and the size limit still applies to whatever is left.
 
+The `ecosystems` and `packages` entries below only pass validation once the ecosystems they name support retention; see the table further down.
+
 ```yaml
 storage:
   retention:
@@ -80,7 +82,7 @@ storage:
     sweep_interval: "10m"
 ```
 
-Each artifact (each version of a package) ages on its own, counted from the last time the proxy served it, or from when it was fetched if it has not been served since. A newer release of the same package does not shorten the life of older versions. Durations take a `d` suffix for days, and `"0"` or an empty value means never evict by age. With no retention configured nothing changes: artifacts stay until `max_size` evicts them.
+Each artifact (each version of a package) ages on its own, counted from the last time the proxy served it, or from when it was fetched if it has not been served since. A newer release of the same package does not shorten the life of older versions. Durations take a `d` suffix for days, and `"0"` or an empty value means never evict by age. With no retention configured, artifacts stay until `max_size` evicts them. `sweep_interval` must be at least `1m`.
 
 A package rule wins over an ecosystem rule, which wins over `default`. Package rules are keyed by package PURL without a version. The ecosystems and package rules can only name ecosystems that support retention in the running version; anything else, including a typo, stops the proxy at startup with an error naming the setting. `default` applies only to supported ecosystems. Support is added one ecosystem at a time, so a later release can make an existing `default` cover more ecosystems. On startup the proxy logs which ecosystems retention covers (`covered`) and which ones `default` does not reach yet (`default_not_applied`).
 
@@ -109,7 +111,7 @@ A package rule wins over an ecosystem rule, which wins over `default`. Package r
 
 An evicted artifact is fetched again from upstream on the next request. Packages preloaded with `proxy mirror` age from the time they were mirrored, so an unused mirrored package is evicted like any other. A registry that removes old releases (Linux distribution archives in particular) cannot serve an evicted version again, so set those ecosystems' rules with that in mind.
 
-Expired artifacts are not deleted right away. Their records are cleared and the files wait in the same queue a replaced artifact goes through, for at least an hour (or `storage.direct_serve_ttl` if longer), so downloads already in progress can finish. `storage.max_size` counts the space as free from the moment the record is cleared. One sweep clears at most 10,000 artifacts, so the first sweep over a large, old cache spreads its evictions, and the downloads that bring popular artifacts back, over several intervals.
+Expired artifacts are not deleted right away. Their records are cleared and the files wait in the same queue a replaced artifact goes through, for at least an hour (or `storage.direct_serve_ttl` if longer), so downloads already in progress can finish. `storage.max_size` counts the space as free from the moment the record is cleared. Once that wait is over, each minute the queue is worked through for up to 30 seconds, pausing until the next minute after a delete fails. One sweep clears at most 10,000 artifacts, so the first sweep over a large, old cache spreads its evictions, and the downloads that bring popular artifacts back, over several intervals.
 
 With several proxies sharing one database and `database.hit_flush_interval` set, a proxy's sweep cannot see downloads another proxy has not written yet. Keep retention durations well above the flush interval.
 

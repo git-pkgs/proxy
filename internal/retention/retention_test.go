@@ -97,6 +97,19 @@ func TestDefaultCanonical(t *testing.T) {
 	if _, ok := canonical(nil); ok {
 		t.Error("nil PURL accepted")
 	}
+
+	// alpine stores pkg:apk/alpine/{name} and deb stores pkg:deb/{name}, so
+	// building their keys back from the full name gives a different package.
+	// The default refuses them rather than produce keys that never match.
+	for _, tt := range []struct{ key, purl string }{
+		{"alpine", "pkg:apk/alpine/curl"},
+		{"alpine", "pkg:apk/curl"},
+		{"deb", "pkg:deb/debian/curl"},
+	} {
+		if got, ok := DefaultCanonical(tt.key)(mustParse(t, tt.purl)); ok {
+			t.Errorf("DefaultCanonical(%q) accepted %s as %q", tt.key, tt.purl, got)
+		}
+	}
 }
 
 func TestRegistryCanonical(t *testing.T) {

@@ -40,35 +40,40 @@ func (s *Server) startReclaimLoop(ctx context.Context) {
 }
 
 // reclaimDue deletes batches of objects queued before cutoff until a batch
-// comes back short or budget has passed.
+// comes back short, a delete fails or budget has passed. Stopping on a
+// failed delete keeps a storage outage to one batch of attempts per tick.
 func reclaimDue(ctx context.Context, db *database.DB, store storage.Storage, logger *slog.Logger,
 	cutoff time.Time, budget time.Duration) {
 	start := time.Now()
 	for ctx.Err() == nil && time.Since(start) < budget {
-		if reclaimStorage(ctx, db, store, logger, cutoff) < reclaimBatch {
+		listed, failed := reclaimStorage(ctx, db, store, logger, cutoff)
+		if listed < reclaimBatch || failed > 0 {
 			return
 		}
 	}
 }
 
 // reclaimStorage deletes up to one batch of objects queued before cutoff and
-// reports how many it listed. A delete that fails is queued again, behind the
-// rest, so objects the backend keeps refusing cannot fill every batch.
-func reclaimStorage(ctx context.Context, db *database.DB, store storage.Storage, logger *slog.Logger, cutoff time.Time) int {
+// reports how many it listed and how many deletes failed. A delete that
+// fails is queued again, behind the rest, so objects the backend keeps
+// refusing cannot fill every batch.
+func reclaimStorage(ctx context.Context, db *database.DB, store storage.Storage, logger *slog.Logger,
+	cutoff time.Time) (listed, failed int) {
 	paths, err := db.GetDuePendingDeletes(cutoff, reclaimBatch)
 	if err != nil {
 		logger.Warn("reclaim: failed to list pending deletes", "error", err)
-		return 0
+		return 0, 0
 	}
 
 	for _, path := range paths {
 		if ctx.Err() != nil {
-			return len(paths)
+			return len(paths), failed
 		}
 		if err := store.Delete(ctx, path); err != nil {
 			if ctx.Err() != nil {
-				return len(paths)
+				return len(paths), failed
 			}
+			failed++
 			logger.Warn("reclaim: failed to delete object, will retry", "path", path, "error", err)
 			if err := db.QueuePendingDelete(path); err != nil {
 				logger.Warn("reclaim: failed to requeue object", "path", path, "error", err)
@@ -79,5 +84,5 @@ func reclaimStorage(ctx context.Context, db *database.DB, store storage.Storage,
 			logger.Warn("reclaim: failed to dequeue deleted object", "path", path, "error", err)
 		}
 	}
-	return len(paths)
+	return len(paths), failed
 }

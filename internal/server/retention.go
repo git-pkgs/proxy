@@ -81,8 +81,11 @@ func sweepRetention(ctx context.Context, db *database.DB, logger *slog.Logger,
 		return
 	}
 
+	// Without the buffered hits written, an artifact being served right now
+	// can look expired, so skip this sweep rather than clear it.
 	if err := db.FlushHits(); err != nil {
-		logger.Warn("retention: failed to write buffered hits before the sweep", "error", err)
+		logger.Warn("retention: failed to write buffered hits, skipping this sweep", "error", err)
+		return
 	}
 
 	maxID, err := db.MaxArtifactID()
