@@ -1302,6 +1302,61 @@ func TestValidateUpstreamAuthURLs(t *testing.T) {
 	})
 }
 
+func TestValidatePackageRoutes(t *testing.T) {
+	tests := []struct {
+		name    string
+		modify  func(*Config)
+		wantErr bool
+	}{
+		{
+			name: "valid Composer and npm routes",
+			modify: func(cfg *Config) {
+				cfg.Upstream.ComposerRoutes = map[string]string{"acme/*": "https://composer.example.com/packages"}
+				cfg.Upstream.NPMRoutes = map[string]string{"@acme/*": "https://npm.example.com/registry"}
+			},
+		},
+		{
+			name: "Composer route URL is not absolute",
+			modify: func(cfg *Config) {
+				cfg.Upstream.ComposerRoutes = map[string]string{"acme/*": "composer.example.com"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "npm route URL is not absolute",
+			modify: func(cfg *Config) {
+				cfg.Upstream.NPMRoutes = map[string]string{"@acme/*": "npm.example.com"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "Composer route pattern is malformed",
+			modify: func(cfg *Config) {
+				cfg.Upstream.ComposerRoutes = map[string]string{"acme/[": "https://composer.example.com"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "npm route pattern is empty",
+			modify: func(cfg *Config) {
+				cfg.Upstream.NPMRoutes = map[string]string{"": "https://npm.example.com"}
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.modify(cfg)
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %t", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateNamedUpstreams(t *testing.T) {
 	tests := []struct {
 		name    string

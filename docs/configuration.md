@@ -229,6 +229,36 @@ upstream:
 
 `upstream.hex_api` is used for cooldown timestamps and must expose Hex's `/api/packages/{name}` JSON endpoint.
 
+### Private package routes
+
+Clients that use the proxy as their only registry can still install private packages. A package route sends every package whose name matches a pattern to a private registry, and never to the default upstream:
+
+```yaml
+upstream:
+  composer_routes:
+    "example/*": "https://packages.example.com/composer"
+  npm_routes:
+    "@example/*": "https://packages.example.com/npm"
+  allow_private_hosts:
+    - "packages.example.com"
+  auth:
+    "https://packages.example.com":
+      type: bearer
+      token: "${PRIVATE_REGISTRY_TOKEN}"
+```
+
+- Patterns use Go's [`path.Match`](https://pkg.go.dev/path#Match) syntax and are matched case-insensitively. `*` does not cross `/`, so `example/*` matches `example/library` but not `example-fork/library`. The longest matching pattern wins.
+- A Composer route URL is the repository base that serves `/p2/{vendor}/{package}.json`. A route also covers the package's dev versions in `/p2/{vendor}/{package}~dev.json`; patterns are matched against the package name without `~dev`.
+- An npm route URL is the registry base that serves `/{package}`. Tarball URLs in its packuments must be on the same host and below the same path.
+- A routed package is not looked up anywhere else. If the private registry does not have it, the client gets a 404. If the registry fails or rejects the credentials, the client gets a 502. A package with the same name on the public registry is never served in its place (dependency confusion).
+- Metadata and artifacts of routed packages are cached under keys that include the route's URL. Entries cached from the public registry before a route was added are never served for a routed package.
+- With cooldown enabled, the publish time of a routed npm version always comes from the route's metadata. Times recorded for the public package of the same name, or for a route's previous URL, are not used, and routed downloads do not record times of their own.
+- Composer metadata of routed packages carries an empty `notification-url`, so Composer does not report their installs to the default upstream's `notify-batch` endpoint.
+- Use `upstream.auth` for the registry's credentials. The proxy has no authentication of its own, so every client that can reach it can download routed packages.
+- Search (`/composer/search.json`) and the package list (`/composer/packages/list.json`) still come from the default upstream only.
+- npm audit and signing-key requests still go to `upstream.npm`. An audit request lists every package in the dependency tree, routed ones included.
+- Routes can only be set in the configuration file, not with environment variables.
+
 Helm HTTP repositories and additional OCI registries are configured as named maps:
 
 ```yaml
