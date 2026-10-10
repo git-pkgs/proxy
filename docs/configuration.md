@@ -105,7 +105,7 @@ A package rule wins over an ecosystem rule, which wins over `default`. Package r
 | `nuget` | no | - |
 | `oci` | no | - |
 | `pub` | no | - |
-| `pypi` | no | - |
+| `pypi` | yes | `pkg:pypi/requests`; any spelling PyPI treats as the same project, e.g. `pkg:pypi/Typing_Extensions` |
 | `rpm` | no | - |
 | `swift` | no | - |
 

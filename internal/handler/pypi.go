@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/git-pkgs/proxy/internal/retention"
 )
 
 const (
@@ -43,6 +45,13 @@ type PyPIHandler struct {
 	downloadURL    string
 	downloadHrefRe *regexp.Regexp
 	proxyURL       string
+}
+
+// PyPI files are stored under pkg:pypi/{name} with the name normalized the
+// way purl normalizes PyPI names, so package rules use the default key
+// mapping and pkg:pypi/Typing_Extensions matches typing-extensions.
+func init() {
+	retention.Default.Register(retention.Spec{Key: "pypi", CanonicalPackage: retention.DefaultCanonical("pypi")})
 }
 
 // NewPyPIHandler creates a new PyPI protocol handler.
