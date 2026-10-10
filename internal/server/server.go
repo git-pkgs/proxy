@@ -64,6 +64,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/archives"
 	"github.com/git-pkgs/cooldown"
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
 	"github.com/git-pkgs/proxy/internal/accesslog"
@@ -117,6 +118,9 @@ type Server struct {
 	breakers    *breakerMonitor
 	ecoStats    ecosystemStatsCache
 	sources     sourceTracker
+
+	// browseLimits overrides defaultBrowseLimits when set; tests use it.
+	browseLimits archives.StreamOptions
 }
 
 // New creates a new Server with the given configuration.
