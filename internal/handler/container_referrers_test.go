@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -431,5 +432,48 @@ func TestContainerHandler_ReferrersRouteKeepsManifestPaths(t *testing.T) {
 	}
 	if strings.Join(upstreamPaths, "\n") != strings.Join(want, "\n") {
 		t.Errorf("upstream paths = %q, want %q", upstreamPaths, want)
+	}
+}
+
+func TestContainerHandler_ReferrersFollowsNamespace(t *testing.T) {
+	var upstreamQueries []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/v2/owner/img/referrers/"+testReferrersSubject {
+			http.NotFound(w, r)
+			return
+		}
+		upstreamQueries = append(upstreamQueries, r.URL.RawQuery)
+		w.Header().Set("Content-Type", containerReferrersMediaType)
+		w.Header().Set("Link", `</v2/owner/img/referrers/`+testReferrersSubject+`?last=abc>; rel="next"`)
+		_, _ = io.WriteString(w, testReferrersIndex)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	proxy.MetadataTTL = time.Hour
+	h := NewContainerHandler(proxy, "http://proxy.example.test", map[string]string{"test": upstream.URL})
+	routes := http.StripPrefix("/v2", h.Routes())
+	host := strings.TrimPrefix(upstream.URL, "http://")
+	target := "/v2/owner/img/referrers/" + testReferrersSubject
+
+	withNS := httptest.NewRecorder()
+	routes.ServeHTTP(withNS, httptest.NewRequest(http.MethodGet, target+"?ns="+url.QueryEscape(host), nil))
+	if withNS.Code != http.StatusOK {
+		t.Fatalf("ns request status = %d, want 200: %s", withNS.Code, withNS.Body.String())
+	}
+	wantLink := `<http://proxy.example.test` + target + `?last=abc&ns=` + url.QueryEscape(host) + `>; rel="next"`
+	if got := withNS.Header().Get("Link"); got != wantLink {
+		t.Errorf("Link = %q, want next page kept on the ns route %q", got, wantLink)
+	}
+
+	// The prefix route reaches the same registry and shares the row.
+	prefixed := httptest.NewRecorder()
+	routes.ServeHTTP(prefixed, httptest.NewRequest(http.MethodGet, "/v2/upstream/test/owner/img/referrers/"+testReferrersSubject, nil))
+	if prefixed.Code != http.StatusOK {
+		t.Fatalf("prefix request status = %d, want 200: %s", prefixed.Code, prefixed.Body.String())
+	}
+	if len(upstreamQueries) != 1 || upstreamQueries[0] != "" {
+		t.Errorf("upstream queries = %q, want one request without ns", upstreamQueries)
 	}
 }

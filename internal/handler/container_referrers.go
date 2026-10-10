@@ -49,7 +49,7 @@ func (h *ContainerHandler) handleReferrers(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	registryURL, upstreamName, _, ok := h.registryForName(name)
+	registryURL, upstreamName, _, ok := h.registryForRequest(r, name)
 	if !ok {
 		h.containerError(w, http.StatusNotFound, "NAME_UNKNOWN", "unknown upstream registry")
 		return
@@ -63,8 +63,11 @@ func (h *ContainerHandler) serveReferrers(w http.ResponseWriter, r *http.Request
 	// artifactType is never forwarded, so the upstream returns the full index
 	// and one row serves every filter. Without OCI-Filters-Applied in the
 	// response, clients filter the index themselves, as the spec requires.
+	// ns only picks the registry, so it is neither forwarded nor part of the
+	// cache identity.
 	query := r.URL.Query()
 	query.Del("artifactType")
+	query.Del(namespaceQueryParam)
 	// Same identity shape as manifests (registry, name, reference, variant);
 	// the oci-referrers ecosystem keeps the rows apart.
 	cacheKey := h.containerManifestCacheKey(registryURL, name, digest, query.Encode())
@@ -196,7 +199,7 @@ func (h *ContainerHandler) writeContainerReferrers(w http.ResponseWriter, r *htt
 	if referrers.etag != "" {
 		w.Header().Set(headerETag, referrers.etag)
 	}
-	if link := h.rewriteContainerTagsLink(referrers.link, registryURL, r.URL.Path); link != "" {
+	if link := h.rewriteContainerTagsLink(referrers.link, registryURL, r.URL.Path, r.URL.Query().Get(namespaceQueryParam)); link != "" {
 		w.Header().Set("Link", link)
 	}
 	if stale {
