@@ -3,6 +3,8 @@ package handler
 import (
 	"context"
 	"encoding/json"
+	"fmt"
+	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
@@ -11,6 +13,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/registries/fetch"
 )
 
 func TestComposerRewriteMetadata(t *testing.T) {
@@ -489,7 +492,7 @@ func TestComposerDownloadDevVersionUsesDevMetadata(t *testing.T) {
 	// OLD behavior: fetching only the regular file fails to resolve the dev
 	// version, which is what produced the 404 before the fix.
 	stableURL := srv.URL + "/p2/phpmd/phpmd.json"
-	got, err := h.findDownloadURLFromMetadata(ctx, stableURL, pkg, version)
+	got, _, err := h.findDownloadURLFromMetadata(ctx, stableURL, pkg, version)
 	if err != nil {
 		t.Fatalf("unexpected error fetching regular metadata: %v", err)
 	}
@@ -507,7 +510,7 @@ func TestComposerDownloadDevVersionUsesDevMetadata(t *testing.T) {
 
 	var resolved string
 	for _, u := range urls {
-		resolved, err = h.findDownloadURLFromMetadata(ctx, u, pkg, version)
+		resolved, _, err = h.findDownloadURLFromMetadata(ctx, u, pkg, version)
 		if err != nil {
 			t.Fatalf("unexpected error fetching metadata %q: %v", u, err)
 		}
@@ -518,6 +521,152 @@ func TestComposerDownloadDevVersionUsesDevMetadata(t *testing.T) {
 
 	if resolved != distURL {
 		t.Errorf("dev version dist URL = %q, want %q", resolved, distURL)
+	}
+}
+
+const (
+	composerCommitA = "1111111111111111111111111111111111111111"
+	composerCommitB = "2222222222222222222222222222222222222222"
+)
+
+// setupComposerBranch returns a caching Composer handler whose upstream lists
+// distPath as the dist of v/p's dev-master and serves archives by request URI.
+func setupComposerBranch(t *testing.T, distPath string, archives map[string]string) (http.Handler, *Proxy) {
+	t.Helper()
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/p2/v/p~dev.json" {
+			_, _ = fmt.Fprintf(w, `{"packages":{"v/p":[{"version":"dev-master","dist":{"url":%q,"type":"zip"}}]}}`,
+				srv.URL+distPath)
+			return
+		}
+		body, ok := archives[r.URL.RequestURI()]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+
+	proxy, _, _, _ := setupTestProxy(t)
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(srv.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+	return NewComposerHandlerWithUpstreams(proxy, "http://proxy", srv.URL, srv.URL).Routes(), proxy
+}
+
+// cachedComposerFile returns the cached bytes of v/p dev-master's filename,
+// or "" when nothing is cached under it.
+func cachedComposerFile(t *testing.T, proxy *Proxy, filename string) string {
+	t.Helper()
+	cached, err := proxy.GetCachedArtifact(context.Background(), "composer", "v/p", "dev-master", filename)
+	if err != nil {
+		t.Fatalf("reading cache for %s: %v", filename, err)
+	}
+	if cached == nil {
+		return ""
+	}
+	defer func() { _ = cached.Reader.Close() }()
+	data, err := io.ReadAll(cached.Reader)
+	if err != nil {
+		t.Fatalf("reading cached %s: %v", filename, err)
+	}
+	return string(data)
+}
+
+// TestComposerDownloadPinnedBranchCommit checks that a lock file pinning an
+// older commit of a branch gets that commit rather than the head the branch's
+// metadata lists now, and that the head is not cached under the older name.
+func TestComposerDownloadPinnedBranchCommit(t *testing.T) {
+	tests := []struct {
+		name, distPath, filename string
+	}{
+		{"github zipball", "/repos/v/p/zipball/%s", "%s.zip"},
+		{"bitbucket archive", "/v/p/get/%s.zip", "%s.zip"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, proxy := setupComposerBranch(t, fmt.Sprintf(tt.distPath, composerCommitB), map[string]string{
+				fmt.Sprintf(tt.distPath, composerCommitA): "commit A",
+				fmt.Sprintf(tt.distPath, composerCommitB): "commit B",
+			})
+			for _, c := range []struct{ commit, want string }{
+				{composerCommitA, "commit A"},
+				{composerCommitB, "commit B"},
+			} {
+				filename, want := fmt.Sprintf(tt.filename, c.commit), c.want
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/files/v/p/dev-master/"+filename, nil))
+				if w.Code != http.StatusOK || w.Body.String() != want {
+					t.Errorf("%s: status %d, body %q, want 200 %q", filename, w.Code, w.Body.String(), want)
+				}
+				if got := cachedComposerFile(t, proxy, filename); got != want {
+					t.Errorf("%s cached as %q, want %q", filename, got, want)
+				}
+			}
+		})
+	}
+}
+
+// TestComposerDownloadUnlistedFile checks that a file the metadata no longer
+// lists, and that names no commit to fetch instead, is a 404 rather than the
+// listed archive cached under the requested name.
+func TestComposerDownloadUnlistedFile(t *testing.T) {
+	tests := []struct {
+		name, distPath, listed, stale string
+	}{
+		{"plain name", "/dist/main.zip", "main.zip", "old.zip"},
+		{"escaped name", "/dist/p%2Bdev-main.zip", "p%2Bdev-main.zip", "old.zip"},
+		{"gitlab archive", "/api/v4/projects/v%2Fp/repository/archive.zip?sha=" + composerCommitB,
+			"archive.zip?sha=" + composerCommitB, "archive.zip?sha=" + composerCommitA},
+		{"branch name for a commit", "/repos/v/p/zipball/" + composerCommitB, composerCommitB + ".zip", "master.zip"},
+		{"commit without zip extension", "/repos/v/p/zipball/" + composerCommitB, composerCommitB + ".zip", composerCommitA},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			h, proxy := setupComposerBranch(t, tt.distPath, map[string]string{tt.distPath: "head"})
+
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/files/v/p/dev-master/"+tt.stale, nil))
+			if w.Code != http.StatusNotFound {
+				t.Errorf("%s: status %d, body %q, want 404", tt.stale, w.Code, w.Body.String())
+			}
+			staleName, _, _ := strings.Cut(tt.stale, "?")
+			if got := cachedComposerFile(t, proxy, staleName); got != "" {
+				t.Errorf("%s cached as %q, want nothing", staleName, got)
+			}
+
+			w = httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/files/v/p/dev-master/"+tt.listed, nil))
+			if w.Code != http.StatusOK || w.Body.String() != "head" {
+				t.Errorf("%s: status %d, body %q, want 200 %q", tt.listed, w.Code, w.Body.String(), "head")
+			}
+		})
+	}
+}
+
+func TestComposerUpstreamDistURL(t *testing.T) {
+	const zipball = "https://api.github.com/repos/v/p/zipball/"
+	sha256A := strings.Repeat("a", 64)
+	tests := []struct {
+		name, listed, distType, filename, want string
+	}{
+		{"listed file", zipball + composerCommitB, "zip", composerCommitB + ".zip", zipball + composerCommitB},
+		{"older commit", zipball + composerCommitB, "zip", composerCommitA + ".zip", zipball + composerCommitA},
+		{"sha256 commit", zipball + composerCommitB, "zip", sha256A + ".zip", zipball + sha256A},
+		{"tar dist keeps bare name", zipball + composerCommitB, "tar", composerCommitA, zipball + composerCommitA},
+		{"short hash", zipball + composerCommitB, "zip", "1111111.zip", ""},
+		{"upper-case hash", zipball + composerCommitB, "zip", strings.ToUpper(sha256A) + ".zip", ""},
+		{"other name", "https://example.com/dist/main.zip", "zip", "old.zip", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got, ok := upstreamDistURL(tt.listed, tt.distType, tt.filename)
+			if got != tt.want || ok != (tt.want != "") {
+				t.Errorf("upstreamDistURL(%q, %q) = %q, %v; want %q", tt.listed, tt.filename, got, ok, tt.want)
+			}
+		})
 	}
 }
 

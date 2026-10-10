@@ -73,7 +73,7 @@ func BenchmarkComposerFindDownloadURL(b *testing.B) {
 	b.SetBytes(int64(len(body)))
 	b.ReportAllocs()
 	for b.Loop() {
-		url, err := h.findDownloadURLFromMetadata(context.Background(), srv.URL, "big/sdk", "3.2500.0")
+		url, _, err := h.findDownloadURLFromMetadata(context.Background(), srv.URL, "big/sdk", "3.2500.0")
 		if err != nil || url == "" {
 			b.Fatalf("download URL not found: %q, %v", url, err)
 		}

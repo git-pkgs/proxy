@@ -9,6 +9,7 @@ import (
 	"io"
 	"net/http"
 	"path"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -329,7 +330,17 @@ func (h *ComposerHandler) proxyDistURL(packageName, version, upstreamURL, distTy
 	if upstreamURL == "" {
 		return "", false
 	}
+	parts := strings.SplitN(packageName, "/", vendorPackageParts)
+	if len(parts) != vendorPackageParts {
+		return "", false
+	}
+	return fmt.Sprintf("%s/composer/files/%s/%s/%s/%s",
+		h.proxyURL, parts[0], parts[1], version, distFilename(upstreamURL, distType)), true
+}
 
+// distFilename returns the file name this proxy serves an archive under: the
+// last segment of its upstream URL.
+func distFilename(upstreamURL, distType string) string {
 	filename := "package.zip"
 	if idx := strings.LastIndex(upstreamURL, "/"); idx >= 0 {
 		filename = upstreamURL[idx+1:]
@@ -340,13 +351,31 @@ func (h *ComposerHandler) proxyDistURL(packageName, version, upstreamURL, distTy
 	if path.Ext(filename) == "" && distType == "zip" {
 		filename += ".zip"
 	}
+	return filename
+}
 
-	parts := strings.SplitN(packageName, "/", vendorPackageParts)
-	if len(parts) != vendorPackageParts {
+// composerCommitPattern matches a full git commit hash, SHA-1 or SHA-256.
+var composerCommitPattern = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
+
+// upstreamDistURL returns the upstream URL of the archive served as filename,
+// given the dist URL the version's metadata lists now. A branch version only
+// lists its current head while lock files pin older commits, so a dist URL
+// ending in a commit hash is rebuilt for the requested commit. Any other name
+// gives false: fetching the listed archive would cache it under a name it
+// does not have.
+func upstreamDistURL(listedURL, distType, filename string) (string, bool) {
+	listed := distFilename(listedURL, distType)
+	if filename == listed {
+		return listedURL, true
+	}
+	ext := path.Ext(listed)
+	commit := strings.TrimSuffix(listed, ext)
+	requested, ok := strings.CutSuffix(filename, ext)
+	if !ok || !composerCommitPattern.MatchString(commit) || !composerCommitPattern.MatchString(requested) {
 		return "", false
 	}
-	return fmt.Sprintf("%s/composer/files/%s/%s/%s/%s",
-		h.proxyURL, parts[0], parts[1], version, filename), true
+	idx := strings.LastIndex(listedURL, commit)
+	return listedURL[:idx] + requested + listedURL[idx+len(commit):], true
 }
 
 // composerFields holds one version's fields as Composer sees them after
@@ -449,16 +478,16 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 		"package", packageName, "version", version,
 		"metadata_urls", metaURLs)
 
-	var downloadURL string
+	var downloadURL, distType string
 	for _, metaURL := range metaURLs {
-		url, err := h.findDownloadURLFromMetadata(r.Context(), metaURL, packageName, version)
+		url, typ, err := h.findDownloadURLFromMetadata(r.Context(), metaURL, packageName, version)
 		if err != nil {
 			h.proxy.Logger.Error("failed to fetch metadata", "error", err, "url", metaURL)
 			http.Error(w, "failed to fetch metadata", http.StatusBadGateway)
 			return
 		}
 		if url != "" {
-			downloadURL = url
+			downloadURL, distType = url, typ
 			break
 		}
 	}
@@ -468,6 +497,22 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 			"package", packageName, "version", version,
 			"tried_urls", metaURLs)
 		http.Error(w, "version not found", http.StatusNotFound)
+		return
+	}
+
+	// The archive is cached under the requested name, so fetch the one that
+	// name stands for. Compare it as sent, the way rewriteDist handed it out.
+	requested := path.Base(r.URL.EscapedPath())
+	if r.URL.RawQuery != "" {
+		requested += "?" + r.URL.RawQuery
+	}
+	listedURL := downloadURL
+	downloadURL, ok := upstreamDistURL(listedURL, distType, requested)
+	if !ok {
+		h.proxy.Logger.Info("composer file not in upstream metadata",
+			"package", packageName, "version", version,
+			"filename", requested, "listed_url", listedURL)
+		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
 
@@ -507,21 +552,22 @@ func (h *ComposerHandler) metadataURLsForVersion(vendor, pkg, version string) []
 }
 
 // findDownloadURLFromMetadata fetches a metadata document and returns the dist
-// URL for the given version, or an empty string if the version is not present.
-// An error is returned only on transport failure; a missing document (non-200)
-// or a missing version both yield an empty string so the caller can fall back.
-func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaURL, packageName, version string) (string, error) {
+// URL and type for the given version, or an empty URL if the version is not
+// present. An error is returned only on transport failure; a missing document
+// (non-200) or a missing version both yield an empty URL so the caller can
+// fall back.
+func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaURL, packageName, version string) (string, string, error) {
 	h.proxy.Logger.Debug("fetching upstream metadata for download lookup",
 		"url", metaURL, "package", packageName, "version", version)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, metaURL, nil)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
 	resp, err := h.proxy.HTTPClient.Do(req)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -529,42 +575,42 @@ func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaU
 		"url", metaURL, "status", resp.StatusCode)
 
 	if resp.StatusCode != http.StatusOK {
-		return "", nil
+		return "", "", nil
 	}
 
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 
-	url, err := composerDistURL(body, packageName, version)
+	url, distType, err := composerDistURL(body, packageName, version)
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	h.proxy.Logger.Debug("download URL lookup result",
 		"url", metaURL, "package", packageName, "version", version,
 		"download_url", url)
-	return url, nil
+	return url, distType, nil
 }
 
-// composerDistURL returns the upstream dist URL of version from Composer
-// metadata, or "" when the package has no such version or it has no dist URL.
-// It walks the version list in place, expanding only as much of the minified
-// format as it needs, since it runs on each archive the proxy has not cached
-// yet.
-func composerDistURL(body []byte, packageName, version string) (string, error) {
+// composerDistURL returns the upstream dist URL and type of version from
+// Composer metadata, or "" when the package has no such version or it has no
+// dist URL. It walks the version list in place, expanding only as much of the
+// minified format as it needs, since it runs on each archive the proxy has not
+// cached yet.
+func composerDistURL(body []byte, packageName, version string) (string, string, error) {
 	format, _, err := lookupJSONString(body, "minified")
 	if err != nil {
-		return "", err
+		return "", "", err
 	}
 	versions, err := lookupJSON(body, "packages", packageName)
 	if err != nil || len(versions) == 0 || versions[0] != '[' {
-		return "", err
+		return "", "", err
 	}
 	minified := format == composerMinified
 
 	fields := newComposerFields()
-	var url string
+	var url, distType string
 	err = forEachJSONElement(versions, func(entry []byte) error {
 		if minified && jsonStringIs(entry, composerDevReset) {
 			fields.reset()
@@ -582,8 +628,10 @@ func composerDistURL(body []byte, packageName, version string) (string, error) {
 		if !jsonStringIs(fields.get("version"), version) {
 			return nil
 		}
-		url, _, _ = lookupJSONString(fields.get("dist"), "url")
+		dist := fields.get("dist")
+		url, _, _ = lookupJSONString(dist, "url")
 		if url != "" {
+			distType, _, _ = lookupJSONString(dist, "type")
 			return errStopScan
 		}
 		return nil
@@ -591,7 +639,7 @@ func composerDistURL(body []byte, packageName, version string) (string, error) {
 	if errors.Is(err, errStopScan) {
 		err = nil
 	}
-	return url, err
+	return url, distType, err
 }
 
 // proxyUpstream forwards a request to packagist.org without caching.
