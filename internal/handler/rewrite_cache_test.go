@@ -190,7 +190,7 @@ func TestCachedRewrite_DisabledRewritesEveryTime(t *testing.T) {
 	var r countingRewrite
 
 	for range 2 {
-		_, _, _ = proxy.cachedRewrite(context.Background(), "npm", "http://proxy", "left-pad", []byte("doc"), "", r.keeping)
+		_, _ = proxy.cachedRewrite(context.Background(), "npm", "http://proxy", "left-pad", []byte("doc"), "", r.keeping)
 	}
 	if got := r.calls.Load(); got != 2 {
 		t.Errorf("rewrites = %d, want 2", got)
@@ -207,7 +207,7 @@ func TestCachedRewrite_CooldownBypassesCache(t *testing.T) {
 	var r countingRewrite
 
 	for range 2 {
-		_, _, _ = proxy.cachedRewrite(context.Background(), "npm", "http://proxy", "left-pad", []byte("doc"), "", r.keeping)
+		_, _ = proxy.cachedRewrite(context.Background(), "npm", "http://proxy", "left-pad", []byte("doc"), "", r.keeping)
 	}
 	if got := r.calls.Load(); got != 2 {
 		t.Errorf("rewrites = %d, want 2", got)

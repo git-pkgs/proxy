@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/proxy/internal/database"
 )
 
 // validatorUpstream serves one npm packument and one Composer document whose
@@ -53,28 +54,54 @@ func (u *validatorUpstream) set(npm, composer string) {
 	u.npm, u.composer = npm, composer
 }
 
+func (u *validatorUpstream) setLastModified(lastModified time.Time) {
+	u.mu.Lock()
+	defer u.mu.Unlock()
+	u.lastModified = lastModified
+}
+
 type validatorCase struct {
-	ecosystem, path string
-	handler         func(*Proxy, *validatorUpstream) http.Handler
+	ecosystem, name, path string
+	handler               func(*Proxy, *validatorUpstream) http.Handler
 }
 
 var validatorCases = []validatorCase{
-	{"npm", "/left-pad", func(p *Proxy, u *validatorUpstream) http.Handler {
+	{"npm", "left-pad", "/left-pad", func(p *Proxy, u *validatorUpstream) http.Handler {
 		return NewNPMHandler(p, "http://proxy.example", u.URL).Routes()
 	}},
-	{"composer", "/p2/vendor/pkg.json", func(p *Proxy, u *validatorUpstream) http.Handler {
+	{"composer", "vendor/pkg", "/p2/vendor/pkg.json", func(p *Proxy, u *validatorUpstream) http.Handler {
 		return NewComposerHandlerWithUpstreams(p, "http://proxy.example", u.URL, u.URL).Routes()
 	}},
 }
 
 func validatorProxy(t *testing.T, u *validatorUpstream, ttl time.Duration) *Proxy {
 	t.Helper()
-	proxy, _, _, _ := setupTestProxy(t)
+	proxy, _ := validatorProxyWithDB(t, u, ttl)
+	return proxy
+}
+
+func validatorProxyWithDB(t *testing.T, u *validatorUpstream, ttl time.Duration) (*Proxy, *database.DB) {
+	t.Helper()
+	proxy, db, _, _ := setupTestProxy(t)
 	proxy.HTTPClient = u.Client()
 	proxy.CacheMetadata = true
 	proxy.MetadataTTL = ttl
 	proxy.SetMetadataRewriteCacheSize(1 << 20)
-	return proxy
+	return proxy, db
+}
+
+// expireMetadata ages a metadata cache row past any TTL, so the next request
+// refreshes it from upstream.
+func expireMetadata(t *testing.T, db *database.DB, ecosystem, name string) {
+	t.Helper()
+	entry, err := db.GetMetadataCache(ecosystem, name)
+	if err != nil || entry == nil {
+		t.Fatalf("metadata row %s/%s = %v, %v", ecosystem, name, entry, err)
+	}
+	entry.FetchedAt.Time = time.Now().Add(-48 * time.Hour)
+	if err := db.UpsertMetadataCache(entry); err != nil {
+		t.Fatal(err)
+	}
 }
 
 func serve(handler http.Handler, path string, header http.Header) *httptest.ResponseRecorder {
@@ -145,8 +172,9 @@ func TestRewrittenMetadataETagFollowsUpstream(t *testing.T) {
 }
 
 // TestRewrittenMetadataLastModified checks the validator Composer revalidates
-// with. It is the upstream Last-Modified, but never earlier than the start of
-// this process: a restart can change the rewrite without upstream changing.
+// with. It is when this process made the rewrite, not upstream's date: the
+// rewrite also depends on configuration read at startup, so the same upstream
+// document can be rewritten differently after a restart.
 func TestRewrittenMetadataLastModified(t *testing.T) {
 	for _, c := range validatorCases {
 		for _, ttl := range []time.Duration{time.Hour, 0} {
@@ -154,13 +182,14 @@ func TestRewrittenMetadataLastModified(t *testing.T) {
 				u := newValidatorUpstream(t)
 				handler := c.handler(validatorProxy(t, u, ttl), u)
 
+				before := time.Now().Truncate(time.Second)
 				first := serve(handler, c.path, nil)
 				lastModified, err := http.ParseTime(first.Header().Get("Last-Modified"))
 				if err != nil {
 					t.Fatalf("Last-Modified %q: %v", first.Header().Get("Last-Modified"), err)
 				}
-				if lastModified.Before(processStartedAt.Truncate(time.Second)) {
-					t.Errorf("Last-Modified %v is before the process started at %v", lastModified, processStartedAt)
+				if lastModified.Before(before) || lastModified.After(time.Now()) {
+					t.Errorf("Last-Modified %v, want the time of the rewrite, at or after %v", lastModified, before)
 				}
 
 				current := serve(handler, c.path, http.Header{"If-Modified-Since": {first.Header().Get("Last-Modified")}})
@@ -180,6 +209,50 @@ func TestRewrittenMetadataLastModified(t *testing.T) {
 				})
 				if rec.Code != http.StatusOK {
 					t.Errorf("mismatched If-None-Match with a current If-Modified-Since: status %d, want 200", rec.Code)
+				}
+			})
+		}
+	}
+}
+
+// TestRewrittenMetadataLastModifiedFollowsRefresh is a regression test for a
+// false 304. Upstream dates both documents before this process started, the
+// cached one and the newer one a refresh fetches, and neither may give the
+// newer document a Last-Modified a client holding the older one already has:
+// If-Modified-Since from the first response must fetch the new body.
+func TestRewrittenMetadataLastModifiedFollowsRefresh(t *testing.T) {
+	for _, c := range validatorCases {
+		for _, ttl := range []time.Duration{time.Hour, 0} {
+			t.Run(c.ecosystem+"/ttl="+ttl.String(), func(t *testing.T) {
+				u := newValidatorUpstream(t)
+				proxy, db := validatorProxyWithDB(t, u, ttl)
+				handler := c.handler(proxy, u)
+
+				first := serve(handler, c.path, nil)
+				firstModified := first.Header().Get("Last-Modified")
+				if first.Code != http.StatusOK || firstModified == "" {
+					t.Fatalf("first response: status %d, Last-Modified %q; want 200 with a Last-Modified", first.Code, firstModified)
+				}
+
+				u.set(
+					`{"name":"left-pad","versions":{"1.3.1":{"dist":{"tarball":"https://registry.npmjs.org/left-pad/-/left-pad-1.3.1.tgz"}}}}`,
+					`{"packages":{"vendor/pkg":[{"version":"1.0.1","dist":{"type":"zip","url":"https://example.com/pkg-1.0.1.zip"}}]}}`,
+				)
+				u.setLastModified(u.lastModified.Add(24 * time.Hour))
+				expireMetadata(t, db, c.ecosystem, c.name)
+
+				rec := serve(handler, c.path, http.Header{"If-Modified-Since": {firstModified}})
+				if rec.Code != http.StatusOK || rec.Body.String() == first.Body.String() {
+					t.Fatalf("If-Modified-Since from before the refresh: status %d, body changed %t; want 200 with the new body",
+						rec.Code, rec.Body.String() != first.Body.String())
+				}
+				was, _ := http.ParseTime(firstModified)
+				now, err := http.ParseTime(rec.Header().Get("Last-Modified"))
+				if err != nil || !now.After(was) {
+					t.Errorf("Last-Modified after the refresh = %q, want later than %q", rec.Header().Get("Last-Modified"), firstModified)
+				}
+				if rec := serve(handler, c.path, http.Header{"If-Modified-Since": {rec.Header().Get("Last-Modified")}}); rec.Code != http.StatusNotModified {
+					t.Errorf("If-Modified-Since the new Last-Modified: status %d, want 304", rec.Code)
 				}
 			})
 		}
@@ -243,14 +316,89 @@ func TestRewriteCacheETag(t *testing.T) {
 	if err != nil || string(out) != "doc!" {
 		t.Fatalf("rewrite = %q, %v", out, err)
 	}
-	if want := metadataETag([]byte("doc!")); etag != want {
-		t.Errorf("rewrite ETag = %q, want %q", etag, want)
+	if want := metadataETag([]byte("doc!")); etag.etag != want {
+		t.Errorf("rewrite ETag = %q, want %q", etag.etag, want)
 	}
-	if _, cachedETag, ok := c.get(key); !ok || cachedETag != etag {
-		t.Errorf("get ETag = %q, %v; want %q", cachedETag, ok, etag)
+	if _, cached, ok := c.get(key); !ok || cached != etag {
+		t.Errorf("get validators = %+v, %v; want %+v", cached, ok, etag)
 	}
-	if metadataETag([]byte("other")) == etag {
+	if metadataETag([]byte("other")) == etag.etag {
 		t.Error("different output has the same ETag")
+	}
+}
+
+// TestRewriteCacheLastModified checks the Last-Modified the rewrite cache
+// gives each rewrite: the second it was made, kept while it stays cached, and
+// always later than any earlier rewrite of the same package, so that a client
+// holding one representation never gets 304 for another.
+func TestRewriteCacheLastModified(t *testing.T) {
+	c := newRewriteCache(8)
+	clock := time.Date(2026, 10, 10, 12, 0, 0, 400_000_000, time.UTC)
+	c.now = func() time.Time { return clock }
+	second := clock.Truncate(time.Second)
+	identity := func(b []byte) ([]byte, error) { return b, nil }
+	rewrite := func(name, doc string) time.Time {
+		t.Helper()
+		_, v, err := c.rewrite(t.Context(), rewriteCacheKey("npm", "http://proxy", name, []byte(doc)), []byte(doc), identity)
+		if err != nil {
+			t.Fatal(err)
+		}
+		return v.lastModified
+	}
+
+	if got := rewrite("demo", "a"); !got.Equal(second) {
+		t.Errorf("first rewrite: Last-Modified %v, want %v", got, second)
+	}
+	clock = clock.Add(300 * time.Millisecond)
+	if got := rewrite("demo", "a"); !got.Equal(second) {
+		t.Errorf("cached rewrite: Last-Modified %v, want %v as before", got, second)
+	}
+
+	// A new document in the same second must not share the date.
+	b := rewrite("demo", "b")
+	if !b.After(second) {
+		t.Errorf("new document in the same second: Last-Modified %v, want later than %v", b, second)
+	}
+	// Another package is not held back by it.
+	if got := rewrite("other", "x"); !got.Equal(second) {
+		t.Errorf("other package: Last-Modified %v, want %v", got, second)
+	}
+
+	// Evicting what came before does not let a later rewrite reuse its date.
+	for _, doc := range []string{"ccc", "ddd", "eee"} {
+		rewrite("filler", doc)
+	}
+	if _, _, ok := c.get(rewriteCacheKey("npm", "http://proxy", "demo", []byte("b"))); ok {
+		t.Fatal("expected b to be evicted")
+	}
+	if got := rewrite("demo", "b"); !got.After(b) {
+		t.Errorf("rewrite after eviction: Last-Modified %v, want later than %v", got, b)
+	}
+
+	// Once the clock moves on, dates follow it again instead of drifting ahead.
+	clock = clock.Add(10 * time.Second)
+	if got, want := rewrite("demo", "f"), clock.Truncate(time.Second); !got.Equal(want) {
+		t.Errorf("later rewrite: Last-Modified %v, want %v", got, want)
+	}
+}
+
+// TestRewrittenMetadataLastModifiedNeedsRewriteCache checks that without the
+// rewrite cache there is no Last-Modified: nothing records when a rewrite was
+// first made, so no date can be relied on to change with it.
+func TestRewrittenMetadataLastModifiedNeedsRewriteCache(t *testing.T) {
+	for _, c := range validatorCases {
+		t.Run(c.ecosystem, func(t *testing.T) {
+			u := newValidatorUpstream(t)
+			proxy := validatorProxy(t, u, time.Hour)
+			proxy.SetMetadataRewriteCacheSize(0)
+			rec := serve(c.handler(proxy, u), c.path, nil)
+			if rec.Code != http.StatusOK || rec.Header().Get("ETag") == "" {
+				t.Fatalf("status %d, ETag %q; want 200 with an ETag", rec.Code, rec.Header().Get("ETag"))
+			}
+			if lm := rec.Header().Get("Last-Modified"); lm != "" {
+				t.Errorf("Last-Modified = %q without the rewrite cache, want none", lm)
+			}
+		})
 	}
 }
 

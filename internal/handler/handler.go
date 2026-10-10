@@ -1088,7 +1088,7 @@ func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 
 // fetchMetadataDocument is FetchOrCacheMetadata for callers that rewrite the
 // document and need to know which one they got: the result carries its
-// digest and upstream Last-Modified along with the body.
+// digest along with the body.
 func (p *Proxy) fetchMetadataDocument(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept string) metadataResult {
 	return p.lookupMetadata(ctx, ecosystem, cacheKey, upstreamURL, accept, "", nil)
 }
@@ -1175,7 +1175,7 @@ func (p *Proxy) fetchMetadataFromUpstream(ctx context.Context, ecosystem, cacheK
 		if p.CacheMetadata {
 			digest = p.cacheMetadataBlob(ctx, ecosystem, cacheKey, metadataStoragePath(ecosystem, cacheKey), meta)
 		}
-		return metadataResult{body: meta.body, contentType: meta.contentType, contentEncoding: meta.contentEncoding, digest: digest, lastModified: meta.lastModified}
+		return metadataResult{body: meta.body, contentType: meta.contentType, contentEncoding: meta.contentEncoding, digest: digest}
 	}
 
 	// Upstream failed -- fall back to cache if available
@@ -1208,20 +1208,16 @@ type metadataResult struct {
 	contentType     string
 	contentEncoding string
 	// digest identifies body when the metadata cache stored it, and is
-	// empty otherwise. lastModified is upstream's, zero when unknown.
-	digest       string
-	lastModified time.Time
-	err          error
+	// empty otherwise.
+	digest string
+	err    error
 }
 
-// describedBy returns res with the digest and Last-Modified that entry, the
-// cache row its body was read for, records.
+// describedBy returns res with the digest that entry, the cache row its body
+// was read for, records.
 func (res metadataResult) describedBy(entry *database.MetadataCacheEntry) metadataResult {
 	if entry.ContentDigest.Valid {
 		res.digest = entry.ContentDigest.String
-	}
-	if entry.LastModified.Valid {
-		res.lastModified = entry.LastModified.Time
 	}
 	return res
 }
