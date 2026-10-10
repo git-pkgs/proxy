@@ -609,6 +609,24 @@ Commit a `mise.lock` and install with `mise install --locked` so pinned
 installs need no API call at all. Add a bearer token for `https://api.github.com`
 under `upstream.auth` if the fleet exceeds GitHub's anonymous rate limit.
 
+Tools mise downloads from elsewhere, such as Maven from `archive.apache.org`,
+can be cached the same way by declaring their version-pinned paths in
+`upstream.generic_artifacts` (see [configuration](docs/configuration.md)):
+
+```yaml
+upstream:
+  generic:
+    apache: "https://archive.apache.org"
+  generic_artifacts:
+    apache:
+      - 'dist/(?P<name>maven)/maven-3/(?P<version>[^/]+)/binaries/(?P<file>[^/]+)'
+```
+
+```toml
+[settings.url_replacements]
+"https://archive.apache.org/" = "http://localhost:8080/generic/apache/"
+```
+
 ## Configuration
 
 The proxy can be configured via:

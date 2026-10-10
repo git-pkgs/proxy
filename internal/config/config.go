@@ -66,6 +66,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
@@ -637,10 +638,20 @@ type UpstreamConfig struct {
 	// Generic maps names to plain HTTP upstream base URLs, served at
 	// /generic/{name}/. The remaining request path and query string are
 	// appended to the upstream URL. GitHub release asset paths
-	// ({owner}/{repo}/releases/download/{tag}/{asset}) are cached in the
-	// artifact cache; everything else goes through the metadata cache.
+	// ({owner}/{repo}/releases/download/{tag}/{asset}) and paths matching
+	// GenericArtifacts are cached in the artifact cache; everything else
+	// goes through the metadata cache.
 	// Example: {"github": "https://github.com", "github-api": "https://api.github.com"}.
 	Generic map[string]string `json:"generic" yaml:"generic"`
+
+	// GenericArtifacts maps a Generic upstream name to regular expressions for
+	// its version-pinned download paths. A request path after
+	// /generic/{name}/ that one of them matches in full is cached in the
+	// artifact cache like a GitHub release asset. Each pattern needs `version`
+	// and `file` named groups; an optional `name` group names the package,
+	// which otherwise is the upstream name.
+	// Example: {"apache": ["dist/(?P<name>maven)/maven-3/(?P<version>[^/]+)/binaries/(?P<file>[^/]+)"]}.
+	GenericArtifacts map[string][]string `json:"generic_artifacts" yaml:"generic_artifacts"`
 
 	// Auth configures authentication for upstream registries.
 	// Keys are absolute URL scopes matched by scheme, host, effective port,
@@ -694,6 +705,9 @@ func (u *UpstreamConfig) Validate() error {
 	if err := validateNamedUpstreams("upstream.generic", u.Generic); err != nil {
 		return err
 	}
+	if err := u.validateGenericArtifacts(); err != nil {
+		return err
+	}
 	if err := validateNamedUpstreams("upstream.debian_repositories", u.DebianRepositories); err != nil {
 		return err
 	}
@@ -706,6 +720,36 @@ func (u *UpstreamConfig) Validate() error {
 		}
 	}
 	return nil
+}
+
+func (u *UpstreamConfig) validateGenericArtifacts() error {
+	for name, patterns := range u.GenericArtifacts {
+		if _, found := u.Generic[name]; !found {
+			return fmt.Errorf("invalid upstream.generic_artifacts name %q: no upstream.generic entry", name)
+		}
+		for _, pattern := range patterns {
+			if _, err := CompileGenericArtifactPattern(pattern); err != nil {
+				return fmt.Errorf("invalid upstream.generic_artifacts.%s pattern %q: %w", name, pattern, err)
+			}
+		}
+	}
+	return nil
+}
+
+// CompileGenericArtifactPattern compiles an upstream.generic_artifacts pattern
+// so that it only matches a whole path, and checks it has the `version` and
+// `file` groups.
+func CompileGenericArtifactPattern(pattern string) (*regexp.Regexp, error) {
+	re, err := regexp.Compile(`^(?:` + pattern + `)$`)
+	if err != nil {
+		return nil, err
+	}
+	for _, group := range []string{"version", "file"} {
+		if re.SubexpIndex(group) < 0 {
+			return nil, fmt.Errorf("missing (?P<%s>...) group", group)
+		}
+	}
+	return re, nil
 }
 
 // debianReservedRepositoryNames are the upstream.debian archive's own root

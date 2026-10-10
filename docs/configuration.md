@@ -276,7 +276,28 @@ Only configured upstreams are reachable, so this is not an open HTTP proxy.
 Paths shaped like `{owner}/{repo}/releases/download/{tag}/{asset}` are
 version-pinned GitHub release assets: they are stored in the artifact cache
 and served from it without revalidation, including while the upstream is
-down. Every other path is served through the metadata cache (`cache_metadata`
+down.
+
+Other upstreams can declare their own version-pinned paths in
+`generic_artifacts`. Each pattern is a regular expression that must match the
+whole path after `/generic/{name}/`, with `version` and `file` named groups
+(single path segments) and an optional `name` group for the package name,
+which otherwise is the upstream name. Matching downloads are cached like
+release assets and listed under the `generic` ecosystem:
+
+```yaml
+upstream:
+  generic:
+    apache: "https://archive.apache.org"
+  generic_artifacts:
+    apache:
+      - 'dist/(?P<name>maven)/maven-3/(?P<version>[^/]+)/binaries/(?P<file>[^/]+)'
+```
+
+Only list paths whose content never changes for a given version: a match is
+never revalidated.
+
+Every other path is served through the metadata cache (`cache_metadata`
 must be enabled for offline fallback): fresh within `metadata_ttl`, then
 revalidated with the upstream's `ETag`/`Last-Modified`, and served stale with
 a `Warning: 110` header when the upstream fails, refuses or rate-limits the

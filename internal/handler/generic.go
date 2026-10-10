@@ -6,6 +6,8 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+
+	"github.com/git-pkgs/proxy/internal/config"
 )
 
 const (
@@ -33,7 +35,8 @@ var githubReleaseAssetPattern = regexp.MustCompile(`^([^/]+)/([^/]+)/releases/do
 // fixed URL shapes, such as mise's aqua backend fetching GitHub release
 // assets, and is pointed at by URL-rewriting settings on the client.
 //
-// Release-asset paths ({owner}/{repo}/releases/download/{tag}/{asset}) are
+// Release-asset paths ({owner}/{repo}/releases/download/{tag}/{asset}), and
+// paths matching the upstream's configured artifact patterns, are
 // version-pinned and cached in the shared artifact cache, so they keep being
 // served when the upstream is unreachable. Every other path is served through
 // the metadata cache: fresh within the metadata TTL, revalidated with the
@@ -41,18 +44,35 @@ var githubReleaseAssetPattern = regexp.MustCompile(`^([^/]+)/([^/]+)/releases/do
 // or refuses the request. That covers API responses such as
 // api.github.com/repos/{owner}/{repo}/releases/tags/{tag}.
 type GenericHandler struct {
-	proxy        *Proxy
-	repositories map[string]string
+	proxy            *Proxy
+	repositories     map[string]string
+	artifactPatterns map[string][]*regexp.Regexp
 }
 
 // NewGenericHandler creates a generic HTTP download proxy handler.
-func NewGenericHandler(proxy *Proxy, repositories map[string]string) *GenericHandler {
+// artifactPatterns maps upstream names to upstream.generic_artifacts patterns;
+// a pattern that does not compile is logged and skipped.
+func NewGenericHandler(proxy *Proxy, repositories map[string]string, artifactPatterns ...map[string][]string) *GenericHandler {
 	h := &GenericHandler{
-		proxy:        proxy,
-		repositories: make(map[string]string, len(repositories)),
+		proxy:            proxy,
+		repositories:     make(map[string]string, len(repositories)),
+		artifactPatterns: make(map[string][]*regexp.Regexp),
 	}
 	for name, upstreamURL := range repositories {
 		h.repositories[name] = strings.TrimSuffix(upstreamURL, "/")
+	}
+	if len(artifactPatterns) > 0 {
+		for name, patterns := range artifactPatterns[0] {
+			for _, pattern := range patterns {
+				re, err := config.CompileGenericArtifactPattern(pattern)
+				if err != nil {
+					proxy.Logger.Warn("skipping generic artifact pattern",
+						"repository", name, "pattern", pattern, "error", err)
+					continue
+				}
+				h.artifactPatterns[name] = append(h.artifactPatterns[name], re)
+			}
+		}
 	}
 	return h
 }
@@ -80,13 +100,61 @@ func (h *GenericHandler) Routes() http.Handler {
 			return
 		}
 
-		if asset, ok := parseGitHubReleaseAsset(rest); ok {
-			h.handleReleaseAsset(w, r, repository, upstreamURL, rest, asset)
+		if artifact, ok := h.parseArtifact(repository, rest); ok {
+			h.handleArtifact(w, r, repository, upstreamURL, rest, artifact)
 			return
 		}
 
 		h.handleMetadata(w, r, repository, upstreamURL, rest)
 	})
+}
+
+// genericArtifact is the identity of a version-pinned download.
+type genericArtifact struct {
+	name     string
+	version  string
+	filename string
+}
+
+// parseArtifact returns the identity of a version-pinned download path: one
+// matching the upstream's artifact patterns, else a GitHub release asset.
+func (h *GenericHandler) parseArtifact(repository, path string) (genericArtifact, bool) {
+	for _, pattern := range h.artifactPatterns[repository] {
+		if artifact, ok := matchArtifactPattern(pattern, repository, path); ok {
+			return artifact, true
+		}
+	}
+	if asset, ok := parseGitHubReleaseAsset(path); ok {
+		return genericArtifact{
+			name:     asset.owner + "/" + asset.repo,
+			version:  asset.tag,
+			filename: asset.filename,
+		}, true
+	}
+	return genericArtifact{}, false
+}
+
+// matchArtifactPattern extracts the artifact identity from a path matched by
+// pattern. The version and file must be single, non-empty path segments; the
+// name defaults to the upstream name.
+func matchArtifactPattern(pattern *regexp.Regexp, repository, path string) (genericArtifact, bool) {
+	matches := pattern.FindStringSubmatch(path)
+	if matches == nil {
+		return genericArtifact{}, false
+	}
+	artifact := genericArtifact{
+		name:     repository,
+		version:  matches[pattern.SubexpIndex("version")],
+		filename: matches[pattern.SubexpIndex("file")],
+	}
+	if i := pattern.SubexpIndex("name"); i >= 0 && matches[i] != "" {
+		artifact.name = matches[i]
+	}
+	if artifact.version == "" || artifact.filename == "" ||
+		strings.Contains(artifact.version, "/") || strings.Contains(artifact.filename, "/") {
+		return genericArtifact{}, false
+	}
+	return artifact, true
 }
 
 // githubReleaseAsset is the identity of a version-pinned release download.
@@ -112,21 +180,20 @@ func parseGitHubReleaseAsset(path string) (githubReleaseAsset, bool) {
 	}, true
 }
 
-// handleReleaseAsset fetches and caches a version-pinned release asset in the
-// artifact cache. The configured upstream name is part of the cache identity
-// so two upstreams serving the same path never share bytes.
-func (h *GenericHandler) handleReleaseAsset(w http.ResponseWriter, r *http.Request, repository, upstreamURL, path string, asset githubReleaseAsset) {
-	name := asset.owner + "/" + asset.repo
+// handleArtifact fetches and caches a version-pinned download in the artifact
+// cache. The configured upstream name is part of the cache identity so two
+// upstreams serving the same path never share bytes.
+func (h *GenericHandler) handleArtifact(w http.ResponseWriter, r *http.Request, repository, upstreamURL, path string, artifact genericArtifact) {
 	downloadURL := upstreamURL + "/" + path
-	cacheFilename := repository + "/" + asset.filename
+	cacheFilename := repository + "/" + artifact.filename
 
-	h.proxy.Logger.Info("generic release asset download",
-		"repository", repository, "name", name, "version", asset.tag, "filename", asset.filename)
+	h.proxy.Logger.Info("generic artifact download",
+		"repository", repository, "name", artifact.name, "version", artifact.version, "filename", artifact.filename)
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(
-		r.Context(), genericEcosystem, name, asset.tag, cacheFilename, downloadURL)
+		r.Context(), genericEcosystem, artifact.name, artifact.version, cacheFilename, downloadURL)
 	if err != nil {
-		h.proxy.serveArtifactError(w, err, "failed to fetch release asset")
+		h.proxy.serveArtifactError(w, err, "failed to fetch artifact")
 		return
 	}
 
