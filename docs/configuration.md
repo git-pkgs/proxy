@@ -84,7 +84,7 @@ storage:
 
 Each cached file ages on its own, counted from the last time the proxy served it, or from when it was fetched if it has not been served since. A newer release of the same package does not shorten the life of older versions. Durations take a `d` suffix for days, and `"0"` or an empty value means never evict by age. With no retention configured, artifacts stay until `max_size` evicts them. `sweep_interval` must be at least `1m`.
 
-A package rule wins over an ecosystem rule, which wins over `default`. Package rules are keyed by package PURL without a version. The ecosystems and package rules can only name ecosystems that support retention in the running version; anything else, including a typo, stops the proxy at startup with an error naming the setting. `default` applies only to supported ecosystems. Support is added one ecosystem at a time, so a later release can make an existing `default` cover more ecosystems. On startup the proxy logs which ecosystems retention covers (`covered`) and which ones `default` does not reach yet (`default_not_applied`).
+A package rule wins over an ecosystem rule, which wins over `default`. Package rules are keyed by package PURL without a version, written in one of the forms the table below lists for the ecosystem. The ecosystems and package rules can only name ecosystems that support retention in the running version; anything else, including a typo, stops the proxy at startup with an error naming the setting. `default` applies only to supported ecosystems. Support is added one ecosystem at a time, so a later release can make an existing `default` cover more ecosystems. On startup the proxy logs which ecosystems retention covers (`covered`) and which ones `default` does not reach yet (`default_not_applied`).
 
 | Ecosystem key | Retention supported | Package rule form |
 |---------------|---------------------|-------------------|
@@ -101,7 +101,7 @@ A package rule wins over an ecosystem rule, which wins over `default`. Package r
 | `hex` | no | - |
 | `julia` | no | - |
 | `maven` | no | - |
-| `npm` | yes | `pkg:npm/lodash`, `pkg:npm/@babel/core` |
+| `npm` | yes | `pkg:npm/lodash`, `pkg:npm/@babel/core`; the name has to match exactly, case included, so `pkg:npm/jsonstream` doesn't cover `JSONStream`. |
 | `nuget` | no | - |
 | `oci` | no | - |
 | `pub` | no | - |
