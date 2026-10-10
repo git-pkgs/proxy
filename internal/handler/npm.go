@@ -693,14 +693,25 @@ func validateTarballURL(raw, registryURL string) (string, error) {
 // fetched and parsed at most once per version. A version with no usable
 // publish time is allowed through, matching how applyCooldownFiltering
 // treats it.
+//
+// The versions row is keyed by the plain version PURL, which does not say
+// which registry the version came from, so routed packages leave it alone:
+// their publish time always comes from the route's own metadata, cached under
+// the route. Otherwise a time read from the default registry would be trusted
+// for a private version of the same name, a private time would hold back the
+// public version, and moving a route to another upstream would keep the old
+// one's times.
 func (h *NPMHandler) versionInCooldown(packageName, version string, metadata func() ([]byte, error)) bool {
 	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
 		return false
 	}
 
+	_, routed := h.routes.match(packageName)
 	versionPURL := canonicalVersionPURL("npm", packageName, version)
-	if ver, err := h.proxy.DB.GetVersionByPURL(versionPURL); err == nil && ver != nil && ver.PublishedAt.Valid {
-		return !h.proxy.Cooldown.IsAllowed("npm", canonicalPackagePURL("npm", packageName), ver.PublishedAt.Time)
+	if !routed {
+		if ver, err := h.proxy.DB.GetVersionByPURL(versionPURL); err == nil && ver != nil && ver.PublishedAt.Valid {
+			return !h.proxy.Cooldown.IsAllowed("npm", canonicalPackagePURL("npm", packageName), ver.PublishedAt.Time)
+		}
 	}
 
 	body, err := metadata()
@@ -725,9 +736,11 @@ func (h *NPMHandler) versionInCooldown(packageName, version string, metadata fun
 		return false
 	}
 
-	if err := h.proxy.DB.SetVersionPublishedAt(versionPURL, canonicalPackagePURL("npm", packageName), publishedAt); err != nil {
-		h.proxy.Logger.Warn("cooldown: could not store npm publish time",
-			"package", packageName, "version", version, "error", err)
+	if !routed {
+		if err := h.proxy.DB.SetVersionPublishedAt(versionPURL, canonicalPackagePURL("npm", packageName), publishedAt); err != nil {
+			h.proxy.Logger.Warn("cooldown: could not store npm publish time",
+				"package", packageName, "version", version, "error", err)
+		}
 	}
 
 	return !h.proxy.Cooldown.IsAllowed("npm", canonicalPackagePURL("npm", packageName), publishedAt)

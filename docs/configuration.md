@@ -252,6 +252,7 @@ upstream:
 - An npm route URL is the registry base that serves `/{package}`. Tarball URLs in its packuments must be on the same host and below the same path.
 - A routed package is not looked up anywhere else. If the private registry does not have it, the client gets a 404. If the registry fails or rejects the credentials, the client gets a 502. A package with the same name on the public registry is never served in its place (dependency confusion).
 - Metadata and artifacts of routed packages are cached under keys that include the route's URL. Entries cached from the public registry before a route was added are never served for a routed package.
+- With cooldown enabled, the publish time of a routed npm version always comes from the route's metadata. Times recorded for the public package of the same name, or for a route's previous URL, are not used, and routed downloads do not record times of their own.
 - Composer metadata of routed packages carries an empty `notification-url`, so Composer does not report their installs to the default upstream's `notify-batch` endpoint.
 - Use `upstream.auth` for the registry's credentials. The proxy has no authentication of its own, so every client that can reach it can download routed packages.
 - Search (`/composer/search.json`) and the package list (`/composer/packages/list.json`) still come from the default upstream only.

@@ -9,6 +9,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/registries/fetch"
 )
 
@@ -218,5 +219,78 @@ func TestNPMRoutedDownloadIgnoresDefaultRegistryArtifact(t *testing.T) {
 
 	if w.Body.String() != "private package" {
 		t.Errorf("routed download served %q, want the routed registry's package", w.Body.String())
+	}
+}
+
+// timedTestPackument is routedTestPackument with a publish time for the
+// version, published age ago.
+func timedTestPackument(version, tarballBase string, age time.Duration) func(string) string {
+	published := time.Now().Add(-age).UTC().Format(time.RFC3339)
+	return func(baseURL string) string {
+		return `{"name":"@example/widgets","dist-tags":{"latest":"` + version + `"},"versions":{"` + version +
+			`":{"version":"` + version + `","dist":{"tarball":"` + baseURL + tarballBase + `/@example/widgets/-/widgets-` + version + `.tgz"}}},` +
+			`"time":{"` + version + `":"` + published + `"}}`
+	}
+}
+
+// TestNPMRoutedCooldownUsesRoutePublishTimes is a regression test: the
+// download cooldown check stored publish times under the package's plain
+// version PURL, so a time read from one registry was trusted for the same
+// version from another. A route's version published an hour ago must stay in
+// a seven-day cooldown even when the default registry's version of the same
+// name is a month old, whichever was downloaded first, and changing a route's
+// upstream must not carry over the old one's times.
+func TestNPMRoutedCooldownUsesRoutePublishTimes(t *testing.T) {
+	const tarball = "/@example/widgets/-/widgets-1.0.0.tgz"
+	month, hour := 30*24*time.Hour, time.Hour
+
+	type step struct {
+		handler    string // "public", "route" or "other route"
+		wantStatus int
+	}
+	tests := []struct {
+		name  string
+		steps []step
+	}{
+		{"route added after a public download", []step{
+			{"public", http.StatusOK},
+			{"route", http.StatusNotFound},
+		}},
+		{"public download after a routed one", []step{
+			{"route", http.StatusNotFound},
+			{"public", http.StatusOK},
+		}},
+		{"route moved to another upstream", []step{
+			{"other route", http.StatusOK},
+			{"route", http.StatusNotFound},
+		}},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			public := newNPMUpstream(t, map[string]func(string) string{"/@example/widgets": timedTestPackument("1.0.0", "", month)}, http.StatusOK)
+			private := newNPMUpstream(t, map[string]func(string) string{routedNPMPath: timedTestPackument("1.0.0", "/registry", hour)}, http.StatusOK)
+			old := newNPMUpstream(t, map[string]func(string) string{routedNPMPath: timedTestPackument("1.0.0", "/registry", month)}, http.StatusOK)
+			proxy, _, _, artifactFetcher := setupTestProxy(t)
+			proxy.HTTPClient = http.DefaultClient
+			proxy.CacheMetadata = true
+			proxy.MetadataTTL = time.Hour
+			proxy.Cooldown = &cooldown.Config{Default: "7d"}
+			handlers := map[string]*NPMHandler{
+				"public":      NewNPMHandler(proxy, "http://proxy.test", public.URL),
+				"route":       newRoutedNPMHandler(proxy, public, private),
+				"other route": newRoutedNPMHandler(proxy, public, old),
+			}
+
+			for _, s := range tt.steps {
+				artifactFetcher.artifact = &fetch.Artifact{
+					Body:        io.NopCloser(strings.NewReader("package")),
+					ContentType: "application/gzip",
+				}
+				w := serveNPM(t, handlers[s.handler], http.MethodGet, tarball, nil, nil)
+				if w.Code != s.wantStatus {
+					t.Errorf("%s download: status %d, want %d; body: %s", s.handler, w.Code, s.wantStatus, w.Body.String())
+				}
+			}
+		})
 	}
 }
