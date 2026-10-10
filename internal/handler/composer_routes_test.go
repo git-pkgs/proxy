@@ -271,3 +271,32 @@ func TestComposerRoutedMinifiedMetadataDisablesNotification(t *testing.T) {
 		}
 	}
 }
+
+// TestComposerExactRouteCoversDevMetadata is a regression test: Packagist
+// serves a package's dev versions from a separate {name}~dev.json file, and an
+// exact route for the package must cover that file too. Matching the route
+// against the name with ~dev still attached sent the private package's dev
+// metadata to the default repository.
+func TestComposerExactRouteCoversDevMetadata(t *testing.T) {
+	const devMetadata = `{"packages":{"example/library":[{"name":"example/library","version":"dev-main","dist":{"url":"https://private.example.com/archives/main.zip","type":"zip"}}]}}`
+	public := newComposerUpstream(t, map[string]string{"/p2/example/library~dev.json": publicComposerMetadata}, http.StatusOK)
+	private := newComposerUpstream(t, map[string]string{"/group/packages/composer/p2/example/library~dev.json": devMetadata}, http.StatusOK)
+	proxy, _, _, _ := setupTestProxy(t)
+	h := NewComposerHandlerWithUpstreams(proxy, "http://proxy.test", public.URL, public.URL).
+		WithPackageRoutes(map[string]string{"example/library": private.URL + "/group/packages/composer"})
+
+	w := serveComposer(h, "/p2/example/library~dev.json")
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d; body: %s", w.Code, w.Body.String())
+	}
+	if got := public.requested(); len(got) != 0 {
+		t.Errorf("default repository was queried for a routed package's dev metadata: %v", got)
+	}
+	if got, want := private.requested(), []string{"/group/packages/composer/p2/example/library~dev.json"}; strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("route requests = %v, want %v", got, want)
+	}
+	if !strings.Contains(w.Body.String(), "/composer/files/example/library/dev-main/") {
+		t.Errorf("dev metadata was not rewritten through the proxy: %s", w.Body.String())
+	}
+}

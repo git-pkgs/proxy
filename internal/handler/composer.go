@@ -19,6 +19,7 @@ const (
 	composerMinified   = "composer/2.0"
 	composerUnset      = "__unset"
 	composerDevReset   = "~dev"
+	composerDevFile    = "~dev" // suffix of the metadata file holding dev versions
 	vendorPackageParts = 2
 )
 
@@ -95,9 +96,12 @@ func (h *ComposerHandler) handleServiceIndex(w http.ResponseWriter, r *http.Requ
 }
 
 // sourceFor returns the repository serving a package and the key its metadata
-// is cached under.
+// is cached under. packageName may carry the ~dev suffix of the file holding
+// the package's dev versions: routes match the package without it, so its dev
+// versions come from the same repository, while the cache key keeps it so the
+// two files stay apart.
 func (h *ComposerHandler) sourceFor(packageName string) (repoURL, cacheKey string) {
-	if route, routed := h.routes.match(packageName); routed {
+	if route, routed := h.routes.match(strings.TrimSuffix(packageName, composerDevFile)); routed {
 		return route.url, route.cacheKey(packageName)
 	}
 	return h.repoURL, packageName
