@@ -73,6 +73,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/denylist"
+	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
 	"gopkg.in/yaml.v3"
 )
@@ -406,6 +407,33 @@ type StorageConfig struct {
 	// of the proxy. False is incompatible with scanning, direct_serve and
 	// mirror_api, which all depend on stored artifacts. Default: true.
 	CacheArtifacts bool `json:"cache_artifacts" yaml:"cache_artifacts"`
+
+	// Retention evicts cached artifacts that have not been accessed for a
+	// configured time, per ecosystem and per package.
+	Retention RetentionConfig `json:"retention" yaml:"retention"`
+}
+
+// RetentionConfig configures age-based eviction of cached artifacts. An
+// artifact's age is the time since it was last served, or since it was
+// fetched when it has not been served since. Durations accept a "d" suffix
+// for days; "0" or empty means never evict by age.
+type RetentionConfig struct {
+	// Default applies to every ecosystem that supports retention and has no
+	// rule of its own.
+	Default string `json:"default" yaml:"default"`
+
+	// Ecosystems overrides the default per ecosystem key (e.g. "npm", "oci").
+	// Configuring an ecosystem whose retention is not supported yet is an
+	// error.
+	Ecosystems map[string]string `json:"ecosystems" yaml:"ecosystems"`
+
+	// Packages overrides the ecosystem rule for single packages, keyed by
+	// package PURL.
+	Packages map[string]string `json:"packages" yaml:"packages"`
+
+	// SweepInterval is how often expired artifacts are looked for, at least
+	// one minute. Default: "10m".
+	SweepInterval string `json:"sweep_interval" yaml:"sweep_interval"`
 }
 
 // GradleConfig configures Gradle-specific features.
@@ -861,6 +889,9 @@ func Default() *Config {
 			Path:           "./cache/artifacts",
 			MaxSize:        "",
 			CacheArtifacts: true,
+			Retention: RetentionConfig{
+				SweepInterval: defaultRetentionSweepIntervalStr,
+			},
 		},
 		Database: DatabaseConfig{
 			Driver: "sqlite",
@@ -1000,6 +1031,8 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Storage.DirectServeTTL, "PROXY_STORAGE_DIRECT_SERVE_TTL")
 	setEnvString(&c.Storage.DirectServeBaseURL, "PROXY_STORAGE_DIRECT_SERVE_BASE_URL")
 	setEnvBool(&c.Storage.CacheArtifacts, "PROXY_STORAGE_CACHE_ARTIFACTS")
+	setEnvString(&c.Storage.Retention.Default, "PROXY_STORAGE_RETENTION_DEFAULT")
+	setEnvString(&c.Storage.Retention.SweepInterval, "PROXY_STORAGE_RETENTION_SWEEP_INTERVAL")
 	setEnvString(&c.Database.Driver, "PROXY_DATABASE_DRIVER")
 	setEnvString(&c.Database.Path, "PROXY_DATABASE_PATH")
 	setEnvString(&c.Database.URL, "PROXY_DATABASE_URL")
@@ -1178,6 +1211,10 @@ func (c *Config) validateComponents() error {
 		return err
 	}
 
+	if _, err := c.RetentionRules(retention.Default); err != nil {
+		return err
+	}
+
 	if _, err := denylist.New(c.Denylist.Packages); err != nil {
 		return err
 	}
@@ -1228,7 +1265,7 @@ func (g *GradleBuildCacheConfig) Validate() error {
 	}
 
 	if g.MaxAge != "" && g.MaxAge != "0" {
-		if _, err := time.ParseDuration(g.MaxAge); err != nil {
+		if _, err := parseDayDuration(g.MaxAge); err != nil {
 			return fmt.Errorf("invalid gradle.build_cache.max_age %q: %w", g.MaxAge, err)
 		}
 	}
@@ -1263,6 +1300,10 @@ const (
 	defaultGradleBuildCacheSweepInterval = 10 * time.Minute
 	defaultGradleMaxUploadSizeStr        = "100MB"
 	defaultGradleSweepIntervalStr        = "10m"
+	defaultRetentionSweepInterval        = 10 * time.Minute
+	defaultRetentionSweepIntervalStr     = "10m"
+	minRetentionSweepInterval            = time.Minute
+	maxDurationDays                      = 36500
 	defaultScanningTimeoutStr            = "30s"
 )
 
@@ -1431,7 +1472,7 @@ func (c *Config) ParseGradleBuildCacheMaxAge() time.Duration {
 	if c.Gradle.BuildCache.MaxAge == "" || c.Gradle.BuildCache.MaxAge == "0" {
 		return 0
 	}
-	d, err := time.ParseDuration(c.Gradle.BuildCache.MaxAge)
+	d, err := parseDayDuration(c.Gradle.BuildCache.MaxAge)
 	if err != nil || d <= 0 {
 		return 0
 	}

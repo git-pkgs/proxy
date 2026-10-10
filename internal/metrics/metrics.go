@@ -62,6 +62,14 @@ var (
 		},
 	)
 
+	ArtifactsEvicted = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_artifacts_evicted_total",
+			Help: "Total number of cached artifacts evicted, by reason (lru or retention) and ecosystem",
+		},
+		[]string{"reason", "ecosystem"},
+	)
+
 	// Upstream metrics
 	UpstreamFetchDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -250,6 +258,7 @@ func init() {
 		CacheMisses,
 		CacheSize,
 		CachedArtifacts,
+		ArtifactsEvicted,
 		UpstreamFetchDuration,
 		UpstreamErrors,
 		CircuitBreakerState,
@@ -307,6 +316,16 @@ func RecordResponse(ecosystem, client string, bytes int64) {
 // RecordCacheHit increments cache hit counter.
 func RecordCacheHit(ecosystem string) {
 	CacheHits.WithLabelValues(purl.NormalizeEcosystem(ecosystem)).Inc()
+}
+
+// RecordArtifactEvicted counts one evicted artifact. ecosystem is the
+// package record's value, normalized like the cache hit counter; an artifact
+// without a package record counts as "other".
+func RecordArtifactEvicted(reason, ecosystem string) {
+	if ecosystem == "" {
+		ecosystem = "other"
+	}
+	ArtifactsEvicted.WithLabelValues(reason, purl.NormalizeEcosystem(ecosystem)).Inc()
 }
 
 // RecordCacheMiss increments cache miss counter.

@@ -374,6 +374,7 @@ func (s *Server) serve(listener net.Listener) error {
 		"database", s.cfg.Database.String())
 	go s.updateCacheStatsMetrics()
 	go s.startEvictionLoop(bgCtx)
+	go s.startRetentionLoop(bgCtx)
 	go s.startReclaimLoop(bgCtx)
 
 	if listener != nil {
