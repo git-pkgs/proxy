@@ -105,7 +105,7 @@ A package rule wins over an ecosystem rule, which wins over `default`. Package r
 | `nuget` | no | - |
 | `oci` | no | - |
 | `pub` | no | - |
-| `pypi` | yes | `pkg:pypi/requests`; any spelling PyPI treats as the same project, e.g. `pkg:pypi/Typing_Extensions` |
+| `pypi` | yes | `pkg:pypi/requests`; case and `_`/`-` don't matter. Files of a project with a `.` in its name can be stored under the dotted and the dashed name (`zope.interface`, `zope-interface`), so add a rule for each |
 | `rpm` | no | - |
 | `swift` | no | - |
 

@@ -47,9 +47,11 @@ type PyPIHandler struct {
 	proxyURL       string
 }
 
-// PyPI files are stored under pkg:pypi/{name} with the name normalized the
-// way purl normalizes PyPI names, so package rules use the default key
-// mapping and pkg:pypi/Typing_Extensions matches typing-extensions.
+// PyPI files are stored under pkg:pypi/{name}, the name taken from the
+// filename and normalized the way purl does it: lowercased, "_" turned into
+// "-". Package rules use the default key mapping, so pkg:pypi/Typing_Extensions
+// matches typing-extensions. Dots are kept, so files named zope.interface-*
+// and zope_interface-* end up under two packages.
 func init() {
 	retention.Default.Register(retention.Spec{Key: "pypi", CanonicalPackage: retention.DefaultCanonical("pypi")})
 }
