@@ -109,7 +109,7 @@ A package rule wins over an ecosystem rule, which wins over `default`. Package r
 | `rpm` | no | - |
 | `swift` | no | - |
 
-An evicted artifact is fetched again from upstream on the next request. Packages preloaded with `proxy mirror` age from the time they were mirrored, so an unused mirrored package is evicted like any other. A registry that removes old releases (Linux distribution archives in particular) cannot serve an evicted version again, so set those ecosystems' rules with that in mind.
+An evicted artifact is fetched again from upstream on the next request. Packages preloaded with `proxy mirror` age from the time they were mirrored, so an unused mirrored package is evicted like any other. Running `proxy mirror` again over a package that is still cached counts as a download and restarts its clock, so packages a scheduled mirror job keeps listing never age out. A registry that removes old releases (Linux distribution archives in particular) cannot serve an evicted version again, so set those ecosystems' rules with that in mind.
 
 Expired artifacts are not deleted right away. Their records are cleared and the files wait in the same queue a replaced artifact goes through, for at least an hour (or `storage.direct_serve_ttl` if longer), so downloads already in progress can finish. `storage.max_size` counts the space as free from the moment the record is cleared. Once that wait is over, each minute the queue is worked through for up to 30 seconds, pausing until the next minute after a delete fails. One sweep clears at most 10,000 artifacts, so the first sweep over a large, old cache spreads its evictions, and the downloads that bring popular artifacts back, over several intervals.
 
