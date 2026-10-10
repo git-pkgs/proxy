@@ -505,8 +505,10 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// The archive is cached under the requested name, so fetch the one that
-	// name stands for. Compare it as sent, the way rewriteDist handed it out.
+	// The archive is cached under the file name from the path, so fetch the
+	// one that name stands for. Compare it as sent, the way rewriteDist handed
+	// it out. A query such as GitLab's ?sha= is compared but is not part of
+	// the cache key.
 	requested := path.Base(r.URL.EscapedPath())
 	if r.URL.RawQuery != "" {
 		requested += "?" + r.URL.RawQuery
