@@ -597,6 +597,9 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 		filename = strings.TrimSuffix(filename, ext) + "-" + commit + ext
 	}
 	cacheFilename := h.routes.cacheFilename(packageName, filename)
+	if commit := strings.TrimSuffix(filename, path.Ext(filename)); isDevVersion(version) && composerCommitPattern.MatchString(commit) {
+		h.discardOtherCommit(packageName, version, cacheFilename, commit)
+	}
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "composer", packageName, version, cacheFilename, downloadURL)
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to fetch package")
@@ -604,6 +607,32 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 	}
 
 	ServeArtifactRequest(w, r, result)
+}
+
+// discardOtherCommit clears a cached branch archive named for commit that was
+// fetched from another commit's URL. Proxy versions before the pinned-commit
+// fix cached the branch head under whatever commit a lock file asked for. The
+// record is only cleared while it still points at the object checked here.
+func (h *ComposerHandler) discardOtherCommit(packageName, version, cacheFilename, commit string) {
+	_, versionPURL, err := packagePURLStrings("composer", packageName, version)
+	if err != nil {
+		return
+	}
+	record, err := h.proxy.DB.GetArtifact(versionPURL, cacheFilename)
+	if err != nil {
+		h.proxy.Logger.Warn("failed to read composer cache record",
+			"purl", versionPURL, "filename", cacheFilename, "error", err)
+		return
+	}
+	if record == nil || !record.StoragePath.Valid || strings.Contains(record.UpstreamURL, commit) {
+		return
+	}
+	h.proxy.Logger.Warn("cached composer archive is from another commit, discarding",
+		"purl", versionPURL, "filename", cacheFilename, "upstream_url", record.UpstreamURL)
+	if err := h.proxy.DB.DiscardArtifact(versionPURL, cacheFilename, record.StoragePath.String); err != nil {
+		h.proxy.Logger.Warn("failed to discard composer cache record",
+			"purl", versionPURL, "filename", cacheFilename, "error", err)
+	}
 }
 
 // isDevVersion reports whether a Composer version string refers to a

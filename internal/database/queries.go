@@ -359,6 +359,7 @@ func (db *DB) upsertArtifactFrom(a *Artifact, previous sql.NullString) (bool, er
 			                       created_at, updated_at)
 			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 			ON CONFLICT(version_purl, filename) DO UPDATE SET
+				upstream_url = EXCLUDED.upstream_url,
 				storage_path = EXCLUDED.storage_path,
 				content_hash = EXCLUDED.content_hash,
 				size = EXCLUDED.size,
@@ -374,6 +375,7 @@ func (db *DB) upsertArtifactFrom(a *Artifact, previous sql.NullString) (bool, er
 			                       created_at, updated_at)
 			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(version_purl, filename) DO UPDATE SET
+				upstream_url = excluded.upstream_url,
 				storage_path = excluded.storage_path,
 				content_hash = excluded.content_hash,
 				size = excluded.size,

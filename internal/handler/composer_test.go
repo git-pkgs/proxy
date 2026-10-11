@@ -9,6 +9,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -613,6 +614,59 @@ func TestComposerDownloadPinnedBranchCommit(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// TestComposerDownloadCachedFromOtherCommit checks that an archive an older
+// proxy cached under a commit's name but fetched from another commit's URL is
+// fetched again, while a correct entry is served from the cache.
+func TestComposerDownloadCachedFromOtherCommit(t *testing.T) {
+	zipball := "/repos/v/p/zipball/"
+	var fetches atomic.Int32
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/p2/v/p.json", "/p2/v/p~dev.json":
+			_, _ = fmt.Fprintf(w, `{"packages":{"v/p":[{"version":"dev-master","dist":{"url":%q,"type":"zip"}}]}}`, srv.URL+zipball+composerCommitB)
+		case zipball + composerCommitA:
+			fetches.Add(1)
+			_, _ = io.WriteString(w, "commit A")
+		case zipball + composerCommitB:
+			fetches.Add(1)
+			_, _ = io.WriteString(w, "commit B")
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(srv.Close)
+	proxy, _, _, _ := setupTestProxy(t)
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(srv.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+	h := NewComposerHandlerWithUpstreams(proxy, "http://proxy", srv.URL, srv.URL).Routes()
+
+	// What proxy versions before the pinned-commit fix stored: the head
+	// under the name of the commit the lock file pins.
+	stale, err := proxy.GetOrFetchArtifactFromURL(context.Background(), "composer", "v/p", "dev-master",
+		composerCommitA+".zip", srv.URL+zipball+composerCommitB)
+	if err != nil {
+		t.Fatalf("seeding stale entry: %v", err)
+	}
+	_ = stale.Reader.Close()
+	fetches.Store(0)
+
+	for range 2 {
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/files/v/p/dev-master/"+composerCommitA+".zip", nil))
+		if w.Code != http.StatusOK || w.Body.String() != "commit A" {
+			t.Errorf("status %d, body %q, want 200 %q", w.Code, w.Body.String(), "commit A")
+		}
+	}
+	if got := cachedComposerFile(t, proxy, composerCommitA+".zip"); got != "commit A" {
+		t.Errorf("cached as %q, want %q", got, "commit A")
+	}
+	if n := fetches.Load(); n != 1 {
+		t.Errorf("upstream archive fetched %d times, want 1", n)
 	}
 }
 
