@@ -30,6 +30,13 @@ func TestConanShouldCacheFile(t *testing.T) {
 		{"conan_sources.tgz", true},
 		{"conan_export.tgz", true},
 		{"conan_package.tgz", true},
+		{"conan_sources.txz", true},
+		{"conan_export.txz", true},
+		{"conan_package.txz", true},
+		{"conan_sources.tzst", true},
+		{"conan_export.tzst", true},
+		{"conan_package.tzst", true},
+		{"conan_package.tar.gz", false},
 		{"conanfile.py", false},
 		{"conanmanifest.txt", false},
 		{"conaninfo.txt", false},
@@ -298,6 +305,10 @@ func TestConanV2FileRoutesCacheArchives(t *testing.T) {
 			"1.3.1_rrev1", "recipe_conan_sources.tgz"},
 		{"package", "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/packages/pkgid1/revisions/prev1/files/conan_package.tgz",
 			"1.3.1_rrev1_pkgid1_prev1", "package_conan_package.tgz"},
+		{"recipe xz", "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/files/conan_export.txz",
+			"1.3.1_rrev1", "recipe_conan_export.txz"},
+		{"package zstd", "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/packages/pkgid1/revisions/prev1/files/conan_package.tzst",
+			"1.3.1_rrev1_pkgid1_prev1", "package_conan_package.tzst"},
 	}
 
 	for _, tt := range tests {

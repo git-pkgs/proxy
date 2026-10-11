@@ -135,11 +135,12 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 
 // shouldCacheFile returns true if the file should be cached.
 func (h *ConanHandler) shouldCacheFile(filename string) bool {
-	// Cache the large archive files
+	// Cache the large archive files. Since Conan 2.25 they can also be xz or
+	// zstd (core.upload:compression_format).
 	cacheFiles := []string{
-		"conan_sources.tgz",
-		"conan_export.tgz",
-		"conan_package.tgz",
+		"conan_sources.tgz", "conan_sources.txz", "conan_sources.tzst",
+		"conan_export.tgz", "conan_export.txz", "conan_export.tzst",
+		"conan_package.tgz", "conan_package.txz", "conan_package.tzst",
 	}
 
 	for _, f := range cacheFiles {
