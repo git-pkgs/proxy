@@ -412,7 +412,7 @@ func TestContainerHandler_ReferrersRouteKeepsManifestPaths(t *testing.T) {
 	for _, path := range []string{
 		// A repository may contain a "referrers" component; manifest paths
 		// must keep reaching the manifest handler.
-		"/foo/manifests/referrers/" + testReferrersSubject,
+		"/foo/referrers/app/manifests/latest",
 		// Clients without a referrers API read the tag schema as a manifest.
 		"/library/nginx/manifests/" + tagSchema,
 	} {
@@ -421,11 +421,40 @@ func TestContainerHandler_ReferrersRouteKeepsManifestPaths(t *testing.T) {
 		}
 	}
 	want := []string{
-		"/v2/foo/manifests/referrers/" + testReferrersSubject,
+		"/v2/foo/referrers/app/manifests/latest",
 		"/v2/library/nginx/manifests/" + tagSchema,
 	}
 	if strings.Join(upstreamPaths, "\n") != strings.Join(want, "\n") {
 		t.Errorf("upstream paths = %q, want %q", upstreamPaths, want)
+	}
+}
+
+func TestContainerHandler_ReferrersRouteAllowsEndpointNamesInRepository(t *testing.T) {
+	var upstreamPaths []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamPaths = append(upstreamPaths, r.URL.Path)
+		// The manifest handler would forward the same path, so only answer
+		// the referrers handler, which asks for the index type alone.
+		if r.Header.Get("Accept") != containerReferrersMediaType {
+			http.Error(w, "reached the manifest handler", http.StatusBadRequest)
+			return
+		}
+		w.Header().Set("Content-Type", containerReferrersMediaType)
+		_, _ = io.WriteString(w, testReferrersIndex)
+	}))
+	defer upstream.Close()
+
+	h, _ := newReferrersTestHandler(t, upstream)
+	for _, name := range []string{"owner/tags/list", "owner/manifests/app"} {
+		upstreamPaths = nil
+		got := serveReferrersRequest(h, http.MethodGet, "/"+name+"/referrers/"+testReferrersSubject)
+		if got.Code != http.StatusOK {
+			t.Fatalf("%s: status = %d, want 200: %s", name, got.Code, got.Body.String())
+		}
+		want := "/v2/" + name + "/referrers/" + testReferrersSubject
+		if len(upstreamPaths) != 1 || upstreamPaths[0] != want {
+			t.Errorf("%s: upstream paths = %q, want [%q]", name, upstreamPaths, want)
+		}
 	}
 }
 

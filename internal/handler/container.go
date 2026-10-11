@@ -324,10 +324,10 @@ func (h *ContainerHandler) Routes() http.Handler {
 		case strings.HasSuffix(path, "/blobs/"+r.URL.Query().Get("digest")) || strings.Contains(path, "/blobs/sha256:"):
 			// Blob download: GET /v2/{name}/blobs/{digest}
 			h.handleBlobDownload(w, r, path)
-		case strings.Contains(path, "/manifests/"):
+		case manifestPathPattern.MatchString(path):
 			// Manifest: GET /v2/{name}/manifests/{reference}
 			h.handleManifest(w, r, path)
-		case strings.Contains(path, "/tags/list"):
+		case tagsListPathPattern.MatchString(path):
 			// Tags list: GET /v2/{name}/tags/list
 			h.handleTagsList(w, r, path)
 		case referrersPathPattern.MatchString(path):
@@ -659,7 +659,7 @@ func (h *ContainerHandler) parseBlobPath(path string) (name, digest string) {
 }
 
 // manifestPathPattern matches manifest paths: {name}/manifests/{reference}
-var manifestPathPattern = regexp.MustCompile(`^(.+)/manifests/(.+)$`)
+var manifestPathPattern = regexp.MustCompile(`^(.+)/manifests/([^/]+)$`)
 
 // parseManifestPath extracts repository name and reference from a manifest path.
 func (h *ContainerHandler) parseManifestPath(path string) (name, reference string) {
