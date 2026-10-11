@@ -362,3 +362,42 @@ func TestMetadataCacheRoundTripsContentEncoding(t *testing.T) {
 		t.Fatalf("content encoding round-trip failed: %#v", got)
 	}
 }
+
+// On Postgres, fetched_at is a TIMESTAMP column without a zone. East of UTC
+// it must still read back as the moment it was written, or metadata_ttl
+// expires hours late. last_modified is an HTTP date in UTC and must keep it.
+func TestMetadataCacheTimesOffUTC(t *testing.T) {
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Skipf("time zone data unavailable: %v", err)
+	}
+	prev := time.Local
+	time.Local = tokyo
+	t.Cleanup(func() { time.Local = prev })
+
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		fetched := time.Now().Add(-90 * time.Minute)
+		modified := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+		entry := &MetadataCacheEntry{
+			Ecosystem:    testEcosystemNPM,
+			Name:         "tz",
+			StoragePath:  "_metadata/npm/tz/metadata",
+			LastModified: sql.NullTime{Time: modified, Valid: true},
+			FetchedAt:    sql.NullTime{Time: fetched, Valid: true},
+		}
+		if err := db.UpsertMetadataCache(entry); err != nil {
+			t.Fatalf("UpsertMetadataCache() error = %v", err)
+		}
+
+		got, err := db.GetMetadataCache(testEcosystemNPM, "tz")
+		if err != nil || got == nil {
+			t.Fatalf("GetMetadataCache() = %v, %v", got, err)
+		}
+		if diff := got.FetchedAt.Time.Sub(fetched).Abs(); diff > time.Second {
+			t.Errorf("fetched_at read back as %v, want %v", got.FetchedAt.Time, fetched)
+		}
+		if !got.LastModified.Time.Equal(modified) {
+			t.Errorf("last_modified read back as %v, want %v", got.LastModified.Time, modified)
+		}
+	})
+}

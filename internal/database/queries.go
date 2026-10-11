@@ -1122,6 +1122,13 @@ func (db *DB) GetMetadataCache(ecosystem, name string) (*MetadataCacheEntry, err
 
 func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 	now := time.Now()
+	// fetched_at is a TIMESTAMP without zone on Postgres, and lib/pq reads it
+	// back labelled UTC, so it has to be stored in UTC. last_modified already
+	// is, since it comes from an HTTP date.
+	fetchedAt := entry.FetchedAt
+	if fetchedAt.Valid {
+		fetchedAt.Time = fetchedAt.Time.UTC()
+	}
 	var query string
 
 	if db.dialect == DialectPostgres {
@@ -1162,7 +1169,7 @@ func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 
 	_, err := db.Exec(query,
 		entry.Ecosystem, entry.Name, entry.StoragePath, entry.ETag, entry.Link,
-		entry.ContentType, entry.ContentEncoding, entry.ContentDigest, entry.Size, entry.LastModified, entry.FetchedAt, now, now,
+		entry.ContentType, entry.ContentEncoding, entry.ContentDigest, entry.Size, entry.LastModified, fetchedAt, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("upserting metadata cache: %w", err)
