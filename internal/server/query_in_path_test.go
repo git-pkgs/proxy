@@ -71,7 +71,7 @@ func TestProtocolHandlersRejectQueryInPath(t *testing.T) {
 		"/go/golang.org/x/text/@v/v0.3.0.zip%3F/@v/v0.3.8.zip",
 		"/nuget/v3-flatcontainer/newtonsoft.json/13.0.1/newtonsoft.json.13.0.1.nupkg%3F%2Ffoo.9.9.nupkg",
 		"/conan/v2/files/zlib/1.3/_/_/rev/recipe/conanfile.py%3F%2Fx",
-		"/composer/files/monolog/monolog/3.0.0/monolog-3.0.0.zip%3F%2Fx.zip",
+		"/composer/p2/monolog/monolog.json%3Fx",
 		"/npm/lodash%3F/-/lodash-4.17.21.tgz",
 		"/cargo/crates/serde%3F/1.0.0/download",
 		"/julia/registry/23338594-aafe-5451-b93e-139f81909106/abc%3F",
@@ -89,5 +89,19 @@ func TestProtocolHandlersRejectQueryInPath(t *testing.T) {
 	}
 	if n := transport.hits.Load(); n != 0 {
 		t.Errorf("upstream was contacted %d times", n)
+	}
+}
+
+// TestComposerFilesAllowHashInVersion keeps Composer archive downloads of git
+// branches with '#' in their name working: the version is escaped in the dist
+// URL and the archive is resolved from metadata, not from the request path.
+func TestComposerFilesAllowHashInVersion(t *testing.T) {
+	var reached atomic.Bool
+	next := http.HandlerFunc(func(http.ResponseWriter, *http.Request) { reached.Store(true) })
+
+	w := httptest.NewRecorder()
+	rejectQueryInPath(next).ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/composer/files/acme/lib/dev-fix%2F%2342/abc123.zip", nil))
+	if w.Code == http.StatusBadRequest || !reached.Load() {
+		t.Errorf("status = %d, reached = %v; want the request passed on", w.Code, reached.Load())
 	}
 }
