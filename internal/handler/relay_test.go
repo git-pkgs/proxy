@@ -50,7 +50,7 @@ func relayTestRoutes(proxy *Proxy, upstream string) http.Handler {
 func TestRelayRoutes(t *testing.T) {
 	for _, route := range []string{
 		"/upstream", "/file", "/metadata", "/nuget/query",
-		"/conan/v2/files/demo/1.0/user/stable/rev/recipe/other.txt",
+		"/conan/v2/conans/demo/1.0/user/stable/revisions/rev/files/other.txt",
 		"/composer/search.json", "/pypi/simple/", "/gem/api/v1/dependencies",
 		"/gem/info/demo", "/conda/conda-forge/noarch/repodata.json",
 		"/hex/packages/demo", "/swift/scope/demo/1.0.0/Package.swift",

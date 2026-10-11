@@ -1163,7 +1163,7 @@ func TestConanHandler_RecipeFileCacheMiss(t *testing.T) {
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/v2/files/zlib/1.3/_/_/abc123/recipe/conan_export.tgz")
+	resp, err := http.Get(srv.URL + "/v2/conans/zlib/1.3/_/_/revisions/abc123/files/conan_export.tgz")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -1173,7 +1173,7 @@ func TestConanHandler_RecipeFileCacheMiss(t *testing.T) {
 		t.Error("expected fetcher to be called on cache miss")
 	}
 
-	want := "https://center.conan.io/v2/files/zlib/1.3/_/_/abc123/recipe/conan_export.tgz"
+	want := "https://center.conan.io/v2/conans/zlib/1.3/_/_/revisions/abc123/files/conan_export.tgz"
 	if fetcher.fetchedURL != want {
 		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
 	}
@@ -1190,7 +1190,7 @@ func TestConanHandler_PackageFileCacheMiss(t *testing.T) {
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
-	resp, err := http.Get(srv.URL + "/v2/files/zlib/1.3/_/_/abc123/package/def456/ghi789/conan_package.tgz")
+	resp, err := http.Get(srv.URL + "/v2/conans/zlib/1.3/_/_/revisions/abc123/packages/def456/revisions/ghi789/files/conan_package.tgz")
 	if err != nil {
 		t.Fatalf("request failed: %v", err)
 	}
@@ -1200,7 +1200,7 @@ func TestConanHandler_PackageFileCacheMiss(t *testing.T) {
 		t.Error("expected fetcher to be called on cache miss")
 	}
 
-	want := "https://center.conan.io/v2/files/zlib/1.3/_/_/abc123/package/def456/ghi789/conan_package.tgz"
+	want := "https://center.conan.io/v2/conans/zlib/1.3/_/_/revisions/abc123/packages/def456/revisions/ghi789/files/conan_package.tgz"
 	if fetcher.fetchedURL != want {
 		t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, want)
 	}

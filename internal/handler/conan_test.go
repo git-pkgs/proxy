@@ -6,7 +6,9 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 const testProxyURL = "http://localhost:8080"
@@ -225,7 +227,7 @@ func TestConanRecipeFileNonCacheable(t *testing.T) {
 		proxyURL:    "http://proxy.local",
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/v2/files/zlib/1.2.13/_/_/abc123/recipe/conanfile.py", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v2/conans/zlib/1.2.13/_/_/revisions/abc123/files/conanfile.py", nil)
 	req.SetPathValue("name", "zlib")
 	req.SetPathValue("version", "1.2.13")
 	req.SetPathValue("user", "_")
@@ -260,7 +262,7 @@ func TestConanPackageFileNonCacheable(t *testing.T) {
 		proxyURL:    "http://proxy.local",
 	}
 
-	req := httptest.NewRequest(http.MethodGet, "/v2/files/zlib/1.2.13/_/_/abc123/package/pkgref1/pkgrev1/conaninfo.txt", nil)
+	req := httptest.NewRequest(http.MethodGet, "/v2/conans/zlib/1.2.13/_/_/revisions/abc123/packages/pkgref1/revisions/pkgrev1/files/conaninfo.txt", nil)
 	req.SetPathValue("name", "zlib")
 	req.SetPathValue("version", "1.2.13")
 	req.SetPathValue("user", "_")
@@ -280,6 +282,116 @@ func TestConanPackageFileNonCacheable(t *testing.T) {
 	body := w.Body.String()
 	if body != "conaninfo content" {
 		t.Errorf("body = %q, want %q", body, "conaninfo content")
+	}
+}
+
+// The Conan 2 client downloads recipe and package files over these routes;
+// the archives must be stored as artifacts and served from the cache after.
+func TestConanV2FileRoutesCacheArchives(t *testing.T) {
+	tests := []struct {
+		name     string
+		path     string
+		version  string
+		filename string
+	}{
+		{"recipe", "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/files/conan_sources.tgz",
+			"1.3.1_rrev1", "recipe_conan_sources.tgz"},
+		{"package", "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/packages/pkgid1/revisions/prev1/files/conan_package.tgz",
+			"1.3.1_rrev1_pkgid1_prev1", "package_conan_package.tgz"},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			proxy, db, _, fetcher := setupTestProxy(t)
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				t.Errorf("archive %s was proxied instead of fetched as an artifact", r.URL.Path)
+				http.Error(w, "unexpected", http.StatusInternalServerError)
+			}))
+			defer upstream.Close()
+			proxy.HTTPClient = upstream.Client()
+
+			h := NewConanHandlerWithUpstream(proxy, testProxyURL, upstream.URL)
+			srv := httptest.NewServer(h.Routes())
+			defer srv.Close()
+
+			for i := range 2 {
+				fetcher.artifact = artifactBody("archive bytes")
+				fetcher.fetchCalled = false
+
+				resp, err := http.Get(srv.URL + tt.path)
+				if err != nil {
+					t.Fatalf("request %d failed: %v", i+1, err)
+				}
+				body, _ := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+
+				if resp.StatusCode != http.StatusOK || string(body) != "archive bytes" {
+					t.Fatalf("request %d: status = %d, body = %q, want 200 %q", i+1, resp.StatusCode, body, "archive bytes")
+				}
+				if fetcher.fetchCalled != (i == 0) {
+					t.Errorf("request %d: fetched = %v, want %v", i+1, fetcher.fetchCalled, i == 0)
+				}
+				if i == 0 && fetcher.fetchedURL != upstream.URL+tt.path {
+					t.Errorf("upstream URL = %q, want %q", fetcher.fetchedURL, upstream.URL+tt.path)
+				}
+			}
+
+			_, versionPURL, err := packagePURLStrings("conan", "zlib/1.3.1@_/_", tt.version)
+			if err != nil {
+				t.Fatal(err)
+			}
+			recordedStoragePath(t, db, versionPURL, tt.filename)
+		})
+	}
+}
+
+// The small files next to the archives keep going through the metadata cache.
+func TestConanV2FileRoutesKeepSmallFilesAsMetadata(t *testing.T) {
+	for name, path := range map[string]string{
+		"recipe":  "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/files/conanmanifest.txt",
+		"package": "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/packages/pkgid1/revisions/prev1/files/conaninfo.txt",
+	} {
+		t.Run(name, func(t *testing.T) {
+			var requests atomic.Int32
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				requests.Add(1)
+				if r.URL.Path != path {
+					http.NotFound(w, r)
+					return
+				}
+				w.Header().Set("Content-Type", "text/plain")
+				_, _ = w.Write([]byte("small file"))
+			}))
+			defer upstream.Close()
+
+			proxy, _, _, fetcher := setupTestProxy(t)
+			proxy.CacheMetadata = true
+			proxy.MetadataTTL = time.Hour
+			proxy.HTTPClient = upstream.Client()
+
+			h := NewConanHandlerWithUpstream(proxy, testProxyURL, upstream.URL)
+			srv := httptest.NewServer(h.Routes())
+			defer srv.Close()
+
+			for i := range 2 {
+				resp, err := http.Get(srv.URL + path)
+				if err != nil {
+					t.Fatalf("request %d failed: %v", i+1, err)
+				}
+				body, _ := io.ReadAll(resp.Body)
+				_ = resp.Body.Close()
+				if resp.StatusCode != http.StatusOK || string(body) != "small file" {
+					t.Fatalf("request %d: status = %d, body = %q, want 200 %q", i+1, resp.StatusCode, body, "small file")
+				}
+			}
+
+			if got := requests.Load(); got != 1 {
+				t.Errorf("upstream requests = %d, want 1 (second served from the metadata cache)", got)
+			}
+			if fetcher.fetchCalled {
+				t.Error("small file was fetched as an artifact")
+			}
+		})
 	}
 }
 

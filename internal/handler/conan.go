@@ -41,13 +41,12 @@ func (h *ConanHandler) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/ping", h.handlePing)
 	mux.HandleFunc("GET /v2/ping", h.handlePing)
 
-	// Recipe file downloads (cache these)
-	mux.HandleFunc("GET /v1/files/{name}/{version}/{user}/{channel}/{revision}/recipe/{filename}", h.handleRecipeFile)
-	mux.HandleFunc("GET /v2/files/{name}/{version}/{user}/{channel}/{revision}/recipe/{filename}", h.handleRecipeFile)
-
-	// Package file downloads (cache these)
-	mux.HandleFunc("GET /v1/files/{name}/{version}/{user}/{channel}/{revision}/package/{pkgref}/{pkgrev}/{filename}", h.handlePackageFile)
-	mux.HandleFunc("GET /v2/files/{name}/{version}/{user}/{channel}/{revision}/package/{pkgref}/{pkgrev}/{filename}", h.handlePackageFile)
+	// Recipe and package file downloads, as built by the Conan 2 client
+	// (ClientV2Router.recipe_file and package_file). The v1 protocol hands out
+	// signed absolute URLs on the upstream host, so its downloads never pass
+	// through here.
+	mux.HandleFunc("GET /v2/conans/{name}/{version}/{user}/{channel}/revisions/{revision}/files/{filename}", h.handleRecipeFile)
+	mux.HandleFunc("GET /v2/conans/{name}/{version}/{user}/{channel}/revisions/{revision}/packages/{pkgref}/revisions/{pkgrev}/files/{filename}", h.handlePackageFile)
 
 	// Proxy all other endpoints (metadata, search, etc.) with caching
 	mux.HandleFunc("GET /", h.proxyCached)
@@ -70,9 +69,9 @@ func (h *ConanHandler) handleRecipeFile(w http.ResponseWriter, r *http.Request) 
 	revision := r.PathValue("revision")
 	filename := r.PathValue("filename")
 
-	// Only cache specific files
+	// Only the archives are artifacts; the rest goes through the metadata cache.
 	if !h.shouldCacheFile(filename) {
-		h.proxyUpstream(w, r)
+		h.proxyCached(w, r)
 		return
 	}
 
@@ -108,9 +107,9 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 	pkgrev := r.PathValue("pkgrev")
 	filename := r.PathValue("filename")
 
-	// Only cache specific files
+	// Only the archives are artifacts; the rest goes through the metadata cache.
 	if !h.shouldCacheFile(filename) {
-		h.proxyUpstream(w, r)
+		h.proxyCached(w, r)
 		return
 	}
 
