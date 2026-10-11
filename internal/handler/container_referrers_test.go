@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -223,18 +222,22 @@ func TestContainerHandler_ReferrersRelaysUpstreamErrorsWithoutCaching(t *testing
 	}
 }
 
-func TestContainerHandler_ReferrersFallsBackToTagSchemaWithoutCache(t *testing.T) {
+func TestContainerHandler_ReferrersReportsUpstreamFailureWithoutCache(t *testing.T) {
 	tests := []struct {
-		name    string
-		handler http.HandlerFunc
+		name           string
+		handler        http.HandlerFunc
+		wantStatus     int
+		wantRetryAfter string
 	}{
-		{name: "upstream 503", handler: func(w http.ResponseWriter, _ *http.Request) {
+		{name: "upstream 503", wantStatus: http.StatusServiceUnavailable, wantRetryAfter: "120", handler: func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", "120")
 			http.Error(w, "unavailable", http.StatusServiceUnavailable)
 		}},
-		{name: "upstream 429", handler: func(w http.ResponseWriter, _ *http.Request) {
+		{name: "upstream 429", wantStatus: http.StatusTooManyRequests, wantRetryAfter: "60", handler: func(w http.ResponseWriter, _ *http.Request) {
+			w.Header().Set("Retry-After", "60")
 			http.Error(w, "slow down", http.StatusTooManyRequests)
 		}},
-		{name: "upstream not JSON", handler: func(w http.ResponseWriter, _ *http.Request) {
+		{name: "upstream not JSON", wantStatus: http.StatusBadGateway, handler: func(w http.ResponseWriter, _ *http.Request) {
 			w.Header().Set("Content-Type", "text/html")
 			_, _ = io.WriteString(w, "<html>captive portal</html>")
 		}},
@@ -252,7 +255,13 @@ func TestContainerHandler_ReferrersFallsBackToTagSchemaWithoutCache(t *testing.T
 			proxy.MetadataTTL = time.Hour
 			target := "/library/nginx/referrers/" + testReferrersSubject
 			for range 2 {
-				assertReferrersFallback(t, serveReferrersRequest(h, http.MethodGet, target))
+				got := serveReferrersRequest(h, http.MethodGet, target)
+				if got.Code != tt.wantStatus {
+					t.Fatalf("status = %d, want %d: %s", got.Code, tt.wantStatus, got.Body.String())
+				}
+				if got.Header().Get("Retry-After") != tt.wantRetryAfter {
+					t.Errorf("Retry-After = %q, want %q", got.Header().Get("Retry-After"), tt.wantRetryAfter)
+				}
 			}
 			if upstreamRequests != 2 {
 				t.Errorf("upstream requests = %d, want 2 (failure must not be cached)", upstreamRequests)
@@ -264,26 +273,11 @@ func TestContainerHandler_ReferrersFallsBackToTagSchemaWithoutCache(t *testing.T
 		upstream := httptest.NewServer(http.NotFoundHandler())
 		h, _ := newReferrersTestHandler(t, upstream)
 		upstream.Close()
-		assertReferrersFallback(t, serveReferrersRequest(h, http.MethodGet, "/library/nginx/referrers/"+testReferrersSubject))
+		got := serveReferrersRequest(h, http.MethodGet, "/library/nginx/referrers/"+testReferrersSubject)
+		if got.Code != http.StatusBadGateway {
+			t.Fatalf("status = %d, want 502 so clients keep using the referrers API: %s", got.Code, got.Body.String())
+		}
 	})
-}
-
-func assertReferrersFallback(t *testing.T, got *httptest.ResponseRecorder) {
-	t.Helper()
-	if got.Code != http.StatusNotFound {
-		t.Fatalf("status = %d, want 404 so clients use the tag schema: %s", got.Code, got.Body.String())
-	}
-	var body struct {
-		Errors []struct {
-			Code string `json:"code"`
-		} `json:"errors"`
-	}
-	if err := json.Unmarshal(got.Body.Bytes(), &body); err != nil || len(body.Errors) != 1 {
-		t.Fatalf("body = %q, want one OCI error", got.Body.String())
-	}
-	if body.Errors[0].Code == "NAME_UNKNOWN" {
-		t.Errorf("error code = NAME_UNKNOWN, which stops clients from falling back")
-	}
 }
 
 func TestContainerHandler_ReferrersNamedRegistryRewritesLink(t *testing.T) {

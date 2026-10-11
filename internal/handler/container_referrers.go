@@ -97,7 +97,7 @@ func (h *ContainerHandler) serveReferrers(w http.ResponseWriter, r *http.Request
 
 	resp, err := h.proxy.HTTPClient.Do(req)
 	if err != nil {
-		h.serveStaleReferrersOrFallback(w, r, registryURL, cached, err)
+		h.serveStaleReferrersOrError(w, r, registryURL, cached, err)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -111,24 +111,25 @@ func (h *ContainerHandler) serveReferrers(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if resp.StatusCode != http.StatusOK {
-		if shouldServeStaleManifest(resp.StatusCode) {
-			h.serveStaleReferrersOrFallback(w, r, registryURL, cached,
+		if shouldServeStaleManifest(resp.StatusCode) && cached != nil {
+			h.serveStaleReferrersOrError(w, r, registryURL, cached,
 				fmt.Errorf("upstream returned status %d", resp.StatusCode))
 			return
 		}
-		// A 404 tells the client the registry has no referrers API, so it
-		// falls back to the sha256-<hex> tag schema served as manifests.
-		h.proxy.relayResponse(w, r, resp, copyContainerTagsHeaders)
+		// Upstream errors reach the client as sent. Only a 404 tells it the
+		// registry has no referrers API, so it falls back to the sha256-<hex>
+		// tag schema served as manifests.
+		h.proxy.relayResponse(w, r, resp, copyContainerReferrersHeaders)
 		return
 	}
 
 	body, err := h.proxy.ReadMetadata(resp.Body)
 	if err != nil {
-		h.serveStaleReferrersOrFallback(w, r, registryURL, cached, fmt.Errorf("reading referrers: %w", err))
+		h.serveStaleReferrersOrError(w, r, registryURL, cached, fmt.Errorf("reading referrers: %w", err))
 		return
 	}
 	if !json.Valid(body) {
-		h.serveStaleReferrersOrFallback(w, r, registryURL, cached, errors.New("upstream referrers response is not JSON"))
+		h.serveStaleReferrersOrError(w, r, registryURL, cached, errors.New("upstream referrers response is not JSON"))
 		return
 	}
 	referrers := &cachedContainerTags{
@@ -150,18 +151,26 @@ func (h *ContainerHandler) serveReferrers(w http.ResponseWriter, r *http.Request
 	h.writeContainerReferrers(w, r, registryURL, referrers, false)
 }
 
-// serveStaleReferrersOrFallback serves a cached index when the upstream cannot
-// answer. Without one it returns 404, the signal clients already got before
-// the proxy served this endpoint: they fall back to the tag schema, whose
-// manifests may well be cached.
-func (h *ContainerHandler) serveStaleReferrersOrFallback(w http.ResponseWriter, r *http.Request, registryURL string, cached *cachedContainerTags, err error) {
+// serveStaleReferrersOrError serves a cached index when the upstream cannot
+// answer. Without one it returns 502 rather than 404, so clients do not take
+// a failed fetch as a registry without the referrers API.
+func (h *ContainerHandler) serveStaleReferrersOrError(w http.ResponseWriter, r *http.Request, registryURL string, cached *cachedContainerTags, err error) {
 	if cached != nil {
 		h.proxy.Logger.Warn("upstream referrers fetch failed, serving stale cache", "error", err)
 		h.writeContainerReferrers(w, r, registryURL, cached, true)
 		return
 	}
-	h.proxy.Logger.Warn("upstream referrers fetch failed, answering without referrers API", "error", err)
-	h.containerError(w, http.StatusNotFound, "UNSUPPORTED", "referrers unavailable from upstream")
+	h.proxy.Logger.Error("failed to fetch container referrers", "error", err)
+	h.containerError(w, http.StatusBadGateway, "INTERNAL_ERROR", "failed to fetch from upstream")
+}
+
+// copyContainerReferrersHeaders also keeps Retry-After, since uncached 429
+// and 5xx answers are relayed here instead of turning into a 502.
+func copyContainerReferrersHeaders(destination, source http.Header) {
+	copyContainerTagsHeaders(destination, source)
+	if value := source.Get("Retry-After"); value != "" {
+		destination.Set("Retry-After", value)
+	}
 }
 
 func (h *ContainerHandler) loadContainerReferrers(ctx context.Context, cacheKey string) (*cachedContainerTags, error) {
