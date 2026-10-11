@@ -298,17 +298,16 @@ func TestConanV2FileRoutesCacheArchives(t *testing.T) {
 	tests := []struct {
 		name     string
 		path     string
-		version  string
 		filename string
 	}{
 		{"recipe", "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/files/conan_sources.tgz",
-			"1.3.1_rrev1", "recipe_conan_sources.tgz"},
+			"rrev1_conan_sources.tgz"},
 		{"package", "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/packages/pkgid1/revisions/prev1/files/conan_package.tgz",
-			"1.3.1_rrev1_pkgid1_prev1", "package_conan_package.tgz"},
+			"rrev1_pkgid1_prev1_conan_package.tgz"},
 		{"recipe xz", "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/files/conan_export.txz",
-			"1.3.1_rrev1", "recipe_conan_export.txz"},
+			"rrev1_conan_export.txz"},
 		{"package zstd", "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/packages/pkgid1/revisions/prev1/files/conan_package.tzst",
-			"1.3.1_rrev1_pkgid1_prev1", "package_conan_package.tzst"},
+			"rrev1_pkgid1_prev1_conan_package.tzst"},
 	}
 
 	for _, tt := range tests {
@@ -347,12 +346,66 @@ func TestConanV2FileRoutesCacheArchives(t *testing.T) {
 				}
 			}
 
-			_, versionPURL, err := packagePURLStrings("conan", "zlib/1.3.1@_/_", tt.version)
-			if err != nil {
-				t.Fatal(err)
-			}
-			recordedStoragePath(t, db, versionPURL, tt.filename)
+			recordedStoragePath(t, db, "pkg:conan/zlib@1.3.1", tt.filename)
 		})
+	}
+}
+
+// References that differ only in user and channel share pkg:conan/zlib@1.3.1
+// but must not share files, even with the same recipe revision.
+func TestConanUserChannelKeptApart(t *testing.T) {
+	proxy, db, _, fetcher := setupTestProxy(t)
+	h := NewConanHandlerWithUpstream(proxy, testProxyURL, "http://upstream.invalid")
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	for _, ref := range []struct{ path, body, filename string }{
+		{"/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/files/conan_sources.tgz",
+			"center sources", "rrev1_conan_sources.tgz"},
+		{"/v2/conans/zlib/1.3.1/acme/stable/revisions/rrev1/files/conan_sources.tgz",
+			"acme sources", "acme@stable_rrev1_conan_sources.tgz"},
+	} {
+		fetcher.artifact = artifactBody(ref.body)
+		fetcher.fetchCalled = false
+
+		resp, err := http.Get(srv.URL + ref.path)
+		if err != nil {
+			t.Fatalf("GET %s failed: %v", ref.path, err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+
+		if string(body) != ref.body || !fetcher.fetchCalled {
+			t.Errorf("GET %s: body = %q, fetched = %v, want %q from upstream", ref.path, body, fetcher.fetchCalled, ref.body)
+		}
+		recordedStoragePath(t, db, "pkg:conan/zlib@1.3.1", ref.filename)
+	}
+}
+
+// A denylist entry for a Conan version blocks its recipe and binary archives.
+func TestConanDenylistMatchesVersion(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+	setTestDenylist(t, proxy, "pkg:conan/zlib@1.3.1")
+	h := NewConanHandlerWithUpstream(proxy, testProxyURL, "http://upstream.invalid")
+	srv := httptest.NewServer(h.Routes())
+	defer srv.Close()
+
+	for _, path := range []string{
+		"/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/files/conan_sources.tgz",
+		"/v2/conans/zlib/1.3.1/acme/stable/revisions/rrev1/packages/pkgid1/revisions/prev1/files/conan_package.tgz",
+	} {
+		fetcher.artifact = artifactBody("archive bytes")
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatalf("GET %s failed: %v", path, err)
+		}
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusForbidden {
+			t.Errorf("GET %s: status = %d, want %d", path, resp.StatusCode, http.StatusForbidden)
+		}
+	}
+	if fetcher.fetchCalled {
+		t.Error("denied archive was fetched from upstream")
 	}
 }
 

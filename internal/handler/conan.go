@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"fmt"
 	"net/http"
 	"strings"
 )
@@ -75,19 +74,13 @@ func (h *ConanHandler) handleRecipeFile(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	// Conan package name format: name/version@user/channel
-	packageName := fmt.Sprintf("%s/%s@%s/%s", name, version, user, channel)
-
 	h.proxy.Logger.Info("conan recipe download",
 		"name", name, "version", version, "user", user, "channel", channel, "filename", filename)
 
 	upstreamURL := h.upstreamURL + r.URL.Path
+	storageFilename := conanStorageFilename(user, channel, revision+"_"+filename)
 
-	// Use revision as part of version for storage
-	storageVersion := fmt.Sprintf("%s_%s", version, revision)
-	storageFilename := fmt.Sprintf("recipe_%s", filename)
-
-	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", packageName, storageVersion, storageFilename, upstreamURL)
+	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", name, version, storageFilename, upstreamURL)
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to fetch file")
 		return
@@ -113,24 +106,29 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	packageName := fmt.Sprintf("%s/%s@%s/%s", name, version, user, channel)
-
 	h.proxy.Logger.Info("conan package download",
 		"name", name, "version", version, "pkgref", pkgref, "filename", filename)
 
 	upstreamURL := h.upstreamURL + r.URL.Path
+	storageFilename := conanStorageFilename(user, channel, revision+"_"+pkgref+"_"+pkgrev+"_"+filename)
 
-	// Use revision and package ref as part of version for storage
-	storageVersion := fmt.Sprintf("%s_%s_%s_%s", version, revision, pkgref, pkgrev)
-	storageFilename := fmt.Sprintf("package_%s", filename)
-
-	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", packageName, storageVersion, storageFilename, upstreamURL)
+	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", name, version, storageFilename, upstreamURL)
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to fetch file")
 		return
 	}
 
 	ServeArtifactRequest(w, r, result)
+}
+
+// conanStorageFilename names a cached archive. Archives are stored under
+// pkg:conan/{name}@{version}, so the file name carries the revisions and, when
+// set, user and channel, to keep every recipe and binary apart.
+func conanStorageFilename(user, channel, file string) string {
+	if user == "_" && channel == "_" {
+		return file
+	}
+	return user + "@" + channel + "_" + file
 }
 
 // shouldCacheFile returns true if the file should be cached.
