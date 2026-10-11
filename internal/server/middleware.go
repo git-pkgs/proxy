@@ -123,3 +123,17 @@ func requestEcosystem(path string) string {
 		return "other"
 	}
 }
+
+// rejectQueryInPath refuses requests whose decoded path contains '?' or '#'.
+// Handlers build upstream URLs from the decoded path, where such a character
+// would end the path: busybox.apk%3F/foo-9.9-r0.apk fetches busybox but is
+// parsed and cached as foo, under the wrong PURL and past the denylist.
+func rejectQueryInPath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.ContainsAny(r.URL.Path, "?#") {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
