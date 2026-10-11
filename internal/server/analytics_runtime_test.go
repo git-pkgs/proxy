@@ -128,6 +128,30 @@ func TestRuntimeViewShapesRegistry(t *testing.T) {
 	}
 }
 
+// Evictions are routine housekeeping, not failures: they reach the page by
+// reason and ecosystem without the failure tint.
+func TestRuntimeViewShowsEvictions(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	evicted := prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "proxy_artifacts_evicted_total", Help: "t"}, []string{"reason", "ecosystem"})
+	reg.MustRegister(evicted)
+	evicted.WithLabelValues("retention", "npm").Add(4)
+	evicted.WithLabelValues("lru", "cargo")
+
+	snap, err := metrics.GatherFrom(reg)
+	if err != nil {
+		t.Fatalf("GatherFrom: %v", err)
+	}
+	v := runtimeView(snap)
+
+	if len(v.Evictions) != 1 {
+		t.Fatalf("Evictions = %+v, want only the non-zero row", v.Evictions)
+	}
+	if got := v.Evictions[0]; got.Label != "retention · npm" || got.Count != "4" || got.Bad {
+		t.Errorf("eviction row = %+v, want retention · npm = 4 without the failure tint", got)
+	}
+}
+
 // A counter sitting at zero carries no information and would bury the rows
 // that do, so it is left out.
 func TestRuntimeViewDropsZeroCounters(t *testing.T) {

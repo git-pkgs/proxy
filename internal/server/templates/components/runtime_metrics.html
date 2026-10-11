@@ -60,6 +60,7 @@
             {{template "runtime_counts" dict "Title" "Storage errors" "Rows" .StorageErrors "Empty" "None"}}
             {{template "runtime_counts" dict "Title" "Integrity failures" "Rows" .IntegrityFailures "Empty" "None"}}
             {{template "runtime_counts" dict "Title" "Health probe failures" "Rows" .ProbeFailures "Empty" "None"}}
+            {{template "runtime_counts" dict "Title" "Evicted artifacts" "Rows" .Evictions "Empty" "None"}}
             {{template "runtime_counts" dict "Title" "Circuit breaker trips" "Rows" .BreakerTrips "Empty" "None"}}
 
             <div>
