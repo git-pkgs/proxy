@@ -617,6 +617,111 @@ func TestComposerDownloadPinnedBranchCommit(t *testing.T) {
 	}
 }
 
+// composerMovingBranch is an upstream whose dev-master head can move. It
+// serves the archives of commits A and B under distPath and counts how often
+// they are fetched.
+type composerMovingBranch struct {
+	h       http.Handler
+	proxy   *Proxy
+	url     string
+	head    atomic.Value
+	fetches atomic.Int32
+}
+
+func setupComposerMovingBranch(t *testing.T, distPath string) *composerMovingBranch {
+	t.Helper()
+	b := &composerMovingBranch{}
+	b.head.Store(composerCommitA)
+	archives := map[string]string{
+		fmt.Sprintf(distPath, composerCommitA): "commit A",
+		fmt.Sprintf(distPath, composerCommitB): "commit B",
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/p2/v/p.json" || r.URL.Path == "/p2/v/p~dev.json" {
+			dist := b.url + fmt.Sprintf(distPath, b.head.Load())
+			_, _ = fmt.Fprintf(w, `{"packages":{"v/p":[{"version":"dev-master","dist":{"url":%q,"type":"zip"}}]}}`, dist)
+			return
+		}
+		body, ok := archives[r.URL.RequestURI()]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		b.fetches.Add(1)
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	b.url = srv.URL
+
+	b.proxy, _, _, _ = setupTestProxy(t)
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(srv.Client()), fetch.WithMaxRetries(0))
+	b.proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+	b.h = NewComposerHandlerWithUpstreams(b.proxy, "http://proxy", srv.URL, srv.URL).Routes()
+	return b
+}
+
+// TestComposerDownloadBranchMovesOn checks a lock file pinning A while the
+// branch moves from A to B: A is cached while it is the head and still served
+// from the cache afterwards, and B, the head a new lock file pins, comes from
+// upstream.
+func TestComposerDownloadBranchMovesOn(t *testing.T) {
+	tests := []struct {
+		name, distPath, filename, cached string
+	}{
+		{"github zipball", "/repos/v/p/zipball/%s", "%s.zip", "%s.zip"},
+		{"gitlab archive", "/api/v4/projects/v%%2Fp/repository/archive.zip?sha=%s", "archive.zip?sha=%s", "archive-%s.zip"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			b := setupComposerMovingBranch(t, tt.distPath)
+			get := func(commit, want string, wantFetches int32) {
+				t.Helper()
+				filename := fmt.Sprintf(tt.filename, commit)
+				w := httptest.NewRecorder()
+				b.h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/files/v/p/dev-master/"+filename, nil))
+				if w.Code != http.StatusOK || w.Body.String() != want {
+					t.Errorf("%s: status %d, body %q, want 200 %q", filename, w.Code, w.Body.String(), want)
+				}
+				if got := cachedComposerFile(t, b.proxy, fmt.Sprintf(tt.cached, commit)); got != want {
+					t.Errorf("%s cached as %q, want %q", filename, got, want)
+				}
+				if n := b.fetches.Load(); n != wantFetches {
+					t.Errorf("after %s: %d upstream fetches, want %d", filename, n, wantFetches)
+				}
+			}
+			get(composerCommitA, "commit A", 1)
+			b.head.Store(composerCommitB)
+			get(composerCommitA, "commit A", 1)
+			get(composerCommitB, "commit B", 2)
+			get(composerCommitB, "commit B", 2)
+		})
+	}
+}
+
+// TestComposerDownloadGitLabSharedName checks that an archive an older proxy
+// cached under GitLab's shared archive.zip name is dropped once a commit is
+// fetched under its own name.
+func TestComposerDownloadGitLabSharedName(t *testing.T) {
+	distPath := "/api/v4/projects/v%%2Fp/repository/archive.zip?sha=%s"
+	b := setupComposerMovingBranch(t, distPath)
+	shared, err := b.proxy.GetOrFetchArtifactFromURL(context.Background(), "composer", "v/p", "dev-master",
+		"archive.zip", b.url+fmt.Sprintf(distPath, composerCommitB))
+	if err != nil {
+		t.Fatalf("seeding shared entry: %v", err)
+	}
+	_ = shared.Reader.Close()
+
+	w := httptest.NewRecorder()
+	b.h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/files/v/p/dev-master/archive.zip?sha="+composerCommitA, nil))
+	if w.Code != http.StatusOK || w.Body.String() != "commit A" {
+		t.Errorf("status %d, body %q, want 200 %q", w.Code, w.Body.String(), "commit A")
+	}
+	if got := cachedComposerFile(t, b.proxy, "archive.zip"); got != "" {
+		t.Errorf("archive.zip still cached as %q", got)
+	}
+}
+
 // TestComposerDownloadCachedFromOtherCommit checks that an archive an older
 // proxy cached under a commit's name but fetched from another commit's URL is
 // fetched again, while a correct entry is served from the cache.

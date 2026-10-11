@@ -591,8 +591,11 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 		"download_url", downloadURL)
 
 	// Archives picked by ?sha= share one file name, so the commit goes into
-	// the name they are cached under.
+	// the name they are cached under. Proxy versions before that cached every
+	// commit under the shared name, which is dropped once a commit is fetched.
+	var sharedFilename string
 	if commit, ok := shaQueryCommit(requested); ok {
+		sharedFilename = h.routes.cacheFilename(packageName, filename)
 		ext := path.Ext(filename)
 		filename = strings.TrimSuffix(filename, ext) + "-" + commit + ext
 	}
@@ -604,6 +607,12 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to fetch package")
 		return
+	}
+	if sharedFilename != "" && !result.Cached {
+		if err := h.proxy.ClearCachedArtifact("composer", packageName, version, sharedFilename); err != nil {
+			h.proxy.Logger.Warn("failed to discard composer archive cached under a shared name",
+				"package", packageName, "version", version, "filename", sharedFilename, "error", err)
+		}
 	}
 
 	ServeArtifactRequest(w, r, result)
