@@ -497,13 +497,15 @@ func (db *DB) DiscardArtifact(versionPURL, filename, storagePath string) error {
 // Queueing a path again, as reclaim does after a failed delete, restarts its
 // grace period and moves it behind the rest.
 func (db *DB) QueuePendingDelete(path string) error {
-	query := db.Rebind(`
-		INSERT INTO pending_deletes (path, queued_at) VALUES (?, ?)
-		ON CONFLICT(path) DO UPDATE SET queued_at = excluded.queued_at
-	`)
-	_, err := db.Exec(query, path, time.Now().UTC())
+	_, err := db.Exec(db.Rebind(queuePendingDeleteQuery), path, time.Now().UTC())
 	return err
 }
+
+// queuePendingDeleteQuery queues a path, or moves an already queued one to
+// the back of the queue. It takes the path and the time it is queued at.
+const queuePendingDeleteQuery = `
+	INSERT INTO pending_deletes (path, queued_at) VALUES (?, ?)
+	ON CONFLICT(path) DO UPDATE SET queued_at = excluded.queued_at`
 
 // GetDuePendingDeletes returns up to limit paths queued before cutoff, oldest
 // first. A path a record points at again is skipped.

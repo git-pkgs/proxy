@@ -341,6 +341,50 @@ func TestSweepRetentionSkipsWhenHitsCannotBeWritten(t *testing.T) {
 	}
 }
 
+// When the object can't be queued for deletion, the sweep leaves the record
+// cached and counts nothing; the next sweep clears it.
+func TestSweepRetentionRetriesWhenQueueingFails(t *testing.T) {
+	db, store := setupEvictionTest(t)
+	now := time.Now()
+	old := now.Add(-30 * retentionDay)
+	path := seedAgedArtifact(t, db, store, "npm", "npm", "stuck", old, old)
+	if _, err := db.Exec(`CREATE TRIGGER refuse_queue BEFORE INSERT ON pending_deletes
+		BEGIN SELECT RAISE(ABORT, 'queue refused'); END`); err != nil {
+		t.Fatalf("creating trigger: %v", err)
+	}
+	evicted := func() float64 {
+		return testutil.ToFloat64(metrics.ArtifactsEvicted.WithLabelValues("retention", "npm"))
+	}
+	before := evicted()
+
+	rules := retention.Rules{Ecosystems: map[string]time.Duration{"npm": retentionDay}}
+	sweepRetention(context.Background(), db, discardLogger(), retentionRegistry(), rules, now)
+	if !isCached(t, db, "npm", "stuck") {
+		t.Fatal("sweep cleared an artifact whose object couldn't be queued for deletion")
+	}
+	if got := evicted() - before; got != 0 {
+		t.Errorf("evictions counted on a failed queue = %v, want 0", got)
+	}
+
+	if _, err := db.Exec(`DROP TRIGGER refuse_queue`); err != nil {
+		t.Fatalf("dropping trigger: %v", err)
+	}
+	sweepRetention(context.Background(), db, discardLogger(), retentionRegistry(), rules, now)
+	if isCached(t, db, "npm", "stuck") {
+		t.Error("next sweep left the artifact cached")
+	}
+	var queued []string
+	if err := db.Select(&queued, `SELECT path FROM pending_deletes`); err != nil {
+		t.Fatalf("reading pending_deletes: %v", err)
+	}
+	if len(queued) != 1 || queued[0] != path {
+		t.Errorf("queued paths = %v, want [%s]", queued, path)
+	}
+	if got := evicted() - before; got != 1 {
+		t.Errorf("evictions counted after the retry = %v, want 1", got)
+	}
+}
+
 func TestEvictionsAreCounted(t *testing.T) {
 	db, store := setupEvictionTest(t)
 	ctx := context.Background()

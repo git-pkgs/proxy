@@ -153,19 +153,13 @@ func clearIfExpired(db *database.DB, logger *slog.Logger, reg *retention.Registr
 		return false
 	}
 
-	recordCleared, err := db.ClearExpiredArtifact(c.VersionPURL, c.Filename, c.StoragePath, cutoff)
+	cleared, err := db.ClearExpiredArtifact(c.VersionPURL, c.Filename, c.StoragePath, cutoff)
 	if err != nil {
 		logger.Warn("retention: failed to clear artifact record",
 			"version_purl", c.VersionPURL, "filename", c.Filename, "error", err)
 		return false
 	}
-	if !recordCleared {
-		return false
-	}
-	if err := db.QueuePendingDelete(c.StoragePath); err != nil {
-		logger.Warn("retention: failed to queue object for deletion", "path", c.StoragePath, "error", err)
-	}
-	return true
+	return cleared
 }
 
 // recordLRUEviction counts an artifact the size limit evicted under the

@@ -152,6 +152,36 @@ func TestClearExpiredArtifact(t *testing.T) {
 		if !art.LastAccessedAt.Valid {
 			t.Error("clear dropped last_accessed_at")
 		}
+		var queued int
+		if err := db.Get(&queued, db.Rebind(`SELECT COUNT(*) FROM pending_deletes WHERE path = ?`), stalePath); err != nil || queued != 1 {
+			t.Errorf("queued deletes for %s = %d, %v, want 1", stalePath, queued, err)
+		}
+	})
+}
+
+// When the object can't be queued for deletion, the clear is rolled back:
+// the record keeps pointing at the object, so a later sweep retries it
+// rather than leaving a file in storage that nothing refers to.
+func TestClearExpiredArtifactRollsBackWhenQueueingFails(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now()
+		old := now.Add(-48 * time.Hour)
+		seedRetentionArtifact(t, db, "npm", "stale", old, old)
+		if _, err := db.Exec(`DROP TABLE pending_deletes`); err != nil {
+			t.Fatalf("dropping pending_deletes: %v", err)
+		}
+
+		cleared, err := db.ClearExpiredArtifact("pkg:npm/stale@1.0.0", "stale.tgz", "npm/stale/1.0.0/stale.tgz", now.Add(-24*time.Hour))
+		if err == nil || cleared {
+			t.Fatalf("ClearExpiredArtifact = %v, %v, want false and an error", cleared, err)
+		}
+		art, err := db.GetArtifact("pkg:npm/stale@1.0.0", "stale.tgz")
+		if err != nil {
+			t.Fatalf("GetArtifact: %v", err)
+		}
+		if !art.StoragePath.Valid || !art.FetchedAt.Valid {
+			t.Error("record cleared although its object couldn't be queued for deletion")
+		}
 	})
 }
 

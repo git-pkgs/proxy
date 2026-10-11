@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"errors"
+	"fmt"
 	"time"
 )
 
@@ -90,19 +91,34 @@ func asLocalWallClock(t sql.NullTime) sql.NullTime {
 
 // ClearExpiredArtifact marks an artifact uncached like ClearArtifactCache,
 // but only while it is still expired before cutoff, so an artifact served
-// between the scan and the clear stays cached.
+// between the scan and the clear stays cached. It queues storagePath for
+// deletion in the same transaction: if queueing fails, the record keeps its
+// path and a later sweep tries again, instead of the object staying in
+// storage with nothing left pointing at it.
 func (db *DB) ClearExpiredArtifact(versionPURL, filename, storagePath string, cutoff time.Time) (bool, error) {
+	tx, err := db.Beginx()
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	query := db.Rebind(`
 		UPDATE artifacts
 		SET storage_path = NULL, content_hash = NULL, size = NULL,
 		    content_type = NULL, fetched_at = NULL, updated_at = ?
 		WHERE version_purl = ? AND filename = ? AND storage_path = ? AND` + expiredCondition)
-	res, err := db.Exec(query, time.Now(), versionPURL, filename, storagePath, cutoff, cutoff)
+	res, err := tx.Exec(query, time.Now(), versionPURL, filename, storagePath, cutoff, cutoff)
 	if err != nil {
 		return false, err
 	}
 	n, err := res.RowsAffected()
-	return n > 0, err
+	if err != nil || n == 0 {
+		return false, err
+	}
+	if _, err := tx.Exec(db.Rebind(queuePendingDeleteQuery), storagePath, time.Now().UTC()); err != nil {
+		return false, fmt.Errorf("queueing %s for deletion: %w", storagePath, err)
+	}
+	return true, tx.Commit()
 }
 
 // GetArtifactEcosystem returns the packages.ecosystem value of the package an
