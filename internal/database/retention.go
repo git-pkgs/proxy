@@ -64,29 +64,10 @@ func (db *DB) GetRetentionCandidates(fromID, toID int64, cutoff time.Time) ([]Re
 		JOIN packages p ON p.purl = v.package_purl
 		ORDER BY a.id
 	`)
-	if err := db.Select(&candidates, query, fromID, toID, cutoff, cutoff); err != nil {
+	if err := db.Select(&candidates, query, fromID, toID, cutoff.UTC(), cutoff.UTC()); err != nil {
 		return nil, err
 	}
-	if db.dialect == DialectPostgres {
-		for i := range candidates {
-			candidates[i].FetchedAt = asLocalWallClock(candidates[i].FetchedAt)
-			candidates[i].LastAccessedAt = asLocalWallClock(candidates[i].LastAccessedAt)
-		}
-	}
 	return candidates, nil
-}
-
-// asLocalWallClock reinterprets a time read from a Postgres TIMESTAMP
-// column. The column has no zone and holds the local wall clock time the
-// proxy wrote, but lib/pq hands it back labelled UTC, which east of UTC
-// makes it look hours newer than it is.
-func asLocalWallClock(t sql.NullTime) sql.NullTime {
-	if !t.Valid {
-		return t
-	}
-	v := t.Time
-	t.Time = time.Date(v.Year(), v.Month(), v.Day(), v.Hour(), v.Minute(), v.Second(), v.Nanosecond(), time.Local)
-	return t
 }
 
 // ClearExpiredArtifact marks an artifact uncached like ClearArtifactCache,
@@ -107,7 +88,7 @@ func (db *DB) ClearExpiredArtifact(versionPURL, filename, storagePath string, cu
 		SET storage_path = NULL, content_hash = NULL, size = NULL,
 		    content_type = NULL, fetched_at = NULL, updated_at = ?
 		WHERE version_purl = ? AND filename = ? AND storage_path = ? AND` + expiredCondition)
-	res, err := tx.Exec(query, time.Now(), versionPURL, filename, storagePath, cutoff, cutoff)
+	res, err := tx.Exec(query, time.Now(), versionPURL, filename, storagePath, cutoff.UTC(), cutoff.UTC())
 	if err != nil {
 		return false, err
 	}

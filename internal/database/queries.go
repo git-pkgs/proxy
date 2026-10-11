@@ -322,6 +322,17 @@ const upsertArtifactAttempts = 5
 // would remove it. The write applies only if the record still holds the path
 // read before it, so commits racing on one artifact each queue the path they
 // replaced.
+// inUTC returns t in UTC. Artifacts store fetched_at and last_accessed_at in
+// UTC: lib/pq sends a time with its offset, a Postgres TIMESTAMP column keeps
+// only the wall clock, and lib/pq reads that back as UTC, so anything else
+// comes back shifted by the local offset.
+func inUTC(t sql.NullTime) sql.NullTime {
+	if t.Valid {
+		t.Time = t.Time.UTC()
+	}
+	return t
+}
+
 func (db *DB) UpsertArtifact(a *Artifact) error {
 	for range upsertArtifactAttempts {
 		var previous sql.NullString
@@ -386,7 +397,7 @@ func (db *DB) upsertArtifactFrom(a *Artifact, previous sql.NullString) (bool, er
 
 	res, err := db.Exec(query,
 		a.VersionPURL, a.Filename, a.UpstreamURL, a.StoragePath, a.ContentHash,
-		a.Size, a.ContentType, a.FetchedAt, a.HitCount, a.LastAccessedAt, now, now, previous,
+		a.Size, a.ContentType, inUTC(a.FetchedAt), a.HitCount, inUTC(a.LastAccessedAt), now, now, previous,
 	)
 	if err != nil {
 		return false, fmt.Errorf("upserting artifact: %w", err)
@@ -409,7 +420,7 @@ func (db *DB) RecordArtifactHit(versionPURL, filename string) error {
 		SET hit_count = hit_count + 1, last_accessed_at = ?, updated_at = ?
 		WHERE version_purl = ? AND filename = ?
 	`)
-	_, err := db.Exec(query, now, now, versionPURL, filename)
+	_, err := db.Exec(query, now.UTC(), now, versionPURL, filename)
 	return err
 }
 
@@ -421,7 +432,7 @@ func (db *DB) MarkArtifactCached(versionPURL, filename, storagePath, contentHash
 		    fetched_at = ?, updated_at = ?
 		WHERE version_purl = ? AND filename = ?
 	`)
-	_, err := db.Exec(query, storagePath, contentHash, size, contentType, now, now, versionPURL, filename)
+	_, err := db.Exec(query, storagePath, contentHash, size, contentType, now.UTC(), now, versionPURL, filename)
 	return err
 }
 

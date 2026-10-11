@@ -2,6 +2,8 @@ package database
 
 import (
 	"database/sql"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 )
@@ -9,6 +11,66 @@ import (
 // seedRetentionArtifact stores a cached artifact for pkg:{ecosystem}/{name}
 // with the given fetch and last access times; a zero accessed leaves the
 // artifact never served.
+// Artifacts store fetched_at and last_accessed_at in UTC, and the retention
+// cutoffs are compared in UTC. In a zone east of UTC, any write or cutoff
+// left in local time shifts an artifact by the offset on Postgres.
+func TestArtifactTimesAreStoredInUTC(t *testing.T) {
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Skipf("time zone data unavailable: %v", err)
+	}
+	prev := time.Local
+	time.Local = tokyo
+	t.Cleanup(func() { time.Local = prev })
+
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now()
+		old := now.Add(-48 * time.Hour)
+		seedRetentionArtifact(t, db, "npm", "stale", now.Add(-90*time.Minute), time.Time{})
+		seedRetentionArtifact(t, db, "npm", "fresh", now.Add(-30*time.Minute), time.Time{})
+		seedRetentionArtifact(t, db, "npm", "hit", old, time.Time{})
+		if err := db.RecordArtifactHit("pkg:npm/hit@1.0.0", "hit.tgz"); err != nil {
+			t.Fatalf("RecordArtifactHit: %v", err)
+		}
+		seedRetentionArtifact(t, db, "npm", "batched", old, time.Time{})
+		hits := map[hitKey]hitEntry{{"pkg:npm/batched@1.0.0", "batched.tgz"}: {count: 1, last: now.Add(-5 * time.Hour)}}
+		if err := db.writeHits(hits); err != nil {
+			t.Fatalf("writeHits: %v", err)
+		}
+		seedRetentionArtifact(t, db, "npm", "refetched", old, time.Time{})
+		if err := db.MarkArtifactCached("pkg:npm/refetched@1.0.0", "refetched.tgz", "npm/refetched/1.0.0/refetched.tgz", "hash", 100, ""); err != nil {
+			t.Fatalf("MarkArtifactCached: %v", err)
+		}
+
+		expired := func(cutoff time.Time) []string {
+			t.Helper()
+			candidates, err := db.GetRetentionCandidates(0, 100, cutoff)
+			if err != nil {
+				t.Fatalf("GetRetentionCandidates: %v", err)
+			}
+			var names []string
+			for _, c := range candidates {
+				if !c.ExpiredBefore(cutoff) {
+					t.Errorf("%s returned as a candidate but read back as not expired before %v", c.Filename, cutoff)
+				}
+				names = append(names, strings.TrimSuffix(c.Filename, ".tgz"))
+			}
+			slices.Sort(names)
+			return names
+		}
+		if got, want := expired(now.Add(-time.Hour)), []string{"batched", "stale"}; !slices.Equal(got, want) {
+			t.Errorf("expired an hour ago = %v, want %v", got, want)
+		}
+		if got, want := expired(now.Add(time.Hour)), []string{"batched", "fresh", "hit", "refetched", "stale"}; !slices.Equal(got, want) {
+			t.Errorf("expired an hour from now = %v, want %v", got, want)
+		}
+		cleared, err := db.ClearExpiredArtifact("pkg:npm/fresh@1.0.0", "fresh.tgz", "npm/fresh/1.0.0/fresh.tgz", now.Add(-time.Hour))
+		if err != nil || cleared {
+			t.Errorf("ClearExpiredArtifact(fresh, an hour ago) = %v, %v, want false, nil", cleared, err)
+		}
+	})
+}
+
 func seedRetentionArtifact(t *testing.T, db *DB, ecosystem, name string, fetched, accessed time.Time) {
 	t.Helper()
 	pkgPURL := "pkg:" + ecosystem + "/" + name
