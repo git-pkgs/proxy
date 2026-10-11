@@ -14,6 +14,7 @@ func retentionTestRegistry() *retention.Registry {
 	reg := retention.NewRegistry()
 	reg.Register(retention.Spec{Key: "npm", CanonicalPackage: retention.DefaultCanonical("npm")})
 	reg.Register(retention.Spec{Key: "julia"})
+	reg.Register(retention.Spec{Key: "conan"})
 	return reg
 }
 
@@ -83,6 +84,8 @@ func TestRetentionRulesErrors(t *testing.T) {
 			"not supported for cargo packages"},
 		{"julia package", func(r *RetentionConfig) { r.Packages = map[string]string{"pkg:julia/Example": "1d"} },
 			"not supported for julia"},
+		{"package of ecosystem without package rules", func(r *RetentionConfig) { r.Packages = map[string]string{"pkg:conan/zlib": "1d"} },
+			"package rules are not supported for conan; use storage.retention.ecosystems.conan"},
 		{"invalid package PURL", func(r *RetentionConfig) { r.Packages = map[string]string{"lodash": "1d"} }, "not a valid package PURL"},
 		{"npm package without its scope marker", func(r *RetentionConfig) { r.Packages = map[string]string{"pkg:npm/babel/core": "1d"} },
 			"does not match how npm packages are stored"},

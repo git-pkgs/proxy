@@ -126,10 +126,14 @@ func retentionPackageKey(reg *retention.Registry, key string) (string, error) {
 	if ok {
 		return canonical, nil
 	}
-	if key, registered := reg.KeyForDBEcosystem(purl.PURLTypeToEcosystem(p.Type)); registered {
-		return "", fmt.Errorf("does not match how %s packages are stored; see the package rule forms in docs/configuration.md", key)
+	ecosystem, registered := reg.KeyForDBEcosystem(purl.PURLTypeToEcosystem(p.Type))
+	if !registered {
+		return "", fmt.Errorf("retention is not supported for %s packages in this version", p.Type)
 	}
-	return "", fmt.Errorf("retention is not supported for %s packages in this version", p.Type)
+	if spec, _ := reg.Lookup(ecosystem); spec.CanonicalPackage == nil {
+		return "", fmt.Errorf("package rules are not supported for %s; use storage.retention.ecosystems.%s", ecosystem, ecosystem)
+	}
+	return "", fmt.Errorf("does not match how %s packages are stored; see the package rule forms in docs/configuration.md", ecosystem)
 }
 
 func sortedKeys(m map[string]string) []string {
