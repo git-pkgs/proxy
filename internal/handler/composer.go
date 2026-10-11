@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"path"
 	"regexp"
 	"strings"
@@ -372,7 +373,7 @@ func (h *ComposerHandler) proxyDistURL(packageName, version, upstreamURL, distTy
 		return "", false
 	}
 	return fmt.Sprintf("%s/composer/files/%s/%s/%s/%s",
-		h.proxyURL, parts[0], parts[1], version, distFilename(upstreamURL, distType)), true
+		h.proxyURL, parts[0], parts[1], url.PathEscape(version), distFilename(upstreamURL, distType)), true
 }
 
 // distFilename returns the file name this proxy serves an archive under: the
@@ -410,6 +411,16 @@ func upstreamDistURL(listedURL, distType, filename string, branch bool) (string,
 	if filename == listed {
 		return listedURL, true
 	}
+	if commit, ok := shaQueryCommit(listed); ok {
+		requested, ok := shaQueryCommit(filename)
+		listedSha, requestedSha := "sha="+commit, "sha="+requested
+		idx := strings.LastIndex(listed, listedSha)
+		if !branch || !ok || idx < 0 || listed[:idx]+requestedSha+listed[idx+len(listedSha):] != filename {
+			return "", false
+		}
+		idx = strings.LastIndex(listedURL, listedSha)
+		return listedURL[:idx] + requestedSha + listedURL[idx+len(listedSha):], true
+	}
 	ext := path.Ext(listed)
 	commit := strings.TrimSuffix(listed, ext)
 	requested, ok := strings.CutSuffix(filename, ext)
@@ -418,6 +429,22 @@ func upstreamDistURL(listedURL, distType, filename string, branch bool) (string,
 	}
 	idx := strings.LastIndex(listedURL, commit)
 	return listedURL[:idx] + requested + listedURL[idx+len(commit):], true
+}
+
+// shaQueryCommit returns the commit an archive name passes in a sha query
+// parameter. GitLab names the archive of every commit archive.zip and picks
+// the commit that way.
+func shaQueryCommit(filename string) (string, bool) {
+	_, query, ok := strings.Cut(filename, "?")
+	if !ok {
+		return "", false
+	}
+	values, err := url.ParseQuery(query)
+	if err != nil {
+		return "", false
+	}
+	commit := values.Get("sha")
+	return commit, composerCommitPattern.MatchString(commit)
 }
 
 // composerFields holds one version's fields as Composer sees them after
@@ -544,8 +571,7 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 
 	// The archive is cached under the file name from the path, so fetch the
 	// one that name stands for. Compare it as sent, the way rewriteDist handed
-	// it out. A query such as GitLab's ?sha= is compared but is not part of
-	// the cache key.
+	// it out, query included.
 	requested := path.Base(r.URL.EscapedPath())
 	if r.URL.RawQuery != "" {
 		requested += "?" + r.URL.RawQuery
@@ -564,6 +590,12 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 		"package", packageName, "version", version,
 		"download_url", downloadURL)
 
+	// Archives picked by ?sha= share one file name, so the commit goes into
+	// the name they are cached under.
+	if commit, ok := shaQueryCommit(requested); ok {
+		ext := path.Ext(filename)
+		filename = strings.TrimSuffix(filename, ext) + "-" + commit + ext
+	}
 	cacheFilename := h.routes.cacheFilename(packageName, filename)
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "composer", packageName, version, cacheFilename, downloadURL)
 	if err != nil {

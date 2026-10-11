@@ -579,13 +579,15 @@ func cachedComposerFile(t *testing.T, proxy *Proxy, filename string) string {
 // TestComposerDownloadPinnedBranchCommit checks that a lock file pinning an
 // older commit of a branch gets that commit rather than the head the branch's
 // metadata lists now, and that the head is not cached under the older name.
+// The second round is served from the cache.
 func TestComposerDownloadPinnedBranchCommit(t *testing.T) {
 	tests := []struct {
-		name, distPath, filename string
+		name, distPath, filename, cached string
 	}{
-		{"github zipball", "/repos/v/p/zipball/%s", "%s.zip"},
-		{"github zipball without .zip", "/repos/v/p/zipball/%s", "%s"},
-		{"bitbucket archive", "/v/p/get/%s.zip", "%s.zip"},
+		{"github zipball", "/repos/v/p/zipball/%s", "%s.zip", "%s.zip"},
+		{"github zipball without .zip", "/repos/v/p/zipball/%s", "%s", "%s"},
+		{"bitbucket archive", "/v/p/get/%s.zip", "%s.zip", "%s.zip"},
+		{"gitlab archive", "/api/v4/projects/v%%2Fp/repository/archive.zip?sha=%s", "archive.zip?sha=%s", "archive-%s.zip"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -593,21 +595,77 @@ func TestComposerDownloadPinnedBranchCommit(t *testing.T) {
 				fmt.Sprintf(tt.distPath, composerCommitA): "commit A",
 				fmt.Sprintf(tt.distPath, composerCommitB): "commit B",
 			})
-			for _, c := range []struct{ commit, want string }{
-				{composerCommitA, "commit A"},
-				{composerCommitB, "commit B"},
-			} {
-				filename, want := fmt.Sprintf(tt.filename, c.commit), c.want
-				w := httptest.NewRecorder()
-				h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/files/v/p/dev-master/"+filename, nil))
-				if w.Code != http.StatusOK || w.Body.String() != want {
-					t.Errorf("%s: status %d, body %q, want 200 %q", filename, w.Code, w.Body.String(), want)
-				}
-				if got := cachedComposerFile(t, proxy, filename); got != want {
-					t.Errorf("%s cached as %q, want %q", filename, got, want)
+			for range 2 {
+				for _, c := range []struct{ commit, want string }{
+					{composerCommitA, "commit A"},
+					{composerCommitB, "commit B"},
+				} {
+					filename, want := fmt.Sprintf(tt.filename, c.commit), c.want
+					w := httptest.NewRecorder()
+					h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/files/v/p/dev-master/"+filename, nil))
+					if w.Code != http.StatusOK || w.Body.String() != want {
+						t.Errorf("%s: status %d, body %q, want 200 %q", filename, w.Code, w.Body.String(), want)
+					}
+					cached := fmt.Sprintf(tt.cached, c.commit)
+					if got := cachedComposerFile(t, proxy, cached); got != want {
+						t.Errorf("%s cached as %q, want %q", cached, got, want)
+					}
 				}
 			}
 		})
+	}
+}
+
+// TestComposerDownloadGitLabTaggedRelease checks that a tagged release on
+// GitLab is only served as the commit its metadata lists.
+func TestComposerDownloadGitLabTaggedRelease(t *testing.T) {
+	archive := "/api/v4/projects/v%2Fp/repository/archive.zip?sha="
+	h, _ := setupComposerBranch(t, archive+composerCommitB, map[string]string{
+		archive + composerCommitA: "commit A",
+		archive + composerCommitB: "commit B",
+	})
+
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/files/v/p/1.0.0/archive.zip?sha="+composerCommitA, nil))
+	if w.Code != http.StatusNotFound {
+		t.Errorf("other commit: status %d, body %q, want 404", w.Code, w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/files/v/p/1.0.0/archive.zip?sha="+composerCommitB, nil))
+	if w.Code != http.StatusOK || w.Body.String() != "commit B" {
+		t.Errorf("listed commit: status %d, body %q, want 200 %q", w.Code, w.Body.String(), "commit B")
+	}
+}
+
+// TestComposerDownloadBranchWithSlash checks that a branch whose name holds a
+// slash gets a dist URL the download route matches.
+func TestComposerDownloadBranchWithSlash(t *testing.T) {
+	const version = "dev-feature/x"
+	var srv *httptest.Server
+	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/zip/x.zip" {
+			_, _ = io.WriteString(w, "feature")
+			return
+		}
+		_, _ = fmt.Fprintf(w, `{"packages":{"v/p":[{"version":%q,"dist":{"url":%q,"type":"zip"}}]}}`, version, srv.URL+"/zip/x.zip")
+	}))
+	t.Cleanup(srv.Close)
+	proxy, _, _, _ := setupTestProxy(t)
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(srv.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+	h := NewComposerHandlerWithUpstreams(proxy, "http://proxy", srv.URL, srv.URL)
+
+	distURL, ok := h.proxyDistURL("v/p", version, srv.URL+"/zip/x.zip", "zip")
+	if want := "http://proxy/composer/files/v/p/dev-feature%2Fx/x.zip"; !ok || distURL != want {
+		t.Fatalf("dist URL = %q, want %q", distURL, want)
+	}
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, strings.TrimPrefix(distURL, "http://proxy/composer"), nil))
+	if w.Code != http.StatusOK || w.Body.String() != "feature" {
+		t.Errorf("status %d, body %q, want 200 %q", w.Code, w.Body.String(), "feature")
 	}
 }
 
@@ -620,8 +678,8 @@ func TestComposerDownloadUnlistedFile(t *testing.T) {
 	}{
 		{"plain name", "/dist/main.zip", "main.zip", "old.zip"},
 		{"escaped name", "/dist/p%2Bdev-main.zip", "p%2Bdev-main.zip", "old.zip"},
-		{"gitlab archive", "/api/v4/projects/v%2Fp/repository/archive.zip?sha=" + composerCommitB,
-			"archive.zip?sha=" + composerCommitB, "archive.zip?sha=" + composerCommitA},
+		{"gitlab archive with other query", "/api/v4/projects/v%2Fp/repository/archive.zip?sha=" + composerCommitB,
+			"archive.zip?sha=" + composerCommitB, "archive.zip?sha=" + composerCommitA + "&path=src"},
 		{"branch name for a commit", "/repos/v/p/zipball/" + composerCommitB, composerCommitB + ".zip", "master.zip"},
 	}
 	for _, tt := range tests {
@@ -676,6 +734,7 @@ func TestComposerDownloadTaggedReleaseCommit(t *testing.T) {
 
 func TestComposerUpstreamDistURL(t *testing.T) {
 	const zipball = "https://api.github.com/repos/v/p/zipball/"
+	const gitlab = "https://gitlab.com/api/v4/projects/v%2Fp/repository/archive.zip?sha="
 	sha256A := strings.Repeat("a", 64)
 	tests := []struct {
 		name, listed, distType, filename, want string
@@ -689,6 +748,9 @@ func TestComposerUpstreamDistURL(t *testing.T) {
 		{"short hash", zipball + composerCommitB, "zip", "1111111.zip", ""},
 		{"upper-case hash", zipball + composerCommitB, "zip", strings.ToUpper(sha256A) + ".zip", ""},
 		{"other name", "https://example.com/dist/main.zip", "zip", "old.zip", ""},
+		{"gitlab older commit", gitlab + composerCommitB, "zip", "archive.zip?sha=" + composerCommitA, gitlab + composerCommitA},
+		{"gitlab short hash", gitlab + composerCommitB, "zip", "archive.zip?sha=1111111", ""},
+		{"gitlab other archive", gitlab + composerCommitB, "zip", "other.zip?sha=" + composerCommitA, ""},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -700,6 +762,9 @@ func TestComposerUpstreamDistURL(t *testing.T) {
 	}
 	if got, ok := upstreamDistURL(zipball+composerCommitB, "zip", composerCommitA+".zip", false); ok {
 		t.Errorf("tagged release rebuilt to %q, want only the listed archive", got)
+	}
+	if got, ok := upstreamDistURL(gitlab+composerCommitB, "zip", "archive.zip?sha="+composerCommitA, false); ok {
+		t.Errorf("tagged GitLab release rebuilt to %q, want only the listed archive", got)
 	}
 }
 
