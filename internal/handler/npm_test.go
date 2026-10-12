@@ -1241,10 +1241,11 @@ func TestNPMVersionMetadataCooldown(t *testing.T) {
 		path        string
 		wantStatus  int
 		wantVersion string
+		wantError   string
 	}{
-		{"/demo/latest", http.StatusOK, testVersion100},
-		{"/demo/1.0.0", http.StatusOK, testVersion100},
-		{"/demo/2.0.0", http.StatusNotFound, ""},
+		{"/demo/latest", http.StatusOK, testVersion100, ""},
+		{"/demo/1.0.0", http.StatusOK, testVersion100, ""},
+		{"/demo/2.0.0", http.StatusNotFound, "", "version not found"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.path, func(t *testing.T) {
@@ -1261,6 +1262,12 @@ func TestNPMVersionMetadataCooldown(t *testing.T) {
 				if path == tt.path {
 					t.Fatalf("upstream must not be called for version path %s when answering from the filtered packument", path)
 				}
+			}
+			if tt.wantError != "" {
+				if !strings.Contains(readNPMTestBody(t, resp.Body), tt.wantError) {
+					t.Fatalf("error body should mention %q", tt.wantError)
+				}
+				return
 			}
 			if tt.wantVersion == "" {
 				return

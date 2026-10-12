@@ -223,7 +223,11 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "npm", metadataCacheKey, upstreamURL, accept)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
-			JSONError(w, http.StatusNotFound, "package not found")
+			if versionLookup {
+				JSONError(w, http.StatusNotFound, ErrVersionNotFound.Error())
+			} else {
+				JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
+			}
 			return
 		}
 		h.proxy.Logger.Error("failed to fetch npm metadata", "error", err)
@@ -242,8 +246,8 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 			JSONError(w, http.StatusForbidden, err.Error())
 			return
 		}
-		if errors.Is(err, ErrUpstreamNotFound) {
-			JSONError(w, http.StatusNotFound, "package not found")
+		if errors.Is(err, ErrVersionNotFound) {
+			JSONError(w, http.StatusNotFound, ErrVersionNotFound.Error())
 			return
 		}
 		if len(h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName))) != 0 {
@@ -270,7 +274,7 @@ func (h *NPMHandler) handleFilteredNPMVersionMetadata(w http.ResponseWriter, r *
 	packument, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "npm", cacheKey, registryURL+"/"+packumentPath, accept)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
-			JSONError(w, http.StatusNotFound, "package not found")
+			JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
 			return
 		}
 		h.proxy.Logger.Error("failed to fetch npm metadata", "error", err)
@@ -289,8 +293,8 @@ func (h *NPMHandler) handleFilteredNPMVersionMetadata(w http.ResponseWriter, r *
 			JSONError(w, http.StatusForbidden, err.Error())
 			return
 		}
-		if errors.Is(err, ErrUpstreamNotFound) {
-			JSONError(w, http.StatusNotFound, "package not found")
+		if errors.Is(err, ErrVersionNotFound) {
+			JSONError(w, http.StatusNotFound, ErrVersionNotFound.Error())
 			return
 		}
 		if len(h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName))) != 0 {
@@ -361,7 +365,7 @@ func (h *NPMHandler) rewriteNPMVersionFromPackument(packageName, specifier strin
 		return nil, err
 	}
 	if len(versionRaw) == 0 {
-		return nil, ErrUpstreamNotFound
+		return nil, ErrVersionNotFound
 	}
 
 	var out bytes.Buffer
@@ -753,7 +757,7 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if h.versionInCooldown(packageName, version, metadata) {
 		h.proxy.Logger.Info("cooldown: withholding npm tarball",
 			"package", packageName, "version", version)
-		JSONError(w, http.StatusNotFound, "version not found")
+		JSONError(w, http.StatusNotFound, ErrVersionNotFound.Error())
 		return
 	}
 
@@ -761,7 +765,7 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	if err != nil {
 		switch {
 		case errors.Is(err, ErrUpstreamNotFound):
-			JSONError(w, http.StatusNotFound, "package not found")
+			JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
 		case errors.Is(err, ErrArtifactBlocked), errors.Is(err, ErrVersionDenied):
 			JSONError(w, http.StatusForbidden, err.Error())
 		default:

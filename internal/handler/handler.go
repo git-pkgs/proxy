@@ -1030,6 +1030,14 @@ var ErrArtifactBlocked = errors.New("artifact blocked by security scan")
 // ErrVersionDenied indicates an operator explicitly denied this package version.
 var ErrVersionDenied = errors.New("package version blocked by denylist")
 
+// ErrVersionNotFound indicates the requested version is not available through
+// the proxy, including when cooldown or other filtering removed it.
+var ErrVersionNotFound = errors.New("version not found")
+
+// ErrPackageNotFound indicates the requested package metadata is not available
+// through the proxy or upstream registry.
+var ErrPackageNotFound = errors.New("package not found")
+
 // serveArtifactError writes response for a failed fetch:
 // 404 when upstream reports artifact missing, 403 when a security scan or
 // denylist blocked the artifact, 502 otherwise.
