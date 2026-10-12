@@ -32,6 +32,7 @@ type RuntimeView struct {
 	StorageErrors     []LabelledCount
 	IntegrityFailures []LabelledCount
 	ProbeFailures     []LabelledCount
+	Evictions         []LabelledCount
 
 	Breakers     []BreakerRow
 	BreakerTrips []LabelledCount
@@ -112,6 +113,7 @@ func runtimeView(snap *metrics.Snapshot) RuntimeView {
 	v.StorageErrors = failureRows(snap, "proxy_storage_errors_total", "operation")
 	v.IntegrityFailures = failureRows(snap, "proxy_integrity_failures_total", "ecosystem")
 	v.ProbeFailures = failureRows(snap, "proxy_health_probe_failures_total", "step")
+	v.Evictions = countRows(snap, "proxy_artifacts_evicted_total", "reason", "ecosystem")
 
 	v.Breakers = breakerRows(snap)
 	v.BreakerTrips = failureRows(snap, "proxy_circuit_breaker_trips_total", "registry")
@@ -202,6 +204,15 @@ func statusClasses(snap *metrics.Snapshot) []LabelledCount {
 // that has never fired carries no information, and a wall of zeroes buries the
 // rows that matter.
 func failureRows(snap *metrics.Snapshot, name string, labels ...string) []LabelledCount {
+	rows := countRows(snap, name, labels...)
+	for i := range rows {
+		rows[i].Bad = true
+	}
+	return rows
+}
+
+// countRows renders every non-zero series of a counter as a row.
+func countRows(snap *metrics.Snapshot, name string, labels ...string) []LabelledCount {
 	var rows []LabelledCount
 	for _, s := range snap.Samples(name) {
 		if s.Value == 0 {
@@ -210,7 +221,6 @@ func failureRows(snap *metrics.Snapshot, name string, labels ...string) []Labell
 		rows = append(rows, LabelledCount{
 			Label: joinLabels(s, labels...),
 			Count: formatCount(int64(s.Value)),
-			Bad:   true,
 		})
 	}
 	return rows

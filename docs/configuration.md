@@ -46,6 +46,8 @@ storage:
 | `storage.path` | `PROXY_STORAGE_PATH` | `-storage-path` | Local path (deprecated, use url) |
 | `storage.max_size` | `PROXY_STORAGE_MAX_SIZE` | - | Max cache size (e.g., "10GB") |
 | `storage.cache_artifacts` | `PROXY_STORAGE_CACHE_ARTIFACTS` | - | Store fetched artifacts (default: true); `false` streams them from upstream |
+| `storage.retention.default` | `PROXY_STORAGE_RETENTION_DEFAULT` | - | Evict artifacts not served for this long (e.g. "30d"); see [Retention](#retention) |
+| `storage.retention.sweep_interval` | `PROXY_STORAGE_RETENTION_SWEEP_INTERVAL` | - | How often expired artifacts are looked for (default: "10m", at least "1m") |
 
 `storage.max_size` counts cached artifacts only. An artifact replaced by a refetch stays in storage for at least an hour, or `storage.direct_serve_ttl` if longer, so requests already reading it can finish, and storage use can exceed the limit by what was replaced in that time.
 
@@ -61,6 +63,57 @@ storage:
 Every download is a fresh upstream fetch, and concurrent requests for the same artifact are not combined. Artifacts with a digest known up front (OCI blobs, Swift archives, Helm charts) are verified while streaming: the response is sent chunked, and on a mismatch the connection is aborted before the response completes so the client never receives a tampered artifact as a good one. The same happens when the upstream connection fails mid-download.
 
 `cache_artifacts: false` cannot be combined with `scanning.enabled`, `storage.direct_serve` or `mirror_api`, which all need stored artifacts, and the `mirror` command refuses to run with it.
+
+### Retention
+
+Retention evicts cached artifacts that nobody has downloaded for a while. It works alongside `storage.max_size`: retention removes what has gone unused, and the size limit still applies to whatever is left.
+
+The `ecosystems` and `packages` entries below only pass validation once the ecosystems they name support retention; see the table further down.
+
+```yaml
+storage:
+  retention:
+    default: "30d"
+    ecosystems:
+      npm: "14d"
+      maven: "0"
+    packages:
+      "pkg:npm/lodash": "0"
+    sweep_interval: "10m"
+```
+
+Each cached file ages on its own, counted from the last time the proxy served it, or from when it was fetched if it has not been served since. A newer release of the same package does not shorten the life of older versions. Durations take a `d` suffix for days, and `"0"` or an empty value means never evict by age. With no retention configured, artifacts stay until `max_size` evicts them. `sweep_interval` must be at least `1m`.
+
+A package rule wins over an ecosystem rule, which wins over `default`. Package rules are keyed by package PURL without a version. The ecosystems and package rules can only name ecosystems that support retention in the running version; anything else, including a typo, stops the proxy at startup with an error naming the setting. `default` applies only to supported ecosystems. Support is added one ecosystem at a time, so a later release can make an existing `default` cover more ecosystems. On startup the proxy logs which ecosystems retention covers (`covered`) and which ones `default` does not reach yet (`default_not_applied`).
+
+| Ecosystem key | Retention supported | Package rule form |
+|---------------|---------------------|-------------------|
+| `alpine` | no | - |
+| `cargo` | no | - |
+| `composer` | no | - |
+| `conan` | no | - |
+| `conda` | no | - |
+| `cran` | no | - |
+| `deb` | no | - |
+| `gem` | no | - |
+| `golang` | yes | `pkg:golang/github.com/stretchr/testify`, the module path as in `go.mod`; case doesn't matter. A major version like `/v2` (or `.v3` on gopkg.in) is a module of its own and needs its own rule. The `!`-escaped form from proxy URLs and the module cache (`github.com/!azure/...`) is refused. |
+| `helm` | no | - |
+| `hex` | no | - |
+| `julia` | no | - |
+| `maven` | yes | `pkg:maven/com.google.guava/guava`, group and artifact as published, case included. Gradle build cache entries are not covered; they use `gradle.build_cache.max_age`. |
+| `npm` | no | - |
+| `nuget` | no | - |
+| `oci` | yes | `pkg:oci/library/nginx`, the repository name of the pull. A named upstream keeps its prefix, also when containerd reaches it through `ns`: `ghcr.io/owner/app` pulled that way is `pkg:oci/upstream/ghcr/owner/app`. Homebrew bottles use Homebrew's image name, with `@` written as `/` and `+` as `x` (`openssl@3` is `pkg:oci/homebrew/core/openssl/3`). Helm charts pulled over OCI are stored like images. Only blobs are evicted; manifests stay in the metadata cache. |
+| `pub` | no | - |
+| `pypi` | yes | `pkg:pypi/requests`; case and single `_`/`-` don't matter. Dots and repeated separators are kept as written, so a project like `zope.interface` can be stored as `zope.interface` and `zope-interface`; add a rule for each. |
+| `rpm` | no | - |
+| `swift` | no | - |
+
+An evicted artifact is fetched again from upstream on the next request. Packages preloaded with `proxy mirror` age from the time they were mirrored, so an unused mirrored package is evicted like any other. Running `proxy mirror` again over a package that is still cached counts as a download and restarts its clock, so packages a scheduled mirror job keeps listing never age out. A registry that removes old releases (Linux distribution archives in particular) cannot serve an evicted version again, so set those ecosystems' rules with that in mind.
+
+Expired artifacts are not deleted right away. Their records are cleared and the files wait in the same queue a replaced artifact goes through, for at least an hour (or `storage.direct_serve_ttl` if longer), so downloads already in progress can finish. `storage.max_size` counts the space as free from the moment the record is cleared. Once that wait is over, each minute the queue is worked through for up to 30 seconds, pausing until the next minute after a delete fails. One sweep clears at most 10,000 artifacts, so the first sweep over a large, old cache spreads its evictions, and the downloads that bring popular artifacts back, over several intervals.
+
+With several proxies sharing one database and `database.hit_flush_interval` set, a proxy's sweep cannot see downloads another proxy has not written yet. Keep retention durations well above the flush interval.
 
 ### Amazon S3
 
@@ -229,6 +282,36 @@ upstream:
 
 `upstream.hex_api` is used for cooldown timestamps and must expose Hex's `/api/packages/{name}` JSON endpoint.
 
+### Private package routes
+
+Clients that use the proxy as their only registry can still install private packages. A package route sends every package whose name matches a pattern to a private registry, and never to the default upstream:
+
+```yaml
+upstream:
+  composer_routes:
+    "example/*": "https://packages.example.com/composer"
+  npm_routes:
+    "@example/*": "https://packages.example.com/npm"
+  allow_private_hosts:
+    - "packages.example.com"
+  auth:
+    "https://packages.example.com":
+      type: bearer
+      token: "${PRIVATE_REGISTRY_TOKEN}"
+```
+
+- Patterns use Go's [`path.Match`](https://pkg.go.dev/path#Match) syntax and are matched case-insensitively. `*` does not cross `/`, so `example/*` matches `example/library` but not `example-fork/library`. The longest matching pattern wins.
+- A Composer route URL is the repository base that serves `/p2/{vendor}/{package}.json`. A route also covers the package's dev versions in `/p2/{vendor}/{package}~dev.json`; patterns are matched against the package name without `~dev`.
+- An npm route URL is the registry base that serves `/{package}`. Tarball URLs in its packuments must be on the same host and below the same path.
+- A routed package is not looked up anywhere else. If the private registry does not have it, the client gets a 404. If the registry fails or rejects the credentials, the client gets a 502. A package with the same name on the public registry is never served in its place (dependency confusion).
+- Metadata and artifacts of routed packages are cached under keys that include the route's URL. Entries cached from the public registry before a route was added are never served for a routed package.
+- With cooldown enabled, the publish time of a routed npm version always comes from the route's metadata. Times recorded for the public package of the same name, or for a route's previous URL, are not used, and routed downloads do not record times of their own.
+- Composer metadata of routed packages carries an empty `notification-url`, so Composer does not report their installs to the default upstream's `notify-batch` endpoint.
+- Use `upstream.auth` for the registry's credentials. The proxy has no authentication of its own, so every client that can reach it can download routed packages.
+- Search (`/composer/search.json`) and the package list (`/composer/packages/list.json`) still come from the default upstream only.
+- npm audit and signing-key requests still go to `upstream.npm`. An audit request lists every package in the dependency tree, routed ones included.
+- Routes can only be set in the configuration file, not with environment variables.
+
 Helm HTTP repositories and additional OCI registries are configured as named maps:
 
 ```yaml
@@ -276,7 +359,28 @@ Only configured upstreams are reachable, so this is not an open HTTP proxy.
 Paths shaped like `{owner}/{repo}/releases/download/{tag}/{asset}` are
 version-pinned GitHub release assets: they are stored in the artifact cache
 and served from it without revalidation, including while the upstream is
-down. Every other path is served through the metadata cache (`cache_metadata`
+down.
+
+Other upstreams can declare their own version-pinned paths in
+`generic_artifacts`. Each pattern is a regular expression that must match the
+whole path after `/generic/{name}/`, with `version` and `file` named groups
+(single path segments) and an optional `name` group for the package name,
+which otherwise is the upstream name. Matching downloads are cached like
+release assets and listed under the `generic` ecosystem:
+
+```yaml
+upstream:
+  generic:
+    apache: "https://archive.apache.org"
+  generic_artifacts:
+    apache:
+      - 'dist/(?P<name>maven)/maven-3/(?P<version>[^/]+)/binaries/(?P<file>[^/]+)'
+```
+
+Only list paths whose content never changes for a given version: a match is
+never revalidated.
+
+Every other path is served through the metadata cache (`cache_metadata`
 must be enabled for offline fallback): fresh within `metadata_ttl`, then
 revalidated with the upstream's `ETag`/`Last-Modified`, and served stale with
 a `Warning: 110` header when the upstream fails, refuses or rate-limits the
@@ -290,6 +394,57 @@ mise section in the README for the client-side `url_replacements`.
 while `upstream.oci` selects named registries through the `upstream/{name}/`
 repository prefix. For example, `oci://proxy.example.com/upstream/ghcr/owner/chart`
 uses the `ghcr` registry with `owner/chart` as its repository.
+
+containerd mirror requests carry the original registry host in an `ns` query
+parameter (see the containerd section in the README). The proxy only looks the
+host up and never connects to it: `docker.io`, `index.docker.io`,
+`registry-1.docker.io` and the host of `upstream.oci_default` select the default
+registry, and the host of each `upstream.oci` URL selects that named registry.
+Hosts are compared case-insensitively. The scheme's default port (443 for
+`https`, 80 for `http`) may be spelled out or left out in the image reference;
+any other port must match exactly, so `https://registry.example:80` and
+`https://registry.example` are two different registries. An
+unknown host returns `404 NAME_UNKNOWN`, so containerd falls back to its next
+host. Registry URLs with a path (for example an Artifactory repository path)
+are not reachable through their own host in `ns`, only through
+`upstream/{name}/` or through `upstream.oci_mirrors`. When two
+entries share a host, the proxy logs a warning at startup; the default registry
+wins, otherwise the alphabetically first name. Pulls through `ns`,
+`upstream/{name}/` and unprefixed requests share the same cache entries.
+Requests that combine the `upstream/{name}/` prefix with `ns`, as per-registry
+containerd mirrors with `override_path = true` send them, are routed by the
+prefix. They are accepted only when `ns` is the upstream's own host, a host
+listed for it in `upstream.oci_mirrors`, or Docker Hub (`docker.io` and its
+aliases). Docker Hub repository names have two path components and can never
+start with `upstream/`, so a Docker Hub mirror behind any prefix stays
+reachable. Any other host gets `404 NAME_UNKNOWN`: a containerd `_default`
+mirror sends the same request for an image such as
+`unconfigured.example/upstream/ghcr/owner/app`, and that pull must not be
+answered from the `ghcr` upstream.
+
+When a named upstream mirrors another registry, for example an Artifactory
+remote of `ghcr.io`, say so in `upstream.oci_mirrors`:
+
+```yaml
+upstream:
+  oci:
+    ghcr: "https://artifactory.example.com/artifactory/api/docker/ghcr-remote"
+  oci_mirrors:
+    ghcr: ["ghcr.io"]
+```
+
+Each entry lists bare registry hosts as containerd sends them, optionally with
+a port. A host can be listed for one upstream only. Those hosts select the
+upstream for unprefixed `ns` requests and are accepted as `ns` on its
+`upstream/{name}/` prefix. A host that is also the host of a configured
+registry URL stays with that registry for unprefixed requests; the proxy logs a
+warning at startup.
+
+A host that is accepted on a prefix route gives up image paths of the form
+`<host>/upstream/{name}/...` under a `_default` mirror: with `ghcr: ["ghcr.io"]`,
+a pull of `ghcr.io/upstream/ghcr/owner/app` is answered with `owner/app` from
+the `ghcr` upstream, because containerd sends the same request for it as a
+per-registry mirror does. The same applies to the upstream's own host.
 When the proxy uses plain HTTP (for example `localhost:8080`), pass
 `--plain-http` to Helm OCI commands.
 
@@ -439,7 +594,7 @@ gradle:
 |--------|-------------|-------------|
 | `gradle.build_cache.read_only` | `PROXY_GRADLE_BUILD_CACHE_READ_ONLY` | Disable PUT uploads and keep GET/HEAD read-only |
 | `gradle.build_cache.max_upload_size` | `PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE` | Maximum accepted PUT body size (must be > 0) |
-| `gradle.build_cache.max_age` | `PROXY_GRADLE_BUILD_CACHE_MAX_AGE` | Delete entries older than this duration (default `168h`, set `0` to disable) |
+| `gradle.build_cache.max_age` | `PROXY_GRADLE_BUILD_CACHE_MAX_AGE` | Delete entries older than this duration (default `168h`, also accepts days such as `7d`; set `0` to disable) |
 | `gradle.build_cache.max_size` | `PROXY_GRADLE_BUILD_CACHE_MAX_SIZE` | Total size cap for `_gradle/http-build-cache`, deleting oldest first (`0` disables) |
 | `gradle.build_cache.sweep_interval` | `PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL` | Frequency for background eviction sweeps |
 

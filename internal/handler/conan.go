@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"fmt"
 	"net/http"
 	"strings"
 )
@@ -41,13 +40,12 @@ func (h *ConanHandler) Routes() http.Handler {
 	mux.HandleFunc("GET /v1/ping", h.handlePing)
 	mux.HandleFunc("GET /v2/ping", h.handlePing)
 
-	// Recipe file downloads (cache these)
-	mux.HandleFunc("GET /v1/files/{name}/{version}/{user}/{channel}/{revision}/recipe/{filename}", h.handleRecipeFile)
-	mux.HandleFunc("GET /v2/files/{name}/{version}/{user}/{channel}/{revision}/recipe/{filename}", h.handleRecipeFile)
-
-	// Package file downloads (cache these)
-	mux.HandleFunc("GET /v1/files/{name}/{version}/{user}/{channel}/{revision}/package/{pkgref}/{pkgrev}/{filename}", h.handlePackageFile)
-	mux.HandleFunc("GET /v2/files/{name}/{version}/{user}/{channel}/{revision}/package/{pkgref}/{pkgrev}/{filename}", h.handlePackageFile)
+	// Recipe and package file downloads, as built by the Conan 2 client
+	// (ClientV2Router.recipe_file and package_file). The v1 protocol hands out
+	// signed absolute URLs on the upstream host, so its downloads never pass
+	// through here.
+	mux.HandleFunc("GET /v2/conans/{name}/{version}/{user}/{channel}/revisions/{revision}/files/{filename}", h.handleRecipeFile)
+	mux.HandleFunc("GET /v2/conans/{name}/{version}/{user}/{channel}/revisions/{revision}/packages/{pkgref}/revisions/{pkgrev}/files/{filename}", h.handlePackageFile)
 
 	// Proxy all other endpoints (metadata, search, etc.) with caching
 	mux.HandleFunc("GET /", h.proxyCached)
@@ -70,25 +68,19 @@ func (h *ConanHandler) handleRecipeFile(w http.ResponseWriter, r *http.Request) 
 	revision := r.PathValue("revision")
 	filename := r.PathValue("filename")
 
-	// Only cache specific files
+	// Only the archives are artifacts; the rest goes through the metadata cache.
 	if !h.shouldCacheFile(filename) {
-		h.proxyUpstream(w, r)
+		h.proxyCached(w, r)
 		return
 	}
-
-	// Conan package name format: name/version@user/channel
-	packageName := fmt.Sprintf("%s/%s@%s/%s", name, version, user, channel)
 
 	h.proxy.Logger.Info("conan recipe download",
 		"name", name, "version", version, "user", user, "channel", channel, "filename", filename)
 
 	upstreamURL := h.upstreamURL + r.URL.Path
+	storageFilename := conanStorageFilename(user, channel, revision+"_"+filename)
 
-	// Use revision as part of version for storage
-	storageVersion := fmt.Sprintf("%s_%s", version, revision)
-	storageFilename := fmt.Sprintf("recipe_%s", filename)
-
-	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", packageName, storageVersion, storageFilename, upstreamURL)
+	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", name, version, storageFilename, upstreamURL)
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to fetch file")
 		return
@@ -108,24 +100,19 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 	pkgrev := r.PathValue("pkgrev")
 	filename := r.PathValue("filename")
 
-	// Only cache specific files
+	// Only the archives are artifacts; the rest goes through the metadata cache.
 	if !h.shouldCacheFile(filename) {
-		h.proxyUpstream(w, r)
+		h.proxyCached(w, r)
 		return
 	}
-
-	packageName := fmt.Sprintf("%s/%s@%s/%s", name, version, user, channel)
 
 	h.proxy.Logger.Info("conan package download",
 		"name", name, "version", version, "pkgref", pkgref, "filename", filename)
 
 	upstreamURL := h.upstreamURL + r.URL.Path
+	storageFilename := conanStorageFilename(user, channel, revision+"_"+pkgref+"_"+pkgrev+"_"+filename)
 
-	// Use revision and package ref as part of version for storage
-	storageVersion := fmt.Sprintf("%s_%s_%s_%s", version, revision, pkgref, pkgrev)
-	storageFilename := fmt.Sprintf("package_%s", filename)
-
-	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", packageName, storageVersion, storageFilename, upstreamURL)
+	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", name, version, storageFilename, upstreamURL)
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to fetch file")
 		return
@@ -134,13 +121,24 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 	ServeArtifactRequest(w, r, result)
 }
 
+// conanStorageFilename names a cached archive. Archives are stored under
+// pkg:conan/{name}@{version}, so the file name carries the revisions and, when
+// set, user and channel, to keep every recipe and binary apart.
+func conanStorageFilename(user, channel, file string) string {
+	if user == "_" && channel == "_" {
+		return file
+	}
+	return user + "@" + channel + "_" + file
+}
+
 // shouldCacheFile returns true if the file should be cached.
 func (h *ConanHandler) shouldCacheFile(filename string) bool {
-	// Cache the large archive files
+	// Cache the large archive files. Since Conan 2.25 they can also be xz or
+	// zstd (core.upload:compression_format).
 	cacheFiles := []string{
-		"conan_sources.tgz",
-		"conan_export.tgz",
-		"conan_package.tgz",
+		"conan_sources.tgz", "conan_sources.txz", "conan_sources.tzst",
+		"conan_export.tgz", "conan_export.txz", "conan_export.tzst",
+		"conan_package.tgz", "conan_package.txz", "conan_package.tzst",
 	}
 
 	for _, f := range cacheFiles {

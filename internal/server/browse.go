@@ -3,6 +3,7 @@ package server
 import (
 	"bufio"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,10 +21,13 @@ import (
 const (
 	contentTypePlainText = "text/plain; charset=utf-8"
 	browseSniffSize      = 512
+	// browsePrefetchSize is how much of a browsed file is read before the
+	// response starts. Read errors within it still produce an error status.
+	browsePrefetchSize = 64 << 10
 )
 
-// maxBrowseArchiveSize caps how much data openArchive will buffer for
-// prefix detection. Artifacts larger than this are rejected to prevent
+// maxBrowseArchiveSize caps the compressed artifact size the browse and diff
+// endpoints will read. Artifacts larger than this are rejected to prevent
 // memory exhaustion from a single request.
 const maxBrowseArchiveSize = 512 << 20 // 512 MB
 
@@ -57,45 +61,32 @@ func isMetadataSidecar(filename string) bool {
 // "repo-hash/"). Returns "" if there's no single root or the archive is flat.
 func detectSingleRootDir(reader archives.Reader) string {
 	files, err := reader.List()
-	if err != nil || len(files) == 0 {
+	if err != nil {
 		return ""
 	}
 
-	var root string
+	var root rootDetector
 	for _, f := range files {
-		parts := strings.SplitN(f.Path, "/", 2) //nolint:mnd // split into dir + rest
-		if len(parts) == 0 {
-			continue
-		}
-		dir := parts[0]
-		if root == "" {
-			root = dir
-		} else if dir != root {
-			return ""
+		if !root.add(f.Path) {
+			break
 		}
 	}
-
-	if root == "" {
-		return ""
-	}
-	return root + "/"
+	return root.prefix()
 }
 
-// openArchive opens a cached artifact as an archive reader, auto-detecting
-// and stripping a single top-level directory prefix (like GitHub zipballs).
-// For npm, the hardcoded "package/" prefix takes precedence.
+// openArchive opens a cached artifact as a random-access archive reader,
+// auto-detecting and stripping a single top-level directory prefix (like
+// GitHub zipballs). For npm, the hardcoded "package/" prefix takes precedence.
+// The whole artifact is buffered, so only the version diff uses it; listing
+// and file reads stream through browseArchive instead.
 func openArchive(filename string, content io.Reader, ecosystem string) (archives.Reader, error) { //nolint:ireturn // wraps multiple archive implementations
-	limited := io.LimitReader(content, maxBrowseArchiveSize+1)
-	data, err := io.ReadAll(limited)
+	data, err := readBrowseInput(content, maxBrowseArchiveSize)
 	if err != nil {
-		return nil, fmt.Errorf("reading artifact: %w", err)
-	}
-	if int64(len(data)) > maxBrowseArchiveSize {
-		return nil, fmt.Errorf("artifact too large for browsing (%d bytes)", len(data))
+		return nil, err
 	}
 
 	if ecosystem == "npm" {
-		return archives.OpenBytesWithPrefix(filename, data, "package/")
+		return archives.OpenBytesWithPrefix(filename, data, npmPackagePrefix)
 	}
 
 	probe, err := archives.OpenBytes(filename, data)
@@ -106,6 +97,35 @@ func openArchive(filename string, content io.Reader, ecosystem string) (archives
 	_ = probe.Close()
 
 	return archives.OpenBytesWithPrefix(filename, data, prefix)
+}
+
+// browseLimitsOrDefault returns the stream limits for listing and file reads.
+func (s *Server) browseLimitsOrDefault() archives.StreamOptions {
+	if s.browseLimits != (archives.StreamOptions{}) {
+		return s.browseLimits
+	}
+	return defaultBrowseLimits
+}
+
+// openBrowseArchive prepares a cached artifact for streaming. content is the
+// already open storage reader; later passes reopen the artifact.
+func (s *Server) openBrowseArchive(r *http.Request, artifact *database.Artifact, content io.Reader, ecosystem string) (*browseArchive, error) {
+	storagePath := artifact.StoragePath.String
+	reopen := func() (io.ReadCloser, error) {
+		return s.storage.Open(r.Context(), storagePath)
+	}
+	return newBrowseArchive(artifact.Filename, ecosystem, content, reopen, s.browseLimitsOrDefault())
+}
+
+// browseArchiveError reports a failure to read an archive for browsing.
+func (s *Server) browseArchiveError(w http.ResponseWriter, err error, filename string) {
+	if isBrowseLimitError(err) {
+		s.logger.Warn("archive exceeds browse limits", "error", err, "filename", filename)
+		internalError(w, "archive exceeds browse limits")
+		return
+	}
+	s.logger.Error("failed to open archive", "error", err, "filename", filename)
+	internalError(w, "failed to open archive")
 }
 
 // BrowseListResponse contains the file listing for a directory in an archives.
@@ -253,20 +273,16 @@ func (s *Server) browseList(w http.ResponseWriter, r *http.Request, ecosystem, n
 	}
 	defer func() { _ = artifactReader.Close() }()
 
-	// Open archive with auto-detected prefix stripping
-	archiveReader, err := openArchive(cachedArtifact.Filename, artifactReader, ecosystem)
+	archive, err := s.openBrowseArchive(r, cachedArtifact, artifactReader, ecosystem)
 	if err != nil {
-		s.logger.Error("failed to open archive", "error", err, "filename", cachedArtifact.Filename)
-		internalError(w, "failed to open archive")
+		s.browseArchiveError(w, err, cachedArtifact.Filename)
 		return
 	}
-	defer func() { _ = archiveReader.Close() }()
 
-	// List files in the directory
-	files, err := archiveReader.ListDir(dirPath)
+	// List files in the directory, with the root prefix stripped
+	files, err := archive.ListDir(dirPath)
 	if err != nil {
-		s.logger.Error("failed to list directory", "error", err, "path", dirPath)
-		internalError(w, "failed to list directory")
+		s.browseArchiveError(w, err, cachedArtifact.Filename)
 		return
 	}
 
@@ -340,35 +356,48 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	}
 	defer func() { _ = artifactReader.Close() }()
 
-	// Open archive with auto-detected prefix stripping
-	archiveReader, err := openArchive(cachedArtifact.Filename, artifactReader, ecosystem)
+	archive, err := s.openBrowseArchive(r, cachedArtifact, artifactReader, ecosystem)
 	if err != nil {
-		s.logger.Error("failed to open archive", "error", err, "filename", cachedArtifact.Filename)
-		internalError(w, "failed to open archive")
+		s.browseArchiveError(w, err, cachedArtifact.Filename)
 		return
 	}
-	defer func() { _ = archiveReader.Close() }()
 
-	// Extract the file
-	fileReader, err := archiveReader.Extract(filePath)
-	if err != nil {
-		if strings.Contains(err.Error(), "not found") {
-			notFound(w, "file not found")
-			return
-		}
+	// Find the file and stream it straight from the archive
+	fileReader, err := archive.Extract(filePath)
+	switch {
+	case errors.Is(err, errBrowseNotFound):
+		notFound(w, "file not found")
+		return
+	case errors.Is(err, errBrowseIsDir):
 		s.logger.Error("failed to extract file", "error", err, "path", filePath)
 		internalError(w, "failed to extract file")
+		return
+	case err != nil:
+		s.browseArchiveError(w, err, cachedArtifact.Filename)
 		return
 	}
 	defer func() { _ = fileReader.Close() }()
 
+	s.writeBrowseFile(w, fileReader, filePath, cachedArtifact.Filename)
+}
+
+// writeBrowseFile sends a file streamed from an archive. The start of the file
+// is read before any headers, so a truncated or over-limit entry that fails
+// there still gets an error status. A failure after the response has started
+// aborts it, so the client sees an incomplete download rather than a
+// successful one.
+func (s *Server) writeBrowseFile(w http.ResponseWriter, file io.Reader, filePath, artifactName string) {
+	source := &trackedReader{reader: file}
+	content := bufio.NewReaderSize(source, browsePrefetchSize)
+	head, err := content.Peek(browsePrefetchSize)
+	if err != nil && !errors.Is(err, io.EOF) {
+		s.browseReadError(w, err, filePath, artifactName)
+		return
+	}
+
 	contentType, knownPath := detectContentTypeFromPath(filePath)
-	var content io.Reader = fileReader
 	if !knownPath {
-		bufferedFile := bufio.NewReaderSize(fileReader, browseSniffSize)
-		prefix, _ := bufferedFile.Peek(browseSniffSize)
-		contentType = detectContentTypeFromPrefix(prefix)
-		content = bufferedFile
+		contentType = detectContentTypeFromPrefix(head[:min(len(head), browseSniffSize)])
 	}
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Security-Policy", "sandbox")
@@ -377,8 +406,43 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	_, filename := path.Split(filePath)
 	w.Header().Set("Content-Disposition", fmt.Sprintf("inline; filename=%q", filename))
 
-	// Stream the file
-	_, _ = io.Copy(w, content)
+	written, err := io.Copy(w, content)
+	if err == nil || source.err == nil {
+		// A write error without a read error means the client went away.
+		return
+	}
+	s.logger.Error("failed to stream file from archive", "error", source.err,
+		"path", filePath, "filename", artifactName, "bytes", written)
+	// Headers are already committed: finishing normally would turn a truncated
+	// file into a seemingly successful download. Let net/http close the HTTP/1
+	// connection or reset the HTTP/2 stream instead.
+	panic(http.ErrAbortHandler)
+}
+
+// browseReadError reports a failure reading a file before its response starts.
+func (s *Server) browseReadError(w http.ResponseWriter, err error, filePath, artifactName string) {
+	if isBrowseLimitError(err) {
+		s.logger.Warn("archive exceeds browse limits", "error", err, "path", filePath, "filename", artifactName)
+		internalError(w, "archive exceeds browse limits")
+		return
+	}
+	s.logger.Error("failed to read file from archive", "error", err, "path", filePath, "filename", artifactName)
+	internalError(w, "failed to read file")
+}
+
+// trackedReader records the first read error other than io.EOF, so a failed
+// copy can be told apart from a failed write to the client.
+type trackedReader struct {
+	reader io.Reader
+	err    error
+}
+
+func (r *trackedReader) Read(p []byte) (int, error) {
+	n, err := r.reader.Read(p)
+	if err != nil && !errors.Is(err, io.EOF) && r.err == nil {
+		r.err = err
+	}
+	return n, err
 }
 
 func detectContentTypeFromPath(filename string) (string, bool) {

@@ -141,6 +141,7 @@ func evictBatch(ctx context.Context, db *database.DB, store storage.Storage, log
 			freed += art.Size.Int64
 		}
 		cleared++
+		recordLRUEviction(db, logger, art.VersionPURL)
 	}
 
 	return cleared, freed

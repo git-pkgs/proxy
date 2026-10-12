@@ -129,7 +129,8 @@ func (db *DB) writeHits(pending map[hitKey]hitEntry) error {
 	})
 	for _, k := range keys {
 		e := pending[k]
-		if _, err := stmt.Exec(e.count, e.last, e.last, e.last, e.last, k.versionPURL, k.filename); err != nil {
+		last := e.last.UTC()
+		if _, err := stmt.Exec(e.count, last, last, e.last, e.last, k.versionPURL, k.filename); err != nil {
 			return err
 		}
 	}

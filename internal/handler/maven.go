@@ -6,6 +6,9 @@ import (
 	"net/http"
 	"path"
 	"strings"
+
+	"github.com/git-pkgs/proxy/internal/retention"
+	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -13,6 +16,24 @@ const (
 	gradlePluginPortalUpstream = "https://plugins.gradle.org/m2"
 	minMavenParts              = 4 // group path segments + artifact + version + filename
 )
+
+// Maven files are stored under pkg:maven/{group}/{artifact}, built from the
+// group:artifact name, which is what the default key mapping produces from
+// a package rule. Names keep their case, as Maven coordinates do.
+func init() {
+	retention.Default.Register(retention.Spec{Key: "maven", CanonicalPackage: mavenRetentionKey})
+}
+
+// mavenRetentionKey maps a package rule to the stored package PURL. A key
+// without a group, or with the group written as a path (com/google/guava)
+// instead of dotted, parses fine but can never match a stored package, so
+// it is refused rather than accepted as a rule that does nothing.
+func mavenRetentionKey(p *purl.PURL) (string, bool) {
+	if p == nil || p.Namespace == "" || strings.Contains(p.Namespace, "/") {
+		return "", false
+	}
+	return retention.DefaultCanonical("maven")(p)
+}
 
 // MavenHandler handles Maven repository protocol requests.
 type MavenHandler struct {
@@ -157,8 +178,12 @@ func (h *MavenHandler) parsePath(urlPath string) (group, artifact, version, file
 
 // isArtifactFile returns true if the filename looks like a Maven artifact.
 func (h *MavenHandler) isArtifactFile(filename string) bool {
-	// Common artifact extensions
-	extensions := []string{".jar", ".war", ".ear", ".pom", ".aar", ".klib", ".module"}
+	// Common artifact extensions, and the archives distributions such as
+	// apache-maven-{version}-bin.tar.gz are published as.
+	extensions := []string{
+		".jar", ".war", ".ear", ".pom", ".aar", ".klib", ".module",
+		".zip", ".tar.gz", ".tgz", ".tar.bz2", ".tar.xz",
+	}
 	for _, ext := range extensions {
 		if strings.HasSuffix(filename, ext) {
 			return true

@@ -96,3 +96,60 @@ func TestWriteFilteredJSONObject(t *testing.T) {
 		t.Errorf("filtered = %s, %v", out.String(), err)
 	}
 }
+
+func TestForEachJSONElement(t *testing.T) {
+	var got []string
+	err := forEachJSONElement([]byte(` [ 1, "a,]", {"b": [2]} ,[] ] `), func(e []byte) error {
+		got = append(got, string(e))
+		return nil
+	})
+	want := []string{`1`, `"a,]"`, `{"b": [2]}`, `[]`}
+	if err != nil || len(got) != len(want) {
+		t.Fatalf("elements = %q, %v; want %q", got, err, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Errorf("element %d = %s, want %s", i, got[i], want[i])
+		}
+	}
+
+	if err := forEachJSONElement([]byte(`[]`), func([]byte) error { t.Error("called for empty array"); return nil }); err != nil {
+		t.Errorf("empty array: err = %v", err)
+	}
+	for _, bad := range []string{`{}`, `[1,`, `[1 2]`, `[1`} {
+		if err := forEachJSONElement([]byte(bad), func([]byte) error { return nil }); err == nil {
+			t.Errorf("%s: expected an error", bad)
+		}
+	}
+}
+
+func TestRewriteJSONMembers(t *testing.T) {
+	obj := []byte(`{ "a": 1,  "b": [2], "c" : 3 }`)
+	var out bytes.Buffer
+	err := rewriteJSONMembers(&out, obj, func(out *bytes.Buffer, m jsonMember) (bool, error) {
+		if !jsonKeyIs(m.key(obj), "b") {
+			return false, nil
+		}
+		out.WriteString(`"B"`)
+		return true, nil
+	})
+	if want := `{ "a": 1,  "b": "B", "c" : 3 }`; err != nil || out.String() != want {
+		t.Errorf("rewritten = %s, %v; want %s", out.String(), err, want)
+	}
+}
+
+func TestJSONStringIs(t *testing.T) {
+	for raw, want := range map[string]bool{
+		`"~dev"`:      true,
+		`"~\u0064ev"`: true,
+		`"~dev2"`:     false,
+		`{"~dev":1}`:  false,
+		`"`:           false,
+		``:            false,
+		`["~dev"]`:    false,
+	} {
+		if got := jsonStringIs([]byte(raw), "~dev"); got != want {
+			t.Errorf("jsonStringIs(%s) = %v, want %v", raw, got, want)
+		}
+	}
+}

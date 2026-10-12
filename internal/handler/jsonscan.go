@@ -21,6 +21,10 @@ var errMalformedJSON = errors.New("malformed JSON")
 // errNotJSONObject is returned when a value expected to be an object is not.
 var errNotJSONObject = errors.New("JSON value is not an object")
 
+// errStopScan is returned by a callback to end a walk early once it has
+// found what it was looking for.
+var errStopScan = errors.New("stop scanning")
+
 // jsonMember is one member of a JSON object as offsets into the bytes that
 // were scanned. The key span includes its quotes.
 type jsonMember struct {
@@ -147,6 +151,58 @@ func forEachJSONMember(obj []byte, fn func(jsonMember) error) error {
 	}
 }
 
+// forEachJSONElement calls fn with each element of the array arr holds, in
+// order, and stops early with fn's error if fn returns one.
+func forEachJSONElement(arr []byte, fn func(element []byte) error) error {
+	i := skipJSONSpace(arr, 0)
+	if i >= len(arr) || arr[i] != '[' {
+		return errMalformedJSON
+	}
+	i = skipJSONSpace(arr, i+1)
+	if i < len(arr) && arr[i] == ']' {
+		return nil
+	}
+	for {
+		end, err := skipJSONValue(arr, i)
+		if err != nil {
+			return err
+		}
+		if err := fn(arr[i:end]); err != nil {
+			return err
+		}
+		next := skipJSONSpace(arr, end)
+		if next >= len(arr) {
+			return errMalformedJSON
+		}
+		switch arr[next] {
+		case ',':
+			i = skipJSONSpace(arr, next+1)
+		case ']':
+			return nil
+		default:
+			return errMalformedJSON
+		}
+	}
+}
+
+// rewriteJSONMembers copies the object obj holds to out byte for byte,
+// except that rewrite may write a member's value itself. It returns true
+// when it did; otherwise the original value is copied.
+func rewriteJSONMembers(out *bytes.Buffer, obj []byte, rewrite func(out *bytes.Buffer, m jsonMember) (bool, error)) error {
+	copied := 0
+	err := forEachJSONMember(obj, func(m jsonMember) error {
+		out.Write(obj[copied:m.valStart])
+		copied = m.valStart
+		rewritten, err := rewrite(out, m)
+		if rewritten {
+			copied = m.valEnd
+		}
+		return err
+	})
+	out.Write(obj[copied:])
+	return err
+}
+
 // jsonKey decodes a quoted key as forEachJSONMember reports it.
 func jsonKey(raw []byte) (string, error) {
 	if bytes.IndexByte(raw, '\\') < 0 {
@@ -164,6 +220,11 @@ func jsonKeyIs(raw []byte, name string) bool {
 	}
 	key, err := jsonKey(raw)
 	return err == nil && key == name
+}
+
+// jsonStringIs reports whether raw is a JSON string that decodes to s.
+func jsonStringIs(raw []byte, s string) bool {
+	return len(raw) >= 2 && raw[0] == '"' && jsonKeyIs(raw, s)
 }
 
 // findJSONMember returns the member of obj named name. When the key repeats,

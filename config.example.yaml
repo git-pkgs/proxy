@@ -74,6 +74,21 @@ storage:
   # Empty or "0" means unlimited
   max_size: ""
 
+  # Evict artifacts that have not been served for longer than a duration
+  # ("30d", "72h"), independent of max_size. Resolution order: package rule,
+  # then ecosystem rule, then default. "0" or empty means never evict by age.
+  # The default only applies to ecosystems that support retention; naming an
+  # ecosystem or package that does not is a configuration error. See
+  # docs/configuration.md for the supported ecosystems.
+  retention:
+    default: ""
+    # ecosystems:
+    #   npm: "30d"
+    # packages:
+    #   "pkg:npm/lodash": "0"
+    # How often to look for expired artifacts; at least "1m".
+    sweep_interval: "10m"
+
   # Store fetched artifacts. Set to false to stream every download from
   # upstream without storing it; metadata filtering, cooldown and the
   # denylist still apply. Useful when another cache sits in front of the
@@ -140,6 +155,11 @@ upstream:
   # gate on publish age, e.g. Yarn's npmMinimalAgeGate. Default: false.
   # npm_full_metadata: true
 
+  # npm packages served only from a private registry, by name pattern.
+  # Matching packages are never looked up on the npm registry above.
+  # npm_routes:
+  #   "@example/*": "https://npm.example.com/registry"
+
   # Cargo sparse index URL
   cargo: "https://index.crates.io"
 
@@ -185,6 +205,11 @@ upstream:
   # Packagist repository URL
   composer_repository: "https://repo.packagist.org"
 
+  # Composer packages served only from a private repository, by name pattern.
+  # Matching packages are never looked up on composer_repository.
+  # composer_routes:
+  #   "example/*": "https://composer.example.com/packages"
+
   # Conan registry URL
   conan: "https://center.conan.io"
 
@@ -229,6 +254,12 @@ upstream:
   # oci:
   #   ghcr: "https://ghcr.io"
 
+  # Registries a named OCI upstream mirrors, e.g. when ghcr above points at
+  # an Artifactory remote of ghcr.io. containerd mirror requests whose ns
+  # parameter names one of these hosts are served by that upstream.
+  # oci_mirrors:
+  #   ghcr: ["ghcr.io"]
+
   # Named Alpine APK repositories (used by /apk/{name}/).
   # Defaults to {"alpine": "https://dl-cdn.alpinelinux.org/alpine"} when empty;
   # configuring any entry replaces that default.
@@ -243,6 +274,15 @@ upstream:
   # generic:
   #   github: "https://github.com"
   #   github-api: "https://api.github.com"
+  #   apache: "https://archive.apache.org"
+
+  # Version-pinned paths of generic upstreams, cached immutably like GitHub
+  # release assets. Each pattern must match the whole path after
+  # /generic/{name}/ and have `version` and `file` named groups; an optional
+  # `name` group names the package.
+  # generic_artifacts:
+  #   apache:
+  #     - 'dist/(?P<name>maven)/maven-3/(?P<version>[^/]+)/binaries/(?P<file>[^/]+)'
 
   # Authentication for upstream registries
   # Keys are absolute URL scopes. Scheme, host, effective port, and path

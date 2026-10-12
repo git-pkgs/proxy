@@ -82,6 +82,7 @@ CREATE TABLE IF NOT EXISTS pending_deletes (
 	path TEXT NOT NULL PRIMARY KEY,
 	queued_at DATETIME NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_pending_deletes_queued_at ON pending_deletes(queued_at);
 
 CREATE TABLE IF NOT EXISTS vulnerabilities (
 	id INTEGER PRIMARY KEY,
@@ -190,6 +191,7 @@ CREATE TABLE IF NOT EXISTS pending_deletes (
 	path TEXT NOT NULL PRIMARY KEY,
 	queued_at TIMESTAMP NOT NULL
 );
+CREATE INDEX IF NOT EXISTS idx_pending_deletes_queued_at ON pending_deletes(queued_at);
 
 CREATE TABLE IF NOT EXISTS vulnerabilities (
 	id SERIAL PRIMARY KEY,
@@ -379,6 +381,7 @@ var migrations = []migration{
 	{"007_add_metadata_link", migrateAddMetadataLink},
 	{"008_add_metadata_content_encoding", migrateAddMetadataContentEncoding},
 	{"009_add_pending_deletes", migrateAddPendingDeletes},
+	{"010_add_pending_deletes_queued_at_index", migrateAddPendingDeletesQueuedAtIndex},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -664,6 +667,16 @@ func migrateAddPendingDeletes(db *DB) error {
 	)`, ts)
 	if _, err := db.Exec(query); err != nil {
 		return fmt.Errorf("creating pending_deletes table: %w", err)
+	}
+	return nil
+}
+
+// migrateAddPendingDeletesQueuedAtIndex indexes the column reclaim orders
+// the queue by, which grows large after a retention sweep.
+func migrateAddPendingDeletesQueuedAtIndex(db *DB) error {
+	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_pending_deletes_queued_at ON pending_deletes(queued_at)`)
+	if err != nil {
+		return fmt.Errorf("creating pending_deletes queued_at index: %w", err)
 	}
 	return nil
 }

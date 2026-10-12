@@ -55,8 +55,12 @@ func TestMavenIsArtifactFile(t *testing.T) {
 		{"guava-32.1.3-jre.module", true},
 		{"app-1.0.war", true},
 		{"lib-1.0.aar", true},
+		{"apache-maven-3.9.9-bin.tar.gz", true},
+		{"apache-maven-3.9.9-bin.zip", true},
+		{"maven-mvnd-1.0.6-linux-amd64.tgz", true},
 		{"maven-metadata.xml", false},
 		{"guava-32.1.3-jre.jar.sha1", false},
+		{"apache-maven-3.9.9-bin.tar.gz.sha512", false},
 	}
 
 	for _, tt := range tests {

@@ -1302,6 +1302,61 @@ func TestValidateUpstreamAuthURLs(t *testing.T) {
 	})
 }
 
+func TestValidatePackageRoutes(t *testing.T) {
+	tests := []struct {
+		name    string
+		modify  func(*Config)
+		wantErr bool
+	}{
+		{
+			name: "valid Composer and npm routes",
+			modify: func(cfg *Config) {
+				cfg.Upstream.ComposerRoutes = map[string]string{"acme/*": "https://composer.example.com/packages"}
+				cfg.Upstream.NPMRoutes = map[string]string{"@acme/*": "https://npm.example.com/registry"}
+			},
+		},
+		{
+			name: "Composer route URL is not absolute",
+			modify: func(cfg *Config) {
+				cfg.Upstream.ComposerRoutes = map[string]string{"acme/*": "composer.example.com"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "npm route URL is not absolute",
+			modify: func(cfg *Config) {
+				cfg.Upstream.NPMRoutes = map[string]string{"@acme/*": "npm.example.com"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "Composer route pattern is malformed",
+			modify: func(cfg *Config) {
+				cfg.Upstream.ComposerRoutes = map[string]string{"acme/[": "https://composer.example.com"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "npm route pattern is empty",
+			modify: func(cfg *Config) {
+				cfg.Upstream.NPMRoutes = map[string]string{"": "https://npm.example.com"}
+			},
+			wantErr: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			tt.modify(cfg)
+			err := cfg.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %t", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateNamedUpstreams(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -1328,6 +1383,40 @@ func TestValidateNamedUpstreams(t *testing.T) {
 			wantErr: true,
 		},
 		{
+			name: "generic artifact patterns",
+			modify: func(cfg *Config) {
+				cfg.Upstream.Generic = map[string]string{"apache": "https://archive.apache.org"}
+				cfg.Upstream.GenericArtifacts = map[string][]string{
+					"apache": {`dist/(?P<name>maven)/maven-3/(?P<version>[^/]+)/binaries/(?P<file>[^/]+)`},
+				}
+			},
+		},
+		{
+			name: "generic artifact patterns for an unknown upstream",
+			modify: func(cfg *Config) {
+				cfg.Upstream.GenericArtifacts = map[string][]string{
+					"apache": {`(?P<version>[^/]+)/(?P<file>[^/]+)`},
+				}
+			},
+			wantErr: true,
+		},
+		{
+			name: "generic artifact pattern does not compile",
+			modify: func(cfg *Config) {
+				cfg.Upstream.Generic = map[string]string{"apache": "https://archive.apache.org"}
+				cfg.Upstream.GenericArtifacts = map[string][]string{"apache": {`(?P<version>[^/]+/(?P<file>[^/]+)`}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "generic artifact pattern without a file group",
+			modify: func(cfg *Config) {
+				cfg.Upstream.Generic = map[string]string{"apache": "https://archive.apache.org"}
+				cfg.Upstream.GenericArtifacts = map[string][]string{"apache": {`(?P<version>[^/]+)/[^/]+`}}
+			},
+			wantErr: true,
+		},
+		{
 			name: "generic upstream URL is not absolute",
 			modify: func(cfg *Config) {
 				cfg.Upstream.Generic = map[string]string{"github": "github.com"}
@@ -1338,6 +1427,84 @@ func TestValidateNamedUpstreams(t *testing.T) {
 			name: "Helm upstream name contains path separator",
 			modify: func(cfg *Config) {
 				cfg.Upstream.Helm = map[string]string{"team/charts": "https://charts.example.com"}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI mirrors for a configured upstream",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://artifactory.example/api/docker/ghcr-remote"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"ghcr": {"ghcr.io", "registry.example:5000"}}
+			},
+		},
+		{
+			name: "OCI mirrors for an unknown upstream",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://ghcr.io"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"quay": {"quay.io"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI mirror given as URL",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://mirror.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"ghcr": {"https://ghcr.io"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI mirror with a path",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://mirror.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"ghcr": {"ghcr.io/owner"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI mirror host with credentials",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://mirror.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"ghcr": {"user@ghcr.io"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI mirror host listed for two upstreams",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"art": "https://art.example", "nexus": "https://nexus.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"art": {"ghcr.io"}, "nexus": {"GHCR.io:443"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI mirror host listed for two upstreams with an empty port",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"art": "https://art.example", "nexus": "https://nexus.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"art": {"ghcr.io"}, "nexus": {"ghcr.io:"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI mirror IPv6 host listed for two upstreams",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"art": "https://art.example", "nexus": "https://nexus.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"art": {"[::1]"}, "nexus": {"[::1]:"}}
+			},
+			wantErr: true,
+		},
+		{
+			name: "OCI mirror hosts that differ only in a non-default port",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"art": "https://art.example", "nexus": "https://nexus.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"art": {"registry.example"}, "nexus": {"registry.example:5000"}}
+			},
+		},
+		{
+			name: "OCI mirror host is empty",
+			modify: func(cfg *Config) {
+				cfg.Upstream.OCI = map[string]string{"ghcr": "https://mirror.example"}
+				cfg.Upstream.OCIMirrors = map[string][]string{"ghcr": {""}}
 			},
 			wantErr: true,
 		},

@@ -63,15 +63,19 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/url"
 	"os"
+	"path"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strconv"
 	"strings"
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/denylist"
+	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
 	"gopkg.in/yaml.v3"
 )
@@ -405,6 +409,33 @@ type StorageConfig struct {
 	// of the proxy. False is incompatible with scanning, direct_serve and
 	// mirror_api, which all depend on stored artifacts. Default: true.
 	CacheArtifacts bool `json:"cache_artifacts" yaml:"cache_artifacts"`
+
+	// Retention evicts cached artifacts that have not been accessed for a
+	// configured time, per ecosystem and per package.
+	Retention RetentionConfig `json:"retention" yaml:"retention"`
+}
+
+// RetentionConfig configures age-based eviction of cached artifacts. An
+// artifact's age is the time since it was last served, or since it was
+// fetched when it has not been served since. Durations accept a "d" suffix
+// for days; "0" or empty means never evict by age.
+type RetentionConfig struct {
+	// Default applies to every ecosystem that supports retention and has no
+	// rule of its own.
+	Default string `json:"default" yaml:"default"`
+
+	// Ecosystems overrides the default per ecosystem key (e.g. "npm", "oci").
+	// Configuring an ecosystem whose retention is not supported yet is an
+	// error.
+	Ecosystems map[string]string `json:"ecosystems" yaml:"ecosystems"`
+
+	// Packages overrides the ecosystem rule for single packages, keyed by
+	// package PURL.
+	Packages map[string]string `json:"packages" yaml:"packages"`
+
+	// SweepInterval is how often expired artifacts are looked for, at least
+	// one minute. Default: "10m".
+	SweepInterval string `json:"sweep_interval" yaml:"sweep_interval"`
 }
 
 // GradleConfig configures Gradle-specific features.
@@ -511,6 +542,13 @@ type UpstreamConfig struct {
 	// Default: false (the abbreviated format is preferred).
 	NPMFullMetadata bool `json:"npm_full_metadata" yaml:"npm_full_metadata"`
 
+	// NPMRoutes maps package name patterns to npm registry URLs. A package
+	// whose name matches a pattern is fetched only from that registry, never
+	// from upstream.npm, so a public package cannot stand in for it. Patterns
+	// use path.Match syntax, e.g. "@example/*"; the longest matching pattern
+	// wins.
+	NPMRoutes map[string]string `json:"npm_routes" yaml:"npm_routes"`
+
 	// Cargo is the upstream cargo index URL.
 	// Default: https://index.crates.io
 	Cargo string `json:"cargo" yaml:"cargo"`
@@ -571,6 +609,14 @@ type UpstreamConfig struct {
 	// ComposerRepository is the upstream Packagist repository URL.
 	// Default: https://repo.packagist.org
 	ComposerRepository string `json:"composer_repository" yaml:"composer_repository"`
+
+	// ComposerRoutes maps package name patterns to Composer repository URLs
+	// (the base that serves /p2/{vendor}/{package}.json). A package whose
+	// name matches a pattern is fetched only from that repository, never
+	// from upstream.composer_repository, so a public package cannot stand in
+	// for it. Patterns use path.Match syntax, e.g. "example/*"; the longest
+	// matching pattern wins.
+	ComposerRoutes map[string]string `json:"composer_routes" yaml:"composer_routes"`
 
 	// Conan is the upstream Conan registry URL.
 	// Default: https://center.conan.io
@@ -634,13 +680,29 @@ type UpstreamConfig struct {
 	// oci://proxy.example.com/upstream/ghcr/owner/chart.
 	OCI map[string]string `json:"oci" yaml:"oci"`
 
+	// OCIMirrors lists, per upstream.oci name, the registry hosts that
+	// upstream mirrors, for example {"ghcr": ["ghcr.io"]} for an Artifactory
+	// remote of ghcr.io. containerd requests whose ns query parameter names
+	// one of these hosts are served by that upstream.
+	OCIMirrors map[string][]string `json:"oci_mirrors" yaml:"oci_mirrors"`
+
 	// Generic maps names to plain HTTP upstream base URLs, served at
 	// /generic/{name}/. The remaining request path and query string are
 	// appended to the upstream URL. GitHub release asset paths
-	// ({owner}/{repo}/releases/download/{tag}/{asset}) are cached in the
-	// artifact cache; everything else goes through the metadata cache.
+	// ({owner}/{repo}/releases/download/{tag}/{asset}) and paths matching
+	// GenericArtifacts are cached in the artifact cache; everything else
+	// goes through the metadata cache.
 	// Example: {"github": "https://github.com", "github-api": "https://api.github.com"}.
 	Generic map[string]string `json:"generic" yaml:"generic"`
+
+	// GenericArtifacts maps a Generic upstream name to regular expressions for
+	// its version-pinned download paths. A request path after
+	// /generic/{name}/ that one of them matches in full is cached in the
+	// artifact cache like a GitHub release asset. Each pattern needs `version`
+	// and `file` named groups; an optional `name` group names the package,
+	// which otherwise is the upstream name.
+	// Example: {"apache": ["dist/(?P<name>maven)/maven-3/(?P<version>[^/]+)/binaries/(?P<file>[^/]+)"]}.
+	GenericArtifacts map[string][]string `json:"generic_artifacts" yaml:"generic_artifacts"`
 
 	// Auth configures authentication for upstream registries.
 	// Keys are absolute URL scopes matched by scheme, host, effective port,
@@ -685,13 +747,25 @@ func (u *UpstreamConfig) Validate() error {
 	if err := validateNamedUpstreams("upstream.helm", u.Helm); err != nil {
 		return err
 	}
+	if err := validatePackageRoutes("upstream.composer_routes", u.ComposerRoutes); err != nil {
+		return err
+	}
+	if err := validatePackageRoutes("upstream.npm_routes", u.NPMRoutes); err != nil {
+		return err
+	}
 	if err := validateNamedUpstreams("upstream.apk", u.APK); err != nil {
 		return err
 	}
 	if err := validateNamedUpstreams("upstream.oci", u.OCI); err != nil {
 		return err
 	}
+	if err := validateOCIMirrors(u.OCIMirrors, u.OCI); err != nil {
+		return err
+	}
 	if err := validateNamedUpstreams("upstream.generic", u.Generic); err != nil {
+		return err
+	}
+	if err := u.validateGenericArtifacts(); err != nil {
 		return err
 	}
 	if err := validateNamedUpstreams("upstream.debian_repositories", u.DebianRepositories); err != nil {
@@ -708,9 +782,89 @@ func (u *UpstreamConfig) Validate() error {
 	return nil
 }
 
+func (u *UpstreamConfig) validateGenericArtifacts() error {
+	for name, patterns := range u.GenericArtifacts {
+		if _, found := u.Generic[name]; !found {
+			return fmt.Errorf("invalid upstream.generic_artifacts name %q: no upstream.generic entry", name)
+		}
+		for _, pattern := range patterns {
+			if _, err := CompileGenericArtifactPattern(pattern); err != nil {
+				return fmt.Errorf("invalid upstream.generic_artifacts.%s pattern %q: %w", name, pattern, err)
+			}
+		}
+	}
+	return nil
+}
+
+// CompileGenericArtifactPattern compiles an upstream.generic_artifacts pattern
+// so that it only matches a whole path, and checks it has the `version` and
+// `file` groups.
+func CompileGenericArtifactPattern(pattern string) (*regexp.Regexp, error) {
+	re, err := regexp.Compile(`^(?:` + pattern + `)$`)
+	if err != nil {
+		return nil, err
+	}
+	for _, group := range []string{"version", "file"} {
+		if re.SubexpIndex(group) < 0 {
+			return nil, fmt.Errorf("missing (?P<%s>...) group", group)
+		}
+	}
+	return re, nil
+}
+
 // debianReservedRepositoryNames are the upstream.debian archive's own root
 // paths, which a repository of the same name would shadow.
 var debianReservedRepositoryNames = []string{"pool", "dists"}
+
+// validateOCIMirrors checks that every upstream.oci_mirrors entry belongs to
+// an upstream.oci name and lists bare registry hosts, the form containerd
+// sends in the ns query parameter. A host may belong to one upstream only;
+// otherwise both prefixes would take it while unprefixed requests silently
+// went to one of them.
+func validateOCIMirrors(mirrors map[string][]string, upstreams map[string]string) error {
+	names := make([]string, 0, len(mirrors))
+	for name := range mirrors {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	owners := make(map[string]string)
+	for _, name := range names {
+		if _, ok := upstreams[name]; !ok {
+			return fmt.Errorf("invalid upstream.oci_mirrors name %q: no upstream.oci entry of that name", name)
+		}
+		for _, host := range mirrors[name] {
+			parsed, err := url.Parse("https://" + host)
+			if host == "" || err != nil || parsed.Host != host {
+				return fmt.Errorf("invalid upstream.oci_mirrors.%s host %q: must be a registry host such as ghcr.io or registry.example:5000", name, host)
+			}
+			key := ociMirrorHostKey(host)
+			if owner, taken := owners[key]; taken && owner != name {
+				return fmt.Errorf("invalid upstream.oci_mirrors.%s host %q: already listed for %s", name, host, owner)
+			}
+			owners[key] = name
+		}
+	}
+	return nil
+}
+
+// ociMirrorHostKey normalizes an upstream.oci_mirrors host the way the
+// container handler builds its ns lookup keys: lowercase, IPv6 literals in
+// brackets, an empty or default https port dropped. Two entries with the same
+// key would select the same route.
+func ociMirrorHostKey(host string) string {
+	name, port, err := net.SplitHostPort(host)
+	if err != nil {
+		name, port = strings.TrimSuffix(strings.TrimPrefix(host, "["), "]"), ""
+	}
+	name = strings.ToLower(name)
+	if strings.Contains(name, ":") {
+		name = "[" + name + "]"
+	}
+	if port == "" || port == "443" {
+		return name
+	}
+	return name + ":" + port
+}
 
 func validateNamedUpstreams(field string, upstreams map[string]string) error {
 	for name, upstreamURL := range upstreams {
@@ -718,6 +872,18 @@ func validateNamedUpstreams(field string, upstreams map[string]string) error {
 			return fmt.Errorf("invalid %s name %q", field, name)
 		}
 		if err := validateAbsoluteURL(field+"."+name, upstreamURL); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func validatePackageRoutes(field string, routes map[string]string) error {
+	for pattern, upstreamURL := range routes {
+		if _, err := path.Match(pattern, ""); pattern == "" || err != nil {
+			return fmt.Errorf("invalid %s pattern %q", field, pattern)
+		}
+		if err := validateAbsoluteURL(field+"."+pattern, upstreamURL); err != nil {
 			return err
 		}
 	}
@@ -801,6 +967,9 @@ func Default() *Config {
 			Path:           "./cache/artifacts",
 			MaxSize:        "",
 			CacheArtifacts: true,
+			Retention: RetentionConfig{
+				SweepInterval: defaultRetentionSweepIntervalStr,
+			},
 		},
 		Database: DatabaseConfig{
 			Driver: "sqlite",
@@ -940,6 +1109,8 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Storage.DirectServeTTL, "PROXY_STORAGE_DIRECT_SERVE_TTL")
 	setEnvString(&c.Storage.DirectServeBaseURL, "PROXY_STORAGE_DIRECT_SERVE_BASE_URL")
 	setEnvBool(&c.Storage.CacheArtifacts, "PROXY_STORAGE_CACHE_ARTIFACTS")
+	setEnvString(&c.Storage.Retention.Default, "PROXY_STORAGE_RETENTION_DEFAULT")
+	setEnvString(&c.Storage.Retention.SweepInterval, "PROXY_STORAGE_RETENTION_SWEEP_INTERVAL")
 	setEnvString(&c.Database.Driver, "PROXY_DATABASE_DRIVER")
 	setEnvString(&c.Database.Path, "PROXY_DATABASE_PATH")
 	setEnvString(&c.Database.URL, "PROXY_DATABASE_URL")
@@ -1118,6 +1289,10 @@ func (c *Config) validateComponents() error {
 		return err
 	}
 
+	if _, err := c.RetentionRules(retention.Default); err != nil {
+		return err
+	}
+
 	if _, err := denylist.New(c.Denylist.Packages); err != nil {
 		return err
 	}
@@ -1168,7 +1343,7 @@ func (g *GradleBuildCacheConfig) Validate() error {
 	}
 
 	if g.MaxAge != "" && g.MaxAge != "0" {
-		if _, err := time.ParseDuration(g.MaxAge); err != nil {
+		if _, err := parseDayDuration(g.MaxAge); err != nil {
 			return fmt.Errorf("invalid gradle.build_cache.max_age %q: %w", g.MaxAge, err)
 		}
 	}
@@ -1203,6 +1378,10 @@ const (
 	defaultGradleBuildCacheSweepInterval = 10 * time.Minute
 	defaultGradleMaxUploadSizeStr        = "100MB"
 	defaultGradleSweepIntervalStr        = "10m"
+	defaultRetentionSweepInterval        = 10 * time.Minute
+	defaultRetentionSweepIntervalStr     = "10m"
+	minRetentionSweepInterval            = time.Minute
+	maxDurationDays                      = 36500
 	defaultScanningTimeoutStr            = "30s"
 )
 
@@ -1371,7 +1550,7 @@ func (c *Config) ParseGradleBuildCacheMaxAge() time.Duration {
 	if c.Gradle.BuildCache.MaxAge == "" || c.Gradle.BuildCache.MaxAge == "0" {
 		return 0
 	}
-	d, err := time.ParseDuration(c.Gradle.BuildCache.MaxAge)
+	d, err := parseDayDuration(c.Gradle.BuildCache.MaxAge)
 	if err != nil || d <= 0 {
 		return 0
 	}

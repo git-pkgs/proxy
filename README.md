@@ -161,6 +161,8 @@ therefore come from upstream's database, not from the proxy's own vulnerability
 data, and versions withheld by [cooldown](#version-cooldown) are not excluded
 from the report.
 
+To serve private packages through the same registry URL, see [Private package routes](docs/configuration.md#private-package-routes).
+
 ### Cargo
 
 Create or edit `~/.cargo/config.toml`:
@@ -344,6 +346,8 @@ Or set globally:
 composer config -g repositories.proxy composer http://localhost:8080/composer
 ```
 
+To serve private packages through the same URL, see [Private package routes](docs/configuration.md#private-package-routes).
+
 ### Conan (C/C++)
 
 Add the proxy as a remote:
@@ -447,6 +451,76 @@ Or pull images directly:
 docker pull localhost:8080/library/nginx:latest
 ```
 
+SBOMs, signatures and attestations attached to an image are found through the
+OCI 1.1 referrers API (`GET /v2/{name}/referrers/{digest}`). `oras discover`
+and `notation verify` use it, and so does cosign for its newer signature
+bundles. The proxy forwards these requests and caches the returned index with
+the same TTL as other metadata, so they keep working offline. It does not
+filter by `artifactType`; it returns the full list and the client filters it,
+as the spec allows. Registries without the referrers API (GHCR, for example)
+answer 404, and clients then look up the `sha256-<digest>` tag instead, which
+the proxy serves like any other manifest. The proxy is pull-only, so attaching
+new artifacts through it is not supported.
+
+#### containerd (Kubernetes, k3s, nerdctl)
+
+containerd mirrors send the original registry host in an `ns` query
+parameter, so one mirror entry can serve Docker Hub and the registries
+configured in `upstream.oci` whose URL has no path. Point containerd's CRI
+plugin at a hosts directory in `/etc/containerd/config.toml` and restart
+containerd. For containerd 2.x:
+
+```toml
+version = 3
+
+[plugins."io.containerd.cri.v1.images".registry]
+  config_path = "/etc/containerd/certs.d"
+```
+
+For containerd 1.x:
+
+```toml
+version = 2
+
+[plugins."io.containerd.grpc.v1.cri".registry]
+  config_path = "/etc/containerd/certs.d"
+```
+
+Then create `/etc/containerd/certs.d/_default/hosts.toml`:
+
+```toml
+[host."http://proxy.example.com:8080"]
+  capabilities = ["pull", "resolve"]
+```
+
+To check that CRI picked up the directory, confirm the setting containerd
+runs with and pull through CRI (on k3s use `k3s crictl`):
+
+```bash
+containerd config dump | grep config_path
+crictl pull docker.io/library/nginx:latest
+```
+
+The proxy logs a `container manifest request` line for the pull and, when
+`access_log.path` is set, an access-log entry. `ctr images pull --hosts-dir`
+is no substitute for this check: it reads the directory itself and succeeds
+even while CRI still has no `config_path`.
+
+`docker.io` and the host of `upstream.oci_default` use the default registry;
+the host of each `upstream.oci` URL uses that named registry, and so do the
+hosts listed for it in `upstream.oci_mirrors`. Pulls for any other registry get
+`404 NAME_UNKNOWN`, and containerd falls back to the registry itself. Existing
+per-registry `hosts.toml` files that point at `/v2/upstream/{name}` with
+`override_path = true` keep working for that upstream's own host and for
+Docker Hub. If the upstream is a mirror of the registry the nodes pull from,
+say an Artifactory remote of `ghcr.io`, list that registry in
+`upstream.oci_mirrors` (`ghcr: ["ghcr.io"]`); otherwise those pulls get the
+404 as well. See [docs/configuration.md](docs/configuration.md) for how
+hosts are matched and which entry wins when two share a host. k3s generates
+the hosts directory itself from `/etc/rancher/k3s/registries.yaml`; `mirrors:
+{"*": {endpoint: ["http://proxy.example.com:8080"]}}` produces the same
+`_default` entry.
+
 ### Helm
 
 Configure each HTTP chart repository with a name, then add the matching proxy
@@ -488,11 +562,30 @@ Configure APT to use the proxy in `/etc/apt/sources.list.d/proxy.list`:
 deb http://localhost:8080/debian stable main contrib
 ```
 
-Replace your existing sources.list entries, then:
+Or in deb822 format, in `/etc/apt/sources.list.d/proxy.sources`:
+
+```
+Types: deb
+URIs: http://localhost:8080/debian
+Suites: stable
+Components: main contrib
+Signed-By: /usr/share/keyrings/debian-archive-keyring.gpg
+```
+
+Replace your existing sources.list entries (on newer releases also
+`debian.sources` or `ubuntu.sources` in `/etc/apt/sources.list.d/`), then:
 
 ```bash
 sudo apt update
 ```
+
+There is no proxy key to install. The proxy serves the upstream's signed
+`InRelease` and `Release` files unchanged, so APT verifies them with the
+upstream archive's own key from the distribution's keyring package:
+`debian-archive-keyring` on Debian, `ubuntu-keyring` on Ubuntu
+(`/usr/share/keyrings/ubuntu-archive-keyring.gpg`). `Signed-By:` in a
+`.sources` file, or `[signed-by=...]` in a `.list` line, restricts the source
+to that key. For a third-party upstream, use the key its vendor publishes.
 
 The upstream defaults to `http://deb.debian.org/debian`. To proxy a different APT repository (e.g. Ubuntu), set `upstream.debian` in the config file or `PROXY_UPSTREAM_DEBIAN` in the environment:
 
@@ -609,6 +702,24 @@ Commit a `mise.lock` and install with `mise install --locked` so pinned
 installs need no API call at all. Add a bearer token for `https://api.github.com`
 under `upstream.auth` if the fleet exceeds GitHub's anonymous rate limit.
 
+Tools mise downloads from elsewhere, such as Maven from `archive.apache.org`,
+can be cached the same way by declaring their version-pinned paths in
+`upstream.generic_artifacts` (see [configuration](docs/configuration.md)):
+
+```yaml
+upstream:
+  generic:
+    apache: "https://archive.apache.org"
+  generic_artifacts:
+    apache:
+      - 'dist/(?P<name>maven)/maven-3/(?P<version>[^/]+)/binaries/(?P<file>[^/]+)'
+```
+
+```toml
+[settings.url_replacements]
+"https://archive.apache.org/" = "http://localhost:8080/generic/apache/"
+```
+
 ## Configuration
 
 The proxy can be configured via:
@@ -659,6 +770,8 @@ base_url: "http://localhost:8080"
 storage:
   url: "file:///var/cache/proxy/artifacts"
   max_size: "10GB"  # Optional: evict LRU when exceeded
+  retention:
+    default: "30d"  # Optional: evict artifacts not downloaded for 30 days
 
 database:
   driver: "sqlite"
@@ -1132,6 +1245,7 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 | `proxy_cache_misses_total` | counter | `ecosystem` | Cache misses |
 | `proxy_cache_size_bytes` | gauge | | Total size of cached artifacts |
 | `proxy_cached_artifacts_total` | gauge | | Number of cached artifacts |
+| `proxy_artifacts_evicted_total` | counter | `reason`, `ecosystem` | Artifacts evicted by the size limit (`lru`) or by age (`retention`) |
 | `proxy_upstream_fetch_duration_seconds` | histogram | `ecosystem` | Time spent fetching from upstream |
 | `proxy_upstream_errors_total` | counter | `ecosystem`, `error_type` | Upstream fetch failures |
 | `proxy_storage_operation_duration_seconds` | histogram | `operation` | Storage read/write latency |
@@ -1194,7 +1308,7 @@ The same figures are available as JSON from `GET /stats`, which reports `downloa
 
 `ecosystem` means three slightly different things across `/metrics`, and queries that join across them need to know which.
 
-**From the package record, normalized.** The six `proxy_ecosystem_*` gauges, `proxy_cache_hits_total`, `proxy_cache_misses_total`, `proxy_integrity_failures_total` and the scan metrics. Aliases collapse here: `gem` reads as `rubygems`, `composer` as `packagist`, `go` as `golang`.
+**From the package record, normalized.** The six `proxy_ecosystem_*` gauges, `proxy_cache_hits_total`, `proxy_cache_misses_total`, `proxy_artifacts_evicted_total`, `proxy_integrity_failures_total` and the scan metrics. Aliases collapse here: `gem` reads as `rubygems`, `composer` as `packagist`, `go` as `golang`.
 
 **From the request path.** `proxy_requests_total`, `proxy_request_duration_seconds` and `proxy_response_bytes_total`. The names mostly coincide with the normalized ones -- these also report `rubygems`, `packagist` and `golang` -- but the Debian route reports `debian` where the package record says `deb`, and any path that is not a package endpoint reports `other`, which corresponds to no ecosystem at all.
 

@@ -31,7 +31,7 @@ func TestArtifactDownloadUpstreamNotFoundReturns404(t *testing.T) {
 			func(p *Proxy) http.Handler { return NewCRANHandler(p, "http://localhost").Routes() }},
 		{"conda", "/conda-forge/linux-64/numpy-1.26.0-py311_0.tar.bz2",
 			func(p *Proxy) http.Handler { return NewCondaHandler(p, "http://localhost").Routes() }},
-		{"conan", "/v1/files/zlib/1.3.1/_/_/0/recipe/conan_sources.tgz",
+		{"conan", "/v2/conans/zlib/1.3.1/_/_/revisions/0/files/conan_sources.tgz",
 			func(p *Proxy) http.Handler { return NewConanHandler(p, "http://localhost").Routes() }},
 		{"gem", "/gems/rails-7.1.0.gem",
 			func(p *Proxy) http.Handler { return NewGemHandler(p, "http://localhost").Routes() }},

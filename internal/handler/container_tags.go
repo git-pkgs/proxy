@@ -13,7 +13,14 @@ import (
 	"time"
 )
 
-const containerTagsCacheEcosystem = "oci-tags"
+const (
+	containerTagsCacheEcosystem = "oci-tags"
+	// containerTagsCacheFormat versions the tag-list cache identity. Rows
+	// written before it hold a Link already rewritten for the route that
+	// filled them, while this format stores the upstream Link verbatim. The
+	// two must not share rows: an older binary would serve a raw Link as is.
+	containerTagsCacheFormat = "raw-link"
+)
 
 var containerLinkTargetPattern = regexp.MustCompile(`<([^>]*)>`)
 
@@ -27,20 +34,24 @@ type cachedContainerTags struct {
 }
 
 func (h *ContainerHandler) serveTagsList(w http.ResponseWriter, r *http.Request, registryURL, name string) {
-	cacheKey := h.containerTagsCacheKey(registryURL, name, r.URL.Query())
+	// ns only selects the registry; it is neither forwarded upstream nor part
+	// of the cache identity, so all routes to one registry share tag lists.
+	query := r.URL.Query()
+	query.Del(namespaceQueryParam)
+	cacheKey := h.containerTagsCacheKey(registryURL, name, query)
 	cached, err := h.loadContainerTags(r.Context(), cacheKey)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to read cached container tag list", "error", err)
 		cached = nil
 	}
 	if cached != nil && h.containerTagsFresh(cached) {
-		writeContainerTags(w, cached, false)
+		h.writeContainerTags(w, r, registryURL, cached, false)
 		return
 	}
 
 	upstreamURL := fmt.Sprintf("%s/v2/%s/tags/list", registryURL, name)
-	if query := r.URL.Query().Encode(); query != "" {
-		upstreamURL += "?" + query
+	if encoded := query.Encode(); encoded != "" {
+		upstreamURL += "?" + encoded
 	}
 	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
 	if err != nil {
@@ -54,7 +65,7 @@ func (h *ContainerHandler) serveTagsList(w http.ResponseWriter, r *http.Request,
 
 	resp, err := h.proxy.HTTPClient.Do(req)
 	if err != nil {
-		h.serveStaleTagsOrError(w, cached, err)
+		h.serveStaleTagsOrError(w, r, registryURL, cached, err)
 		return
 	}
 	defer func() { _ = resp.Body.Close() }()
@@ -64,12 +75,12 @@ func (h *ContainerHandler) serveTagsList(w http.ResponseWriter, r *http.Request,
 		if err := h.storeContainerTags(r.Context(), cacheKey, cached); err != nil {
 			h.proxy.Logger.Warn("failed to refresh cached container tag list", "error", err)
 		}
-		writeContainerTags(w, cached, false)
+		h.writeContainerTags(w, r, registryURL, cached, false)
 		return
 	}
 	if resp.StatusCode != http.StatusOK {
 		if cached != nil && shouldServeStaleManifest(resp.StatusCode) {
-			writeContainerTags(w, cached, true)
+			h.writeContainerTags(w, r, registryURL, cached, true)
 			return
 		}
 		h.proxy.relayResponse(w, r, resp, copyContainerTagsHeaders)
@@ -78,14 +89,16 @@ func (h *ContainerHandler) serveTagsList(w http.ResponseWriter, r *http.Request,
 
 	body, err := h.proxy.ReadMetadata(resp.Body)
 	if err != nil {
-		h.serveStaleTagsOrError(w, cached, fmt.Errorf("reading tag list: %w", err))
+		h.serveStaleTagsOrError(w, r, registryURL, cached, fmt.Errorf("reading tag list: %w", err))
 		return
 	}
+	// The upstream Link is stored verbatim and rewritten per request because
+	// clients on different routes share this cache entry.
 	tags := &cachedContainerTags{
 		body:        body,
 		contentType: resp.Header.Get(headerContentType),
 		etag:        resp.Header.Get(headerETag),
-		link:        h.rewriteContainerTagsLink(strings.Join(resp.Header.Values("Link"), ", "), registryURL, r.URL.Path),
+		link:        strings.Join(resp.Header.Values("Link"), ", "),
 		size:        int64(len(body)),
 		fetchedAt:   time.Now(),
 	}
@@ -95,13 +108,13 @@ func (h *ContainerHandler) serveTagsList(w http.ResponseWriter, r *http.Request,
 	if err := h.storeContainerTags(r.Context(), cacheKey, tags); err != nil {
 		h.proxy.Logger.Warn("failed to cache container tag list", "error", err)
 	}
-	writeContainerTags(w, tags, false)
+	h.writeContainerTags(w, r, registryURL, tags, false)
 }
 
-func (h *ContainerHandler) serveStaleTagsOrError(w http.ResponseWriter, cached *cachedContainerTags, err error) {
+func (h *ContainerHandler) serveStaleTagsOrError(w http.ResponseWriter, r *http.Request, registryURL string, cached *cachedContainerTags, err error) {
 	if cached != nil {
 		h.proxy.Logger.Warn("upstream tag list fetch failed, serving stale cache", "error", err)
-		writeContainerTags(w, cached, true)
+		h.writeContainerTags(w, r, registryURL, cached, true)
 		return
 	}
 	h.proxy.Logger.Error("failed to fetch container tag list", "error", err)
@@ -109,7 +122,7 @@ func (h *ContainerHandler) serveStaleTagsOrError(w http.ResponseWriter, cached *
 }
 
 func (h *ContainerHandler) containerTagsCacheKey(registryURL, name string, query url.Values) string {
-	identity := registryURL + "\x00" + name + "\x00" + query.Encode()
+	identity := containerTagsCacheFormat + "\x00" + registryURL + "\x00" + name + "\x00" + query.Encode()
 	sum := sha256.Sum256([]byte(identity))
 	return hex.EncodeToString(sum[:])
 }
@@ -165,14 +178,15 @@ func (h *ContainerHandler) storeContainerTags(ctx context.Context, cacheKey stri
 	return nil
 }
 
-func writeContainerTags(w http.ResponseWriter, tags *cachedContainerTags, stale bool) {
+func (h *ContainerHandler) writeContainerTags(w http.ResponseWriter, r *http.Request, registryURL string, tags *cachedContainerTags, stale bool) {
 	w.Header().Set(headerContentType, tags.contentType)
 	w.Header().Set(headerContentLength, strconv.FormatInt(tags.size, 10))
 	if tags.etag != "" {
 		w.Header().Set(headerETag, tags.etag)
 	}
-	if tags.link != "" {
-		w.Header().Set("Link", tags.link)
+	link := h.rewriteContainerTagsLink(tags.link, registryURL, r.URL.Path, r.URL.Query().Get(namespaceQueryParam))
+	if link != "" {
+		w.Header().Set("Link", link)
 	}
 	if stale {
 		w.Header().Set("Warning", containerStaleWarning)
@@ -189,7 +203,7 @@ func copyContainerTagsHeaders(destination, source http.Header) {
 	}
 }
 
-func (h *ContainerHandler) rewriteContainerTagsLink(link, registryURL, requestPath string) string {
+func (h *ContainerHandler) rewriteContainerTagsLink(link, registryURL, requestPath, namespace string) string {
 	if link == "" {
 		return ""
 	}
@@ -221,6 +235,12 @@ func (h *ContainerHandler) rewriteContainerTagsLink(link, registryURL, requestPa
 		linkURL.User = proxyURL.User
 		linkURL.Path = strings.TrimSuffix(proxyURL.Path, "/") + "/v2" + requestPath
 		linkURL.RawPath = ""
+		if namespace != "" {
+			// Keep follow-up pages on the ns route the client is using.
+			query := linkURL.Query()
+			query.Set(namespaceQueryParam, namespace)
+			linkURL.RawQuery = query.Encode()
+		}
 		return "<" + linkURL.String() + ">"
 	})
 }

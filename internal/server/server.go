@@ -64,6 +64,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/archives"
 	"github.com/git-pkgs/cooldown"
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
 	"github.com/git-pkgs/proxy/internal/accesslog"
@@ -117,6 +118,9 @@ type Server struct {
 	breakers    *breakerMonitor
 	ecoStats    ecosystemStatsCache
 	sources     sourceTracker
+
+	// browseLimits overrides defaultBrowseLimits when set; tests use it.
+	browseLimits archives.StreamOptions
 }
 
 // New creates a new Server with the given configuration.
@@ -370,6 +374,7 @@ func (s *Server) serve(listener net.Listener) error {
 		"database", s.cfg.Database.String())
 	go s.updateCacheStatsMetrics()
 	go s.startEvictionLoop(bgCtx)
+	go s.startRetentionLoop(bgCtx)
 	go s.startReclaimLoop(bgCtx)
 
 	if listener != nil {
@@ -381,7 +386,8 @@ func (s *Server) serve(listener net.Listener) error {
 // mountProtocolHandlers constructs every ecosystem handler and mounts it on
 // r under its protocol prefix.
 func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
-	npmHandler := handler.NewNPMHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.NPM)
+	npmHandler := handler.NewNPMHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.NPM).
+		WithPackageRoutes(s.cfg.Upstream.NPMRoutes)
 	cargoHandler := handler.NewCargoHandler(
 		proxy,
 		s.cfg.BaseURL,
@@ -421,7 +427,7 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 		s.cfg.BaseURL,
 		s.cfg.Upstream.Composer,
 		s.cfg.Upstream.ComposerRepository,
-	)
+	).WithPackageRoutes(s.cfg.Upstream.ComposerRoutes)
 	conanHandler := handler.NewConanHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Conan)
 	condaHandler := handler.NewCondaHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Conda)
 	cranHandler := handler.NewCRANHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.CRAN)
@@ -434,6 +440,7 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 		s.cfg.Upstream.OCIDefault,
 		s.cfg.Upstream.OCI,
 	)
+	containerHandler.SetMirroredRegistries(s.cfg.Upstream.OCIMirrors)
 	handler.RegisterHomebrewArtifacts(containerHandler, s.cfg.Upstream.HomebrewArtifact)
 	helmHandler := handler.NewHelmHandlerWithOCIRegistries(
 		proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm, s.cfg.Upstream.OCIDefault, s.cfg.Upstream.OCI)
@@ -445,8 +452,9 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 		s.cfg.Upstream.DebianRepositories,
 	)
 	rpmHandler := handler.NewRPMHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.RPM)
-	genericHandler := handler.NewGenericHandler(proxy, s.cfg.Upstream.Generic)
+	genericHandler := handler.NewGenericHandler(proxy, s.cfg.Upstream.Generic, s.cfg.Upstream.GenericArtifacts)
 
+	r = r.With(rejectQueryInPath)
 	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))
 	r.Mount("/cargo", http.StripPrefix("/cargo", cargoHandler.Routes()))
 	r.Mount("/gem", http.StripPrefix("/gem", gemHandler.Routes()))

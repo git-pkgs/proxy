@@ -11,6 +11,7 @@ import (
 	"time"
 
 	upstreamhttp "github.com/git-pkgs/proxy/internal/httpclient"
+	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
 )
 
@@ -1334,5 +1335,39 @@ func TestContainerHandler_Routes_VersionCheck(t *testing.T) {
 
 	if got := w.Header().Get("Docker-Distribution-Api-Version"); got != "registry/2.0" {
 		t.Errorf("Docker-Distribution-Api-Version = %q, want %q", got, "registry/2.0")
+	}
+}
+
+func TestOCIRetentionKey(t *testing.T) {
+	tests := []struct {
+		key  string
+		want string
+		ok   bool
+	}{
+		{"pkg:oci/library/nginx", "pkg:oci/library%2Fnginx", true},
+		{"pkg:oci/library%2Fnginx", "pkg:oci/library%2Fnginx", true},
+		{"pkg:oci/nginx", "pkg:oci/nginx", true},
+		{"pkg:oci/upstream/ghcr/owner/app", "pkg:oci/upstream%2Fghcr%2Fowner%2Fapp", true},
+		{"pkg:oci/homebrew/core/wget", "pkg:oci/homebrew%2Fcore%2Fwget", true},
+		{"pkg:oci/upstream/ghcr", "", false},
+		{"pkg:oci/library%2F%2Fnginx", "", false},
+		{"pkg:oci/%2Fnginx", "", false},
+		{"pkg:oci/library/nginx:latest", "", false},
+		{"pkg:oci/homebrew/core/openssl%403", "", false},
+		{"pkg:oci/homebrew/core/openssl/3", "pkg:oci/homebrew%2Fcore%2Fopenssl%2F3", true},
+		{"pkg:npm/library/nginx", "", false},
+	}
+	for _, tt := range tests {
+		p, err := purl.Parse(tt.key)
+		if err != nil {
+			t.Fatalf("Parse(%s): %v", tt.key, err)
+		}
+		got, ok := ociRetentionKey(p)
+		if ok != tt.ok || (ok && got != tt.want) {
+			t.Errorf("ociRetentionKey(%s) = %q, %v, want %q, %v", tt.key, got, ok, tt.want, tt.ok)
+		}
+	}
+	if _, ok := ociRetentionKey(nil); ok {
+		t.Error("ociRetentionKey(nil) accepted")
 	}
 }
