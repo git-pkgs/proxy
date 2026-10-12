@@ -1160,14 +1160,91 @@ func TestNPMVersionMetadataRejectsTraversal(t *testing.T) {
 }
 
 func TestNPMVersionMetadataCooldown(t *testing.T) {
+	proxyURL, upstreamPaths := npmCooldownMetadataHarness(t)
+
+	resp, err := http.Get(proxyURL + "/demo")
+	if err != nil {
+		t.Fatalf("packument request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("packument status = %d, want 200", resp.StatusCode)
+	}
+	var packument map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&packument); err != nil {
+		t.Fatalf("decode packument: %v", err)
+	}
+	distTags := packument["dist-tags"].(map[string]any)
+	if distTags["latest"] != testVersion100 {
+		t.Fatalf("dist-tags.latest = %v, want %s", distTags["latest"], testVersion100)
+	}
+	if _, ok := packument["versions"].(map[string]any)["2.0.0"]; ok {
+		t.Fatal("packument should not include version 2.0.0")
+	}
+
+	for _, tt := range []struct {
+		path        string
+		wantStatus  int
+		wantVersion string
+		wantError   string
+	}{
+		{"/demo/latest", http.StatusOK, testVersion100, ""},
+		{"/demo/1.0.0", http.StatusOK, testVersion100, ""},
+		{"/demo/2.0.0", http.StatusNotFound, "", "version not found"},
+	} {
+		t.Run(tt.path, func(t *testing.T) {
+			testNPMVersionMetadataCooldownPath(t, proxyURL, upstreamPaths, tt.path, tt.wantStatus, tt.wantVersion, tt.wantError)
+		})
+	}
+}
+
+// testNPMVersionMetadataCooldownPath is a subtest helper so the parent test stays
+// under gocognit's complexity limit.
+func testNPMVersionMetadataCooldownPath(t *testing.T, proxyURL string, upstreamPaths *[]string, path string, wantStatus int, wantVersion, wantError string) {
+	t.Helper()
+	before := len(*upstreamPaths)
+	resp, err := http.Get(proxyURL + path)
+	if err != nil {
+		t.Fatalf("request failed: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	body := readNPMTestBody(t, resp.Body)
+	if resp.StatusCode != wantStatus {
+		t.Fatalf("status = %d, want %d; body: %s", resp.StatusCode, wantStatus, body)
+	}
+	for _, upstreamPath := range (*upstreamPaths)[before:] {
+		if upstreamPath == path {
+			t.Fatalf("upstream must not be called for version path %s when answering from the filtered packument", path)
+		}
+	}
+	if wantError != "" {
+		if !strings.Contains(body, wantError) {
+			t.Fatalf("error body should mention %q, got %s", wantError, body)
+		}
+		return
+	}
+	var versionDoc map[string]any
+	if err := json.Unmarshal([]byte(body), &versionDoc); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if versionDoc["version"] != wantVersion {
+		t.Fatalf("version = %v, want %s", versionDoc["version"], wantVersion)
+	}
+	wantTarball := "http://proxy.test/npm/demo/-/demo-" + wantVersion + ".tgz"
+	if versionDoc["dist"].(map[string]any)["tarball"] != wantTarball {
+		t.Fatalf("tarball = %v, want %s", versionDoc["dist"].(map[string]any)["tarball"], wantTarball)
+	}
+}
+
+func npmCooldownMetadataHarness(t *testing.T) (proxyURL string, upstreamPaths *[]string) {
+	t.Helper()
 	now := time.Now()
+	old := now.Add(-30 * 24 * time.Hour).Format(time.RFC3339)
+	recent := now.Add(-1 * time.Hour).Format(time.RFC3339)
 	packument := `{
 		"name": "demo",
 		"dist-tags": {"latest": "2.0.0"},
-		"time": {
-			"1.0.0": "` + now.Add(-30*24*time.Hour).Format(time.RFC3339) + `",
-			"2.0.0": "` + now.Add(-1*time.Hour).Format(time.RFC3339) + `"
-		},
+		"time": {"1.0.0": "` + old + `", "2.0.0": "` + recent + `"},
 		"versions": {
 			"1.0.0": {
 				"name": "demo",
@@ -1181,20 +1258,12 @@ func TestNPMVersionMetadataCooldown(t *testing.T) {
 			}
 		}
 	}`
-	version200 := `{
-		"name": "demo",
-		"version": "2.0.0",
-		"dist": {"tarball": "https://registry.npmjs.org/demo/-/demo-2.0.0.tgz"}
-	}`
-	version100 := `{
-		"name": "demo",
-		"version": "1.0.0",
-		"dist": {"tarball": "https://registry.npmjs.org/demo/-/demo-1.0.0.tgz"}
-	}`
+	version200 := `{"name":"demo","version":"2.0.0","dist":{"tarball":"https://registry.npmjs.org/demo/-/demo-2.0.0.tgz"}}`
+	version100 := `{"name":"demo","version":"1.0.0","dist":{"tarball":"https://registry.npmjs.org/demo/-/demo-1.0.0.tgz"}}`
 
-	var upstreamPaths []string
+	var paths []string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upstreamPaths = append(upstreamPaths, r.URL.Path)
+		paths = append(paths, r.URL.Path)
 		w.Header().Set("Content-Type", contentTypeJSON)
 		switch r.URL.Path {
 		case "/demo":
@@ -1207,84 +1276,14 @@ func TestNPMVersionMetadataCooldown(t *testing.T) {
 			http.NotFound(w, r)
 		}
 	}))
-	defer upstream.Close()
+	t.Cleanup(upstream.Close)
 
 	proxy, _, _, _ := setupTestProxy(t)
 	proxy.HTTPClient = upstream.Client()
 	proxy.Cooldown = &cooldown.Config{Default: "7d"}
-
-	h := NewNPMHandler(proxy, "http://proxy.test", upstream.URL)
-	srv := httptest.NewServer(h.Routes())
-	defer srv.Close()
-
-	resp, err := http.Get(srv.URL + "/demo")
-	if err != nil {
-		t.Fatalf("packument request failed: %v", err)
-	}
-	defer func() { _ = resp.Body.Close() }()
-	if resp.StatusCode != http.StatusOK {
-		t.Fatalf("packument status = %d, want 200", resp.StatusCode)
-	}
-	var packumentResult map[string]any
-	if err := json.NewDecoder(resp.Body).Decode(&packumentResult); err != nil {
-		t.Fatalf("decode packument: %v", err)
-	}
-	distTags := packumentResult["dist-tags"].(map[string]any)
-	if distTags["latest"] != testVersion100 {
-		t.Fatalf("dist-tags.latest = %v, want %s", distTags["latest"], testVersion100)
-	}
-	if _, ok := packumentResult["versions"].(map[string]any)["2.0.0"]; ok {
-		t.Fatal("packument should not include version 2.0.0")
-	}
-
-	tests := []struct {
-		path        string
-		wantStatus  int
-		wantVersion string
-		wantError   string
-	}{
-		{"/demo/latest", http.StatusOK, testVersion100, ""},
-		{"/demo/1.0.0", http.StatusOK, testVersion100, ""},
-		{"/demo/2.0.0", http.StatusNotFound, "", "version not found"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.path, func(t *testing.T) {
-			before := len(upstreamPaths)
-			resp, err := http.Get(srv.URL + tt.path)
-			if err != nil {
-				t.Fatalf("request failed: %v", err)
-			}
-			defer func() { _ = resp.Body.Close() }()
-			if resp.StatusCode != tt.wantStatus {
-				t.Fatalf("status = %d, want %d; body: %s", resp.StatusCode, tt.wantStatus, readNPMTestBody(t, resp.Body))
-			}
-			for _, path := range upstreamPaths[before:] {
-				if path == tt.path {
-					t.Fatalf("upstream must not be called for version path %s when answering from the filtered packument", path)
-				}
-			}
-			if tt.wantError != "" {
-				if !strings.Contains(readNPMTestBody(t, resp.Body), tt.wantError) {
-					t.Fatalf("error body should mention %q", tt.wantError)
-				}
-				return
-			}
-			if tt.wantVersion == "" {
-				return
-			}
-			var result map[string]any
-			if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-				t.Fatalf("decode response: %v", err)
-			}
-			if result["version"] != tt.wantVersion {
-				t.Fatalf("version = %v, want %s", result["version"], tt.wantVersion)
-			}
-			wantTarball := "http://proxy.test/npm/demo/-/demo-" + tt.wantVersion + ".tgz"
-			if result["dist"].(map[string]any)["tarball"] != wantTarball {
-				t.Fatalf("tarball = %v, want %s", result["dist"].(map[string]any)["tarball"], wantTarball)
-			}
-		})
-	}
+	srv := httptest.NewServer(NewNPMHandler(proxy, "http://proxy.test", upstream.URL).Routes())
+	t.Cleanup(srv.Close)
+	return srv.URL, &paths
 }
 
 func readNPMTestBody(t *testing.T, r io.Reader) string {
