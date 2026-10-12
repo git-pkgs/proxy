@@ -12,6 +12,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+
+	"github.com/git-pkgs/proxy/internal/retention"
+	"github.com/git-pkgs/purl"
 )
 
 const (
@@ -55,6 +58,38 @@ func dockerHubKeys() []string {
 
 func isDockerHubKey(key string) bool {
 	return slices.Contains(dockerHubNamespaceKeys, key)
+}
+
+// Blobs are stored under the repository name the client asks for, which
+// purl writes as one name, pkg:oci/library%2Fnginx. Named upstreams keep
+// their upstream/{name}/ prefix, also when containerd reaches them through
+// ns. Homebrew bottles are stored under Homebrew's image name, which writes
+// openssl@3 as homebrew/core/openssl/3, and Helm charts pulled over OCI go
+// through here like images.
+// Package rules write the repository name as a path, pkg:oci/library/nginx,
+// and are mapped to that form.
+func init() {
+	retention.Default.Register(retention.Spec{Key: "oci", CanonicalPackage: ociRetentionKey})
+}
+
+// ociRetentionKey maps a package rule to the stored package PURL. It refuses
+// a key with an empty path segment, a segment with ':' or '@' (a tag or
+// digest from an image reference), or an upstream/{name} prefix without a
+// repository, since no blob is ever stored under such a name.
+func ociRetentionKey(p *purl.PURL) (string, bool) {
+	if p == nil {
+		return "", false
+	}
+	name := p.Name
+	if p.Namespace != "" {
+		name = p.Namespace + "/" + p.Name
+	}
+	segments := strings.Split(name, "/")
+	if slices.Contains(segments, "") || strings.ContainsAny(name, ":@") ||
+		(segments[0] == "upstream" && len(segments) < registrySelectorParts) {
+		return "", false
+	}
+	return retention.DefaultCanonical("oci")(purl.New(p.Type, "", name, "", nil))
 }
 
 // ContainerHandler handles OCI/Docker container registry protocol requests.

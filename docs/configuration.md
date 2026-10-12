@@ -96,16 +96,16 @@ A package rule wins over an ecosystem rule, which wins over `default`. Package r
 | `cran` | no | - |
 | `deb` | no | - |
 | `gem` | no | - |
-| `golang` | no | - |
+| `golang` | yes | `pkg:golang/github.com/stretchr/testify`, the module path as in `go.mod`; case doesn't matter. A major version like `/v2` (or `.v3` on gopkg.in) is a module of its own and needs its own rule. The `!`-escaped form from proxy URLs and the module cache (`github.com/!azure/...`) is refused. |
 | `helm` | no | - |
 | `hex` | no | - |
 | `julia` | no | - |
-| `maven` | no | - |
+| `maven` | yes | `pkg:maven/com.google.guava/guava`, group and artifact as published, case included. Gradle build cache entries are not covered; they use `gradle.build_cache.max_age`. |
 | `npm` | yes | `pkg:npm/lodash`, `pkg:npm/@babel/core`; the name has to match exactly, case included, so `pkg:npm/jsonstream` doesn't cover `JSONStream`. |
 | `nuget` | no | - |
-| `oci` | no | - |
+| `oci` | yes | `pkg:oci/library/nginx`, the repository name of the pull. A named upstream keeps its prefix, also when containerd reaches it through `ns`: `ghcr.io/owner/app` pulled that way is `pkg:oci/upstream/ghcr/owner/app`. Homebrew bottles use Homebrew's image name, with `@` written as `/` and `+` as `x` (`openssl@3` is `pkg:oci/homebrew/core/openssl/3`). Helm charts pulled over OCI are stored like images. Only blobs are evicted; manifests stay in the metadata cache. |
 | `pub` | no | - |
-| `pypi` | no | - |
+| `pypi` | yes | `pkg:pypi/requests`; case and single `_`/`-` don't matter. Dots and repeated separators are kept as written, so a project like `zope.interface` can be stored as `zope.interface` and `zope-interface`; add a rule for each. |
 | `rpm` | no | - |
 | `swift` | no | - |
 

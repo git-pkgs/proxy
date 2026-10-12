@@ -12,6 +12,8 @@ import (
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/git-pkgs/proxy/internal/retention"
 )
 
 const (
@@ -43,6 +45,15 @@ type PyPIHandler struct {
 	downloadURL    string
 	downloadHrefRe *regexp.Regexp
 	proxyURL       string
+}
+
+// PyPI files are stored under pkg:pypi/{name}, the name taken from the
+// filename and normalized the way purl does it: lowercased, "_" turned into
+// "-". Package rules use the default key mapping, so pkg:pypi/Typing_Extensions
+// matches typing-extensions. Dots and runs of separators are kept, so files
+// named zope.interface-* and zope_interface-* end up under two packages.
+func init() {
+	retention.Default.Register(retention.Spec{Key: "pypi", CanonicalPackage: retention.DefaultCanonical("pypi")})
 }
 
 // NewPyPIHandler creates a new PyPI protocol handler.

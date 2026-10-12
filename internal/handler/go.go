@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/registries/fetch"
 )
 
@@ -13,6 +14,17 @@ const (
 	goUpstream      = "https://proxy.golang.org"
 	asciiCaseOffset = 32 // difference between lowercase and uppercase ASCII letters
 )
+
+// Module zips are stored under pkg:golang/{module path}, which the PURL
+// rules lowercase, so a package rule covers a module whatever case either
+// is written in. A major version suffix (/v2) is part of the module path
+// and so a module of its own. A key in the escaped form proxy URLs and the
+// module cache use (github.com/!azure) does not survive the default
+// mapping's round trip and is refused; the handler stores decoded paths,
+// so such a key could never match.
+func init() {
+	retention.Default.Register(retention.Spec{Key: "golang", CanonicalPackage: retention.DefaultCanonical("golang")})
+}
 
 // GoHandler handles Go module proxy protocol requests.
 type GoHandler struct {
