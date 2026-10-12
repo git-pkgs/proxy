@@ -195,6 +195,12 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	specifier, versionLookup := npmVersionSpecifier(packagePath, packageName)
+	if versionLookup && h.npmVersionMetadataUsesFilteredPackument(packageName) {
+		h.handleFilteredNPMVersionMetadata(w, r, packageName, packagePath, specifier, accept)
+		return
+	}
+
 	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "npm", packagePath, upstreamURL, accept)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
@@ -217,6 +223,10 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 			JSONError(w, http.StatusForbidden, err.Error())
 			return
 		}
+		if errors.Is(err, ErrUpstreamNotFound) {
+			JSONError(w, http.StatusNotFound, "package not found")
+			return
+		}
 		if len(h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName))) != 0 {
 			JSONError(w, http.StatusBadGateway, "failed to filter package metadata")
 			return
@@ -232,6 +242,102 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 	w.Header().Set(headerContentType, contentTypeJSON)
 	w.WriteHeader(http.StatusOK)
 	_, _ = w.Write(rewritten)
+}
+
+// handleFilteredNPMVersionMetadata serves /pkg/<version> and /pkg/<tag> from the
+// filtered packument so cooldown and dist-tags match the root metadata response.
+func (h *NPMHandler) handleFilteredNPMVersionMetadata(w http.ResponseWriter, r *http.Request, packageName, packagePath, specifier, accept string) {
+	_, packumentPath := npmMetadataPath(packageName)
+	packument, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "npm", packageName, h.upstreamURL+"/"+packumentPath, accept)
+	if err != nil {
+		if errors.Is(err, ErrUpstreamNotFound) {
+			JSONError(w, http.StatusNotFound, "package not found")
+			return
+		}
+		h.proxy.Logger.Error("failed to fetch npm metadata", "error", err)
+		JSONError(w, http.StatusBadGateway, "failed to fetch from upstream")
+		return
+	}
+
+	rewritten, err := h.proxy.cachedRewrite(r.Context(), "npm", h.proxyURL, packagePath, packument, func(b []byte) ([]byte, error) {
+		return h.rewriteNPMVersionFromPackument(packageName, specifier, b)
+	})
+	if err != nil {
+		if r.Context().Err() != nil {
+			return
+		}
+		if errors.Is(err, ErrVersionDenied) {
+			JSONError(w, http.StatusForbidden, err.Error())
+			return
+		}
+		if errors.Is(err, ErrUpstreamNotFound) {
+			JSONError(w, http.StatusNotFound, "package not found")
+			return
+		}
+		if len(h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName))) != 0 {
+			JSONError(w, http.StatusBadGateway, "failed to filter package metadata")
+			return
+		}
+		h.proxy.Logger.Warn("failed to rewrite npm version metadata", "error", err)
+		JSONError(w, http.StatusBadGateway, "failed to filter package metadata")
+		return
+	}
+
+	w.Header().Set(headerContentType, contentTypeJSON)
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write(rewritten)
+}
+
+// npmVersionSpecifier returns the version or dist-tag segment after the package
+// name in a metadata path, for example "4.17.21" or "latest".
+func npmVersionSpecifier(packagePath, packageName string) (string, bool) {
+	if packagePath == packageName {
+		return "", false
+	}
+	specifier, ok := strings.CutPrefix(packagePath, packageName+"/")
+	return specifier, ok
+}
+
+func (h *NPMHandler) npmVersionMetadataUsesFilteredPackument(packageName string) bool {
+	if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
+		return true
+	}
+	if h.proxy.Denylist != nil {
+		return len(h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName))) != 0
+	}
+	return false
+}
+
+// rewriteNPMVersionFromPackument picks one version entry out of an already
+// filtered packument and rewrites its tarball URL.
+func (h *NPMHandler) rewriteNPMVersionFromPackument(packageName, specifier string, packument []byte) ([]byte, error) {
+	filtered, err := h.rewriteMetadata(packageName, packument)
+	if err != nil {
+		return nil, err
+	}
+
+	target := specifier
+	if resolved, ok, err := lookupJSONString(filtered, "dist-tags", specifier); err != nil {
+		return nil, err
+	} else if ok {
+		target = resolved
+	}
+
+	if h.proxy.versionDenied("npm", packageName, target) {
+		return nil, ErrVersionDenied
+	}
+
+	versionRaw, err := lookupJSON(filtered, "versions", target)
+	if err != nil {
+		return nil, err
+	}
+	if len(versionRaw) == 0 {
+		return nil, ErrUpstreamNotFound
+	}
+
+	var out bytes.Buffer
+	h.writeNPMVersion(&out, packageName, target, versionRaw)
+	return out.Bytes(), nil
 }
 
 // rewriteMetadata rewrites tarball URLs in npm package metadata to point at this proxy.
