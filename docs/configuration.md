@@ -604,11 +604,36 @@ git:
   stale_max_age: 24h     # never serve a copy not checked for this long
 ```
 
-Clients point their remote URLs at the proxy, for example with `insteadOf`:
+Clients reach the proxy through Git's `insteadOf` setting, which rewrites the
+start of a URL before Git connects. After
 
 ```bash
 git config --global url."http://localhost:8080/git/github/".insteadOf https://github.com/
 ```
+
+`git clone https://github.com/git-pkgs/purl` fetches from
+`http://localhost:8080/git/github/git-pkgs/purl`, while the clone's remote
+stays `https://github.com/git-pkgs/purl`.
+
+In CI, the same setting can come from environment variables instead of a
+config file (Git 2.31 or newer), next to the variables that point package
+managers at the proxy. Each `GIT_CONFIG_KEY_n` and `GIT_CONFIG_VALUE_n` pair is
+one `git config` setting, and `GIT_CONFIG_COUNT` says how many pairs there are.
+This sends both upstreams from the example above through the proxy:
+
+```bash
+export GIT_CONFIG_COUNT=2
+export GIT_CONFIG_KEY_0=url.http://localhost:8080/git/github/.insteadOf
+export GIT_CONFIG_VALUE_0=https://github.com/
+export GIT_CONFIG_KEY_1=url.http://localhost:8080/git/wikimedia/.insteadOf
+export GIT_CONFIG_VALUE_1=https://gerrit.wikimedia.org/r/
+```
+
+Every process the job starts inherits these variables, so the rewrite also
+applies when a package manager runs `git` for a Git dependency, as pip,
+Bundler, Composer, SwiftPM, and Go for modules it fetches directly do. Those
+fetches are cached too. npm downloads GitHub dependencies as tarballs over
+HTTPS where it can, without `git`, so the rewrite does not reach them.
 
 `repos` patterns use `path.Match` syntax, where `*` does not cross a `/`; a
 pattern ending in `/**` also matches every repository nested below its
