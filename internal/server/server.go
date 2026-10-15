@@ -326,10 +326,16 @@ func (s *Server) serve(listener net.Listener) error {
 		ui.Get("/package/{ecosystem}/*", s.handlePackagePath)
 		ui.Get("/api/browse/{ecosystem}/*", s.handleBrowsePath)
 		ui.Get("/api/compare/{ecosystem}/*", s.handleComparePath)
+		if s.cfg.CacheDelete {
+			ui.Delete("/api/cache/{ecosystem}/*", s.handleCacheDelete)
+		}
 	})
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 	})
+	if s.cfg.CacheDelete {
+		r.Delete("/api/cache/{ecosystem}/*", s.handleCacheDelete)
+	}
 
 	// API endpoints for enrichment data
 	enrichSvc := enrichment.New(s.logger)
@@ -1088,19 +1094,29 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 	hasCached := firstBrowsableArtifact(artifacts) != nil
 
 	data := VersionShowData{
-		Layout:            s.layoutFor(r),
-		Package:           pkg,
-		Version:           ver,
-		Artifacts:         artifacts,
-		Vulnerabilities:   vulns,
-		IsOutdated:        isOutdated,
-		LicenseCategory:   categorizeLicense(ver.License),
-		HasCachedArtifact: hasCached,
+		Layout:               s.layoutFor(r),
+		Package:              pkg,
+		Version:              ver,
+		Artifacts:            artifacts,
+		Vulnerabilities:      vulns,
+		IsOutdated:           isOutdated,
+		LicenseCategory:      categorizeLicense(ver.License),
+		HasCachedArtifact:    hasCached,
+		HasDeletableArtifact: hasDeletableArtifact(artifacts),
 	}
 
 	if err := s.templates.Render(w, "version_show", data); err != nil {
 		s.logger.Error("failed to render version show", "error", err)
 	}
+}
+
+func hasDeletableArtifact(artifacts []database.Artifact) bool {
+	for _, art := range artifacts {
+		if art.StoragePath.Valid && art.Source != database.SourceLocal {
+			return true
+		}
+	}
+	return false
 }
 
 func (s *Server) cachedVersionPURL(ecosystem, name, version string) string {

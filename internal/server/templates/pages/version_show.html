@@ -69,10 +69,14 @@
 </div>
 
 {{if .Artifacts}}
-<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
-    <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800">
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800"{{if .CacheDelete}} data-cache-url="/ui/api/cache/{{.Package.Ecosystem}}/{{.Package.Name}}/{{.Version.EscapedVersion}}"{{end}}>
+    <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between gap-4">
         <h2 class="text-lg font-semibold">Artifacts ({{len .Artifacts}})</h2>
+        {{if and .CacheDelete .HasDeletableArtifact}}
+        <button type="button" class="cache-delete text-sm px-3 py-1.5 rounded-lg border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950" data-label="Delete all cached files">Delete all cached files</button>
+        {{end}}
     </div>
+    <p id="cache-delete-error" class="hidden px-6 py-3 text-sm text-red-700 dark:text-red-400 border-b border-gray-200 dark:border-gray-800"></p>
     <div class="divide-y divide-gray-200 dark:divide-gray-800">
         {{range .Artifacts}}
         <div class="px-6 py-4">
@@ -81,6 +85,9 @@
                 <div class="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400">
                     {{if .Size.Valid}}<span>{{.Size.Int64}} bytes</span>{{end}}
                     {{if gt .HitCount 0}}<span>{{.HitCount}} cache hits</span>{{end}}
+                    {{if and $.CacheDelete .StoragePath.Valid (ne .Source "local")}}
+                    <button type="button" class="cache-delete text-xs px-2 py-1 rounded border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950" data-filename="{{.Filename}}" data-label="Delete">Delete</button>
+                    {{end}}
                 </div>
             </div>
             {{if .ContentHash.Valid}}
@@ -100,6 +107,46 @@
         {{end}}
     </div>
 </div>
+{{if .CacheDelete}}
+<script>
+// The first click arms a button and the second deletes, so a stray click
+// removes nothing.
+document.querySelectorAll('.cache-delete').forEach(button => {
+    button.addEventListener('click', async () => {
+        if (button.dataset.armed !== 'true') {
+            document.querySelectorAll('.cache-delete').forEach(other => {
+                other.dataset.armed = 'false';
+                other.textContent = other.dataset.label;
+            });
+            button.dataset.armed = 'true';
+            button.textContent = 'Click again to delete';
+            return;
+        }
+        const errorBox = document.getElementById('cache-delete-error');
+        let url = button.closest('[data-cache-url]').dataset.cacheUrl;
+        if (button.dataset.filename) {
+            url += '?filename=' + encodeURIComponent(button.dataset.filename);
+        }
+        button.disabled = true;
+        button.textContent = 'Deleting…';
+        try {
+            const resp = await fetch(url, { method: 'DELETE' });
+            if (!resp.ok) {
+                const body = await resp.json().catch(() => ({}));
+                throw new Error(body.message || `HTTP ${resp.status}`);
+            }
+            window.location.reload();
+        } catch (err) {
+            errorBox.textContent = 'Delete failed: ' + err.message;
+            errorBox.classList.remove('hidden');
+            button.disabled = false;
+            button.dataset.armed = 'false';
+            button.textContent = button.dataset.label;
+        }
+    });
+});
+</script>
+{{end}}
 {{else}}
 <div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-12 text-center text-gray-500 dark:text-gray-400">
     No artifacts cached yet

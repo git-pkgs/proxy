@@ -80,6 +80,9 @@ type VersionShowData struct {
 	IsOutdated        bool
 	LicenseCategory   string
 	HasCachedArtifact bool
+	// HasDeletableArtifact is true when a stored artifact was fetched from
+	// the upstream rather than pushed.
+	HasDeletableArtifact bool
 }
 
 // SearchPageData contains data for rendering the search results page.

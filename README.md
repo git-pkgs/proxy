@@ -1147,6 +1147,14 @@ Registered when `hosted.enabled` is set. Pushing and deleting require `Authoriza
 | `GET /api/hosted/{ecosystem}/{name}` | List the archives pushed for a package |
 | `DELETE /api/hosted/{ecosystem}/{name}/{version}` | Delete a pushed version |
 
+### Cache API
+
+Registered when `cache_delete` is set. It has no authentication of its own.
+
+| Endpoint | Description |
+|----------|-------------|
+| `DELETE /api/cache/{ecosystem}/{name}/{version}` | Delete a version's cached files, or only `?filename=` |
+
 ### Enrichment API
 
 The proxy provides REST endpoints for package metadata enrichment, vulnerability scanning, and outdated detection.
@@ -1620,6 +1628,12 @@ cache/artifacts/
     └── nginx/
         └── 1.24.0-1.fc39/
             └── nginx-1.24.0-1.fc39.x86_64.rpm
+```
+
+To delete one version's cached files, so the next request fetches them again, enable `cache_delete` and use the Delete buttons on the version page in the web UI, or the [cache API](docs/configuration.md#cache-delete-api):
+
+```bash
+curl -X DELETE 'http://localhost:8080/api/cache/maven/com.google.guava:guava/32.1.3-jre?filename=guava-32.1.3-jre.jar'
 ```
 
 Cache metadata is stored in SQLite (default) or PostgreSQL. To clear a local cache:

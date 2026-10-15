@@ -115,6 +115,73 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/cache/{ecosystem}/{name}/{version}": {
+            "delete": {
+                "description": "Removes the cached files of name@version, or only the one named by filename, so the next request fetches them from the upstream again. Pushed archives are not touched; delete those through /api/hosted.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cache"
+                ],
+                "summary": "Delete cached artifacts",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Ecosystem",
+                        "name": "ecosystem",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Package name as shown in the UI, e.g. com.google.guava:guava for Maven",
+                        "name": "name",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Version",
+                        "name": "version",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Delete only this file",
+                        "name": "filename",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.CacheDeleteResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/hosted/{ecosystem}/{name}": {
             "get": {
                 "produces": [
@@ -750,6 +817,20 @@ const docTemplate = `{
                     "additionalProperties": {
                         "$ref": "#/definitions/server.PackageResponse"
                     }
+                }
+            }
+        },
+        "server.CacheDeleteResponse": {
+            "type": "object",
+            "properties": {
+                "deleted": {
+                    "type": "array",
+                    "items": {
+                        "type": "string"
+                    }
+                },
+                "purl": {
+                    "type": "string"
                 }
             }
         },

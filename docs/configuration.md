@@ -1101,6 +1101,29 @@ curl -X POST http://localhost:8080/api/mirror \
   -d '{"purls":["pkg:docker/library/alpine@3.20"],"platforms":["linux/amd64"]}'
 ```
 
+## Cache Delete API
+
+Deleting cached artifacts is disabled by default. Enable it to register `DELETE /api/cache` and show Delete buttons on the version page of the web UI:
+
+```yaml
+cache_delete: true
+```
+
+Or via environment variable: `PROXY_CACHE_DELETE=true`.
+
+The endpoint has no authentication. Before enabling it, restrict `/api/cache` and `/ui` to trusted users at your ingress or reverse proxy. The UI sends its deletes to `/ui/api/cache`, so whatever protects `/ui` protects those too.
+
+Delete every cached file of a version, or only the one named by `filename`:
+
+```bash
+curl -X DELETE http://localhost:8080/api/cache/maven/com.google.guava:guava/32.1.3-jre
+curl -X DELETE 'http://localhost:8080/api/cache/maven/com.google.guava:guava/32.1.3-jre?filename=guava-32.1.3-jre.jar'
+```
+
+The name is the package name the UI shows, for example `group:artifact` for Maven. The response lists the deleted files. The next request for a deleted file fetches it from the upstream again. The stored bytes are removed after the same delay as a replaced artifact, so downloads already in progress can finish.
+
+Pushed archives are not touched: a whole-version delete skips them, and naming one answers 409. Delete those through the [hosted API](#hosted-packages).
+
 ## Mirror Command
 
 The `proxy mirror` command pre-populates the cache from various sources. It accepts the same storage and database flags as `serve`.

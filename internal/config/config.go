@@ -190,6 +190,11 @@ type Config struct {
 	// Disabled by default to prevent unauthenticated users from triggering downloads.
 	MirrorAPI bool `json:"mirror_api" yaml:"mirror_api"`
 
+	// CacheDelete enables DELETE /api/cache for removing cached artifacts, and
+	// the delete buttons on the UI's version page. It has no authentication of
+	// its own, so restrict /api/cache and /ui at the ingress when enabling it.
+	CacheDelete bool `json:"cache_delete" yaml:"cache_delete"`
+
 	// Hosted configures pushing packages to the proxy (/api/hosted).
 	Hosted HostedConfig `json:"hosted" yaml:"hosted"`
 
@@ -1212,6 +1217,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Scanning.FetchBaseURL, "PROXY_SCANNING_FETCH_BASE_URL")
 	setEnvBool(&c.CacheMetadata, "PROXY_CACHE_METADATA")
 	setEnvBool(&c.MirrorAPI, "PROXY_MIRROR_API")
+	setEnvBool(&c.CacheDelete, "PROXY_CACHE_DELETE")
 	setEnvBool(&c.Hosted.Enabled, "PROXY_HOSTED_ENABLED")
 	setEnvString(&c.Hosted.Token, "PROXY_HOSTED_TOKEN")
 	setEnvString(&c.Hosted.MaxUploadSize, "PROXY_HOSTED_MAX_UPLOAD_SIZE")

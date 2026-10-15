@@ -15,6 +15,8 @@ type Layout struct {
 	BuildInfo     BuildInfo
 	UIBaseURL     string
 	CanonicalPath string
+	// CacheDelete shows the controls for deleting cached artifacts.
+	CacheDelete bool
 }
 
 func (s *Server) layoutFor(r *http.Request) Layout {
@@ -22,5 +24,6 @@ func (s *Server) layoutFor(r *http.Request) Layout {
 		BuildInfo:     s.buildInfo,
 		UIBaseURL:     s.cfg.UIBaseURL,
 		CanonicalPath: r.URL.Path,
+		CacheDelete:   s.cfg.CacheDelete,
 	}
 }

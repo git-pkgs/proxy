@@ -14,6 +14,11 @@ base_url: "http://localhost:8080"
 # Set to "0" to disable the timeout. Default: "30s".
 # http_timeout: "30s"
 
+# Register DELETE /api/cache and show Delete buttons on the UI's version page,
+# for removing cached artifacts so they are fetched again. Has no
+# authentication: restrict /api/cache and /ui at the ingress first.
+# cache_delete: false
+
 # Largest upstream artifact to fetch (e.g. "2GB"). Larger ones are refused
 # and not cached. Default: unlimited.
 # artifact_max_size: ""
