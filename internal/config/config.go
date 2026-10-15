@@ -216,6 +216,9 @@ type Config struct {
 	// Health configures the /health endpoint behavior.
 	Health HealthConfig `json:"health" yaml:"health"`
 
+	// Git configures the Git repository cache served at /git/{name}/.
+	Git GitConfig `json:"git" yaml:"git"`
+
 	// envWarnings collects environment values LoadFromEnv ignored.
 	envWarnings []string
 }
@@ -767,6 +770,11 @@ type UpstreamConfig struct {
 	// Example: {"apache": ["dist/(?P<name>maven)/maven-3/(?P<version>[^/]+)/binaries/(?P<file>[^/]+)"]}.
 	GenericArtifacts map[string][]string `json:"generic_artifacts" yaml:"generic_artifacts"`
 
+	// Git maps names to Git servers, served read-only at /git/{name}/{repo}
+	// from a local cache of bare repositories. See GitUpstream.
+	// Example: {"github": {"url": "https://github.com"}}.
+	Git map[string]GitUpstream `json:"git" yaml:"git"`
+
 	// Auth configures authentication for upstream registries.
 	// Keys are absolute URL scopes matched by scheme, host, effective port,
 	// and path-segment prefix.
@@ -835,6 +843,9 @@ func (u *UpstreamConfig) Validate() error {
 		return err
 	}
 	if err := u.validateGenericArtifacts(); err != nil {
+		return err
+	}
+	if err := u.validateGitUpstreams(); err != nil {
 		return err
 	}
 	if err := validateNamedUpstreams("upstream.debian_repositories", u.DebianRepositories); err != nil {
@@ -1281,6 +1292,11 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Gradle.BuildCache.MaxSize, "PROXY_GRADLE_BUILD_CACHE_MAX_SIZE")
 	setEnvString(&c.Gradle.BuildCache.SweepInterval, "PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL")
 	setEnvString(&c.Health.StorageProbeInterval, "PROXY_HEALTH_STORAGE_PROBE_INTERVAL")
+	setEnvString(&c.Git.CacheDir, "PROXY_GIT_CACHE_DIR")
+	setEnvString(&c.Git.MaxSize, "PROXY_GIT_MAX_SIZE")
+	setEnvString(&c.Git.MaxRepoSize, "PROXY_GIT_MAX_REPO_SIZE")
+	setEnvString(&c.Git.RefreshWait, "PROXY_GIT_REFRESH_WAIT")
+	setEnvString(&c.Git.StaleMaxAge, "PROXY_GIT_STALE_MAX_AGE")
 }
 
 // validateAbsoluteURL returns an error if value is not a parseable URL with
@@ -1434,6 +1450,10 @@ func (c *Config) validateComponents() error {
 	}
 
 	if err := c.Mirror.Validate(); err != nil {
+		return err
+	}
+
+	if err := c.Git.Validate(); err != nil {
 		return err
 	}
 

@@ -74,6 +74,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/denylist"
 	"github.com/git-pkgs/proxy/internal/enrichment"
+	"github.com/git-pkgs/proxy/internal/gitcache"
 	"github.com/git-pkgs/proxy/internal/handler"
 	upstreamhttp "github.com/git-pkgs/proxy/internal/httpclient"
 	"github.com/git-pkgs/proxy/internal/metrics"
@@ -122,6 +123,7 @@ type Server struct {
 	metaStats   metadataStatsCache
 	sources     sourceTracker
 	scheduler   *mirror.Scheduler
+	git         *gitcache.Cache
 
 	// browseLimits overrides defaultBrowseLimits when set; tests use it.
 	browseLimits archives.StreamOptions
@@ -269,6 +271,27 @@ func (s *Server) serve(listener net.Listener) error {
 	proxy.DirectServeTTL = s.cfg.ParseDirectServeTTL()
 	proxy.DirectServeBaseURL = s.cfg.Storage.DirectServeBaseURL
 	proxy.StreamArtifacts = !s.cfg.Storage.CacheArtifacts
+
+	if len(s.cfg.Upstream.Git) > 0 {
+		upstreamDirs := make(map[string]string, len(s.cfg.Upstream.Git))
+		for name, upstream := range s.cfg.Upstream.Git {
+			upstreamDirs[name] = gitcache.UpstreamDir(name, upstream.URL)
+		}
+		gitCache, err := gitcache.New(gitcache.Options{
+			CacheDir:    s.cfg.Git.CacheDir,
+			MaxSize:     s.cfg.Git.MaxSizeBytes(),
+			MaxRepoSize: s.cfg.Git.MaxRepoSizeBytes(),
+			RefreshWait: s.cfg.Git.RefreshWaitDuration(),
+			StaleMaxAge: s.cfg.Git.StaleMaxAgeDuration(),
+			Client:      artifactClient,
+			Logger:      s.logger,
+			Upstreams:   upstreamDirs,
+		})
+		if err != nil {
+			return fmt.Errorf("configuring git cache: %w", err)
+		}
+		s.git = gitCache
+	}
 
 	// Create router with Chi
 	r := chi.NewRouter()
@@ -496,6 +519,10 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 	r.Mount("/generic", http.StripPrefix("/generic", genericHandler.Routes()))
+	if s.git != nil {
+		gitHandler := handler.NewGitHandler(proxy, s.git, s.cfg.Upstream)
+		r.Mount("/git", http.StripPrefix("/git", gitHandler.Routes()))
+	}
 }
 
 // configureScanning builds the scanner group from cfg and wires it into
@@ -681,6 +708,12 @@ func (s *Server) Shutdown(ctx context.Context) error {
 	}
 
 	s.waitForMirrorSchedules(ctx)
+
+	if s.git != nil {
+		if err := s.git.Close(); err != nil {
+			errs = append(errs, fmt.Errorf("git cache close: %w", err))
+		}
+	}
 
 	if s.storage != nil {
 		if err := s.storage.Close(); err != nil {

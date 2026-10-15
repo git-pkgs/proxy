@@ -326,6 +326,15 @@ upstream:
   #   apache:
   #     - 'dist/(?P<name>maven)/maven-3/(?P<version>[^/]+)/binaries/(?P<file>[^/]+)'
 
+  # Named Git servers (used by /git/{name}/{repo}), served read-only from
+  # cached bare repositories. repos limits which repositories may be served
+  # and is required when upstream.auth has credentials for the server.
+  # git:
+  #   github: "https://github.com"
+  #   wikimedia:
+  #     url: "https://gerrit.wikimedia.org/r"
+  #     repos: ["mediawiki/**"]
+
   # Authentication for upstream registries
   # Keys are absolute URL scopes. Scheme, host, effective port, and path
   # segment boundaries must match; the longest matching scope wins.
@@ -365,6 +374,14 @@ upstream:
     # is inferred from the private ECR hostname)
     # "https://123456789012.dkr.ecr.eu-west-1.amazonaws.com":
     #   type: ecr
+
+# Git repository cache, used when upstream.git is set
+# git:
+#   cache_dir: ./cache/git   # local disk, used by this process only
+#   max_size: ""             # evict least recently used repositories past this
+#   max_repo_size: 5GB       # refuse a repository that grows past this
+#   refresh_wait: 5s         # then serve the cached copy if the upstream is slow
+#   stale_max_age: 24h       # never serve a copy not checked for this long
 
 # Gradle HttpBuildCache configuration
 gradle:
