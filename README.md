@@ -68,6 +68,7 @@ The proxy never uploads artifact bytes to a scanner. Each scanner is notified wi
 | Arch | Arch Linux | | ✓ |
 | Chef | Chef | | ✗ |
 | Generic | Any | | ✓ |
+| Git | Any | | ✓ |
 | Helm | Kubernetes | Yes | ✓ |
 | Vagrant | Vagrant | | ✗ |
 
@@ -804,6 +805,27 @@ go.download_mirror = "http://localhost:8080/generic/golang"
 Other download hosts need their version-pinned paths declared in
 `upstream.generic_artifacts`.
 
+### Git repositories
+
+Configure named Git servers:
+
+```yaml
+upstream:
+  git:
+    github: "https://github.com"
+```
+
+Then point clones at the proxy:
+
+```bash
+git config --global url."http://localhost:8080/git/github/".insteadOf https://github.com/
+```
+
+Each repository is cached as a bare clone and refreshed whenever its branches
+or tags change upstream. See [configuration](docs/configuration.md#git-repositories)
+for setting the rewrite through environment variables, size limits, private
+repositories and outage behavior.
+
 ## Configuration
 
 The proxy can be configured via:
@@ -1125,6 +1147,7 @@ Recently cached:
 | `GET /apk/{repository}/*` | Alpine APK repository protocol |
 | `GET /arch/{repository}/*` | Arch Linux pacman repository protocol |
 | `GET /generic/{name}/*` | Generic HTTP download proxy (GitHub release assets, mise/aqua) |
+| `GET /git/{name}/{repo}/info/refs`, `POST /git/{name}/{repo}/git-upload-pack` | Git smart HTTP protocol, read-only |
 | `GET /debian/*` | Debian/APT repository protocol (main archive) |
 | `GET /debian/{repository}/*` | Debian/APT repository protocol (named archive, e.g. security) |
 | `GET /rpm/*` | RPM/Yum repository protocol |
