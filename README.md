@@ -843,7 +843,8 @@ git config --global url."http://localhost:8080/git/github/".insteadOf https://gi
 
 Each repository is cached as a bare clone and refreshed whenever its branches
 or tags change upstream. See [configuration](docs/configuration.md#git-repositories)
-for size limits, private repositories and outage behavior.
+for setting the rewrite through environment variables, size limits, private
+repositories and outage behavior.
 
 ## Configuration
 
