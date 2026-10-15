@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"net/http/httptest"
 	"strings"
 	"testing"
@@ -273,5 +274,97 @@ func TestEcosystemMetricsMapping(t *testing.T) {
 	if m.Ecosystem != "npm" || m.Packages != 1 || m.Versions != 2 || m.Artifacts != 3 ||
 		m.CacheSize != 4 || m.Downloads != 5 || m.DownloadedBytes != 6 {
 		t.Errorf("fields did not map across: %+v", m)
+	}
+}
+
+// The metadata cache is stored apart from artifacts, so the page reports it in
+// its own card rather than leaving it out of every figure.
+func TestAnalyticsPageShowsMetadataCache(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+	ts.server.cfg.CacheMetadata = true
+
+	for _, e := range []database.MetadataCacheEntry{
+		{Ecosystem: "pypi", Name: "requests", StoragePath: "_metadata/pypi/requests", Size: sql.NullInt64{Int64: 3 << 10, Valid: true}},
+		{Ecosystem: "pypi", Name: "urllib3", StoragePath: "_metadata/pypi/urllib3", Size: sql.NullInt64{Int64: 1 << 10, Valid: true}},
+	} {
+		if err := ts.db.UpsertMetadataCache(&e); err != nil {
+			t.Fatalf("UpsertMetadataCache: %v", err)
+		}
+	}
+
+	body := ts.getOK(t, "/ui/analytics")
+	for _, want := range []string{"Metadata cache", "Cached documents", "4.0 KB", "100.0%"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered page missing %q", want)
+		}
+	}
+	if strings.Contains(body, "Metadata caching is off") {
+		t.Error("the off-state note rendered with cache_metadata on")
+	}
+}
+
+func TestAnalyticsPageNotesMetadataCachingOff(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	body := ts.getOK(t, "/ui/analytics")
+	for _, want := range []string{"Metadata cache", "Metadata caching is off", "No metadata cached yet"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("rendered page missing %q", want)
+		}
+	}
+}
+
+func TestMetadataCacheView(t *testing.T) {
+	v := metadataCacheView([]database.MetadataCacheStats{
+		{Ecosystem: "npm", Entries: 3, Size: 3000},
+		{Ecosystem: "pypi", Entries: 1, Size: 1000},
+	}, true)
+
+	if !v.Enabled || v.Entries != "4" || v.Size != "3.9 KB" {
+		t.Errorf("totals = %+v, want enabled, 4 entries, 3.9 KB", v)
+	}
+	if len(v.Rows) != 2 || v.Rows[0].SharePct != "75.0" || v.Rows[1].SharePct != "25.0" {
+		t.Errorf("rows = %+v, want npm 75.0%% then pypi 25.0%%", v.Rows)
+	}
+
+	empty := metadataCacheView(nil, false)
+	if empty.Enabled || len(empty.Rows) != 0 || empty.Entries != "0" || empty.Size != "0 B" {
+		t.Errorf("empty view = %+v", empty)
+	}
+}
+
+// The page reads the metadata card from the snapshot the gauges publish, so a
+// page load issues no query of its own and the two always agree.
+func TestAnalyticsPageMetadataCardUsesSnapshot(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+	ts.server.cfg.CacheMetadata = true
+
+	seed := func(name string, size int64) {
+		t.Helper()
+		if err := ts.db.UpsertMetadataCache(&database.MetadataCacheEntry{
+			Ecosystem: "pypi", Name: name, StoragePath: "_metadata/pypi/" + name,
+			Size: sql.NullInt64{Int64: size, Valid: true},
+		}); err != nil {
+			t.Fatalf("UpsertMetadataCache: %v", err)
+		}
+	}
+
+	seed("requests", 1<<10)
+	ts.server.updateMetadataCacheStats()
+	if !strings.Contains(ts.getOK(t, "/ui/analytics"), "1.0 KB") {
+		t.Fatal("page did not show the snapshot the metrics tick read")
+	}
+
+	seed("urllib3", 2<<10)
+	if body := ts.getOK(t, "/ui/analytics"); !strings.Contains(body, "1.0 KB") || strings.Contains(body, "3.0 KB") {
+		t.Error("a page load re-queried the database instead of serving the snapshot")
+	}
+
+	ts.server.updateMetadataCacheStats()
+	if !strings.Contains(ts.getOK(t, "/ui/analytics"), "3.0 KB") {
+		t.Error("page did not pick up the refreshed snapshot")
 	}
 }

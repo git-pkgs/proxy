@@ -106,11 +106,11 @@ func (h *GradleBuildCacheHandler) handleGetOrHead(w http.ResponseWriter, r *http
 			return
 		}
 		if !exists {
-			metrics.RecordCacheMiss("gradle")
+			metrics.RecordArtifactCacheMiss("gradle")
 			http.NotFound(w, r)
 			return
 		}
-		metrics.RecordCacheHit("gradle")
+		metrics.RecordArtifactCacheHit("gradle")
 
 		sizeStart := time.Now()
 		size, err := h.proxy.Storage.Size(r.Context(), storagePath)
@@ -130,7 +130,7 @@ func (h *GradleBuildCacheHandler) handleGetOrHead(w http.ResponseWriter, r *http
 	metrics.RecordStorageOperation("read", time.Since(readStart))
 	if err != nil {
 		if errors.Is(err, storage.ErrNotFound) {
-			metrics.RecordCacheMiss("gradle")
+			metrics.RecordArtifactCacheMiss("gradle")
 			http.NotFound(w, r)
 			return
 		}
@@ -140,7 +140,7 @@ func (h *GradleBuildCacheHandler) handleGetOrHead(w http.ResponseWriter, r *http
 		return
 	}
 	defer func() { _ = reader.Close() }()
-	metrics.RecordCacheHit("gradle")
+	metrics.RecordArtifactCacheHit("gradle")
 
 	w.WriteHeader(http.StatusOK)
 	_, _ = io.Copy(w, reader)

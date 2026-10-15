@@ -215,6 +215,58 @@
     {{end}}
 </div>
 
+<!-- Metadata cache: stored apart from artifacts, so none of the figures above include it -->
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 mb-8 overflow-hidden">
+    <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800">
+        <h2 class="text-lg font-semibold">Metadata cache</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400 mt-0.5">
+            Cached registry metadata, kept apart from artifacts: the download, cache size and
+            artifact figures above do not include it.
+            {{if not .Metadata.Enabled}}Metadata caching is off; set <code class="text-xs">cache_metadata</code> to enable it.{{end}}
+        </p>
+    </div>
+    {{if .Metadata.Rows}}
+    <div class="grid grid-cols-2 gap-4 px-6 py-4 border-b border-gray-200 dark:border-gray-800">
+        <div>
+            <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Cached documents</div>
+            <div class="text-xl font-semibold mt-1 tabular-nums">{{.Metadata.Entries}}</div>
+        </div>
+        <div>
+            <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Metadata size</div>
+            <div class="text-xl font-semibold mt-1 tabular-nums">{{.Metadata.Size}}</div>
+        </div>
+    </div>
+    <div class="overflow-x-auto">
+        <table class="w-full text-sm">
+            <thead class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400 border-b border-gray-200 dark:border-gray-800">
+                <tr>
+                    <th scope="col" class="px-6 py-3 text-left font-medium">Ecosystem</th>
+                    <th scope="col" class="px-6 py-3 text-right font-medium">Size</th>
+                    <th scope="col" class="px-6 py-3 text-right font-medium">Share</th>
+                    <th scope="col" class="px-6 py-3 text-right font-medium">Documents</th>
+                </tr>
+            </thead>
+            <tbody class="divide-y divide-gray-200 dark:divide-gray-800">
+                {{range .Metadata.Rows}}
+                <tr class="hover:bg-gray-50 dark:hover:bg-gray-800/50">
+                    <th scope="row" class="px-6 py-3 text-left font-normal">{{template "ecosystem_badge" .Ecosystem}}</th>
+                    <td class="px-6 py-3 text-right tabular-nums font-medium">{{.Size}}</td>
+                    <td class="px-6 py-3 text-right tabular-nums text-gray-500 dark:text-gray-400">{{.SharePct}}%</td>
+                    <td class="px-6 py-3 text-right tabular-nums text-gray-500 dark:text-gray-400">{{.Entries}}</td>
+                </tr>
+                {{end}}
+            </tbody>
+        </table>
+    </div>
+    {{else if .Metadata.Failed}}
+    <div class="px-6 py-12 text-center text-gray-500 dark:text-gray-400">
+        The metadata cache query failed, so these figures are unavailable. Check the proxy logs.
+    </div>
+    {{else}}
+    <div class="px-6 py-12 text-center text-gray-500 dark:text-gray-400">No metadata cached yet</div>
+    {{end}}
+</div>
+
 {{if .EnrichmentStats.HasVulns}}
 {{template "security_overview" .EnrichmentStats}}
 {{end}}

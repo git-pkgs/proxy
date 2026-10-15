@@ -237,8 +237,8 @@ func TestGradleBuildCacheHandler_RecordsMetrics(t *testing.T) {
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 
-	hitsBefore := testutil.ToFloat64(metrics.CacheHits.WithLabelValues("gradle"))
-	missesBefore := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("gradle"))
+	hitsBefore := testutil.ToFloat64(metrics.CacheHits.WithLabelValues("gradle", metrics.CacheKindArtifact))
+	missesBefore := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("gradle", metrics.CacheKindArtifact))
 
 	key := "metrics-key"
 	putReq, err := http.NewRequest(http.MethodPut, srv.URL+"/"+key, strings.NewReader("payload"))
@@ -273,8 +273,8 @@ func TestGradleBuildCacheHandler_RecordsMetrics(t *testing.T) {
 	}
 	_ = missResp.Body.Close()
 
-	hitsAfter := testutil.ToFloat64(metrics.CacheHits.WithLabelValues("gradle"))
-	missesAfter := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("gradle"))
+	hitsAfter := testutil.ToFloat64(metrics.CacheHits.WithLabelValues("gradle", metrics.CacheKindArtifact))
+	missesAfter := testutil.ToFloat64(metrics.CacheMisses.WithLabelValues("gradle", metrics.CacheKindArtifact))
 
 	if diff := hitsAfter - hitsBefore; diff != 2 {
 		t.Fatalf("cache hits delta = %.0f, want 2", diff)

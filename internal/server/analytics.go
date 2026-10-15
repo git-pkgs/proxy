@@ -21,6 +21,7 @@ type AnalyticsData struct {
 	Donut           DonutView
 	EnrichmentStats EnrichmentStatsView
 	Ecosystems      []EcosystemRow
+	Metadata        MetadataCacheView
 	Runtime         RuntimeView
 	// StatsFailed records that the per-ecosystem query errored, so the page
 	// can say the figures are unavailable instead of claiming an empty cache.
@@ -64,6 +65,54 @@ type EcosystemRow struct {
 	Versions        string
 	// SharePct is this ecosystem's share of the accumulated download total.
 	SharePct string
+}
+
+// MetadataCacheView summarises the metadata cache, which is stored separately
+// from artifacts and so appears in none of the artifact figures.
+type MetadataCacheView struct {
+	// Enabled reports whether cache_metadata is on. Entries can remain from
+	// an earlier run with it on, so both are shown independently.
+	Enabled bool
+	// Failed records that the query errored, so the card can say so rather
+	// than claim the cache is empty.
+	Failed  bool
+	Entries string
+	Size    string
+	Rows    []MetadataCacheRow
+}
+
+// MetadataCacheRow is one ecosystem's share of the metadata cache.
+type MetadataCacheRow struct {
+	Ecosystem string
+	Entries   string
+	Size      string
+	SharePct  string
+}
+
+// metadataCacheView turns per-ecosystem metadata cache rows into the card's
+// totals and table.
+func metadataCacheView(stats []database.MetadataCacheStats, enabled bool) MetadataCacheView {
+	var entries, size int64
+	for _, e := range stats {
+		entries += e.Entries
+		size += e.Size
+	}
+
+	v := MetadataCacheView{
+		Enabled: enabled,
+		Entries: formatCount(entries),
+		Size:    formatSize(size),
+		Rows:    make([]MetadataCacheRow, 0, len(stats)),
+	}
+	for _, e := range stats {
+		v.Rows = append(v.Rows, MetadataCacheRow{
+			Ecosystem: e.Ecosystem,
+			Entries:   formatCount(e.Entries),
+			Size:      formatSize(e.Size),
+			SharePct:  formatPercent(e.Size, size),
+		})
+	}
+	return v
 }
 
 func formatCount(n int64) string {
@@ -164,6 +213,16 @@ func (s *Server) handleAnalytics(w http.ResponseWriter, r *http.Request) {
 	}
 	data.Totals, data.Ecosystems = analyticsView(ecosystems)
 	data.Donut = donutView(ecosystems, data.Totals.DownloadedBytes, data.Totals.Downloaded)
+
+	// The same 60-second snapshot the metadata cache gauges are published
+	// from, so a page load costs no query of its own. A failed read keeps the
+	// last good rows, which the card shows in preference to the error.
+	metadataStats, err := s.metaStats.Get(s.db)
+	if err != nil {
+		s.logger.Error("failed to get metadata cache stats", "error", err)
+	}
+	data.Metadata = metadataCacheView(metadataStats, s.cfg != nil && s.cfg.CacheMetadata)
+	data.Metadata.Failed = err != nil
 
 	// Process-lifetime counters come from the Prometheus registry rather than
 	// the database; a failure here must not take the page down with it.

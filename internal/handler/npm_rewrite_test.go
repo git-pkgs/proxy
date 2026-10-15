@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/proxy/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 // TestNPMRewriteMetadataKeepsUpstreamBytes checks that only tarball URLs
@@ -268,5 +270,45 @@ func TestNPMStoredRewriteSkippedWhenStale(t *testing.T) {
 	_ = db.UpsertMetadataCache(entry)
 	if _, ok := proxy.storedRewrite("npm", "demo", "http://proxy", "demo"); ok {
 		t.Error("cooldown on: expected no stored rewrite")
+	}
+}
+
+// TestNPMStoredRewriteRecordsMetadataHit checks the digest fast path counts as
+// a metadata cache hit with the bytes it serves, never as an artifact hit.
+func TestNPMStoredRewriteRecordsMetadataHit(t *testing.T) {
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	proxy.SetMetadataRewriteCacheSize(1 << 20)
+
+	body := []byte(`{"name":"demo"}`)
+	proxy.cacheMetadataBlob(t.Context(), "npm", "hit-demo", metadataStoragePath("npm", "hit-demo"), &upstreamMetadata{body: body})
+	key := rewriteCacheKey("npm", "http://proxy", "hit-demo", body)
+	if _, _, err := proxy.rewrites.rewrite(t.Context(), key, body, func(b []byte) ([]byte, error) { return b, nil }); err != nil {
+		t.Fatal(err)
+	}
+
+	metadataHits := func() float64 {
+		return testutil.ToFloat64(metrics.CacheHits.WithLabelValues("npm", metrics.CacheKindMetadata))
+	}
+	artifactHits := func() float64 {
+		return testutil.ToFloat64(metrics.CacheHits.WithLabelValues("npm", metrics.CacheKindArtifact))
+	}
+	served := func() float64 { return testutil.ToFloat64(metrics.MetadataServedBytes.WithLabelValues("npm")) }
+	metadataBefore, artifactBefore, servedBefore := metadataHits(), artifactHits(), served()
+
+	m, ok := proxy.storedRewrite("npm", "hit-demo", "http://proxy", "hit-demo")
+	if !ok {
+		t.Fatal("expected a stored rewrite")
+	}
+
+	if diff := metadataHits() - metadataBefore; diff != 1 {
+		t.Errorf("metadata hits delta = %.0f, want 1", diff)
+	}
+	if diff := artifactHits() - artifactBefore; diff != 0 {
+		t.Errorf("artifact hits delta = %.0f, want 0", diff)
+	}
+	if diff := served() - servedBefore; diff != float64(len(m.body)) {
+		t.Errorf("metadata served bytes delta = %.0f, want %d", diff, len(m.body))
 	}
 }

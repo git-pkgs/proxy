@@ -40,9 +40,9 @@ func TestRuntimeViewShapesRegistry(t *testing.T) {
 	scanErrors := prometheus.NewCounterVec(
 		prometheus.CounterOpts{Name: "proxy_scan_errors_total", Help: "t"}, []string{"ecosystem", "scanner", "error_type"})
 	hits := prometheus.NewCounterVec(
-		prometheus.CounterOpts{Name: "proxy_cache_hits_total", Help: "t"}, []string{"ecosystem"})
+		prometheus.CounterOpts{Name: "proxy_cache_hits_total", Help: "t"}, []string{"ecosystem", "kind"})
 	misses := prometheus.NewCounterVec(
-		prometheus.CounterOpts{Name: "proxy_cache_misses_total", Help: "t"}, []string{"ecosystem"})
+		prometheus.CounterOpts{Name: "proxy_cache_misses_total", Help: "t"}, []string{"ecosystem", "kind"})
 	breaker := prometheus.NewGaugeVec(
 		prometheus.GaugeOpts{Name: "proxy_circuit_breaker_state", Help: "t"}, []string{"registry"})
 	storage := prometheus.NewHistogramVec(
@@ -53,8 +53,8 @@ func TestRuntimeViewShapesRegistry(t *testing.T) {
 	requests.WithLabelValues("npm", "304").Add(5)
 	requests.WithLabelValues("npm", "500").Add(5)
 	scanErrors.WithLabelValues("npm", "clamav", "timeout").Add(3)
-	hits.WithLabelValues("npm").Add(80)
-	misses.WithLabelValues("npm").Add(20)
+	hits.WithLabelValues("npm", metrics.CacheKindArtifact).Add(80)
+	misses.WithLabelValues("npm", metrics.CacheKindArtifact).Add(20)
 	breaker.WithLabelValues("registry.npmjs.org").Set(0)
 	breaker.WithLabelValues("static.crates.io").Set(2)
 	storage.WithLabelValues("get").Observe(0.002)
@@ -71,8 +71,8 @@ func TestRuntimeViewShapesRegistry(t *testing.T) {
 	if v.Requests != "100" {
 		t.Errorf("Requests = %q, want %q", v.Requests, "100")
 	}
-	if v.CacheHitRatio != "80.0" || !v.HasCacheTraffic {
-		t.Errorf("CacheHitRatio = %q (traffic=%v), want 80.0", v.CacheHitRatio, v.HasCacheTraffic)
+	if a := v.ArtifactCache; a.HitRatio != "80.0" || !a.HasTraffic {
+		t.Errorf("ArtifactCache = %+v, want an 80.0%% hit rate", a)
 	}
 
 	// Status codes collapse to classes; 5xx is flagged as a failure row.
@@ -178,6 +178,48 @@ func TestRuntimeViewDropsZeroCounters(t *testing.T) {
 	}
 }
 
+// Artifact and metadata lookups are separate caches, so the view reports each
+// on its own rather than pooling them into one hit rate.
+func TestRuntimeViewSplitsCacheKinds(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	hits := prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "proxy_cache_hits_total", Help: "t"}, []string{"ecosystem", "kind"})
+	misses := prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "proxy_cache_misses_total", Help: "t"}, []string{"ecosystem", "kind"})
+	served := prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "proxy_metadata_cache_served_bytes_total", Help: "t"}, []string{"ecosystem"})
+	reg.MustRegister(hits, misses, served)
+
+	hits.WithLabelValues("npm", metrics.CacheKindArtifact).Add(80)
+	misses.WithLabelValues("npm", metrics.CacheKindArtifact).Add(20)
+	hits.WithLabelValues("pypi", metrics.CacheKindMetadata).Add(20)
+	hits.WithLabelValues("npm", metrics.CacheKindMetadata).Add(10)
+	misses.WithLabelValues("pypi", metrics.CacheKindMetadata).Add(10)
+	served.WithLabelValues("pypi").Add(2048)
+
+	snap, err := metrics.GatherFrom(reg)
+	if err != nil {
+		t.Fatalf("GatherFrom: %v", err)
+	}
+	v := runtimeView(snap, false)
+
+	want := map[string]struct {
+		got  CacheLookups
+		want CacheLookups
+	}{
+		"artifact": {v.ArtifactCache, CacheLookups{Hits: "80", Misses: "20", HitRatio: "80.0", HasTraffic: true}},
+		"metadata": {v.MetadataCache, CacheLookups{Hits: "30", Misses: "10", HitRatio: "75.0", HasTraffic: true}},
+	}
+	for kind, c := range want {
+		if c.got != c.want {
+			t.Errorf("%s lookups = %+v, want %+v", kind, c.got, c.want)
+		}
+	}
+	if v.MetadataServed != "2.0 KB" {
+		t.Errorf("MetadataServed = %q, want %q", v.MetadataServed, "2.0 KB")
+	}
+}
+
 // An empty registry must still render, reporting nothing rather than dividing
 // by zero or showing a hit rate of NaN.
 func TestRuntimeViewEmptyRegistry(t *testing.T) {
@@ -190,11 +232,13 @@ func TestRuntimeViewEmptyRegistry(t *testing.T) {
 	if !v.Available {
 		t.Error("an empty registry is still a valid snapshot")
 	}
-	if v.HasCacheTraffic {
-		t.Error("no traffic recorded, so HasCacheTraffic must be false")
-	}
-	if v.CacheHitRatio != "" {
-		t.Errorf("CacheHitRatio = %q, want empty when nothing was recorded", v.CacheHitRatio)
+	for name, c := range map[string]CacheLookups{"artifact": v.ArtifactCache, "metadata": v.MetadataCache} {
+		if c.HasTraffic {
+			t.Errorf("%s: no traffic recorded, so HasTraffic must be false", name)
+		}
+		if c.HitRatio != "" {
+			t.Errorf("%s: HitRatio = %q, want empty when nothing was recorded", name, c.HitRatio)
+		}
 	}
 	if v.Requests != "0" {
 		t.Errorf("Requests = %q, want %q", v.Requests, "0")

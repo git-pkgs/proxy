@@ -1,6 +1,7 @@
 package server
 
 import (
+	"database/sql"
 	"path/filepath"
 	"testing"
 	"time"
@@ -195,5 +196,51 @@ func TestEcosystemStatsCacheSnapshotAtTracksSuccessOnly(t *testing.T) {
 	}
 	if got := c.SnapshotAt(); !got.Equal(at) {
 		t.Errorf("SnapshotAt moved on a failed read: %v, want %v", got, at)
+	}
+}
+
+// The metadata cache figures go through the same memo as the artifact ones.
+// Rows added inside the TTL stay out of the snapshot until a Refresh, which is
+// what the metrics tick calls.
+func TestMetadataStatsCacheServesSnapshot(t *testing.T) {
+	db := cacheTestDB(t)
+	c := metadataStatsCache{ttl: time.Hour}
+
+	seed := func(name string, size int64) {
+		t.Helper()
+		if err := db.UpsertMetadataCache(&database.MetadataCacheEntry{
+			Ecosystem:   "npm",
+			Name:        name,
+			StoragePath: "_metadata/npm/" + name,
+			Size:        sql.NullInt64{Int64: size, Valid: true},
+		}); err != nil {
+			t.Fatalf("UpsertMetadataCache: %v", err)
+		}
+	}
+	entries := func(stats []database.MetadataCacheStats) int64 {
+		var n int64
+		for _, s := range stats {
+			n += s.Entries
+		}
+		return n
+	}
+
+	seed("lodash", 100)
+	stats, err := c.Get(db)
+	if err != nil || entries(stats) != 1 {
+		t.Fatalf("first Get = %+v, %v; want 1 entry", stats, err)
+	}
+
+	seed("react", 50)
+	if stats, _ := c.Get(db); entries(stats) != 1 {
+		t.Errorf("Get inside the TTL = %+v; want the 1-entry snapshot", stats)
+	}
+
+	stats, err = c.Refresh(db)
+	if err != nil || entries(stats) != 2 {
+		t.Fatalf("Refresh = %+v, %v; want 2 entries", stats, err)
+	}
+	if stats, _ := c.Get(db); entries(stats) != 2 {
+		t.Errorf("Get after Refresh = %+v; want the refreshed snapshot", stats)
 	}
 }

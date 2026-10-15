@@ -25,8 +25,8 @@
                 <div class="text-xl font-semibold mt-1 tabular-nums">{{.RequestMean}}</div>
             </div>
             <div>
-                <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Cache hit rate</div>
-                <div class="text-xl font-semibold mt-1 tabular-nums">{{if .HasCacheTraffic}}{{.CacheHitRatio}}%{{else}}—{{end}}</div>
+                <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Artifact hit rate</div>
+                <div class="text-xl font-semibold mt-1 tabular-nums">{{if .ArtifactCache.HasTraffic}}{{.ArtifactCache.HitRatio}}%{{else}}—{{end}}</div>
             </div>
             <div>
                 <div class="text-xs uppercase tracking-wide text-gray-500 dark:text-gray-400">Upstream fetches</div>
@@ -41,16 +41,14 @@
         <div class="grid md:grid-cols-2 xl:grid-cols-3 gap-8">
             {{template "runtime_counts" dict "Title" "Responses by status" "Rows" .StatusClasses "Empty" "No requests yet"}}
 
+            {{template "runtime_cache" dict "Title" "Artifact cache lookups" "Lookups" .ArtifactCache}}
+
             <div>
-                <h3 class="text-sm font-semibold mb-3">Cache lookups</h3>
-                <dl class="space-y-2 text-sm">
+                {{template "runtime_cache" dict "Title" "Metadata cache lookups" "Lookups" .MetadataCache}}
+                <dl class="space-y-2 text-sm mt-2">
                     <div class="flex items-center justify-between gap-4">
-                        <dt class="text-gray-500 dark:text-gray-400">hits</dt>
-                        <dd class="tabular-nums">{{.CacheHits}}</dd>
-                    </div>
-                    <div class="flex items-center justify-between gap-4">
-                        <dt class="text-gray-500 dark:text-gray-400">misses</dt>
-                        <dd class="tabular-nums">{{.CacheMisses}}</dd>
+                        <dt class="text-gray-500 dark:text-gray-400">served from cache</dt>
+                        <dd class="tabular-nums">{{.MetadataServed}}</dd>
                     </div>
                 </dl>
             </div>
@@ -265,5 +263,25 @@
     {{else}}
     <p class="text-sm text-gray-500 dark:text-gray-400">{{.Empty}}</p>
     {{end}}
+</div>
+{{end}}
+
+{{define "runtime_cache"}}
+<div>
+    <h3 class="text-sm font-semibold mb-3">{{.Title}}</h3>
+    <dl class="space-y-2 text-sm">
+        <div class="flex items-center justify-between gap-4">
+            <dt class="text-gray-500 dark:text-gray-400">hits</dt>
+            <dd class="tabular-nums">{{.Lookups.Hits}}</dd>
+        </div>
+        <div class="flex items-center justify-between gap-4">
+            <dt class="text-gray-500 dark:text-gray-400">misses</dt>
+            <dd class="tabular-nums">{{.Lookups.Misses}}</dd>
+        </div>
+        <div class="flex items-center justify-between gap-4">
+            <dt class="text-gray-500 dark:text-gray-400">hit rate</dt>
+            <dd class="tabular-nums">{{if .Lookups.HasTraffic}}{{.Lookups.HitRatio}}%{{else}}—{{end}}</dd>
+        </div>
+    </dl>
 </div>
 {{end}}

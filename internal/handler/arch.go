@@ -198,7 +198,7 @@ func (h *ArchHandler) handleDatabase(w http.ResponseWriter, r *http.Request, rep
 	}
 	d := h.database(repository, upstreamURL, path)
 	if _, hit := p.cachedMetadataState(r.Context(), archEcosystem, d.dbKey, nil); hit != nil {
-		metrics.RecordCacheHit(archEcosystem)
+		metrics.RecordMetadataCacheHit(archEcosystem, len(hit.body))
 		h.writeMetadata(w, r, d.dbKey, *hit)
 		return
 	}
@@ -217,7 +217,7 @@ func (h *ArchHandler) handleDatabaseSignature(w http.ResponseWriter, r *http.Req
 	}
 	d := h.database(repository, upstreamURL, strings.TrimSuffix(path, archSignatureSuffix))
 	if res, ok := h.cachedSignature(r.Context(), d); ok {
-		metrics.RecordCacheHit(archEcosystem)
+		metrics.RecordMetadataCacheHit(archEcosystem, len(res.body))
 		h.writeMetadata(w, r, d.sigKey, res)
 		return
 	}

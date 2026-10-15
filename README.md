@@ -1351,10 +1351,13 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 |--------|------|--------|-------------|
 | `proxy_requests_total` | counter | `ecosystem`, `status` | Proxy responses by package ecosystem and HTTP status |
 | `proxy_request_duration_seconds` | histogram | `ecosystem`, `status` | Proxy request duration |
-| `proxy_cache_hits_total` | counter | `ecosystem` | Cache hits |
-| `proxy_cache_misses_total` | counter | `ecosystem` | Cache misses |
+| `proxy_cache_hits_total` | counter | `ecosystem`, `kind` | Cache hits. `kind` is `artifact` or `metadata`. |
+| `proxy_cache_misses_total` | counter | `ecosystem`, `kind` | Cache misses. `kind` is `artifact` or `metadata`; metadata misses are counted only while `cache_metadata` is on. |
 | `proxy_cache_size_bytes` | gauge | | Total size of cached artifacts |
 | `proxy_cached_artifacts_total` | gauge | | Number of cached artifacts |
+| `proxy_metadata_cache_served_bytes_total` | counter | `ecosystem` | Metadata bytes served from the metadata cache. |
+| `proxy_metadata_cache_size_bytes` | gauge | `ecosystem` | Size of cached metadata documents per ecosystem. |
+| `proxy_metadata_cache_entries` | gauge | `ecosystem` | Number of cached metadata documents per ecosystem. |
 | `proxy_artifacts_evicted_total` | counter | `reason`, `ecosystem` | Artifacts evicted by the size limit (`lru`) or by age (`retention`) |
 | `proxy_upstream_fetch_duration_seconds` | histogram | `ecosystem` | Time spent fetching from upstream |
 | `proxy_upstream_errors_total` | counter | `ecosystem`, `error_type` | Upstream fetch failures |
@@ -1414,11 +1417,17 @@ For history, trends and alerting, scrape `/metrics` with Prometheus. That is the
 
 The same figures are available as JSON from `GET /stats`, which reports `downloaded_bytes`, `downloads` and an `ecosystems` array carrying the per-ecosystem breakdown, served from the same 60-second snapshot the page and the gauges read. When the aggregation fails with no snapshot to fall back on, the response carries `stats_unavailable: true` rather than passing zeros off as a count -- the endpoint keeps answering with the artifact count and cache size either way.
 
+#### Artifact and metadata caches
+
+The proxy keeps two caches. Artifacts (tarballs, wheels, crates and so on) live in storage and are what `proxy_cache_size_bytes`, `proxy_ecosystem_downloaded_bytes` and the other artifact figures describe. Registry metadata is cached separately when `cache_metadata` is on. It is stored persistently in the `metadata_cache` table rather than held in memory.
+
+The `kind` label on `proxy_cache_hits_total` and `proxy_cache_misses_total` keeps the two apart, so an artifact hit rate is `sum(rate(proxy_cache_hits_total{kind="artifact"}[5m]))` over the same expression with misses added. Metadata has its own size and entry gauges plus `proxy_metadata_cache_served_bytes_total`. That one is a process counter rather than a database total, because metadata hits are not recorded per row. On `/ui/analytics` metadata appears in its own card and in the Runtime card's metadata lookups, never mixed into the artifact figures. The card and the two gauges read one 60-second snapshot, like the artifact figures. The bundled Grafana dashboard's hit ratio covers artifacts only, while its hits and misses panel shows each kind as its own series.
+
 #### Three ecosystem label sets
 
 `ecosystem` means three slightly different things across `/metrics`, and queries that join across them need to know which.
 
-**From the package record, normalized.** The six `proxy_ecosystem_*` gauges, `proxy_cache_hits_total`, `proxy_cache_misses_total`, `proxy_artifacts_evicted_total`, `proxy_integrity_failures_total` and the scan metrics. Aliases collapse here: `gem` reads as `rubygems`, `composer` as `packagist`, `go` as `golang`.
+**From the package record, normalized.** The six `proxy_ecosystem_*` gauges, `proxy_cache_hits_total`, `proxy_cache_misses_total`, the three `proxy_metadata_cache_*` metrics, `proxy_artifacts_evicted_total`, `proxy_integrity_failures_total` and the scan metrics. Aliases collapse here: `gem` reads as `rubygems`, `composer` as `packagist`, `go` as `golang`.
 
 **From the request path.** `proxy_requests_total`, `proxy_request_duration_seconds` and `proxy_response_bytes_total`. The names mostly coincide with the normalized ones -- these also report `rubygems`, `packagist` and `golang` -- but the Debian route reports `debian` where the package record says `deb`, and any path that is not a package endpoint reports `other`, which corresponds to no ecosystem at all.
 

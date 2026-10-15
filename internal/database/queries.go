@@ -1123,6 +1123,62 @@ func (db *DB) CountCachedPackages(ecosystem string) (int64, error) {
 
 // Metadata cache queries
 
+// MetadataCacheStats is one ecosystem's share of the metadata cache.
+type MetadataCacheStats struct {
+	Ecosystem string
+	Entries   int64
+	Size      int64
+}
+
+// GetMetadataCacheStats returns the number and total size of cached metadata
+// documents per ecosystem, largest first. Ecosystem names are normalized so
+// aliases such as "gem" and "rubygems" share one row. Rows written before
+// sizes were recorded count as entries with no size.
+func (db *DB) GetMetadataCacheStats() ([]MetadataCacheStats, error) {
+	hasTable, err := db.HasTable("metadata_cache")
+	if err != nil || !hasTable {
+		return nil, err
+	}
+
+	rows, err := db.Query(`SELECT ecosystem, COUNT(*), COALESCE(SUM(size), 0) FROM metadata_cache GROUP BY ecosystem`)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = rows.Close() }()
+
+	byEcosystem := make(map[string]*MetadataCacheStats)
+	for rows.Next() {
+		var ecosystem string
+		var entries, size int64
+		if err := rows.Scan(&ecosystem, &entries, &size); err != nil {
+			return nil, err
+		}
+		key := purl.NormalizeEcosystem(ecosystem)
+		row, ok := byEcosystem[key]
+		if !ok {
+			row = &MetadataCacheStats{Ecosystem: key}
+			byEcosystem[key] = row
+		}
+		row.Entries += entries
+		row.Size += size
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	stats := make([]MetadataCacheStats, 0, len(byEcosystem))
+	for _, row := range byEcosystem {
+		stats = append(stats, *row)
+	}
+	sort.Slice(stats, func(i, j int) bool {
+		if stats[i].Size != stats[j].Size {
+			return stats[i].Size > stats[j].Size
+		}
+		return stats[i].Ecosystem < stats[j].Ecosystem
+	})
+	return stats, nil
+}
+
 func (db *DB) GetMetadataCache(ecosystem, name string) (*MetadataCacheEntry, error) {
 	var entry MetadataCacheEntry
 	query := db.Rebind(`

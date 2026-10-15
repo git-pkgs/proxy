@@ -365,13 +365,13 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(increase(proxy_cache_hits_total{job=~\"$job\", ecosystem=~\"$ecosystem\"}[$__range]))\n/\n(\n  sum(increase(proxy_cache_hits_total{job=~\"$job\", ecosystem=~\"$ecosystem\"}[$__range]))\n  +\n  sum(increase(proxy_cache_misses_total{job=~\"$job\", ecosystem=~\"$ecosystem\"}[$__range]))\n)",
+          "expr": "sum(increase(proxy_cache_hits_total{job=~\"$job\", ecosystem=~\"$ecosystem\", kind=\"artifact\"}[$__range]))\n/\n(\n  sum(increase(proxy_cache_hits_total{job=~\"$job\", ecosystem=~\"$ecosystem\", kind=\"artifact\"}[$__range]))\n  +\n  sum(increase(proxy_cache_misses_total{job=~\"$job\", ecosystem=~\"$ecosystem\", kind=\"artifact\"}[$__range]))\n)",
           "range": true,
           "instant": false,
           "refId": "A"
         }
       ],
-      "title": "Cache hit ratio",
+      "title": "Artifact cache hit ratio",
       "type": "stat"
     },
     {
@@ -981,11 +981,11 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(proxy_cache_hits_total{job=~\"$job\", ecosystem=~\"$ecosystem\"}[$__rate_interval]))",
+          "expr": "sum by (kind) (rate(proxy_cache_hits_total{job=~\"$job\", ecosystem=~\"$ecosystem\"}[$__rate_interval]))",
           "range": true,
           "instant": false,
           "refId": "A",
-          "legendFormat": "hits"
+          "legendFormat": "{{kind}} hits"
         },
         {
           "datasource": {
@@ -993,11 +993,11 @@
             "uid": "${datasource}"
           },
           "editorMode": "code",
-          "expr": "sum(rate(proxy_cache_misses_total{job=~\"$job\", ecosystem=~\"$ecosystem\"}[$__rate_interval]))",
+          "expr": "sum by (kind) (rate(proxy_cache_misses_total{job=~\"$job\", ecosystem=~\"$ecosystem\"}[$__rate_interval]))",
           "range": true,
           "instant": false,
           "refId": "B",
-          "legendFormat": "misses"
+          "legendFormat": "{{kind}} misses"
         }
       ],
       "title": "Cache hits and misses",

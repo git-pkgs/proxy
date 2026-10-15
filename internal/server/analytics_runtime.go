@@ -15,14 +15,15 @@ import (
 type RuntimeView struct {
 	Available bool
 
-	Requests        string
-	ActiveRequests  string
-	RequestMean     string
-	StatusClasses   []LabelledCount
-	CacheHits       string
-	CacheMisses     string
-	CacheHitRatio   string
-	HasCacheTraffic bool
+	Requests       string
+	ActiveRequests string
+	RequestMean    string
+	StatusClasses  []LabelledCount
+	// Artifact and metadata lookups are counted apart: they are separate
+	// caches. Only artifacts feed the database figures above.
+	ArtifactCache  CacheLookups
+	MetadataCache  CacheLookups
+	MetadataServed string
 
 	UpstreamFetches   string
 	UpstreamFetchMean string
@@ -56,6 +57,28 @@ type RuntimeView struct {
 	// HasFailures is set when any failure counter has fired, which is when the
 	// note about turning failure details on is worth showing.
 	HasFailures bool
+}
+
+// CacheLookups is one cache's hits and misses since the process started.
+type CacheLookups struct {
+	Hits       string
+	Misses     string
+	HitRatio   string
+	HasTraffic bool
+}
+
+// cacheLookups reads one kind's share of the hit and miss counters.
+func cacheLookups(hits, misses map[string]float64, kind string) CacheLookups {
+	h, m := hits[kind], misses[kind]
+	c := CacheLookups{
+		Hits:       formatCount(int64(h)),
+		Misses:     formatCount(int64(m)),
+		HasTraffic: h+m > 0,
+	}
+	if c.HasTraffic {
+		c.HitRatio = strconv.FormatFloat(h/(h+m)*100, 'f', 1, 64) //nolint:mnd // percent
+	}
+	return c
 }
 
 // ClientRow is one client tool's share of requests and bytes.
@@ -121,14 +144,11 @@ func runtimeView(snap *metrics.Snapshot, failureDetails bool) RuntimeView {
 	v.RequestMean = formatDuration(snap.Mean("proxy_request_duration_seconds"))
 	v.StatusClasses = statusClasses(snap)
 
-	hits := snap.Sum("proxy_cache_hits_total")
-	misses := snap.Sum("proxy_cache_misses_total")
-	v.CacheHits = formatCount(int64(hits))
-	v.CacheMisses = formatCount(int64(misses))
-	v.HasCacheTraffic = hits+misses > 0
-	if v.HasCacheTraffic {
-		v.CacheHitRatio = strconv.FormatFloat(hits/(hits+misses)*100, 'f', 1, 64) //nolint:mnd // percent
-	}
+	hits := snap.SumBy("proxy_cache_hits_total", "kind")
+	misses := snap.SumBy("proxy_cache_misses_total", "kind")
+	v.ArtifactCache = cacheLookups(hits, misses, metrics.CacheKindArtifact)
+	v.MetadataCache = cacheLookups(hits, misses, metrics.CacheKindMetadata)
+	v.MetadataServed = formatSize(int64(snap.Sum("proxy_metadata_cache_served_bytes_total")))
 
 	v.UpstreamFetches = formatCount(int64(snap.Count("proxy_upstream_fetch_duration_seconds")))
 	v.UpstreamFetchMean = formatDuration(snap.Mean("proxy_upstream_fetch_duration_seconds"))

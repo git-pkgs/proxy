@@ -303,7 +303,7 @@ func (p *Proxy) GetOrFetchArtifact(ctx context.Context, ecosystem, name, version
 	} else if cached != nil {
 		return cached, nil
 	}
-	metrics.RecordCacheMiss(ecosystem)
+	metrics.RecordArtifactCacheMiss(ecosystem)
 
 	key := artifactCoalesceKey(versionPURL, filename, "", "", "")
 	recheck := func() (artifacts.Artifact, string, bool) {
@@ -474,7 +474,7 @@ func rewriteSignedURLHost(signed, baseURL string) string {
 
 func (p *Proxy) recordCacheHit(ecosystem, versionPURL, filename string) {
 	_ = p.DB.RecordArtifactHit(versionPURL, filename)
-	metrics.RecordCacheHit(ecosystem)
+	metrics.RecordArtifactCacheHit(ecosystem)
 }
 
 func (p *Proxy) rejectUnusableCacheRecord(artifact *database.CachedArtifact, versionPURL, filename string, cause error) {
@@ -1266,7 +1266,7 @@ func (p *Proxy) lookupMetadata(ctx context.Context, ecosystem, cacheKey, upstrea
 
 	// Serve from cache if within TTL (skip upstream entirely)
 	if _, hit := p.cachedMetadataState(ctx, ecosystem, cacheKey, validate); hit != nil {
-		metrics.RecordCacheHit(ecosystem)
+		metrics.RecordMetadataCacheHit(ecosystem, len(hit.body))
 		return *hit
 	}
 	p.recordMetadataCacheMiss(ecosystem)
@@ -1477,7 +1477,7 @@ func (p *Proxy) readCachedMetadata(ctx context.Context, entry *database.Metadata
 
 func (p *Proxy) recordMetadataCacheMiss(ecosystem string) {
 	if p.CacheMetadata {
-		metrics.RecordCacheMiss(ecosystem)
+		metrics.RecordMetadataCacheMiss(ecosystem)
 	}
 }
 
@@ -1843,7 +1843,7 @@ func (p *Proxy) getOrFetchArtifactFromURLWithCachePURLs(ctx context.Context, eco
 	} else if cached != nil {
 		return cached, nil
 	}
-	metrics.RecordCacheMiss(ecosystem)
+	metrics.RecordArtifactCacheMiss(ecosystem)
 	return p.coalescedFetchFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, upstreamHash, declared)
 }
 

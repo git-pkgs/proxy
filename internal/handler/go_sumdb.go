@@ -348,7 +348,7 @@ func (h *GoHandler) serveCachedSumDBTile(w http.ResponseWriter, r *http.Request,
 	if check != nil && check(body) != nil {
 		return false, true
 	}
-	metrics.RecordCacheHit(goEcosystem)
+	metrics.RecordMetadataCacheHit(goEcosystem, len(body))
 
 	if entry.ETag.Valid {
 		w.Header().Set(headerETag, entry.ETag.String)

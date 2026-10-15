@@ -125,7 +125,7 @@ func TestSnapshotMissingMetric(t *testing.T) {
 // come back. This is the check that a newly added metric is reachable by the UI.
 func TestGatherSeesRegisteredMetrics(t *testing.T) {
 	isolateRecentFailures(t)
-	RecordCacheHit("npm")
+	RecordArtifactCacheHit("npm")
 	RecordScanError("npm", "clamav", "timeout", FailureDetail{})
 
 	snap, err := Gather()

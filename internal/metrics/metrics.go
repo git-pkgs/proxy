@@ -35,15 +35,23 @@ var (
 	CacheHits = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "proxy_cache_hits_total",
-			Help: "Total number of cache hits by ecosystem",
+			Help: "Total number of cache hits by ecosystem and kind (artifact or metadata)",
 		},
-		[]string{"ecosystem"},
+		[]string{"ecosystem", "kind"},
 	)
 
 	CacheMisses = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "proxy_cache_misses_total",
-			Help: "Total number of cache misses by ecosystem",
+			Help: "Total number of cache misses by ecosystem and kind (artifact or metadata)",
+		},
+		[]string{"ecosystem", "kind"},
+	)
+
+	MetadataServedBytes = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_metadata_cache_served_bytes_total",
+			Help: "Total metadata bytes served from the metadata cache, by ecosystem",
 		},
 		[]string{"ecosystem"},
 	)
@@ -198,6 +206,24 @@ var (
 		[]string{"ecosystem"},
 	)
 
+	// Metadata cache gauges, derived from the metadata_cache table on the
+	// same tick as the per-ecosystem gauges above.
+	MetadataCacheSize = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "proxy_metadata_cache_size_bytes",
+			Help: "Size of cached metadata documents per ecosystem in bytes",
+		},
+		[]string{"ecosystem"},
+	)
+
+	MetadataCacheEntries = prometheus.NewGaugeVec(
+		prometheus.GaugeOpts{
+			Name: "proxy_metadata_cache_entries",
+			Help: "Number of cached metadata documents per ecosystem",
+		},
+		[]string{"ecosystem"},
+	)
+
 	ResponseBytes = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "proxy_response_bytes_total",
@@ -256,6 +282,7 @@ func init() {
 		RequestDuration,
 		CacheHits,
 		CacheMisses,
+		MetadataServedBytes,
 		CacheSize,
 		CachedArtifacts,
 		ArtifactsEvicted,
@@ -274,6 +301,8 @@ func init() {
 		EcosystemCachedArtifacts,
 		EcosystemPackages,
 		EcosystemVersions,
+		MetadataCacheSize,
+		MetadataCacheEntries,
 		ResponseBytes,
 		ClientRequests,
 		ClientResponseBytes,
@@ -313,9 +342,27 @@ func RecordResponse(ecosystem, client string, bytes int64) {
 	ClientResponseBytes.WithLabelValues(client).Add(float64(bytes))
 }
 
-// RecordCacheHit increments cache hit counter.
-func RecordCacheHit(ecosystem string) {
-	CacheHits.WithLabelValues(purl.NormalizeEcosystem(ecosystem)).Inc()
+// Values of the kind label on proxy_cache_hits_total and
+// proxy_cache_misses_total. Artifacts and metadata are separate caches with
+// very different costs, so a hit on one says nothing about the other.
+const (
+	CacheKindArtifact = "artifact"
+	CacheKindMetadata = "metadata"
+)
+
+// RecordArtifactCacheHit counts an artifact served from storage.
+func RecordArtifactCacheHit(ecosystem string) {
+	CacheHits.WithLabelValues(purl.NormalizeEcosystem(ecosystem), CacheKindArtifact).Inc()
+}
+
+// RecordMetadataCacheHit counts a metadata document served from the metadata
+// cache, along with the bytes it served.
+func RecordMetadataCacheHit(ecosystem string, bytes int) {
+	ecosystem = purl.NormalizeEcosystem(ecosystem)
+	CacheHits.WithLabelValues(ecosystem, CacheKindMetadata).Inc()
+	if bytes > 0 {
+		MetadataServedBytes.WithLabelValues(ecosystem).Add(float64(bytes))
+	}
 }
 
 // RecordArtifactEvicted counts one evicted artifact. ecosystem is the
@@ -328,9 +375,14 @@ func RecordArtifactEvicted(reason, ecosystem string) {
 	ArtifactsEvicted.WithLabelValues(reason, purl.NormalizeEcosystem(ecosystem)).Inc()
 }
 
-// RecordCacheMiss increments cache miss counter.
-func RecordCacheMiss(ecosystem string) {
-	CacheMisses.WithLabelValues(purl.NormalizeEcosystem(ecosystem)).Inc()
+// RecordArtifactCacheMiss counts an artifact that had to be fetched upstream.
+func RecordArtifactCacheMiss(ecosystem string) {
+	CacheMisses.WithLabelValues(purl.NormalizeEcosystem(ecosystem), CacheKindArtifact).Inc()
+}
+
+// RecordMetadataCacheMiss counts a metadata lookup the cache could not serve.
+func RecordMetadataCacheMiss(ecosystem string) {
+	CacheMisses.WithLabelValues(purl.NormalizeEcosystem(ecosystem), CacheKindMetadata).Inc()
 }
 
 // RecordUpstreamFetch tracks upstream fetch duration.
@@ -414,6 +466,8 @@ type EcosystemStats struct {
 var (
 	publishedMu         sync.Mutex
 	publishedEcosystems = map[string]bool{}
+	// publishedMetadataEcosystems does the same for the metadata cache gauges.
+	publishedMetadataEcosystems = map[string]bool{}
 )
 
 // UpdateEcosystemStats republishes the per-ecosystem gauges from a fresh snapshot.
@@ -468,6 +522,48 @@ func UpdateEcosystemStats(stats []EcosystemStats) {
 	publishedEcosystems = make(map[string]bool, len(totals))
 	for ecosystem := range totals {
 		publishedEcosystems[ecosystem] = true
+	}
+}
+
+// MetadataCacheStats is one ecosystem's share of the metadata cache.
+type MetadataCacheStats struct {
+	Ecosystem string
+	Entries   int64
+	Size      int64
+}
+
+// UpdateMetadataCacheStats republishes the metadata cache gauges from a fresh
+// snapshot. Like UpdateEcosystemStats it sums rows by normalized label, sets
+// each series in place and deletes only labels that have disappeared.
+func UpdateMetadataCacheStats(stats []MetadataCacheStats) {
+	totals := make(map[string]MetadataCacheStats, len(stats))
+	for _, s := range stats {
+		ecosystem := purl.NormalizeEcosystem(s.Ecosystem)
+		t := totals[ecosystem]
+		t.Entries += s.Entries
+		t.Size += s.Size
+		totals[ecosystem] = t
+	}
+
+	for ecosystem, t := range totals {
+		MetadataCacheEntries.WithLabelValues(ecosystem).Set(float64(t.Entries))
+		MetadataCacheSize.WithLabelValues(ecosystem).Set(float64(t.Size))
+	}
+
+	publishedMu.Lock()
+	defer publishedMu.Unlock()
+
+	for ecosystem := range publishedMetadataEcosystems {
+		if _, still := totals[ecosystem]; still {
+			continue
+		}
+		MetadataCacheEntries.DeleteLabelValues(ecosystem)
+		MetadataCacheSize.DeleteLabelValues(ecosystem)
+	}
+
+	publishedMetadataEcosystems = make(map[string]bool, len(totals))
+	for ecosystem := range totals {
+		publishedMetadataEcosystems[ecosystem] = true
 	}
 }
 
