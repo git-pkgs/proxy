@@ -301,6 +301,21 @@ HTTP protocol handlers for each registry type.
 - Proxies the Swift Package Registry v1 read endpoints
 - Rewrites release URLs and caches source archives
 
+**GitHandler:**
+- Serves `/git/{name}/{repo}` from `internal/gitcache`, read-only over smart HTTP
+- Validates repository paths and the `repos` allowlist, and maps cache errors to statuses
+
+### `internal/gitcache`
+
+Local bare clones of upstream Git repositories, outside the artifact cache and the database, at `{git.cache_dir}/{name}-{URL hash}/{repo}.git`. The hash of the upstream's URL means repointing an upstream starts a fresh cache; at startup only the configured upstreams' directories are loaded, and those of their old URLs removed.
+
+- Each request for refs checks the upstream's branches and tags with protocol v2 `ls-refs` and fetches only when they changed; concurrent requests share one refresh
+- Clients are served by `git upload-pack --stateless-rpc`
+- Spawned `git` reaches the upstream only through a loopback relay that forwards with the proxy's upstream client, so address checks, `upstream.auth` and the access log apply
+- Commits a client asks for by ID that are on no cached branch or tag are fetched and kept under hidden `refs/proxy/wanted/{time}/{id}` refs until a branch or tag includes them or for 7 days; off for upstreams with credentials
+- Evicts least recently used repositories after each fetch once `git.max_size` is passed, and drops a repository that can no longer be refreshed within `git.max_repo_size` so it is cloned again; never one in use. A commit fetched by ID that does not fit is refused instead
+- Every fetched pack is kept as a pack (`transfer.unpackLimit=1`), so a transfer cut off at the size limit leaves nothing behind
+
 ### `internal/server`
 
 HTTP server setup, web UI, and API handlers.
