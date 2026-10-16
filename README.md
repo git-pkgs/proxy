@@ -1012,6 +1012,8 @@ proxy mirror --platform linux/amd64 pkg:docker/library/alpine@3.20
 
 The mirror command accepts the same storage and database flags as `serve`. Already-cached artifacts are skipped.
 
+With `scanning.enabled`, the mirror command refuses every package and container image, reporting each one as failed, so nothing is cached unscanned. Scanners fetch the staged bytes from the running server, which this command does not start. Use the mirror API below instead, since its jobs run inside the server and go through the pre-cache scan. `--dry-run` still lists what would be mirrored.
+
 A mirror API is also available when the server is running:
 
 ```bash

@@ -860,6 +860,8 @@ Scanners configured for the same ecosystem all run concurrently, never sequentia
 
 A blocked download surfaces to the client as `403 Forbidden` with the scanner's reason, across every ecosystem handler.
 
+Because scanners pull the staged bytes from the running server, the `proxy mirror` command cannot scan what it fetches. While scanning is enabled it refuses every package and container image instead of caching them unscanned. Mirror through the `/api/mirror` endpoints of the running server, whose jobs are scanned like any other download.
+
 ### Scanner HTTP contract
 
 Any external service that implements this contract can act as a scanner — a trivy wrapper, a clamav-rest bridge, a Wiz connector, or an in-house service. The proxy POSTs a notify request to `scanning.scanners[].url` and waits for a JSON verdict.

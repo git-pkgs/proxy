@@ -558,9 +558,7 @@ func runMirror() {
 	m := mirror.New(proxy, db, store, logger, *concurrency)
 	m.Images = images
 	if cfg.Scanning.Enabled {
-		// Scanners fetch staged layers from the running server, which this
-		// command does not start.
-		m.Images = mirror.UnavailableImages{Reason: "container images cannot be mirrored by this command while scanning is enabled; use the mirror API of the running server"}
+		refuseUnscannedMirroring(m)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -599,6 +597,23 @@ func runMirror() {
 			fmt.Fprintf(os.Stderr, "  %s/%s@%s: %s\n", e.Ecosystem, e.Name, e.Version, e.Error)
 		}
 	}
+}
+
+// Reasons the mirror command gives for refusing items while scanning is
+// enabled.
+const (
+	mirrorScanningImagesReason   = "container images cannot be mirrored by this command while scanning is enabled; use the mirror API of the running server"
+	mirrorScanningPackagesReason = "packages cannot be mirrored by this command while scanning is enabled; use the mirror API of the running server"
+)
+
+// refuseUnscannedMirroring makes m fail every item instead of caching it.
+// Scanners fetch the staged bytes from the running server, which this command
+// does not start, so anything it cached would skip the pre-cache scan and
+// later be served from the cache unscanned. The mirror API's jobs run inside
+// the server with its scanners and are unaffected.
+func refuseUnscannedMirroring(m *mirror.Mirror) {
+	m.Images = mirror.UnavailableImages{Reason: mirrorScanningImagesReason}
+	m.RefusePackages = mirrorScanningPackagesReason
 }
 
 func printStats(db *database.DB, popular, recent int, asJSON bool) error {
