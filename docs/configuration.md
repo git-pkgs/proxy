@@ -926,6 +926,8 @@ cache_metadata: true
 
 Or via environment variable: `PROXY_CACHE_METADATA=true`.
 
+Composer archive downloads look up their upstream URL in the same cached metadata, so a cached archive is served without asking Packagist again and stays installable while it is down. Only a version or file the cached metadata does not list yet is looked up upstream.
+
 The `proxy mirror` command always enables metadata caching regardless of this setting.
 
 ### Metadata TTL
