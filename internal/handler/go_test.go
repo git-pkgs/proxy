@@ -105,6 +105,30 @@ func TestGoModulesDifferingInCaseAreCachedApart(t *testing.T) {
 	}
 }
 
+// An entry cached before the fix under the shared filename holds the
+// capitalised module's zip; the lowercase module refetches it.
+func TestGoMisplacedZipIsRefetched(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.artifact = artifactBody("upper")
+	res, err := proxy.GetOrFetchArtifactFromURL(t.Context(), "golang", "github.com/Sirupsen/logrus", "v1.0.6",
+		"logrus@v1.0.6.zip", goUpstream+"/github.com/!sirupsen/logrus/@v/v1.0.6.zip")
+	if err != nil {
+		t.Fatalf("seeding old entry: %v", err)
+	}
+	_ = res.Reader.Close()
+
+	fetcher.artifact = artifactBody("lower")
+	handler := NewGoHandler(proxy, "http://localhost:8080")
+	for range 2 {
+		resp := httptest.NewRecorder()
+		req := httptest.NewRequest(http.MethodGet, "/github.com/sirupsen/logrus/@v/v1.0.6.zip", nil)
+		handler.Routes().ServeHTTP(resp, req)
+		if resp.Code != http.StatusOK || resp.Body.String() != "lower" {
+			t.Fatalf("status = %d, body = %q", resp.Code, resp.Body.String())
+		}
+	}
+}
+
 func TestGoZipFilename(t *testing.T) {
 	tests := []struct {
 		module string

@@ -128,6 +128,13 @@ func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, modul
 	result, err := h.proxy.GetOrFetchArtifactFromURL(
 		r.Context(), "golang", decodedModule, version, filename, downloadURL,
 	)
+	if err == nil && misplacedGoZip(result, decodedModule) {
+		if err = h.discardZip(result); err == nil {
+			result, err = h.proxy.GetOrFetchArtifactFromURL(
+				r.Context(), "golang", decodedModule, version, filename, downloadURL,
+			)
+		}
+	}
 	if err != nil {
 		if errors.Is(err, fetch.ErrNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -146,6 +153,23 @@ func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, modul
 	}
 
 	ServeArtifactRequest(w, r, result)
+}
+
+// misplacedGoZip reports a cached zip stored for a module that differs from
+// module only in case. Before goZipFilename such modules shared a record, so
+// it may hold the other module's zip; the storage path names whose it is.
+func misplacedGoZip(result *CacheResult, module string) bool {
+	return result.storagePath != "" && !strings.HasPrefix(result.storagePath, "golang/"+module+"/")
+}
+
+// discardZip clears a misplaced cache entry so the next lookup refetches it.
+func (h *GoHandler) discardZip(result *CacheResult) error {
+	if result.Reader != nil {
+		_ = result.Reader.Close()
+	}
+	h.proxy.Logger.Warn("cached go module zip belongs to another module, refetching",
+		"purl", result.Artifact.PURL, "path", result.storagePath)
+	return h.proxy.DB.DiscardArtifact(result.Artifact.PURL, result.Artifact.Filename, result.storagePath)
 }
 
 // proxyCached forwards a request with metadata caching.
