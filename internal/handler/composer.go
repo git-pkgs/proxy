@@ -639,50 +639,6 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 		return
 	}
 
-	// We need to fetch the metadata to get the actual download URL since
-	// Packagist URLs include a hash. Packagist serves dev versions (e.g.
-	// "3.x-dev", "dev-master") from a separate "~dev" metadata file, while
-	// tagged releases live in the regular file. Try the file most likely to
-	// contain this version first, then fall back to the other so that both
-	// stable and dev versions resolve correctly.
-	metaURLs := h.metadataURLsForVersion(vendor, pkg, version)
-
-	h.proxy.Logger.Debug("resolving download URL",
-		"package", packageName, "version", version,
-		"metadata_urls", metaURLs)
-
-	var dist composerDist
-	for _, metaURL := range metaURLs {
-		found, err := h.findDownloadURLFromMetadata(r.Context(), metaURL, packageName, version)
-		if err != nil {
-			if writeUpstreamHeld(w, err) {
-				return
-			}
-			h.proxy.Logger.Error("failed to fetch metadata", "error", err, "url", metaURL)
-			http.Error(w, "failed to fetch metadata", http.StatusBadGateway)
-			return
-		}
-		if found.url != "" {
-			dist = found
-			break
-		}
-	}
-
-	if dist.url == "" {
-		h.proxy.Logger.Debug("version not found in any metadata source",
-			"package", packageName, "version", version,
-			"tried_urls", metaURLs)
-		http.Error(w, "version not found", http.StatusNotFound)
-		return
-	}
-
-	// Lock files name archive URLs directly, so a version filtered out of the
-	// metadata still has to be withheld here.
-	if h.shouldFilterVersion(canonicalPackagePURL("composer", packageName), packageName, version, dist.published) {
-		http.Error(w, "version not found", http.StatusNotFound)
-		return
-	}
-
 	// The archive is cached under the file name from the path, so fetch the
 	// one that name stands for. Compare it as sent, the way rewriteDist handed
 	// it out, query included.
@@ -690,13 +646,18 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 	if r.URL.RawQuery != "" {
 		requested += "?" + r.URL.RawQuery
 	}
-	listedURL := dist.url
-	downloadURL, ok := upstreamDistURL(listedURL, dist.distType, requested, isDevVersion(version))
+	files := h.metadataFilesForVersion(vendor, pkg, version)
+	dist, downloadURL, ok := h.cachedDist(r.Context(), files, packageName, version, requested)
 	if !ok {
-		h.proxy.Logger.Info("composer file not in upstream metadata",
-			"package", packageName, "version", version,
-			"filename", requested, "listed_url", listedURL)
-		http.Error(w, "file not found", http.StatusNotFound)
+		if dist, downloadURL, ok = h.upstreamDist(w, r, files, packageName, version, requested); !ok {
+			return
+		}
+	}
+
+	// Lock files name archive URLs directly, so a version filtered out of the
+	// metadata still has to be withheld here.
+	if h.shouldFilterVersion(canonicalPackagePURL("composer", packageName), packageName, version, dist.published) {
+		http.Error(w, "version not found", http.StatusNotFound)
 		return
 	}
 
@@ -718,7 +679,7 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 		h.discardOtherCommit(packageName, version, cacheFilename, commit)
 	}
 	result, err := h.proxy.GetOrFetchArtifactFromURLWithIntegrity(r.Context(), "composer", packageName, version, cacheFilename, downloadURL,
-		composerIntegrity(dist.shasum, version, downloadURL == listedURL))
+		composerIntegrity(dist.shasum, version, downloadURL == dist.url))
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to fetch package")
 		return
@@ -767,19 +728,98 @@ func isDevVersion(version string) bool {
 	return strings.HasPrefix(version, "dev-") || strings.HasSuffix(version, "-dev")
 }
 
-// metadataURLsForVersion returns the upstream metadata URLs to consult for a
+// composerMetadataFile is one of the metadata documents a version's dist can
+// be listed in: its upstream URL and the key the proxy caches it under.
+type composerMetadataFile struct {
+	url, cacheKey string
+}
+
+// metadataFilesForVersion returns the metadata documents to consult for a
 // given version, in priority order. Dev versions are served from the "~dev"
 // file, tagged releases from the regular file; the other file is included as a
-// fallback so an unexpected classification still resolves.
-func (h *ComposerHandler) metadataURLsForVersion(vendor, pkg, version string) []string {
-	repoURL, _ := h.sourceFor(vendor + "/" + pkg)
-	stable := fmt.Sprintf("%s/p2/%s/%s.json", repoURL, vendor, pkg)
-	dev := fmt.Sprintf("%s/p2/%s/%s~dev.json", repoURL, vendor, pkg)
+// fallback so an unexpected classification still resolves. The cache keys are
+// the ones handlePackageMetadata stores the documents under.
+func (h *ComposerHandler) metadataFilesForVersion(vendor, pkg, version string) []composerMetadataFile {
+	file := func(name string) composerMetadataFile {
+		repoURL, cacheKey := h.sourceFor(name)
+		return composerMetadataFile{url: fmt.Sprintf("%s/p2/%s.json", repoURL, name), cacheKey: cacheKey}
+	}
+	stable := file(vendor + "/" + pkg)
+	dev := file(vendor + "/" + pkg + composerDevFile)
 
 	if isDevVersion(version) {
-		return []string{dev, stable}
+		return []composerMetadataFile{dev, stable}
 	}
-	return []string{stable, dev}
+	return []composerMetadataFile{stable, dev}
+}
+
+// cachedDist looks up the dist of version in the metadata documents the proxy
+// caches for Composer, returning it with the URL to download the requested
+// file from. While the documents are fresh this costs no upstream request,
+// and when upstream fails their cached copies still resolve the archive. ok is
+// false when neither document lists a dist the requested file stands for, as
+// for a version published after the metadata was cached, so the caller asks
+// upstream instead. Without cache_metadata there is nothing to look in.
+func (h *ComposerHandler) cachedDist(ctx context.Context, files []composerMetadataFile, packageName, version, requested string) (composerDist, string, bool) {
+	if !h.proxy.CacheMetadata || h.proxy.DB == nil {
+		return composerDist{}, "", false
+	}
+	for _, f := range files {
+		doc := h.proxy.fetchMetadataDocument(ctx, "composer", f.cacheKey, f.url, contentTypeJSON)
+		if doc.err != nil {
+			continue
+		}
+		dist, err := composerDistURL(doc.body, packageName, version)
+		if err != nil || dist.url == "" {
+			continue
+		}
+		if downloadURL, ok := upstreamDistURL(dist.url, dist.distType, requested, isDevVersion(version)); ok {
+			return dist, downloadURL, true
+		}
+	}
+	return composerDist{}, "", false
+}
+
+// upstreamDist looks up the dist of version in the metadata upstream serves
+// now, returning it with the URL to download the requested file from. When it
+// cannot, it writes the error response and returns false.
+func (h *ComposerHandler) upstreamDist(w http.ResponseWriter, r *http.Request, files []composerMetadataFile, packageName, version, requested string) (composerDist, string, bool) {
+	h.proxy.Logger.Debug("resolving download URL",
+		"package", packageName, "version", version)
+
+	var dist composerDist
+	for _, f := range files {
+		found, err := h.findDownloadURLFromMetadata(r.Context(), f.url, packageName, version)
+		if err != nil {
+			if writeUpstreamHeld(w, err) {
+				return composerDist{}, "", false
+			}
+			h.proxy.Logger.Error("failed to fetch metadata", "error", err, "url", f.url)
+			http.Error(w, "failed to fetch metadata", http.StatusBadGateway)
+			return composerDist{}, "", false
+		}
+		if found.url != "" {
+			dist = found
+			break
+		}
+	}
+
+	if dist.url == "" {
+		h.proxy.Logger.Debug("version not found in any metadata source",
+			"package", packageName, "version", version)
+		http.Error(w, "version not found", http.StatusNotFound)
+		return composerDist{}, "", false
+	}
+
+	downloadURL, ok := upstreamDistURL(dist.url, dist.distType, requested, isDevVersion(version))
+	if !ok {
+		h.proxy.Logger.Info("composer file not in upstream metadata",
+			"package", packageName, "version", version,
+			"filename", requested, "listed_url", dist.url)
+		http.Error(w, "file not found", http.StatusNotFound)
+		return composerDist{}, "", false
+	}
+	return dist, downloadURL, true
 }
 
 // composerDist is what a version's metadata says about its archive: the dist

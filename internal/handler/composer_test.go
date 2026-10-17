@@ -505,16 +505,16 @@ func TestComposerDownloadDevVersionUsesDevMetadata(t *testing.T) {
 
 	// FIXED behavior: the handler consults the ~dev file (it is first in the
 	// candidate list for dev versions) and resolves the dist URL.
-	urls := h.metadataURLsForVersion(vendor, name, version)
-	if len(urls) == 0 || !strings.HasSuffix(urls[0], "/p2/phpmd/phpmd~dev.json") {
-		t.Fatalf("dev version should consult the ~dev metadata file first, got %v", urls)
+	files := h.metadataFilesForVersion(vendor, name, version)
+	if len(files) == 0 || !strings.HasSuffix(files[0].url, "/p2/phpmd/phpmd~dev.json") || files[0].cacheKey != "phpmd/phpmd~dev" {
+		t.Fatalf("dev version should consult the ~dev metadata file first, got %v", files)
 	}
 
 	var resolved string
-	for _, u := range urls {
-		found, err := h.findDownloadURLFromMetadata(ctx, u, pkg, version)
+	for _, f := range files {
+		found, err := h.findDownloadURLFromMetadata(ctx, f.url, pkg, version)
 		if err != nil {
-			t.Fatalf("unexpected error fetching metadata %q: %v", u, err)
+			t.Fatalf("unexpected error fetching metadata %q: %v", f.url, err)
 		}
 		resolved = found.url
 		if resolved != "" {
