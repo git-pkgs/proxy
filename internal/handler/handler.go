@@ -1355,7 +1355,10 @@ func (p *Proxy) fetchMetadataFromUpstream(ctx context.Context, ecosystem, cacheK
 	if err == nil {
 		var digest string
 		if p.CacheMetadata {
-			digest = p.cacheMetadataBlob(ctx, ecosystem, cacheKey, metadataStoragePath(ecosystem, cacheKey), meta)
+			digest = p.refreshMetadataBlob(ecosystem, cacheKey, meta)
+			if digest == "" {
+				digest = p.cacheMetadataBlob(ctx, ecosystem, cacheKey, metadataStoragePath(ecosystem, cacheKey), meta)
+			}
 		}
 		return metadataResult{body: meta.body, contentType: meta.contentType, contentEncoding: meta.contentEncoding, digest: digest}
 	}
@@ -1505,6 +1508,9 @@ type upstreamMetadata struct {
 	contentEncoding string
 	etag            string
 	lastModified    time.Time
+	// notModified is the cache row upstream answered 304 for, whose stored
+	// bytes body holds. It is nil for a document upstream sent.
+	notModified *database.MetadataCacheEntry
 }
 
 // fetchUpstreamMetadata fetches metadata from upstream, using ETag for conditional revalidation.
@@ -1546,7 +1552,7 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		if readErr != nil {
 			return nil, errStale304
 		}
-		meta := &upstreamMetadata{body: data, contentType: contentTypeJSON, etag: entry.ETag.String}
+		meta := &upstreamMetadata{body: data, contentType: contentTypeJSON, etag: entry.ETag.String, notModified: entry}
 		if entry.ContentType.Valid {
 			meta.contentType = entry.ContentType.String
 		}
@@ -1585,6 +1591,28 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		meta.lastModified, _ = http.ParseTime(lm)
 	}
 	return meta, nil
+}
+
+// refreshMetadataBlob records that upstream answered 304 for the cached
+// document meta was read from, by moving the row's fetched_at on. The bytes in
+// storage are unchanged, so they are neither written nor hashed again. It
+// returns the row's digest, or "" when the caller has to store meta as for a
+// new document: when upstream sent one, the row records no digest, or a
+// concurrent fetch has replaced the document since it was read.
+func (p *Proxy) refreshMetadataBlob(ecosystem, cacheKey string, meta *upstreamMetadata) string {
+	entry := meta.notModified
+	if entry == nil || p.DB == nil || !entry.ContentDigest.Valid {
+		return ""
+	}
+	refreshed, err := p.DB.RefreshMetadataCache(ecosystem, cacheKey, entry.ContentDigest.String, time.Now())
+	if err != nil {
+		p.Logger.Warn("failed to refresh cached metadata", "ecosystem", ecosystem, "key", cacheKey, "error", err)
+		return ""
+	}
+	if !refreshed {
+		return ""
+	}
+	return entry.ContentDigest.String
 }
 
 // cacheMetadataBlob stores metadata bytes in storage and updates the

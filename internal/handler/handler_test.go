@@ -38,6 +38,7 @@ type mockStorage struct {
 	signedURL string
 	signErr   error
 	seekable  bool
+	stores    int
 }
 
 func newMockStorage() *mockStorage {
@@ -55,6 +56,7 @@ func (s *mockStorage) Store(_ context.Context, path string, r io.Reader) (int64,
 		return 0, "", err
 	}
 	s.files[path] = data
+	s.stores++
 	return int64(len(data)), sha256Hex(string(data)), nil
 }
 
