@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
 )
 
@@ -41,8 +42,10 @@ func (s *Server) runEviction(ctx context.Context, maxSize int64) {
 	evictLRU(ctx, s.db, s.storage, s.logger, maxSize)
 }
 
+// evictLRU removes the least recently used cached artifacts and metadata
+// documents until what max_size counts falls to maxSize.
 func evictLRU(ctx context.Context, db *database.DB, store storage.Storage, logger *slog.Logger, maxSize int64) {
-	totalSize, err := db.GetTotalCacheSize()
+	totalSize, err := db.GetEvictableCacheSize()
 	if err != nil {
 		logger.Warn("eviction: failed to get cache size", "error", err)
 		return
@@ -63,16 +66,16 @@ func evictLRU(ctx context.Context, db *database.DB, store storage.Storage, logge
 			break
 		}
 
-		artifacts, err := db.GetLeastRecentlyUsedArtifacts(evictionBatch)
+		entries, err := db.GetLeastRecentlyUsedCacheEntries(evictionBatch)
 		if err != nil {
-			logger.Warn("eviction: failed to get LRU artifacts", "error", err)
+			logger.Warn("eviction: failed to get LRU entries", "error", err)
 			break
 		}
-		if len(artifacts) == 0 {
+		if len(entries) == 0 {
 			break
 		}
 
-		cleared, freed := evictBatch(ctx, db, store, logger, artifacts, maxSize, totalSize-freedBytes)
+		cleared, freed := evictBatch(ctx, db, store, logger, entries, maxSize, totalSize-freedBytes)
 		evicted += cleared
 		freedBytes += freed
 
@@ -84,8 +87,8 @@ func evictLRU(ctx context.Context, db *database.DB, store storage.Storage, logge
 		// stop rather than retry them without end. The next pass retries after
 		// the interval.
 		if cleared == 0 {
-			logger.Warn("eviction: no artifact in this batch could be evicted, ending the pass",
-				"batch", len(artifacts))
+			logger.Warn("eviction: no entry in this batch could be evicted, ending the pass",
+				"batch", len(entries))
 			break
 		}
 	}
@@ -96,40 +99,42 @@ func evictLRU(ctx context.Context, db *database.DB, store storage.Storage, logge
 	}
 }
 
-// evictBatch evicts from artifacts until the size still in use falls to
+// evictBatch evicts from entries until the size still in use falls to
 // maxSize, reporting how many records it cleared and how many bytes that
 // freed. Progress is reported in records as well as bytes because a cached
 // record can have no size recorded, and clearing one is still progress.
 func evictBatch(ctx context.Context, db *database.DB, store storage.Storage, logger *slog.Logger,
-	artifacts []database.Artifact, maxSize, inUse int64) (int, int64) {
+	entries []database.CacheEntry, maxSize, inUse int64) (int, int64) {
 	cleared := 0
 	freed := int64(0)
 
-	for _, art := range artifacts {
+	for _, entry := range entries {
 		if inUse-freed <= maxSize {
 			break
 		}
 		if ctx.Err() != nil {
 			break
 		}
-		if !art.StoragePath.Valid {
+		if !entry.StoragePath.Valid {
 			continue
 		}
 
-		path := art.StoragePath.String
+		path := entry.StoragePath.String
 
 		// Clear before deleting: a record a newer fetch moved has left this
 		// path queued, and a request may still open it within the grace period.
-		recordCleared, err := db.ClearArtifactCache(art.VersionPURL, art.Filename, path)
+		recordCleared, err := clearEntry(db, logger, entry)
 		if err != nil {
-			logger.Warn("eviction: failed to clear artifact record",
-				"version_purl", art.VersionPURL, "filename", art.Filename, "error", err)
+			logger.Warn("eviction: failed to clear record",
+				"kind", entry.Kind, "key", entry.Key, "name", entry.Name, "error", err)
 			continue
 		}
 		if !recordCleared {
 			continue
 		}
 
+		// Metadata goes now too: readers hold the whole document in memory,
+		// and a row refetched meanwhile refetches again on a missing blob.
 		if err := store.Delete(ctx, path); err != nil {
 			logger.Warn("eviction: failed to delete from storage, queueing it", "path", path, "error", err)
 			if err := db.QueuePendingDelete(path); err != nil {
@@ -137,12 +142,28 @@ func evictBatch(ctx context.Context, db *database.DB, store storage.Storage, log
 			}
 		}
 
-		if art.Size.Valid {
-			freed += art.Size.Int64
+		if entry.Size.Valid {
+			freed += entry.Size.Int64
 		}
 		cleared++
-		recordLRUEviction(db, logger, art.VersionPURL)
 	}
 
 	return cleared, freed
+}
+
+// clearEntry drops the record of entry if it still points at the path read
+// for it, and counts the eviction.
+func clearEntry(db *database.DB, logger *slog.Logger, entry database.CacheEntry) (bool, error) {
+	if entry.Kind == database.CacheEntryMetadata {
+		cleared, err := db.EvictMetadataCache(entry.Key, entry.Name, entry.StoragePath.String, entry.LastAccessedAt)
+		if cleared {
+			metrics.RecordMetadataEvicted(entry.Key)
+		}
+		return cleared, err
+	}
+	cleared, err := db.ClearArtifactCache(entry.Key, entry.Name, entry.StoragePath.String)
+	if cleared {
+		recordLRUEviction(db, logger, entry.Key)
+	}
+	return cleared, err
 }

@@ -70,6 +70,14 @@ var (
 		[]string{"reason", "ecosystem"},
 	)
 
+	MetadataEvicted = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_metadata_evicted_total",
+			Help: "Total number of cached metadata documents evicted by the size limit, by ecosystem",
+		},
+		[]string{"ecosystem"},
+	)
+
 	// Upstream metrics
 	UpstreamFetchDuration = prometheus.NewHistogramVec(
 		prometheus.HistogramOpts{
@@ -267,6 +275,7 @@ func init() {
 		CacheSize,
 		CachedArtifacts,
 		ArtifactsEvicted,
+		MetadataEvicted,
 		UpstreamFetchDuration,
 		UpstreamErrors,
 		CircuitBreakerState,
@@ -335,6 +344,13 @@ func RecordArtifactEvicted(reason, ecosystem string) {
 		ecosystem = "other"
 	}
 	ArtifactsEvicted.WithLabelValues(reason, purl.NormalizeEcosystem(ecosystem)).Inc()
+}
+
+// RecordMetadataEvicted counts one metadata document evicted by the size
+// limit. ecosystem is the metadata cache's, normalized like the cache hit
+// counter.
+func RecordMetadataEvicted(ecosystem string) {
+	MetadataEvicted.WithLabelValues(purl.NormalizeEcosystem(ecosystem)).Inc()
 }
 
 // RecordCacheMiss increments cache miss counter.

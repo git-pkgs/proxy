@@ -2,6 +2,7 @@ package database
 
 import (
 	"cmp"
+	"errors"
 	"log/slog"
 	"slices"
 	"sync"
@@ -20,9 +21,14 @@ type hitEntry struct {
 	last  time.Time
 }
 
+// metadataHitKey identifies a metadata cache row; a hit only moves its
+// last-access time.
+type metadataHitKey struct{ ecosystem, name string }
+
 type hitBatch struct {
 	mu       sync.Mutex
 	pending  map[hitKey]hitEntry
+	metadata map[metadataHitKey]time.Time
 	stop     chan struct{}
 	stopOnce sync.Once
 	done     chan struct{}
@@ -37,6 +43,22 @@ func (b *hitBatch) add(k hitKey, e hitEntry) {
 		cur.last = e.last
 	}
 	b.pending[k] = cur
+}
+
+func (b *hitBatch) addMetadata(k metadataHitKey, last time.Time) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if last.After(b.metadata[k]) {
+		b.metadata[k] = last
+	}
+}
+
+func (b *hitBatch) takeMetadata() map[metadataHitKey]time.Time {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	metadata := b.metadata
+	b.metadata = map[metadataHitKey]time.Time{}
+	return metadata
 }
 
 func (b *hitBatch) take() map[hitKey]hitEntry {
@@ -57,7 +79,7 @@ func (db *DB) BatchHits(interval time.Duration, logger *slog.Logger) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	b := &hitBatch{pending: map[hitKey]hitEntry{}, stop: make(chan struct{}), done: make(chan struct{})}
+	b := &hitBatch{pending: map[hitKey]hitEntry{}, metadata: map[metadataHitKey]time.Time{}, stop: make(chan struct{}), done: make(chan struct{})}
 	db.hits = b
 	go func() {
 		defer close(b.done)
@@ -83,9 +105,10 @@ func (db *DB) BatchHits(interval time.Duration, logger *slog.Logger) {
 // fails they are put back for the next flush, so a failed write delays
 // counts rather than losing them.
 func (db *DB) flushHits() error {
+	metadataErr := db.flushMetadataHits()
 	pending := db.hits.take()
 	if len(pending) == 0 {
-		return nil
+		return metadataErr
 	}
 
 	err := db.writeHits(pending)
@@ -94,7 +117,52 @@ func (db *DB) flushHits() error {
 			db.hits.add(k, e)
 		}
 	}
+	return errors.Join(err, metadataErr)
+}
+
+// flushMetadataHits writes the pending metadata hits like flushHits.
+func (db *DB) flushMetadataHits() error {
+	metadata := db.hits.takeMetadata()
+	if len(metadata) == 0 {
+		return nil
+	}
+	err := db.writeMetadataHits(metadata)
+	if err != nil {
+		for k, last := range metadata {
+			db.hits.addMetadata(k, last)
+		}
+	}
 	return err
+}
+
+func (db *DB) writeMetadataHits(metadata map[metadataHitKey]time.Time) error {
+	tx, err := db.Beginx()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	stmt, err := tx.Preparex(db.Rebind(recordMetadataHitQuery))
+	if err != nil {
+		return err
+	}
+	defer func() { _ = stmt.Close() }()
+
+	// Sorted for the same reason as the artifact hits.
+	keys := make([]metadataHitKey, 0, len(metadata))
+	for k := range metadata {
+		keys = append(keys, k)
+	}
+	slices.SortFunc(keys, func(a, b metadataHitKey) int {
+		return cmp.Or(cmp.Compare(a.ecosystem, b.ecosystem), cmp.Compare(a.name, b.name))
+	})
+	for _, k := range keys {
+		last := metadata[k].UTC()
+		if _, err := stmt.Exec(last, last, k.ecosystem, k.name); err != nil {
+			return err
+		}
+	}
+	return tx.Commit()
 }
 
 func (db *DB) writeHits(pending map[hitKey]hitEntry) error {

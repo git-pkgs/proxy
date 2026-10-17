@@ -187,6 +187,7 @@ type MetadataCacheEntry struct {
 	Size            sql.NullInt64  `db:"size" json:"size,omitempty"`
 	LastModified    sql.NullTime   `db:"last_modified" json:"last_modified,omitempty"`
 	FetchedAt       sql.NullTime   `db:"fetched_at" json:"fetched_at,omitempty"`
+	LastAccessedAt  sql.NullTime   `db:"last_accessed_at" json:"last_accessed_at,omitempty"`
 	CreatedAt       time.Time      `db:"created_at" json:"created_at"`
 	UpdatedAt       time.Time      `db:"updated_at" json:"updated_at"`
 }

@@ -151,6 +151,7 @@ func (h *ContainerHandler) loadContainerTags(ctx context.Context, cacheKey strin
 	if err != nil {
 		return nil, err
 	}
+	h.proxy.recordMetadataRead(entry)
 
 	tags := &cachedContainerTags{body: body, contentType: contentTypeJSON, size: int64(len(body))}
 	if entry.ContentType.Valid {

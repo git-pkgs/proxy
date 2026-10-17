@@ -1485,11 +1485,20 @@ func (p *Proxy) readCachedMetadata(ctx context.Context, entry *database.Metadata
 	if err != nil {
 		return nil, "", err
 	}
+	p.recordMetadataRead(entry)
 	ct := contentTypeJSON
 	if entry.ContentType.Valid {
 		ct = entry.ContentType.String
 	}
 	return data, ct, nil
+}
+
+// recordMetadataRead marks a cached metadata document as used, so size
+// eviction drops the documents nobody asks for first.
+func (p *Proxy) recordMetadataRead(entry *database.MetadataCacheEntry) {
+	if err := p.DB.RecordMetadataHit(entry.Ecosystem, entry.Name); err != nil {
+		p.Logger.Warn("failed to record metadata cache hit", "ecosystem", entry.Ecosystem, "key", entry.Name, "error", err)
+	}
 }
 
 func (p *Proxy) recordMetadataCacheMiss(ecosystem string) {

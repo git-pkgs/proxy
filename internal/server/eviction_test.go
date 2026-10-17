@@ -458,6 +458,7 @@ func TestEvictBatch_SkipsRecordThatMoved(t *testing.T) {
 	if err != nil || len(stale) != 1 {
 		t.Fatalf("reading LRU rows: %v, %v", stale, err)
 	}
+	entries := []database.CacheEntry{{Kind: database.CacheEntryArtifact, Key: stale[0].VersionPURL, Name: stale[0].Filename, StoragePath: stale[0].StoragePath, Size: stale[0].Size}}
 	newer := storage.FetchPath("npm", "moved", "1.0.0", storage.NewFetchID(), "moved-1.0.0.tgz")
 	if _, _, err := store.Store(ctx, newer, strings.NewReader("refetched")); err != nil {
 		t.Fatalf("storing refetch: %v", err)
@@ -468,7 +469,7 @@ func TestEvictBatch_SkipsRecordThatMoved(t *testing.T) {
 		t.Fatalf("moving record: %v", err)
 	}
 
-	cleared, freed := evictBatch(ctx, db, store, logger, stale, 0, 1000)
+	cleared, freed := evictBatch(ctx, db, store, logger, entries, 0, 1000)
 	if cleared != 0 || freed != 0 {
 		t.Errorf("cleared %d records freeing %d bytes, want nothing counted", cleared, freed)
 	}

@@ -336,7 +336,7 @@ func (h *ArchHandler) storeDatabase(ctx context.Context, d archDatabase, meta *u
 	defer h.lock(d.dbKey)()
 
 	previous, _ := p.DB.GetMetadataCache(archEcosystem, d.dbKey)
-	if previous != nil && previous.StoragePath == path {
+	if previous != nil && previous.StoragePath == path && h.blobExists(ctx, path) {
 		// Same bytes: a failed rewrite would delete the blob the row uses.
 		h.touchDatabase(previous, meta)
 	} else {
@@ -354,6 +354,13 @@ func (h *ArchHandler) storeDatabase(ctx context.Context, d archDatabase, meta *u
 		_ = p.Storage.Delete(ctx, previous.StoragePath)
 	}
 	return metadataResult{body: meta.body, contentType: meta.contentType, contentEncoding: meta.contentEncoding}, row
+}
+
+// blobExists reports whether path is stored. Size eviction can remove a blob
+// while a refresh re-creates its row, and only a rewrite brings it back.
+func (h *ArchHandler) blobExists(ctx context.Context, path string) bool {
+	ok, err := h.proxy.Storage.Exists(ctx, path)
+	return ok || err != nil
 }
 
 // touchDatabase marks an unchanged cached database as fetched now.

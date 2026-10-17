@@ -276,6 +276,7 @@ func (h *ContainerHandler) loadContainerManifest(ctx context.Context, cacheKey s
 	if err != nil {
 		return nil, err
 	}
+	h.proxy.recordMetadataRead(entry)
 
 	manifest := &cachedContainerManifest{body: body, size: int64(len(body))}
 	if entry.ContentType.Valid {

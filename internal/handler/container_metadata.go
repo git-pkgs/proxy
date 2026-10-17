@@ -57,5 +57,6 @@ func (h *ContainerHandler) loadContainerMetadata(ctx context.Context, ecosystem,
 	if err != nil {
 		return nil, nil, err
 	}
+	h.proxy.recordMetadataRead(entry)
 	return entry, body, nil
 }
