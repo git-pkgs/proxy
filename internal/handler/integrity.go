@@ -79,10 +79,22 @@ func verifyIntegrity(body io.ReadCloser, declared string) (_ io.Reader, verified
 }
 
 func (c integrityChecks) wrap(source io.ReadCloser, onMismatch func(string)) (io.ReadCloser, error) {
+	return c.wrapSeekable(source, onMismatch, false)
+}
+
+// wrapFailOnMismatch is wrap for bytes that are served to a client: the
+// final chunk is held back until the digest is checked, and a mismatch drops
+// it and is returned from Read as ErrArtifactDigestMismatch in place of
+// io.EOF, so the caller can abort rather than complete the response.
+func (c integrityChecks) wrapFailOnMismatch(source io.ReadCloser, onMismatch func(string)) (io.ReadCloser, error) {
+	return c.wrapSeekable(source, onMismatch, true)
+}
+
+func (c integrityChecks) wrapSeekable(source io.ReadCloser, onMismatch func(string), failOnMismatch bool) (io.ReadCloser, error) {
 	if len(c.algorithms) == 0 {
 		return source, nil
 	}
-	verified, err := c.newVerifyingReader(source, onMismatch, false)
+	verified, err := c.newVerifyingReader(source, onMismatch, failOnMismatch)
 	if err != nil {
 		return nil, err
 	}
@@ -95,13 +107,6 @@ func (c integrityChecks) wrap(source io.ReadCloser, onMismatch func(string)) (io
 		verified: verified,
 		seeker:   seeker,
 	}, nil
-}
-
-// wrapFailOnMismatch is wrap for bytes that have not been checked anywhere
-// else: a mismatch is also returned from Read as ErrArtifactDigestMismatch in
-// place of io.EOF, so the caller can abort rather than complete the response.
-func (c integrityChecks) wrapFailOnMismatch(source io.ReadCloser, onMismatch func(string)) (io.ReadCloser, error) {
-	return c.newVerifyingReader(source, onMismatch, true)
 }
 
 func (c integrityChecks) newVerifyingReader(source io.ReadCloser, onMismatch func(string), failOnMismatch bool) (io.ReadCloser, error) {
@@ -132,6 +137,14 @@ type verifyingReader struct {
 
 	failOnMismatch bool
 	mismatched     bool
+
+	// With failOnMismatch, held (backed by buf) is read but not yet
+	// returned, and only its first releasable bytes are known not to end the
+	// body. The rest is the latest chunk, returned once the digest matches.
+	buf        []byte
+	held       []byte
+	releasable int
+	eof        bool
 }
 
 // seekableVerifyingReader verifies ordinary reads until a successful seek,
@@ -163,14 +176,63 @@ func (r *seekableVerifyingReader) Close() error {
 }
 
 func (r *verifyingReader) Read(p []byte) (int, error) {
+	if r.failOnMismatch {
+		return r.readHoldingBack(p)
+	}
 	n, err := r.reader.Read(p)
 	if err == io.EOF {
 		r.verify()
-		if r.failOnMismatch && r.mismatched {
-			return n, ErrArtifactDigestMismatch
-		}
 	}
 	return n, err
+}
+
+// readHoldingBack returns bytes one chunk behind the source, so the final
+// chunk is released only after the digest over the whole body has matched.
+func (r *verifyingReader) readHoldingBack(p []byte) (int, error) {
+	if len(p) == 0 {
+		return 0, nil
+	}
+	for r.releasable == 0 && !r.eof {
+		// Move the held chunk to the front of the buffer and read the next
+		// chunk after it; once that arrives, the held chunk is not the last.
+		var pending int
+		if cap(r.buf) < len(r.held)+len(p) {
+			buf := make([]byte, len(r.held)+len(p))
+			pending = copy(buf, r.held)
+			r.buf = buf
+		} else {
+			pending = copy(r.buf[:cap(r.buf)], r.held)
+		}
+		n, err := r.reader.Read(r.buf[pending : pending+len(p)])
+		r.held = r.buf[:pending+n]
+		if n > 0 {
+			r.releasable = pending
+		}
+		switch {
+		case err == io.EOF:
+			r.verify()
+			r.eof = true
+		case err != nil:
+			r.held, r.releasable = nil, 0
+			return 0, err
+		case n == 0:
+			return 0, nil
+		}
+	}
+	if r.eof {
+		if r.mismatched {
+			r.held, r.releasable = nil, 0
+			return 0, ErrArtifactDigestMismatch
+		}
+		r.releasable = len(r.held)
+		if r.releasable == 0 {
+			return 0, io.EOF
+		}
+	}
+	n := copy(p, r.held[:r.releasable])
+	r.held = r.held[n:]
+	r.releasable -= n
+	return n, nil
 }
 
 func (r *verifyingReader) Close() error {

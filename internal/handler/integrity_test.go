@@ -8,9 +8,14 @@ import (
 	"encoding/hex"
 	"errors"
 	"io"
+	"net/http"
+	"net/http/httptest"
 	"slices"
 	"strings"
 	"testing"
+	"testing/iotest"
+
+	"github.com/git-pkgs/proxy/internal/storage"
 )
 
 func sha256Hex(data string) string {
@@ -346,5 +351,102 @@ func TestVerifyingReaderVerifyOnce(t *testing.T) {
 	_ = reader.Close()
 	if calls != 1 {
 		t.Errorf("onMismatch called %d times, want 1", calls)
+	}
+}
+
+// TestCorruptCachedArtifactAbortsResponse serves a cached artifact whose
+// stored bytes no longer match its digest through a real server and client.
+// The client must see a failed, short body rather than a complete response.
+func TestCorruptCachedArtifactAbortsResponse(t *testing.T) {
+	proxy, db, store, _ := setupTestProxy(t)
+	content := strings.Repeat("cached content ", 10000)
+	seedPackage(t, db, store, "npm", "corrupt", "1.0.0", "corrupt-1.0.0.tgz", content)
+	storagePath := storage.ArtifactPath("npm", "", "corrupt", "1.0.0", "corrupt-1.0.0.tgz")
+	tampered := []byte(content)
+	tampered[len(tampered)-1] = '!'
+	store.files[storagePath] = tampered
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		result, err := proxy.GetCachedArtifact(r.Context(), "npm", "corrupt", "1.0.0", "corrupt-1.0.0.tgz")
+		if err != nil || result == nil {
+			http.Error(w, "not cached", http.StatusInternalServerError)
+			return
+		}
+		ServeArtifactRequest(w, r, result)
+	}))
+	t.Cleanup(server.Close)
+
+	resp, err := server.Client().Get(server.URL)
+	if err != nil {
+		t.Fatalf("GET: %v", err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d, want %d", resp.StatusCode, http.StatusOK)
+	}
+	if resp.ContentLength != int64(len(content)) {
+		t.Fatalf("Content-Length = %d, want %d", resp.ContentLength, len(content))
+	}
+	body, err := io.ReadAll(resp.Body)
+	if err == nil {
+		t.Error("reading a corrupted cached artifact succeeded, want an error")
+	}
+	if int64(len(body)) >= resp.ContentLength {
+		t.Errorf("read %d bytes, want fewer than Content-Length %d", len(body), resp.ContentLength)
+	}
+	if !bytes.HasPrefix(tampered, body) {
+		t.Error("body is not a prefix of the stored bytes")
+	}
+
+	artifact, err := db.GetArtifact("pkg:npm/corrupt@1.0.0", "corrupt-1.0.0.tgz")
+	if err != nil || artifact == nil || artifact.StoragePath.Valid {
+		t.Errorf("record = %+v (err %v), want it cleared", artifact, err)
+	}
+}
+
+func TestFailOnMismatchHoldsBackFinalChunk(t *testing.T) {
+	data := strings.Repeat("0123456789", 1000)
+	for _, tt := range []struct {
+		name   string
+		source func(string) io.Reader
+	}{
+		{"single reads", func(s string) io.Reader { return strings.NewReader(s) }},
+		{"one byte reads", func(s string) io.Reader { return iotest.OneByteReader(strings.NewReader(s)) }},
+		{"data with EOF", func(s string) io.Reader { return iotest.DataErrReader(strings.NewReader(s)) }},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			checks, err := newIntegrityChecks(sha256Hex(data), "")
+			if err != nil {
+				t.Fatal(err)
+			}
+
+			reader, err := checks.wrapFailOnMismatch(io.NopCloser(tt.source(data)), func(string) {
+				t.Error("onMismatch called for matching bytes")
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err := io.ReadAll(reader)
+			if err != nil || string(got) != data {
+				t.Errorf("matching read = %d bytes, %v; want %d bytes, nil", len(got), err, len(data))
+			}
+
+			var calls int
+			tampered := data[:len(data)-1] + "!"
+			reader, err = checks.wrapFailOnMismatch(io.NopCloser(tt.source(tampered)), func(string) { calls++ })
+			if err != nil {
+				t.Fatal(err)
+			}
+			got, err = io.ReadAll(reader)
+			if !errors.Is(err, ErrArtifactDigestMismatch) {
+				t.Errorf("mismatched read error = %v, want ErrArtifactDigestMismatch", err)
+			}
+			if len(got) >= len(tampered) || !strings.HasPrefix(tampered, string(got)) {
+				t.Errorf("mismatched read returned %d of %d bytes, want a strict prefix", len(got), len(tampered))
+			}
+			if calls != 1 {
+				t.Errorf("onMismatch called %d times, want 1", calls)
+			}
+		})
 	}
 }

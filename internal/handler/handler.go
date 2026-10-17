@@ -437,7 +437,7 @@ func (p *Proxy) readStored(ctx context.Context, pkgPURL, versionPURL, filename s
 		return nil, nil
 	}
 
-	result.Reader, err = checks.wrap(reader,
+	result.Reader, err = checks.wrapFailOnMismatch(reader,
 		func(reason string) {
 			p.Logger.Error("cached artifact failed integrity check",
 				"purl", versionPURL, "filename", filename,
