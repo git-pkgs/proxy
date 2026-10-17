@@ -173,7 +173,7 @@ func TestGolangRetentionPackageRules(t *testing.T) {
 	golangGet(t, srv.URL+golangTOMLZip)
 	golangGet(t, srv.URL+golangTestifyZip)
 	golangGet(t, srv.URL+golangBackoffZip)
-	const toml, testify, backoff = "toml@v1.3.2.zip", "testify@v1.8.4.zip", "v4@v4.3.0.zip"
+	const toml, testify, backoff = "github.com_!burnt!sushi_toml@v1.3.2.zip", "testify@v1.8.4.zip", "v4@v4.3.0.zip"
 
 	var stored string
 	zip := golangArtifact(t, db, toml)

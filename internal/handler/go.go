@@ -119,7 +119,7 @@ func (h *GoHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, module, version string) {
 	// Decode module path (! followed by lowercase = uppercase)
 	decodedModule := decodeGoModule(module)
-	filename := fmt.Sprintf("%s@%s.zip", lastComponent(decodedModule), version)
+	filename := goZipFilename(decodedModule, version)
 
 	h.proxy.Logger.Info("go module download request",
 		"module", decodedModule, "version", version)
@@ -163,6 +163,30 @@ func decodeGoModule(encoded string) string {
 			i++
 		} else {
 			b.WriteByte(encoded[i])
+		}
+	}
+	return b.String()
+}
+
+// goZipFilename names a module zip in the cache. The PURL lowercases the
+// module path, so modules that differ only in case share a version record;
+// a path with capitals keeps them in its filename, in the escaped form.
+func goZipFilename(module, version string) string {
+	if module == strings.ToLower(module) {
+		return fmt.Sprintf("%s@%s.zip", lastComponent(module), version)
+	}
+	return fmt.Sprintf("%s@%s.zip", strings.ReplaceAll(encodeGoModule(module), "/", "_"), version)
+}
+
+// encodeGoModule is the inverse of decodeGoModule.
+func encodeGoModule(module string) string {
+	var b strings.Builder
+	for i := 0; i < len(module); i++ {
+		if c := module[i]; c >= 'A' && c <= 'Z' {
+			b.WriteByte('!')
+			b.WriteByte(c + asciiCaseOffset)
+		} else {
+			b.WriteByte(c)
 		}
 	}
 	return b.String()
