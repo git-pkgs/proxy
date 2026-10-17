@@ -1140,6 +1140,22 @@ func (db *DB) GetMetadataCache(ecosystem, name string) (*MetadataCacheEntry, err
 	return &entry, nil
 }
 
+// RefreshMetadataCache sets fetched_at on the metadata cache row for ecosystem
+// and name, provided the row still records digest, and reports whether it did.
+// It is for an upstream 304, which leaves the stored document as it is.
+func (db *DB) RefreshMetadataCache(ecosystem, name, digest string, fetchedAt time.Time) (bool, error) {
+	// fetched_at is stored in UTC, as in UpsertMetadataCache.
+	res, err := db.Exec(db.Rebind(`
+		UPDATE metadata_cache SET fetched_at = ?, updated_at = ?
+		WHERE ecosystem = ? AND name = ? AND content_digest = ?
+	`), fetchedAt.UTC(), time.Now(), ecosystem, name, digest)
+	if err != nil {
+		return false, err
+	}
+	n, err := res.RowsAffected()
+	return n > 0, err
+}
+
 func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 	now := time.Now()
 	// fetched_at is a TIMESTAMP without zone on Postgres, and lib/pq reads it
