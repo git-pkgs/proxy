@@ -1010,7 +1010,7 @@ proxy mirror --concurrency 8 pkg:npm/lodash@4.17.21
 proxy mirror --platform linux/amd64 pkg:docker/library/alpine@3.20
 ```
 
-The mirror command accepts the same storage and database flags as `serve`. Already-cached artifacts are skipped.
+The mirror command accepts the same storage and database flags as `serve`. Already-cached artifacts are skipped. If any package version fails to mirror, the command lists the errors and exits with status 1, so a CI step that warms the cache fails on a partial mirror.
 
 A mirror API is also available when the server is running:
 

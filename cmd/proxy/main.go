@@ -599,6 +599,22 @@ func runMirror() {
 			fmt.Fprintf(os.Stderr, "  %s/%s@%s: %s\n", e.Ecosystem, e.Name, e.Version, e.Error)
 		}
 	}
+
+	// A partial mirror has to be visible in the exit status, or a CI step
+	// that prewarms the cache passes even when every download failed.
+	if code := mirrorExitCode(progress); code != 0 {
+		_ = db.Close()
+		os.Exit(code) //nolint:gocritic // db closed above
+	}
+}
+
+// mirrorExitCode returns the exit status for a finished mirror run: 1 when any
+// package version failed to mirror, 0 otherwise.
+func mirrorExitCode(progress *mirror.Progress) int {
+	if progress != nil && progress.Failed > 0 {
+		return 1
+	}
+	return 0
 }
 
 func printStats(db *database.DB, popular, recent int, asJSON bool) error {
