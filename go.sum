@@ -117,8 +117,8 @@ github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a h1:yDWHCSQ40h88yi
 github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a/go.mod h1:7Ga40egUymuWXxAe151lTNnCv97MddSOVsjpPPkityA=
 github.com/felixge/httpsnoop v1.1.0 h1:3YtUj32ZZkqZtt3sZZsClsymw/QDuVfpNhoA31zeORc=
 github.com/felixge/httpsnoop v1.1.0/go.mod h1:Zqxgdd+1Rkcz8euOqdr7lqgCRJztwr5hp9vDSi5UZCE=
-github.com/git-pkgs/archives v0.8.2-0.20261018114934-e96eb78b9948 h1:kLCEb8vPZtiXtMlOLbg+MbmF5FAKnsebsAQgFPXeR4s=
-github.com/git-pkgs/archives v0.8.2-0.20261018114934-e96eb78b9948/go.mod h1:GJ/h7NPTUYiPinOUxpYNsHFCUikYZcJXvugBvP1VGNc=
+github.com/git-pkgs/archives v0.8.2-0.20261018121304-37b9a6e2b526 h1:tOFUEAD+Dn1HxAKoIC4br3bAvMzskpO60KiTe04i7X4=
+github.com/git-pkgs/archives v0.8.2-0.20261018121304-37b9a6e2b526/go.mod h1:GJ/h7NPTUYiPinOUxpYNsHFCUikYZcJXvugBvP1VGNc=
 github.com/git-pkgs/artifacts v0.2.1 h1:VwdxR4yTDaqBZ34h0slxQBVyr2Xfa+QGOKCKviMx2xk=
 github.com/git-pkgs/artifacts v0.2.1/go.mod h1:Otosgq52pXT5UNN7lh6s/lszpWKVDO8XrOjN1M70/IA=
 github.com/git-pkgs/cooldown v0.3.0 h1:eAl2CQFwqXxluoVP9hHmropAf1VoV3gSxLMkN+NEu8A=
