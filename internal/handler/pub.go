@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/retention"
 )
 
@@ -95,6 +96,7 @@ func (h *PubHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	downloadURL := fmt.Sprintf("%s/packages/%s/versions/%s%s",
 		h.upstreamURL, url.PathEscape(name), url.PathEscape(version), pubArchiveExt)
+	h.discardVersionPage(name, version, filename)
 	result, err := h.proxy.GetOrFetchArtifactFromURL(
 		r.Context(), "pub", name, version, filename, downloadURL,
 	)
@@ -104,6 +106,32 @@ func (h *PubHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ServeArtifactRequest(w, r, result)
+}
+
+// discardVersionPage clears a cached archive that was fetched from a path
+// without the archive suffix. Proxy versions before the suffix check cached
+// pub.dev's HTML version page under the archive's name that way.
+func (h *PubHandler) discardVersionPage(name, version, filename string) {
+	_, versionPURL, err := packagePURLStrings("pub", name, version)
+	if err != nil {
+		return
+	}
+	record, err := h.proxy.DB.GetArtifact(versionPURL, filename)
+	if err != nil {
+		h.proxy.Logger.Warn("failed to read pub cache record",
+			"purl", versionPURL, "filename", filename, "error", err)
+		return
+	}
+	if record == nil || !record.StoragePath.Valid || record.Source == database.SourceLocal ||
+		strings.HasSuffix(record.UpstreamURL, pubArchiveExt) {
+		return
+	}
+	h.proxy.Logger.Warn("cached pub archive was fetched without the archive suffix, discarding",
+		"purl", versionPURL, "filename", filename, "upstream_url", record.UpstreamURL)
+	if err := h.proxy.DB.DiscardArtifact(versionPURL, filename, record.StoragePath.String); err != nil {
+		h.proxy.Logger.Warn("failed to discard pub cache record",
+			"purl", versionPURL, "filename", filename, "error", err)
+	}
 }
 
 // handlePackageMetadata proxies package metadata and rewrites archive URLs.

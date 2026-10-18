@@ -154,3 +154,55 @@ func TestPubDownloadRejectsEncodedQueryInName(t *testing.T) {
 		}
 	}
 }
+
+// Older versions cached the HTML version page as the archive. Such an entry
+// is fetched again instead of being served.
+func TestPubDownloadRefetchesCachedVersionPage(t *testing.T) {
+	proxy, db, store, fetcher := setupTestProxy(t)
+	seedPackage(t, db, store, "pub", "http", "1.2.0", "http-1.2.0.tar.gz", "<html>version page</html>")
+	art, err := db.GetArtifact("pkg:pub/http@1.2.0", "http-1.2.0.tar.gz")
+	if err != nil || art == nil {
+		t.Fatalf("GetArtifact: %v", err)
+	}
+	art.UpstreamURL = "https://pub.dev/packages/http/versions/1.2.0"
+	if err := db.UpsertArtifact(art); err != nil {
+		t.Fatalf("UpsertArtifact: %v", err)
+	}
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("archive")),
+		ContentType: "application/octet-stream",
+	}
+	h := NewPubHandlerWithUpstream(proxy, "http://localhost", "https://pub.example.com")
+
+	req := httptest.NewRequest(http.MethodGet, "/packages/http/versions/1.2.0.tar.gz", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if !fetcher.fetchCalled {
+		t.Fatal("cached version page was served without fetching upstream")
+	}
+	if got := w.Body.String(); got != "archive" {
+		t.Errorf("body = %q, want %q", got, "archive")
+	}
+}
+
+func TestPubDownloadServesCachedArchive(t *testing.T) {
+	proxy, db, store, fetcher := setupTestProxy(t)
+	seedPackage(t, db, store, "pub", "http", "1.2.0", "http-1.2.0.tar.gz", "cached archive")
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("refetched")),
+		ContentType: "application/octet-stream",
+	}
+	h := NewPubHandlerWithUpstream(proxy, "http://localhost", "https://pub.example.com")
+
+	req := httptest.NewRequest(http.MethodGet, "/packages/http/versions/1.2.0.tar.gz", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if fetcher.fetchCalled {
+		t.Errorf("cached archive fetched again from %q", fetcher.fetchedURL)
+	}
+	if got := w.Body.String(); got != "cached archive" {
+		t.Errorf("body = %q, want %q", got, "cached archive")
+	}
+}
