@@ -79,7 +79,7 @@ func TestNPMDenylistMetadata(t *testing.T) {
 	h := NewNPMHandler(p, "https://proxy.example", "")
 	for _, times := range []string{"", `,"time":{"1.0.0":"2020-01-01T00:00:00Z","2.0.0":"2021-01-01T00:00:00Z"}`} {
 		body := `{"versions":{"1.0.0":{},"2.0.0":{},"3.0.0-beta.1":{}},"dist-tags":{"latest":"2.0.0","beta":"2.0.0","next":"3.0.0-beta.1"}` + times + `}`
-		out, err := h.rewriteMetadata("@scope/demo", []byte(body))
+		out, _, err := h.rewriteMetadataKeeping("@scope/demo", []byte(body))
 		if err != nil {
 			t.Fatal(err)
 		}
@@ -87,7 +87,7 @@ func TestNPMDenylistMetadata(t *testing.T) {
 			t.Fatalf("incorrect metadata: %s", out)
 		}
 	}
-	out, err := h.rewriteMetadata("@scope/demo", []byte(`{"versions":{"2.0.0":{}},"dist-tags":{"latest":"2.0.0"}}`))
+	out, _, err := h.rewriteMetadataKeeping("@scope/demo", []byte(`{"versions":{"2.0.0":{}},"dist-tags":{"latest":"2.0.0"}}`))
 	if err != nil || strings.Contains(string(out), "2.0.0") {
 		t.Fatalf("all denied: %s, %v", out, err)
 	}
@@ -205,7 +205,7 @@ func TestDenylistAndCooldownCompose(t *testing.T) {
 	setTestDenylist(t, p, "pkg:npm/demo@1.0.0")
 	h := NewNPMHandler(p, "https://proxy.test", "")
 	body := fmt.Sprintf(`{"versions":{"1.0.0":{},"2.0.0":{},"3.0.0":{}},"time":{"1.0.0":"2020-01-01T00:00:00Z","2.0.0":"2021-01-01T00:00:00Z","3.0.0":%q},"dist-tags":{"latest":"3.0.0"}}`, time.Now().UTC().Format(time.RFC3339))
-	out, err := h.rewriteMetadata("demo", []byte(body))
+	out, _, err := h.rewriteMetadataKeeping("demo", []byte(body))
 	if err != nil || strings.Contains(string(out), "1.0.0") || strings.Contains(string(out), "3.0.0") || !strings.Contains(string(out), `"latest":"2.0.0"`) {
 		t.Fatalf("combined policy: %s, %v", out, err)
 	}

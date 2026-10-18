@@ -1,12 +1,9 @@
-package handler
+package npm
 
 import "github.com/Masterminds/semver/v3"
 
-func (h *NPMHandler) applyDenylistFiltering(metadata, versions map[string]any, packageName string) {
-	if h.proxy.Denylist == nil {
-		return
-	}
-	denied := h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName))
+func (h *transformer) applyDenylistFiltering(metadata, versions map[string]any) {
+	denied := h.DeniedVersions
 	if len(denied) == 0 {
 		return
 	}

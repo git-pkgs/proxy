@@ -2,21 +2,18 @@ package handler
 
 import (
 	"bytes"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
-	"maps"
 	"net/http"
 	"net/url"
-	"reflect"
-	"slices"
-	"sort"
 	"strings"
 	"sync"
 	"time"
 
 	"github.com/git-pkgs/integrity"
+	"github.com/git-pkgs/proxy/internal/jsonscan"
+	"github.com/git-pkgs/proxy/internal/metadata/npm"
 	"github.com/git-pkgs/proxy/internal/retention"
 )
 
@@ -360,444 +357,51 @@ func (h *NPMHandler) npmVersionMetadataUsesFilteredPackument(packageName string)
 	return false
 }
 
-// rewriteNPMVersionFromPackument picks one version entry out of an already
-// filtered packument and rewrites its tarball URL.
 func (h *NPMHandler) rewriteNPMVersionFromPackument(packageName, specifier string, packument []byte) ([]byte, error) {
-	filtered, err := h.rewriteMetadata(packageName, packument)
-	if err != nil {
-		return nil, err
-	}
-
-	target := specifier
-	if resolved, ok, err := lookupJSONString(filtered, "dist-tags", specifier); err != nil {
-		return nil, err
-	} else if ok {
-		target = resolved
-	}
-
-	if h.proxy.versionDenied("npm", packageName, target) {
-		return nil, ErrVersionDenied
-	}
-
-	versionRaw, err := lookupJSON(filtered, "versions", target)
-	if err != nil {
-		return nil, err
-	}
-	if len(versionRaw) == 0 {
-		return nil, ErrVersionNotFound
-	}
-
-	var out bytes.Buffer
-	h.writeNPMVersion(&out, packageName, target, versionRaw)
-	return out.Bytes(), nil
+	out, err := npm.Version(packageName, specifier, packument, h.npmRewriteOptions(packageName, nil))
+	return out, npmRewriteError(err)
 }
 
-// rewriteMetadata rewrites tarball URLs in npm package metadata to point at this proxy.
-// If cooldown is enabled, versions published too recently are filtered out.
-//
-// The document is never decoded as a whole. A full packument can run to tens
-// of megabytes, and decoding it into generic maps took many times that in
-// memory for every rewrite. Instead the version names, time map and dist-tags
-// are decoded to decide what to keep, and the response is assembled from
-// slices of the original bytes: only each version's tarball URL, and the time
-// map and dist-tags when filtering changed them, are written fresh. Everything
-// else reaches the client byte for byte as upstream sent it.
-func (h *NPMHandler) rewriteMetadata(packageName string, body []byte) ([]byte, error) {
-	out, _, err := h.rewriteMetadataKeeping(packageName, body)
-	return out, err
-}
-
-// rewriteMetadataKeeping is rewriteMetadata that also reports the versions it
-// kept.
 func (h *NPMHandler) rewriteMetadataKeeping(packageName string, body []byte) ([]byte, []string, error) {
 	return h.rewriteMetadataWithLocal(packageName, body, nil)
 }
 
-// rewriteMetadataWithLocal is rewriteMetadataKeeping that also lists the
-// pushed versions in local, in place of any upstream entry with the same
-// version. Cooldown and the denylist only filter upstream versions, and
-// dist-tags stay as upstream has them.
 func (h *NPMHandler) rewriteMetadataWithLocal(packageName string, body []byte, local []npmLocalEntry) ([]byte, []string, error) {
-	doc, err := indexNPMPackument(body)
-	if err != nil {
-		return nil, nil, err
-	}
+	out, kept, err := npm.Rewrite(packageName, body, h.npmRewriteOptions(packageName, local))
+	return out, kept, npmRewriteError(err)
+}
 
-	versionsRaw := doc.value(doc.versionsAt)
-	if len(versionsRaw) == 0 || versionsRaw[0] != '{' {
-		version, ok, err := lookupJSONString(body, "version")
-		if err != nil {
-			return nil, nil, err
-		}
-		if ok {
-			if h.proxy.versionDenied("npm", packageName, version) {
-				return nil, nil, ErrVersionDenied
-			}
-			var out bytes.Buffer
-			h.writeNPMVersion(&out, packageName, version, body)
-			return out.Bytes(), []string{version}, nil
-		}
-		if len(h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName))) != 0 {
-			return nil, nil, errors.New("npm metadata has no versions object")
-		}
-		return body, nil, nil // No versions to rewrite
+func (h *NPMHandler) npmRewriteOptions(packageName string, local []npmLocalEntry) npm.Options {
+	return npm.Options{
+		ProxyURL:       h.proxyURL,
+		Cooldown:       h.proxy.Cooldown,
+		DeniedVersions: h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName)),
+		EvaluatedAt:    time.Now(),
+		LocalVersions:  local,
+		OnTarballRewrite: func(version, oldURL, newURL string) {
+			h.proxy.Logger.Debug("rewrote tarball URL", "package", packageName, "version", version,
+				"old", oldURL, "new", newURL)
+		},
+		OnCooldownFilter: func(version, publishedAt string) {
+			h.proxy.Logger.Info("cooldown: filtering npm version", "package", packageName, "version", version,
+				"published", publishedAt)
+		},
 	}
+}
 
-	// The filters only look at which versions exist, so they run on a map of
-	// version names alongside the decoded time map and dist-tags.
-	versions := map[string]any{}
-	if err := forEachJSONMember(versionsRaw, func(m jsonMember) error {
-		version, err := jsonKey(m.key(versionsRaw))
-		versions[version] = nil
+func npmRewriteError(err error) error {
+	switch {
+	case errors.Is(err, npm.ErrVersionDenied):
+		return ErrVersionDenied
+	case errors.Is(err, npm.ErrVersionNotFound):
+		return ErrVersionNotFound
+	default:
 		return err
-	}); err != nil {
-		return nil, nil, err
-	}
-	metadata := map[string]any{}
-	timeMap := doc.decodeObject(doc.timeAt, metadata, "time")
-	distTags := doc.decodeObject(doc.tagsAt, metadata, "dist-tags")
-	timeEntries := len(timeMap)
-	originalTags := maps.Clone(distTags)
-
-	h.applyCooldownFiltering(metadata, versions, packageName)
-	h.applyDenylistFiltering(metadata, versions, packageName)
-	for _, e := range local {
-		delete(versions, e.version)
-	}
-
-	// Untouched members are copied as they are; the three the filters
-	// handled are written from their filtered state, and only when it changed.
-	out, err := doc.write(func(out *bytes.Buffer, i int) error {
-		switch {
-		case i == doc.versionsAt:
-			return h.writeNPMVersions(out, packageName, versionsRaw, versions, local)
-		case i == doc.timeAt && timeMap != nil && (len(timeMap) != timeEntries || len(local) > 0):
-			pushedAt := make([][2]string, 0, len(local))
-			for _, e := range local {
-				pushedAt = append(pushedAt, [2]string{e.version, e.time})
-			}
-			return writeFilteredJSONObjectWith(out, doc.value(i), func(key string) bool {
-				_, ok := timeMap[key]
-				_, pushed := findNPMLocalEntry(local, key)
-				return ok && !pushed
-			}, pushedAt)
-		case i == doc.tagsAt && distTags != nil && !reflect.DeepEqual(distTags, originalTags):
-			encoded, err := json.Marshal(distTags)
-			out.Write(encoded)
-			return err
-		default:
-			out.Write(doc.value(i))
-			return nil
-		}
-	})
-	kept := slices.Collect(maps.Keys(versions))
-	for _, e := range local {
-		kept = append(kept, e.version)
-	}
-	return out, kept, err
-}
-
-// npmPackument is a packument's top-level members as offsets into its bytes,
-// with the positions of the members rewriteMetadata filters, or -1 for those
-// it lacks. A key that repeats is recorded at its last occurrence, the one
-// JSON.parse keeps.
-type npmPackument struct {
-	body                       []byte
-	members                    []jsonMember
-	versionsAt, timeAt, tagsAt int
-}
-
-func indexNPMPackument(body []byte) (*npmPackument, error) {
-	if !json.Valid(body) {
-		return nil, errors.New("npm metadata is not valid JSON")
-	}
-	doc := &npmPackument{body: body, versionsAt: -1, timeAt: -1, tagsAt: -1}
-	err := forEachJSONMember(body, func(m jsonMember) error {
-		switch key := m.key(body); {
-		case jsonKeyIs(key, "versions"):
-			doc.versionsAt = len(doc.members)
-		case jsonKeyIs(key, "time"):
-			doc.timeAt = len(doc.members)
-		case jsonKeyIs(key, "dist-tags"):
-			doc.tagsAt = len(doc.members)
-		}
-		doc.members = append(doc.members, m)
-		return nil
-	})
-	return doc, err
-}
-
-// value returns the raw value of member i, or nil when i is -1.
-func (d *npmPackument) value(i int) []byte {
-	if i < 0 {
-		return nil
-	}
-	return d.members[i].value(d.body)
-}
-
-// decodeObject decodes member i into metadata[name] and returns it when it is
-// an object. The filters edit the returned map in place.
-func (d *npmPackument) decodeObject(i int, metadata map[string]any, name string) map[string]any {
-	raw := d.value(i)
-	if raw == nil {
-		return nil
-	}
-	var value any
-	if err := json.Unmarshal(raw, &value); err != nil {
-		return nil
-	}
-	metadata[name] = value
-	object, _ := value.(map[string]any)
-	return object
-}
-
-// write assembles the document in member order, with writeValue writing each
-// member's value. Earlier duplicates of the filtered keys are dropped: they
-// would carry unfiltered data, and JSON.parse ignores them anyway.
-func (d *npmPackument) write(writeValue func(out *bytes.Buffer, i int) error) ([]byte, error) {
-	var out bytes.Buffer
-	out.Grow(len(d.body) + len(d.body)/8)
-	out.WriteByte('{')
-	first := true
-	for i, m := range d.members {
-		if i != d.versionsAt && i != d.timeAt && i != d.tagsAt {
-			key := m.key(d.body)
-			if jsonKeyIs(key, "versions") || jsonKeyIs(key, "time") || jsonKeyIs(key, "dist-tags") {
-				continue
-			}
-		}
-		if !first {
-			out.WriteByte(',')
-		}
-		first = false
-		out.Write(m.key(d.body))
-		out.WriteByte(':')
-		if err := writeValue(&out, i); err != nil {
-			return nil, err
-		}
-	}
-	out.WriteByte('}')
-	return out.Bytes(), nil
-}
-
-// writeNPMVersions writes the versions object, keeping the versions still in
-// keep and pointing each kept version's tarball at this proxy, followed by the
-// pushed versions in local.
-func (h *NPMHandler) writeNPMVersions(out *bytes.Buffer, packageName string, versionsRaw []byte, keep map[string]any, local []npmLocalEntry) error {
-	out.WriteByte('{')
-	first := true
-	err := forEachJSONMember(versionsRaw, func(m jsonMember) error {
-		version, err := jsonKey(m.key(versionsRaw))
-		if err != nil {
-			return err
-		}
-		if _, ok := keep[version]; !ok {
-			return nil
-		}
-		if !first {
-			out.WriteByte(',')
-		}
-		first = false
-		out.Write(m.key(versionsRaw))
-		out.WriteByte(':')
-		h.writeNPMVersion(out, packageName, version, m.value(versionsRaw))
-		return nil
-	})
-	for _, e := range local {
-		if !first {
-			out.WriteByte(',')
-		}
-		first = false
-		key, _ := json.Marshal(e.version)
-		out.Write(key)
-		out.WriteByte(':')
-		out.Write(e.entry)
-	}
-	out.WriteByte('}')
-	return err
-}
-
-// writeNPMVersion writes one version entry with its dist.tarball pointing at
-// this proxy. An entry without a string tarball is written unchanged.
-func (h *NPMHandler) writeNPMVersion(out *bytes.Buffer, packageName, version string, raw []byte) {
-	dist, ok, err := findJSONMember(raw, "dist")
-	if err != nil || !ok {
-		out.Write(raw)
-		return
-	}
-	distRaw := dist.value(raw)
-	tarball, ok, err := findJSONMember(distRaw, "tarball")
-	if err != nil || !ok || distRaw[tarball.valStart] != '"' {
-		out.Write(raw)
-		return
-	}
-	var oldTarball string
-	if err := json.Unmarshal(tarball.value(distRaw), &oldTarball); err != nil {
-		out.Write(raw)
-		return
-	}
-
-	newTarball := h.proxyTarballURL(packageName, version, oldTarball)
-	encoded, err := json.Marshal(newTarball)
-	if err != nil {
-		out.Write(raw)
-		return
-	}
-	out.Write(raw[:dist.valStart+tarball.valStart])
-	out.Write(encoded)
-	out.Write(raw[dist.valStart+tarball.valEnd:])
-
-	h.proxy.Logger.Debug("rewrote tarball URL",
-		"package", packageName, "version", version,
-		"old", oldTarball, "new", newTarball)
-}
-
-// writeFilteredJSONObject writes the object obj holds, keeping the members
-// whose decoded key keep accepts.
-func writeFilteredJSONObject(out *bytes.Buffer, obj []byte, keep func(string) bool) error {
-	return writeFilteredJSONObjectWith(out, obj, keep, nil)
-}
-
-// writeFilteredJSONObjectWith is writeFilteredJSONObject followed by extra
-// string members.
-func writeFilteredJSONObjectWith(out *bytes.Buffer, obj []byte, keep func(string) bool, extra [][2]string) error {
-	out.WriteByte('{')
-	first := true
-	err := forEachJSONMember(obj, func(m jsonMember) error {
-		key, err := jsonKey(m.key(obj))
-		if err != nil {
-			return err
-		}
-		if !keep(key) {
-			return nil
-		}
-		if !first {
-			out.WriteByte(',')
-		}
-		first = false
-		out.Write(obj[m.keyStart:m.valEnd])
-		return nil
-	})
-	for _, member := range extra {
-		if !first {
-			out.WriteByte(',')
-		}
-		first = false
-		key, _ := json.Marshal(member[0])
-		value, _ := json.Marshal(member[1])
-		out.Write(key)
-		out.WriteByte(':')
-		out.Write(value)
-	}
-	out.WriteByte('}')
-	return err
-}
-
-// applyCooldownFiltering removes versions that are too recently published,
-// and updates dist-tags.latest if the current latest was filtered out.
-func (h *NPMHandler) applyCooldownFiltering(metadata map[string]any, versions map[string]any, packageName string) {
-	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		return
-	}
-
-	timeMap, _ := metadata["time"].(map[string]any)
-	if timeMap == nil {
-		return
-	}
-
-	packagePURL := canonicalPackagePURL("npm", packageName)
-
-	for version := range versions {
-		publishedStr, ok := timeMap[version].(string)
-		if !ok {
-			continue
-		}
-		publishedAt, err := time.Parse(time.RFC3339, publishedStr)
-		if err != nil {
-			continue
-		}
-		if !h.proxy.Cooldown.IsAllowed("npm", packagePURL, publishedAt) {
-			h.proxy.Logger.Info("cooldown: filtering npm version",
-				"package", packageName, "version", version,
-				"published", publishedStr)
-			delete(versions, version)
-			delete(timeMap, version)
-		}
-	}
-
-	h.updateDistTagsLatest(metadata, versions, timeMap)
-}
-
-// updateDistTagsLatest updates the dist-tags.latest field if the current latest
-// version was removed by cooldown filtering.
-func (h *NPMHandler) updateDistTagsLatest(metadata, versions, timeMap map[string]any) {
-	distTags, ok := metadata["dist-tags"].(map[string]any)
-	if !ok {
-		return
-	}
-
-	latest, ok := distTags["latest"].(string)
-	if !ok {
-		return
-	}
-
-	if _, exists := versions[latest]; exists {
-		return
-	}
-
-	if newLatest := h.findNewestVersion(versions, timeMap); newLatest != "" {
-		distTags["latest"] = newLatest
 	}
 }
 
-// proxyTarballURL returns the proxy URL that serves the tarball upstream
-// lists at tarball for this version.
 func (h *NPMHandler) proxyTarballURL(packageName, version, tarball string) string {
-	filename := tarball
-	if idx := strings.LastIndex(tarball, "/"); idx >= 0 {
-		filename = tarball[idx+1:]
-	}
-	if h.extractVersionFromFilename(packageName, filename) != version {
-		_, shortName, scoped := strings.Cut(packageName, "/")
-		if !scoped {
-			shortName = packageName
-		}
-		filename = shortName + "-" + version + ".tgz"
-	}
-
-	return fmt.Sprintf("%s/npm/%s/-/%s", h.proxyURL, url.PathEscape(packageName), filename)
-}
-
-// findNewestVersion returns the version string with the most recent timestamp
-// from the remaining versions, using the time map.
-func (h *NPMHandler) findNewestVersion(versions map[string]any, timeMap map[string]any) string {
-	if timeMap == nil {
-		return ""
-	}
-
-	type versionTime struct {
-		version string
-		t       time.Time
-	}
-
-	var vts []versionTime
-	for v := range versions {
-		if ts, ok := timeMap[v].(string); ok {
-			if t, err := time.Parse(time.RFC3339, ts); err == nil {
-				vts = append(vts, versionTime{v, t})
-			}
-		}
-	}
-
-	if len(vts) == 0 {
-		return ""
-	}
-
-	sort.Slice(vts, func(i, j int) bool {
-		return vts[i].t.After(vts[j].t)
-	})
-
-	return vts[0].version
+	return npm.TarballURL(h.proxyURL, packageName, version, tarball)
 }
 
 // handleDownload serves a package tarball, fetching and caching from upstream if needed.
@@ -898,13 +502,13 @@ func (h *NPMHandler) getTarball(r *http.Request, registryURL, packageName, versi
 // returns "" when neither is usable, and the tarball is fetched unverified as
 // before.
 func npmVersionIntegrity(body []byte, version string) string {
-	sri, _, _ := lookupJSONString(body, "versions", version, "dist", "integrity")
+	sri, _, _ := jsonscan.LookupString(body, "versions", version, "dist", "integrity")
 	if sri != "" {
 		if _, err := integrity.ParseSRI(sri); err == nil {
 			return sri
 		}
 	}
-	shasum, _, _ := lookupJSONString(body, "versions", version, "dist", "shasum")
+	shasum, _, _ := jsonscan.LookupString(body, "versions", version, "dist", "shasum")
 	return sha1Checksum(shasum)
 }
 
@@ -912,7 +516,7 @@ func npmVersionIntegrity(body []byte, version string) string {
 // or "" if it has none. It reads that one value in place rather than decoding
 // every version, since it runs on each tarball the proxy has not cached yet.
 func npmVersionTarball(body []byte, version string) string {
-	tarball, _, _ := lookupJSONString(body, "versions", version, "dist", "tarball")
+	tarball, _, _ := jsonscan.LookupString(body, "versions", version, "dist", "tarball")
 	return tarball
 }
 
@@ -978,7 +582,7 @@ func (h *NPMHandler) versionInCooldown(packageName, version string, metadata fun
 		return false
 	}
 
-	published, ok, err := lookupJSONString(body, "time", version)
+	published, ok, err := jsonscan.LookupString(body, "time", version)
 	if err != nil {
 		h.proxy.Logger.Warn("cooldown: could not parse npm metadata for download check",
 			"package", packageName, "version", version, "error", err)
@@ -1076,28 +680,6 @@ func (h *NPMHandler) parseDownloadPath(path string) (packageName, filename strin
 	return packageName, filename
 }
 
-// extractVersionFromFilename extracts version from npm tarball filename.
-// e.g., "lodash-4.17.21.tgz" -> "4.17.21"
-// e.g., "core-7.23.0.tgz" for @babel/core -> "7.23.0"
 func (h *NPMHandler) extractVersionFromFilename(packageName, filename string) string {
-	// Remove .tgz extension
-	if !strings.HasSuffix(filename, ".tgz") {
-		return ""
-	}
-	base := strings.TrimSuffix(filename, ".tgz")
-
-	// For scoped packages, the filename uses the short name
-	shortName := packageName
-	if strings.Contains(packageName, "/") {
-		parts := strings.SplitN(packageName, "/", scopedParts)
-		shortName = parts[1]
-	}
-
-	// Expected format: {shortName}-{version}
-	prefix := shortName + "-"
-	if !strings.HasPrefix(base, prefix) {
-		return ""
-	}
-
-	return strings.TrimPrefix(base, prefix)
+	return npm.VersionFromFilename(packageName, filename)
 }

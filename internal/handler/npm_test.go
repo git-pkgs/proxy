@@ -153,7 +153,7 @@ func TestNPMRewriteMetadata(t *testing.T) {
 		}
 	}`
 
-	output, err := h.rewriteMetadata("lodash", []byte(input))
+	output, _, err := h.rewriteMetadataKeeping("lodash", []byte(input))
 	if err != nil {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
@@ -193,7 +193,7 @@ func TestNPMRewriteMetadataScopedPackage(t *testing.T) {
 		}
 	}`
 
-	output, err := h.rewriteMetadata("@babel/core", []byte(input))
+	output, _, err := h.rewriteMetadataKeeping("@babel/core", []byte(input))
 	if err != nil {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
@@ -308,7 +308,7 @@ func TestNPMRewriteMetadataCooldown(t *testing.T) {
 		}
 	}`
 
-	output, err := h.rewriteMetadata("testpkg", []byte(input))
+	output, _, err := h.rewriteMetadataKeeping("testpkg", []byte(input))
 	if err != nil {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
@@ -364,7 +364,7 @@ func TestNPMRewriteMetadataCooldownExemptPackage(t *testing.T) {
 		}
 	}`
 
-	output, err := h.rewriteMetadata("testpkg", []byte(input))
+	output, _, err := h.rewriteMetadataKeeping("testpkg", []byte(input))
 	if err != nil {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
@@ -1065,7 +1065,7 @@ func TestNPMMetadataPath(t *testing.T) {
 func TestNPMVersionMetadataKeepsVersionSegment(t *testing.T) {
 	tests := []struct {
 		request, upstreamPath, wantTarball string
-		body                                string
+		body                               string
 	}{
 		{
 			request:      "/lodash/4.17.21",

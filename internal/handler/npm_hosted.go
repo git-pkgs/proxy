@@ -8,15 +8,10 @@ import (
 	"time"
 
 	"github.com/Masterminds/semver/v3"
+	"github.com/git-pkgs/proxy/internal/metadata/npm"
 )
 
-// npmLocalEntry is a pushed version as a packument lists it: the version
-// entry built from its package.json, and the time it was pushed.
-type npmLocalEntry struct {
-	version string
-	entry   json.RawMessage
-	time    string
-}
+type npmLocalEntry = npm.LocalVersion
 
 // npmLocalEntries returns the pushed versions of a package as packument
 // entries, or nil when there are none or hosted packages are disabled.
@@ -42,14 +37,14 @@ func (h *NPMHandler) npmLocalEntries(packageName string) ([]npmLocalEntry, error
 		if err != nil {
 			return nil, err
 		}
-		entries = append(entries, npmLocalEntry{version: lv.Version, entry: entry, time: lv.PushedAt.Format(time.RFC3339)})
+		entries = append(entries, npmLocalEntry{Version: lv.Version, Entry: entry, PublishedAt: lv.PushedAt.Format(time.RFC3339)})
 	}
 	return entries, nil
 }
 
 func findNPMLocalEntry(local []npmLocalEntry, version string) (npmLocalEntry, bool) {
 	for _, e := range local {
-		if e.version == version {
+		if e.Version == version {
 			return e, true
 		}
 	}
@@ -81,7 +76,7 @@ func (h *NPMHandler) serveLocalMetadata(w http.ResponseWriter, r *http.Request, 
 	case req.versionLookup && pushed:
 		w.Header().Set(headerContentType, contentTypeJSON)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(e.entry)
+		_, _ = w.Write(e.Entry)
 	case h.proxy.hostedOnly("npm", req.packageName):
 		h.serveHostedOnlyMetadata(w, r, req.packageName, req.specifier, req.versionLookup, req.metadataCacheKey, local)
 	case len(local) > 0 && !req.versionLookup:
@@ -144,7 +139,7 @@ func (h *NPMHandler) serveHostedOnlyMetadata(w http.ResponseWriter, r *http.Requ
 		}
 		w.Header().Set(headerContentType, contentTypeJSON)
 		w.WriteHeader(http.StatusOK)
-		_, _ = w.Write(e.entry)
+		_, _ = w.Write(e.Entry)
 		return
 	}
 	out, err := localNPMPackument(packageName, local)
@@ -161,8 +156,8 @@ func localNPMPackument(packageName string, local []npmLocalEntry) ([]byte, error
 	versions := make(map[string]json.RawMessage, len(local))
 	times := make(map[string]string, len(local))
 	for _, e := range local {
-		versions[e.version] = e.entry
-		times[e.version] = e.time
+		versions[e.Version] = e.Entry
+		times[e.Version] = e.PublishedAt
 	}
 	return json.Marshal(map[string]any{
 		"name":      packageName,
@@ -179,10 +174,10 @@ func latestNPMVersion(local []npmLocalEntry) string {
 	var latestSemver *semver.Version
 	semverOnly := true
 	for _, e := range local {
-		if e.time > latestTime {
-			latest, latestTime = e.version, e.time
+		if e.PublishedAt > latestTime {
+			latest, latestTime = e.Version, e.PublishedAt
 		}
-		v, err := semver.NewVersion(e.version)
+		v, err := semver.NewVersion(e.Version)
 		if err != nil {
 			semverOnly = false
 			continue
