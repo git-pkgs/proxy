@@ -222,6 +222,10 @@ type Proxy struct {
 	// Nil leaves every request to rewrite its own copy.
 	rewrites *rewriteCache
 
+	// publishIndexes keeps publish times read out of large metadata
+	// documents for the download cooldown check; see publishIndex.
+	publishIndexes publishIndexCache
+
 	// now is the clock rewritten metadata is dated by, and started the time
 	// the process started; see metadataDate.
 	now     func() time.Time
