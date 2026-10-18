@@ -190,6 +190,9 @@ type Config struct {
 	// Disabled by default to prevent unauthenticated users from triggering downloads.
 	MirrorAPI bool `json:"mirror_api" yaml:"mirror_api"`
 
+	// Mirror configures scheduled mirroring.
+	Mirror MirrorConfig `json:"mirror" yaml:"mirror"`
+
 	// Hosted configures pushing packages to the proxy (/api/hosted).
 	Hosted HostedConfig `json:"hosted" yaml:"hosted"`
 
@@ -1343,6 +1346,8 @@ func (c *Config) validateCacheArtifacts() error {
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with storage.direct_serve: no artifacts are stored to redirect to")
 	case c.MirrorAPI:
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror_api: mirrored artifacts would never be served")
+	case len(c.Mirror.Schedules) > 0:
+		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror.schedules: mirrored artifacts would never be served")
 	case c.Hosted.Enabled:
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with hosted.enabled: pushed packages would never be served")
 	}
@@ -1375,6 +1380,10 @@ func (c *Config) validateComponents() error {
 	}
 
 	if err := c.Hosted.Validate(); err != nil {
+		return err
+	}
+
+	if err := c.Mirror.Validate(); err != nil {
 		return err
 	}
 
