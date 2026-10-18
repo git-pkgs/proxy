@@ -2,7 +2,10 @@ package handler
 
 import (
 	"net/http"
+	"sync"
 	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 // publishTimeLookup reads a version's publish time from upstream metadata. ok
@@ -79,4 +82,63 @@ func (p *Proxy) versionInCooldown(d downloadVersion) bool {
 	}
 
 	return !p.Cooldown.IsAllowed(d.ecosystem, policyKey, published)
+}
+
+// maxPublishIndexes bounds how many documents publishIndexCache keeps an
+// index for.
+const maxPublishIndexes = 64
+
+// publishIndexCache keeps, for each large metadata document, the publish
+// times a download check reads from it, so a document is decompressed and
+// parsed once per version from upstream rather than on every download.
+// Concurrent checks for a document not indexed yet share one parse.
+type publishIndexCache struct {
+	mu      sync.Mutex
+	entries map[string]publishIndexEntry
+	group   singleflight.Group
+}
+
+type publishIndexEntry struct {
+	digest string
+	index  any
+}
+
+// publishIndex returns build's index of res, reusing the one built for the
+// same document under key. res.digest identifies the document; without one,
+// as when the metadata cache is off, the index is built for this call alone.
+func publishIndex[V any](p *Proxy, key string, res metadataResult, build func([]byte, string) (map[string]V, error)) (map[string]V, error) {
+	c := &p.publishIndexes
+	if res.digest == "" {
+		return build(res.body, res.contentEncoding)
+	}
+	c.mu.Lock()
+	if e, ok := c.entries[key]; ok && e.digest == res.digest {
+		c.mu.Unlock()
+		return e.index.(map[string]V), nil
+	}
+	c.mu.Unlock()
+
+	v, err, _ := c.group.Do(key+"\x00"+res.digest, func() (any, error) {
+		index, err := build(res.body, res.contentEncoding)
+		if err != nil {
+			return nil, err
+		}
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if c.entries == nil {
+			c.entries = make(map[string]publishIndexEntry)
+		}
+		if _, ok := c.entries[key]; !ok && len(c.entries) >= maxPublishIndexes {
+			for evict := range c.entries {
+				delete(c.entries, evict)
+				break
+			}
+		}
+		c.entries[key] = publishIndexEntry{digest: res.digest, index: index}
+		return index, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+	return v.(map[string]V), nil
 }

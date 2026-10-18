@@ -26,9 +26,10 @@ const (
 // is always named demo, so the policy key is pkg:{ecosystem}/demo.
 type downloadCooldownCase struct {
 	ecosystem string
-	// storedName is the name the artifact is cached under; empty when the
-	// ecosystem keeps no publish time in the versions table.
-	storedName string
+	// cachedName is the name the artifact is cached under, and keepsTime
+	// whether the publish time is kept in its versions row.
+	cachedName string
+	keepsTime  bool
 	// artifactVersion maps a release to the version the artifact is cached
 	// under, and filename and path to its file and download path.
 	artifactVersion func(version string) string
@@ -48,7 +49,8 @@ func downloadCooldownCases() []downloadCooldownCase {
 	return []downloadCooldownCase{
 		{
 			ecosystem:       "cargo",
-			storedName:      "demo",
+			cachedName:      "demo",
+			keepsTime:       true,
 			artifactVersion: sameVersion,
 			filename:        func(v string) string { return "demo-" + v + ".crate" },
 			path:            func(v string) string { return "/crates/demo/" + v + "/download" },
@@ -57,7 +59,8 @@ func downloadCooldownCases() []downloadCooldownCase {
 		},
 		{
 			ecosystem:  "gem",
-			storedName: "demo",
+			cachedName: "demo",
+			keepsTime:  true,
 			// Platform gems carry the platform in the filename and the
 			// cached version, but not in the versions API number.
 			artifactVersion: func(v string) string { return v + "-x86_64-linux" },
@@ -68,7 +71,8 @@ func downloadCooldownCases() []downloadCooldownCase {
 		},
 		{
 			ecosystem:       "hex",
-			storedName:      "demo",
+			cachedName:      "demo",
+			keepsTime:       true,
 			artifactVersion: sameVersion,
 			filename:        func(v string) string { return "demo-" + v + ".tar" },
 			path:            func(v string) string { return "/tarballs/demo-" + v + ".tar" },
@@ -79,7 +83,8 @@ func downloadCooldownCases() []downloadCooldownCase {
 		},
 		{
 			ecosystem:       "pub",
-			storedName:      "demo",
+			cachedName:      "demo",
+			keepsTime:       true,
 			artifactVersion: sameVersion,
 			filename:        func(v string) string { return "demo-" + v + ".tar.gz" },
 			path:            func(v string) string { return "/packages/demo/versions/" + v + ".tar.gz" },
@@ -88,9 +93,10 @@ func downloadCooldownCases() []downloadCooldownCase {
 		},
 		{
 			// Conda caches under {channel}/{name}, but the policy is keyed by
-			// the name alone, as the repodata filter keys it.
+			// the name alone, as the repodata filter keys it. Each build has
+			// its own timestamp, so none is kept in the version's row.
 			ecosystem:       "conda",
-			storedName:      "conda-forge/demo",
+			cachedName:      "conda-forge/demo",
 			artifactVersion: sameVersion,
 			filename:        func(v string) string { return "noarch/demo-" + v + "-py_0.conda" },
 			path:            func(v string) string { return "/conda-forge/noarch/demo-" + v + "-py_0.conda" },
@@ -102,6 +108,7 @@ func downloadCooldownCases() []downloadCooldownCase {
 		{
 			// Helm caches charts under the repository and digest, so the
 			// chart name and time come from the index on every check.
+			cachedName:      "stable",
 			ecosystem:       "helm",
 			artifactVersion: func(v string) string { return sha256Hex(chartContent(v)) },
 			filename:        func(v string) string { return "demo-" + v + ".tgz" },
@@ -217,12 +224,11 @@ func helmCooldownMetadata(w http.ResponseWriter, r *http.Request, times map[stri
 func (c downloadCooldownCase) seedCachedArtifact(t *testing.T, proxy *Proxy, version string) {
 	t.Helper()
 	db, store := proxy.DB, proxy.Storage.(*mockStorage)
-	name := c.storedName
 	content := "artifact " + version
 	if c.ecosystem == "helm" {
-		name, content = "stable", chartContent(version)
+		content = chartContent(version)
 	}
-	seedPackage(t, db, store, c.ecosystem, name, c.artifactVersion(version), c.filename(version), content)
+	seedPackage(t, db, store, c.ecosystem, c.cachedName, c.artifactVersion(version), c.filename(version), content)
 }
 
 // TestDownloadCooldownWithholdsCachedArtifacts requests each ecosystem's
@@ -267,10 +273,10 @@ func TestDownloadCooldownWithholdsCachedArtifacts(t *testing.T) {
 				if w.Code == http.StatusOK && w.Body.String() == "" {
 					t.Error("served an empty body")
 				}
-				if c.storedName == "" || times[version].IsZero() {
+				if !c.keepsTime || times[version].IsZero() {
 					return
 				}
-				ver, err := db.GetVersionByPURL(canonicalVersionPURL(c.ecosystem, c.storedName, c.artifactVersion(version)))
+				ver, err := db.GetVersionByPURL(canonicalVersionPURL(c.ecosystem, c.cachedName, c.artifactVersion(version)))
 				if err != nil || ver == nil || !ver.PublishedAt.Valid {
 					t.Fatalf("publish time not stored: %+v, %v", ver, err)
 				}
@@ -291,7 +297,7 @@ func TestDownloadCooldownUsesStoredPublishTime(t *testing.T) {
 	t.Cleanup(upstream.Close)
 
 	for _, c := range downloadCooldownCases() {
-		if c.storedName == "" {
+		if !c.keepsTime {
 			continue
 		}
 		t.Run(c.ecosystem, func(t *testing.T) {
@@ -299,8 +305,8 @@ func TestDownloadCooldownUsesStoredPublishTime(t *testing.T) {
 			proxy.HTTPClient = upstream.Client()
 			fetcher.fetchErr = errors.New("artifact must be served from the cache")
 			c.seedCachedArtifact(t, proxy, cooldownRecentVersion)
-			versionPURL := canonicalVersionPURL(c.ecosystem, c.storedName, c.artifactVersion(cooldownRecentVersion))
-			packagePURL := canonicalPackagePURL(c.ecosystem, c.storedName)
+			versionPURL := canonicalVersionPURL(c.ecosystem, c.cachedName, c.artifactVersion(cooldownRecentVersion))
+			packagePURL := canonicalPackagePURL(c.ecosystem, c.cachedName)
 			if err := db.SetVersionPublishedAt(versionPURL, packagePURL, time.Now().Add(-time.Hour)); err != nil {
 				t.Fatalf("seeding publish time: %v", err)
 			}
@@ -320,7 +326,7 @@ func TestDownloadCooldownUsesStoredPublishTime(t *testing.T) {
 // needs the index to learn the chart name, so it is left out.
 func TestDownloadCooldownOtherPackagesSkipLookup(t *testing.T) {
 	for _, c := range downloadCooldownCases() {
-		if c.storedName == "" {
+		if c.ecosystem == "helm" {
 			continue
 		}
 		t.Run(c.ecosystem, func(t *testing.T) {
@@ -343,5 +349,71 @@ func TestDownloadCooldownOtherPackagesSkipLookup(t *testing.T) {
 				t.Fatalf("status = %d, want 200 (body %q)", w.Code, strings.TrimSpace(w.Body.String()))
 			}
 		})
+	}
+}
+
+// TestCondaDownloadCooldownPerBuild checks that builds of one version are
+// judged by their own timestamps, whichever is requested first: a rebuild
+// inside the window is withheld and an old build stays available.
+func TestCondaDownloadCooldownPerBuild(t *testing.T) {
+	now := time.Now()
+	repodata := map[string]any{"packages.conda": map[string]any{
+		"demo-1.0.0-py_0.conda": map[string]any{"name": "demo", "version": "1.0.0", "timestamp": now.Add(-400 * 24 * time.Hour).UnixMilli()},
+		"demo-1.0.0-py_1.conda": map[string]any{"name": "demo", "version": "1.0.0", "timestamp": now.Add(-time.Hour).UnixMilli()},
+	}}
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_ = json.NewEncoder(w).Encode(repodata)
+	}))
+	t.Cleanup(upstream.Close)
+
+	builds := map[string]int{"py_0": http.StatusOK, "py_1": http.StatusNotFound}
+	for _, order := range [][]string{{"py_0", "py_1", "py_0"}, {"py_1", "py_0", "py_1"}} {
+		t.Run(strings.Join(order, ","), func(t *testing.T) {
+			proxy, db, store, fetcher := setupTestProxy(t)
+			proxy.HTTPClient = upstream.Client()
+			fetcher.fetchErr = errors.New("artifact must be served from the cache")
+			for build := range builds {
+				filename := "noarch/demo-1.0.0-" + build + ".conda"
+				seedPackage(t, db, store, "conda", "conda-forge/demo", "1.0.0", filename, "artifact "+build)
+			}
+			proxy.Cooldown = &cooldown.Config{Default: "7d"}
+			h := NewCondaHandlerWithUpstream(proxy, "http://proxy", upstream.URL).Routes()
+
+			for _, build := range order {
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/conda-forge/noarch/demo-1.0.0-"+build+".conda", nil))
+				if w.Code != builds[build] {
+					t.Fatalf("%s status = %d, want %d", build, w.Code, builds[build])
+				}
+			}
+		})
+	}
+}
+
+// TestPublishIndexBuildsOncePerDocument checks that an index is reused for
+// the same document, rebuilt for a new one, and not kept without a digest.
+func TestPublishIndexBuildsOncePerDocument(t *testing.T) {
+	proxy, _, _, _ := setupTestProxy(t)
+	builds := 0
+	build := func(body []byte, _ string) (map[string]bool, error) {
+		builds++
+		return map[string]bool{string(body): true}, nil
+	}
+	steps := []struct {
+		res        metadataResult
+		want       string
+		wantBuilds int
+	}{
+		{metadataResult{body: []byte("a"), digest: "d1"}, "a", 1},
+		{metadataResult{body: []byte("ignored"), digest: "d1"}, "a", 1},
+		{metadataResult{body: []byte("b"), digest: "d2"}, "b", 2},
+		{metadataResult{body: []byte("c")}, "c", 3},
+		{metadataResult{body: []byte("c")}, "c", 4},
+	}
+	for i, step := range steps {
+		got, err := publishIndex(proxy, "key", step.res, build)
+		if err != nil || !got[step.want] || builds != step.wantBuilds {
+			t.Fatalf("step %d: publishIndex = %v, %v after %d builds, want %q after %d", i, got, err, builds, step.want, step.wantBuilds)
+		}
 	}
 }
