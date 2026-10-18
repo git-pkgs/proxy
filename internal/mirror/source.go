@@ -1,18 +1,13 @@
 package mirror
 
 import (
-	"bytes"
 	"context"
-	"encoding/json"
 	"fmt"
 
-	cdx "github.com/CycloneDX/cyclonedx-go"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries"
 	_ "github.com/git-pkgs/registries/all"
-	spdxjson "github.com/spdx/tools-golang/json"
-	"github.com/spdx/tools-golang/spdx"
-	spdxtv "github.com/spdx/tools-golang/tagvalue"
+	"github.com/git-pkgs/sbom"
 )
 
 // PackageVersion identifies a specific package version to mirror.
@@ -130,75 +125,20 @@ func (s *SBOMSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 }
 
 func (s *SBOMSource) extractPURLs() ([]string, error) {
-	// Try CycloneDX first
-	if purls, err := extractCycloneDXPURLs(s.Data); err == nil && len(purls) > 0 {
-		return purls, nil
-	}
-
-	// Try SPDX JSON
-	if purls, err := extractSPDXJSONPURLs(s.Data); err == nil && len(purls) > 0 {
-		return purls, nil
-	}
-
-	// Try SPDX tag-value
-	if purls, err := extractSPDXTVPURLs(s.Data); err == nil && len(purls) > 0 {
-		return purls, nil
-	}
-
-	return nil, fmt.Errorf("could not parse SBOM as CycloneDX or SPDX")
-}
-
-func extractCycloneDXPURLs(data []byte) ([]string, error) {
-	bom := new(cdx.BOM)
-	if err := json.Unmarshal(data, bom); err != nil {
-		// Try XML
-		decoder := cdx.NewBOMDecoder(bytes.NewReader(data), cdx.BOMFileFormatXML)
-		bom = new(cdx.BOM)
-		if err := decoder.Decode(bom); err != nil {
-			return nil, err
-		}
-	}
-
-	if bom.Components == nil {
-		return nil, nil
-	}
-
-	var purls []string
-	for _, c := range *bom.Components {
-		if c.PackageURL != "" {
-			purls = append(purls, c.PackageURL)
-		}
-	}
-	return purls, nil
-}
-
-func extractSPDXJSONPURLs(data []byte) ([]string, error) {
-	doc, err := spdxjson.Read(bytes.NewReader(data))
+	doc, err := sbom.Parse(s.Data)
 	if err != nil {
 		return nil, err
 	}
-	return extractSPDXDocPURLs(doc), nil
-}
-
-func extractSPDXTVPURLs(data []byte) ([]string, error) {
-	doc, err := spdxtv.Read(bytes.NewReader(data))
-	if err != nil {
-		return nil, err
-	}
-	return extractSPDXDocPURLs(doc), nil
-}
-
-func extractSPDXDocPURLs(doc *spdx.Document) []string {
-	if doc == nil {
-		return nil
-	}
 	var purls []string
-	for _, pkg := range doc.Packages {
-		for _, ref := range pkg.PackageExternalReferences {
-			if ref.RefType == "purl" {
+	for _, p := range doc.Packages {
+		for _, ref := range p.ExternalRefs {
+			if ref.Type == "purl" && ref.Locator != "" {
 				purls = append(purls, ref.Locator)
 			}
 		}
 	}
-	return purls
+	if len(purls) == 0 {
+		return nil, fmt.Errorf("SBOM contains no package URLs")
+	}
+	return purls, nil
 }

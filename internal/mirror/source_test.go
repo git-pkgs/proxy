@@ -211,8 +211,6 @@ func TestSBOMSourceEmptyCycloneDX(t *testing.T) {
 		"bomFormat":   "CycloneDX",
 		"specVersion": "1.4",
 	}
-	// This should fall through to SPDX parsing, which will also fail,
-	// resulting in an error about not being able to parse
 	source := &SBOMSource{Data: marshalJSON(t, bom)}
 	err := source.Enumerate(context.Background(), func(pv PackageVersion) error {
 		return nil

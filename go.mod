@@ -4,7 +4,6 @@ go 1.26.7
 
 require (
 	github.com/BurntSushi/toml v1.6.0
-	github.com/CycloneDX/cyclonedx-go v0.12.0
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.7
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.66.2
@@ -17,6 +16,7 @@ require (
 	github.com/git-pkgs/magic v0.5.0
 	github.com/git-pkgs/purl v0.1.21
 	github.com/git-pkgs/registries v0.9.3
+	github.com/git-pkgs/sbom v0.1.7-0.20261018110459-65bab75e131f
 	github.com/git-pkgs/spdx v0.3.3
 	github.com/git-pkgs/vers v0.7.2
 	github.com/git-pkgs/vulns v0.2.4
@@ -26,7 +26,6 @@ require (
 	github.com/opencontainers/go-digest v1.0.0
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
-	github.com/spdx/tools-golang v0.5.7
 	github.com/swaggo/swag v1.16.6
 	gocloud.dev v0.46.0
 	golang.org/x/mod v0.41.0
@@ -49,7 +48,6 @@ require (
 	github.com/KyleBanks/depth v1.2.1 // indirect
 	github.com/PuerkitoBio/purell v1.1.1 // indirect
 	github.com/PuerkitoBio/urlesc v0.0.0-20170810143723-de5bf2ad4578 // indirect
-	github.com/anchore/go-struct-converter v0.1.0 // indirect
 	github.com/apapsch/go-jsonmerge/v2 v2.0.0 // indirect
 	github.com/aws/aws-sdk-go-v2 v1.47.1 // indirect
 	github.com/aws/aws-sdk-go-v2/aws/protocol/eventstream v1.7.11 // indirect
