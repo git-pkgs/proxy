@@ -63,7 +63,7 @@ storage:
 
 Every download is a fresh upstream fetch, and concurrent requests for the same artifact are not combined. Artifacts with a digest known up front (OCI blobs, Swift archives, Helm charts) are verified while streaming: the response is sent chunked, and on a mismatch the connection is aborted before the response completes so the client never receives a tampered artifact as a good one. The same happens when the upstream connection fails mid-download.
 
-`cache_artifacts: false` cannot be combined with `scanning.enabled`, `storage.direct_serve` or `mirror_api`, which all need stored artifacts, and the `mirror` command refuses to run with it.
+`cache_artifacts: false` cannot be combined with `scanning.enabled`, `storage.direct_serve`, `mirror_api` or `mirror.schedules`, which all need stored artifacts, and the `mirror` command refuses to run with it.
 
 ### Retention
 
@@ -1140,6 +1140,33 @@ proxy mirror 'pkg:oci/debian@sha256:...?repository_url=docker.io/library/debian&
 - Without `--platform` every platform of an index is mirrored, including Windows images, which can be large. Attestation manifests of the selected platforms are mirrored too, because Docker fetches them on every pull.
 - Non-distributable (foreign) layers are skipped.
 - While `scanning.enabled` is set, the command refuses images, because scanners fetch staged layers from the running server. Use the mirror API instead.
+
+### Scheduled refresh
+
+Tags such as `alpine:3.20` move. The server can re-mirror them on its own, so the cache follows the tag even when nobody pulls it or the proxy is offline later:
+
+```yaml
+mirror:
+  schedules:
+    - images: [pkg:docker/library/alpine@3.20, pkg:docker/library/nginx@stable]
+      interval: 6h
+      platforms: [linux/amd64]
+```
+
+| Setting | Env | Description |
+|---------|-----|-------------|
+| `mirror.schedules[].images` | - | `pkg:docker` or `pkg:oci` PURLs with a tag, resolved like the `mirror` command |
+| `mirror.schedules[].interval` | - | How often the images are mirrored, at least `1m` |
+| `mirror.schedules[].platforms` | - | `os/arch[/variant]` entries limiting the platforms; empty mirrors all |
+
+Each run checks the tag with a HEAD request. If the tag still points to the cached digest, nothing else is fetched. If it moved, the new manifests and blobs are fetched first and the tag is switched only when all of them are cached, so a failed run leaves the previous image pullable. Images of one schedule are mirrored one after the other.
+
+- The first run starts within ten minutes of startup, later runs every `interval` ±10 %, so restarts and several instances don't hit the registry at once. Each instance runs the schedules on its own.
+- Digest-pinned PURLs never move and are rejected. A `pkg:oci` digest with `tag=` is accepted; the tag is refreshed and a warning is logged when it no longer matches the digest.
+- The previous digest stays cached, so pulls by digest keep working, until eviction or retention removes it.
+- Docker Hub does not count HEAD requests against its pull limit, but every changed manifest is a pull. Set `platforms` and `upstream.auth` for `registry-1.docker.io` to stay under the anonymous limit.
+- Mirrored layers are scanned when `scanning.enabled` is set. A blocked layer fails the run and keeps the previous image.
+- Schedules are read at startup; changes need a restart. They do not need `mirror_api`.
 
 ## Docker
 

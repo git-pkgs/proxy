@@ -120,6 +120,7 @@ type Server struct {
 	rateLimits  *upstreamhttp.RateLimitGate
 	ecoStats    ecosystemStatsCache
 	sources     sourceTracker
+	scheduler   *mirror.Scheduler
 
 	// browseLimits overrides defaultBrowseLimits when set; tests use it.
 	browseLimits archives.StreamOptions
@@ -358,6 +359,7 @@ func (s *Server) serve(listener net.Listener) error {
 		r.Delete("/api/mirror/{id}", mirrorAPI.HandleCancel)
 		go jobStore.StartCleanup(bgCtx)
 	}
+	s.startMirrorSchedules(bgCtx, proxy)
 
 	// Hosted package endpoints (opt-in via hosted.enabled or PROXY_HOSTED_ENABLED)
 	if s.cfg.Hosted.Enabled {
@@ -631,6 +633,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("http shutdown: %w", err))
 		}
 	}
+
+	s.waitForMirrorSchedules(ctx)
 
 	if s.storage != nil {
 		if err := s.storage.Close(); err != nil {

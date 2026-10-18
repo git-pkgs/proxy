@@ -103,7 +103,8 @@ storage:
   # Store fetched artifacts. Set to false to stream every download from
   # upstream without storing it; metadata filtering, cooldown and the
   # denylist still apply. Useful when another cache sits in front of the
-  # proxy. false is incompatible with direct_serve, scanning and mirror_api.
+  # proxy. false is incompatible with direct_serve, scanning, mirror_api and
+  # mirror.schedules.
   cache_artifacts: true
 
   # Redirect cached artifact downloads to presigned storage URLs (HTTP 302)
@@ -375,6 +376,14 @@ gradle:
 #   # about them, so nobody can mix in versions by publishing the same name.
 #   npm_scopes: ["@acme"]
 #   composer_vendors: ["acme"]
+
+# Re-mirror container image tags on a schedule, so a moved tag is picked up
+# even when nobody pulls it. An unchanged tag costs one HEAD request.
+# mirror:
+#   schedules:
+#     - images: ["pkg:docker/library/alpine@3.20", "pkg:docker/library/nginx@stable"]
+#       interval: "6h"
+#       platforms: ["linux/amd64"]
 
 # Health endpoint configuration.
 health:
