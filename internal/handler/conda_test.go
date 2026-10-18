@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"log/slog"
 	"net/http"
@@ -105,7 +106,7 @@ func TestCondaCooldownFiltering(t *testing.T) {
 		proxyURL: "http://localhost:8080",
 	}
 
-	filtered, err := h.applyCooldownFiltering(body)
+	filtered, err := filterRepodataBytes(h, body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -164,7 +165,7 @@ func TestCondaCooldownFilteringWithPackageOverride(t *testing.T) {
 		proxyURL: "http://localhost:8080",
 	}
 
-	filtered, err := h.applyCooldownFiltering(body)
+	filtered, err := filterRepodataBytes(h, body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -208,7 +209,7 @@ func TestCondaCooldownFilteringNoTimestamp(t *testing.T) {
 		proxyURL: "http://localhost:8080",
 	}
 
-	filtered, err := h.applyCooldownFiltering(body)
+	filtered, err := filterRepodataBytes(h, body)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -335,4 +336,10 @@ func TestCondaRetentionKey(t *testing.T) {
 	if _, ok := condaRetentionKey(nil); ok {
 		t.Error("condaRetentionKey(nil) accepted")
 	}
+}
+
+func filterRepodataBytes(h *CondaHandler, body []byte) ([]byte, error) {
+	var out bytes.Buffer
+	err := h.filterRepodata(bytes.NewReader(body), &out)
+	return out.Bytes(), err
 }
