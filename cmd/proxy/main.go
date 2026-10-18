@@ -598,6 +598,7 @@ func runMirror() {
 		for _, e := range progress.Errors {
 			fmt.Fprintf(os.Stderr, "  %s/%s@%s: %s\n", e.Ecosystem, e.Name, e.Version, e.Error)
 		}
+		os.Exit(1)
 	}
 }
 
