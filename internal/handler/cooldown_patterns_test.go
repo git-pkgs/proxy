@@ -10,7 +10,6 @@ import (
 	"time"
 
 	"github.com/git-pkgs/cooldown"
-	"github.com/git-pkgs/proxy/internal/cooldownpolicy"
 )
 
 func TestNuGetCooldownPackagePatterns(t *testing.T) {
@@ -26,7 +25,7 @@ func TestNuGetCooldownPackagePatterns(t *testing.T) {
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p, db, store, fetcher := setupTestProxy(t)
-			policy, err := cooldownpolicy.New(&cooldown.Config{Default: tc.defaultDuration, Packages: tc.exact}, map[string]string{"pkg:nuget/test*": tc.pattern})
+			policy, err := cooldown.NewPolicy(&cooldown.Config{Default: tc.defaultDuration, Packages: tc.exact}, map[string]string{"pkg:nuget/test*": tc.pattern})
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -56,7 +55,7 @@ func TestNuGetCooldownPackagePatterns(t *testing.T) {
 func TestNPMCooldownPatternExemptionRespectsDenylist(t *testing.T) {
 	p, db, store, fetcher := setupTestProxy(t)
 	var err error
-	p.Cooldown, err = cooldownpolicy.New(&cooldown.Config{Default: "7d"}, map[string]string{"pkg:npm/@example/*": "0"})
+	p.Cooldown, err = cooldown.NewPolicy(&cooldown.Config{Default: "7d"}, map[string]string{"pkg:npm/@example/*": "0"})
 	if err != nil {
 		t.Fatal(err)
 	}

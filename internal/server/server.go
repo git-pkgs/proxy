@@ -70,7 +70,6 @@ import (
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
 	"github.com/git-pkgs/proxy/internal/accesslog"
 	"github.com/git-pkgs/proxy/internal/config"
-	"github.com/git-pkgs/proxy/internal/cooldownpolicy"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/denylist"
 	"github.com/git-pkgs/proxy/internal/enrichment"
@@ -239,7 +238,7 @@ func (s *Server) serve(listener net.Listener) error {
 	proxy := handler.NewProxy(s.db, s.storage, handler.LimitArtifactSize(fetcher, s.cfg.ParseArtifactMaxSize()), resolver, s.logger)
 	proxy.HTTPClient = metadataClient
 	proxy.RateLimits = s.rateLimits
-	cooldownPolicy, err := cooldownpolicy.New(cd, s.cfg.Cooldown.PackagePatterns)
+	cooldownPolicy, err := cooldown.NewPolicy(cd, s.cfg.Cooldown.PackagePatterns)
 	if err != nil {
 		return fmt.Errorf("configuring cooldown policy: %w", err)
 	}
