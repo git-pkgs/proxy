@@ -183,7 +183,7 @@ func (db *DB) upsertVersion(exec execer, v *Version) error {
 
 	_, err := exec.Exec(query,
 		v.PURL, v.PackagePURL, v.License, v.Integrity,
-		v.PublishedAt, v.Yanked, v.EnrichedAt, now, now,
+		inUTC(v.PublishedAt), v.Yanked, v.EnrichedAt, now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("upserting version: %w", err)
@@ -216,7 +216,7 @@ func (db *DB) SetVersionPublishedAt(versionPURL, packagePURL string, publishedAt
 		`
 	}
 
-	_, err := db.Exec(query, versionPURL, packagePURL, publishedAt, now, now)
+	_, err := db.Exec(query, versionPURL, packagePURL, publishedAt.UTC(), now, now)
 	if err != nil {
 		return fmt.Errorf("setting version publish time: %w", err)
 	}

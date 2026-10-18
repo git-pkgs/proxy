@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bufio"
+	"bytes"
 	"compress/gzip"
 	"encoding/json"
 	"io"
@@ -126,6 +127,13 @@ func (h *CondaHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	h.proxy.Logger.Debug("conda download request",
 		"channel", channel, "arch", arch, "name", name, "version", version)
+
+	if h.proxy.withholdInCooldown(w, downloadVersion{
+		ecosystem: "conda", policyName: name, storedName: packageName, version: version,
+		lookup: func() (time.Time, bool, error) { return h.publishTime(r, channel, arch, filename) },
+	}) {
+		return
+	}
 
 	upstreamURL := h.upstreamURL + r.URL.Path
 	// The same filename can hold different bytes in each subdir, so the
@@ -359,6 +367,43 @@ func (h *CondaHandler) recordInCooldown(filename, name, version string, timestam
 // metadataCacheKey is the metadata cache key of a request path.
 func (h *CondaHandler) metadataCacheKey(urlPath string) string {
 	return hashedCacheKey(h.upstreamURL, urlPath)
+}
+
+// publishTime reads a package file's timestamp from the subdir's
+// repodata.json. It shares proxyCached's cache entry and encoding, so the
+// repodata a client just fetched is not downloaded again, and reads the one
+// entry in place rather than decoding the whole index.
+func (h *CondaHandler) publishTime(r *http.Request, channel, arch, filename string) (time.Time, bool, error) {
+	repodataPath := "/" + channel + "/" + arch + "/repodata.json"
+	cacheKey := h.metadataCacheKey(repodataPath)
+	body, _, encoding, err := h.proxy.fetchOrCacheMetadata(r.Context(), "conda", cacheKey, h.upstreamURL+repodataPath, "gzip", nil, "*/*")
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	if strings.EqualFold(strings.TrimSpace(encoding), "gzip") {
+		decoded, err := gzip.NewReader(bytes.NewReader(body))
+		if err != nil {
+			return time.Time{}, false, err
+		}
+		body, err = h.proxy.ReadMetadata(decoded)
+		if err != nil {
+			return time.Time{}, false, err
+		}
+	}
+
+	key := "packages"
+	if strings.HasSuffix(filename, ".conda") {
+		key = "packages.conda"
+	}
+	raw, err := lookupJSON(body, key, filename, "timestamp")
+	if err != nil || len(raw) == 0 {
+		return time.Time{}, false, err
+	}
+	var ts float64
+	if err := json.Unmarshal(raw, &ts); err != nil || ts == 0 {
+		return time.Time{}, false, nil
+	}
+	return time.Unix(int64(ts)/condaTimestampDivisor, 0), true, nil
 }
 
 // proxyCached forwards a metadata request with caching.
