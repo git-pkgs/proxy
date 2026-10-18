@@ -128,8 +128,10 @@ func (h *CondaHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	h.proxy.Logger.Debug("conda download request",
 		"channel", channel, "arch", arch, "name", name, "version", version)
 
+	// Builds and subdirs of one version each have their own timestamp, so
+	// the check is per file and keeps no time in the shared versions row.
 	if h.proxy.withholdInCooldown(w, downloadVersion{
-		ecosystem: "conda", policyName: name, storedName: packageName, version: version,
+		ecosystem: "conda", policyName: name, version: version,
 		lookup: func() (time.Time, bool, error) { return h.publishTime(r, channel, arch, filename) },
 	}) {
 		return
@@ -370,40 +372,57 @@ func (h *CondaHandler) metadataCacheKey(urlPath string) string {
 }
 
 // publishTime reads a package file's timestamp from the subdir's
-// repodata.json. It shares proxyCached's cache entry and encoding, so the
-// repodata a client just fetched is not downloaded again, and reads the one
-// entry in place rather than decoding the whole index.
+// repodata.json, fetched with the cache key and encoding proxyCached uses.
+// The repodata is indexed once per document (see publishIndex), since a
+// subdir's index runs to tens of megabytes and an install downloads many
+// files from it.
 func (h *CondaHandler) publishTime(r *http.Request, channel, arch, filename string) (time.Time, bool, error) {
 	repodataPath := "/" + channel + "/" + arch + "/repodata.json"
 	cacheKey := h.metadataCacheKey(repodataPath)
-	body, _, encoding, err := h.proxy.fetchOrCacheMetadata(r.Context(), "conda", cacheKey, h.upstreamURL+repodataPath, "gzip", nil, "*/*")
+	res := h.proxy.lookupMetadata(r.Context(), "conda", cacheKey, h.upstreamURL+repodataPath, "*/*", "gzip", nil)
+	if res.err != nil {
+		return time.Time{}, false, res.err
+	}
+	index, err := publishIndex(h.proxy, "conda\x00"+cacheKey, res, h.indexRepodata)
 	if err != nil {
 		return time.Time{}, false, err
 	}
+	published, ok := index[filename]
+	return published, ok, nil
+}
+
+// indexRepodata maps each package file in a repodata.json to its timestamp,
+// leaving out files without one.
+func (h *CondaHandler) indexRepodata(body []byte, encoding string) (map[string]time.Time, error) {
 	if strings.EqualFold(strings.TrimSpace(encoding), "gzip") {
 		decoded, err := gzip.NewReader(bytes.NewReader(body))
 		if err != nil {
-			return time.Time{}, false, err
+			return nil, err
 		}
 		body, err = h.proxy.ReadMetadata(decoded)
 		if err != nil {
-			return time.Time{}, false, err
+			return nil, err
 		}
 	}
-
-	key := "packages"
-	if strings.HasSuffix(filename, ".conda") {
-		key = "packages.conda"
+	type entry struct {
+		Timestamp float64 `json:"timestamp"`
 	}
-	raw, err := lookupJSON(body, key, filename, "timestamp")
-	if err != nil || len(raw) == 0 {
-		return time.Time{}, false, err
+	var repodata struct {
+		Packages      map[string]entry `json:"packages"`
+		PackagesConda map[string]entry `json:"packages.conda"`
 	}
-	var ts float64
-	if err := json.Unmarshal(raw, &ts); err != nil || ts == 0 {
-		return time.Time{}, false, nil
+	if err := json.Unmarshal(body, &repodata); err != nil {
+		return nil, err
 	}
-	return time.Unix(int64(ts)/condaTimestampDivisor, 0), true, nil
+	index := make(map[string]time.Time, len(repodata.Packages)+len(repodata.PackagesConda))
+	for _, files := range []map[string]entry{repodata.Packages, repodata.PackagesConda} {
+		for filename, e := range files {
+			if e.Timestamp != 0 {
+				index[filename] = time.Unix(int64(e.Timestamp)/condaTimestampDivisor, 0)
+			}
+		}
+	}
+	return index, nil
 }
 
 // proxyCached forwards a metadata request with caching.
