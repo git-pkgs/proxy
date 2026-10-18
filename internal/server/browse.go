@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"io/fs"
 	"net/http"
 	"path"
 	"strings"
@@ -98,20 +99,14 @@ func detectSingleRootDir(reader archives.Reader) string {
 		return ""
 	}
 
-	var root rootDetector
-	for _, f := range files {
-		if !root.add(f.Path) {
-			break
-		}
-	}
-	return root.prefix()
+	return archives.CommonRoot(files)
 }
 
 // openArchive opens a cached artifact as a random-access archive reader,
 // auto-detecting and stripping a single top-level directory prefix (like
 // GitHub zipballs). For npm, the hardcoded "package/" prefix takes precedence.
 // The whole artifact is buffered, so only the version diff uses it; listing
-// and file reads stream through browseArchive instead.
+// and file reads use the streaming browser instead.
 func openArchive(filename string, content io.Reader, ecosystem string) (archives.Reader, error) { //nolint:ireturn // wraps multiple archive implementations
 	data, err := readBrowseInput(content, maxBrowseArchiveSize)
 	if err != nil {
@@ -142,7 +137,7 @@ func (s *Server) browseLimitsOrDefault() archives.StreamOptions {
 
 // openBrowseArchive prepares a cached artifact for streaming. content is the
 // already open storage reader; later passes reopen the artifact.
-func (s *Server) openBrowseArchive(r *http.Request, artifact *database.Artifact, content io.Reader, ecosystem string) (*browseArchive, error) {
+func (s *Server) openBrowseArchive(r *http.Request, artifact *database.Artifact, content io.Reader, ecosystem string) (*archives.Browser, error) {
 	storagePath := artifact.StoragePath.String
 	reopen := func() (io.ReadCloser, error) {
 		return s.storage.Open(r.Context(), storagePath)
@@ -398,10 +393,10 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	// Find the file and stream it straight from the archive
 	fileReader, err := archive.Extract(filePath)
 	switch {
-	case errors.Is(err, errBrowseNotFound):
+	case errors.Is(err, fs.ErrNotExist):
 		notFound(w, "file not found")
 		return
-	case errors.Is(err, errBrowseIsDir):
+	case errors.Is(err, archives.ErrIsDir):
 		s.logger.Error("failed to extract file", "error", err, "path", filePath)
 		internalError(w, "failed to extract file")
 		return

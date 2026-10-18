@@ -347,6 +347,39 @@ func TestBrowseFileFirstDuplicateWins(t *testing.T) {
 	}
 }
 
+func TestBrowseSingleRootFile(t *testing.T) {
+	for _, format := range []string{"tar.gz", "zip"} {
+		t.Run(format, func(t *testing.T) {
+			ts := newTestServer(t)
+			defer ts.close()
+			entries := []archiveEntry{{name: "README.md", body: "single file\n"}}
+			data := buildTarGz(t, entries)
+			if format == "zip" {
+				data = buildZip(t, entries)
+			}
+			filename := "single." + format
+			cacheBrowseArtifact(t, ts, "cargo", "single", filename, data)
+			paths := listingPaths(decodeListing(t, browseGet(ts, browseListURL("cargo", "single", ""))))
+			if len(paths) != 1 || paths[0] != "README.md" {
+				t.Fatalf("listing = %v, want README.md", paths)
+			}
+			response := browseGet(ts, browseFileURL("cargo", "single", "README.md"))
+			if response.Code != http.StatusOK || response.Body.String() != "single file\n" {
+				t.Fatalf("file = %d %q", response.Code, response.Body.String())
+			}
+			r, err := openArchive(filename, bytes.NewReader(data), "cargo")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer func() { _ = r.Close() }()
+			files, err := r.List()
+			if err != nil || len(files) != 1 || files[0].Path != "README.md" {
+				t.Fatalf("diff reader listing = %+v, %v", files, err)
+			}
+		})
+	}
+}
+
 // TestBrowseFileEscapedPath requests files the way the source browser does,
 // with each path segment percent-encoded, so names holding URL syntax resolve.
 func TestBrowseFileEscapedPath(t *testing.T) {
