@@ -831,12 +831,9 @@ func migrateAddArtifactManifest(db *DB) error {
 	return nil
 }
 
-// migrateAddMetadataLastAccessed records when a cached metadata document was
-// last served, so size eviction can drop the least recently used ones along
-// with artifacts. Existing rows count as accessed when they were last
-// written; the backfill runs again if an earlier attempt was cut short.
-// The indexes serve the eviction order and the pending-delete check, with
-// NULLs first on Postgres as the queries order them.
+// migrateAddMetadataLastAccessed records when cached metadata was last served,
+// for size eviction. Existing rows count from their last write; an interrupted
+// backfill is resumed on the next run.
 func migrateAddMetadataLastAccessed(db *DB) error {
 	hasCol, err := db.HasColumn("metadata_cache", "last_accessed_at")
 	if err != nil {
@@ -871,12 +868,9 @@ func migrateAddMetadataLastAccessed(db *DB) error {
 	return nil
 }
 
-// backfillMetadataLastAccessed copies each row's write time into
-// last_accessed_at, in UTC like the times written later. updated_at was
-// written in local time: SQLite kept the offset, so the driver reads back
-// the right instant, while a Postgres TIMESTAMP kept only the local wall
-// clock, which lib/pq labels UTC and has to be read as local again. This
-// assumes the proxy that wrote the rows ran in the zone migrating them.
+// backfillMetadataLastAccessed copies updated_at into last_accessed_at as UTC.
+// updated_at was written in local time; Postgres kept only the wall clock,
+// so it is read as local again, assuming the same zone wrote it.
 func backfillMetadataLastAccessed(db *DB) error {
 	var rows []struct {
 		ID        int64        `db:"id"`
