@@ -3,6 +3,7 @@ package handler
 import (
 	"net/http"
 	"strings"
+	"time"
 )
 
 type filenameDownload struct {
@@ -12,6 +13,9 @@ type filenameDownload struct {
 	parseErr    string
 	fetchErr    string
 	parse       func(string) (name, version string)
+	// publishTime reads a version's publish time from upstream metadata for
+	// the download-time cooldown check.
+	publishTime func(r *http.Request, name, version string) (time.Time, bool, error)
 }
 
 func (p *Proxy) handleFilenameDownload(w http.ResponseWriter, r *http.Request, d filenameDownload) {
@@ -29,6 +33,13 @@ func (p *Proxy) handleFilenameDownload(w http.ResponseWriter, r *http.Request, d
 
 	p.Logger.Info(d.ecosystem+" download request",
 		"name", name, "version", version, "filename", filename)
+
+	if p.withholdInCooldown(w, downloadVersion{
+		ecosystem: d.ecosystem, policyName: name, storedName: name, version: version,
+		lookup: func() (time.Time, bool, error) { return d.publishTime(r, name, version) },
+	}) {
+		return
+	}
 
 	downloadURL := d.upstreamURL + r.URL.Path
 	result, err := p.GetOrFetchArtifactFromURL(
