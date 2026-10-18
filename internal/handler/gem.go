@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 	"time"
@@ -82,6 +83,7 @@ func (h *GemHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		parseErr:    "could not parse gem filename",
 		fetchErr:    "failed to fetch gem",
 		parse:       h.parseGemFilename,
+		publishTime: h.publishTime,
 	})
 }
 
@@ -302,6 +304,34 @@ func parseGemVersions(body []byte) (publishTimes, error) {
 		times[versionStr] = createdAt
 	}
 	return times, nil
+}
+
+// publishTime reads a gem version's created_at from the versions API. The
+// download check caches the response, unlike fetchFilteredVersions, so each
+// download does not cost an upstream request. version carries the platform
+// the way gem filenames do, as in 1.0.0-x86_64-linux.
+func (h *GemHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, error) {
+	versionsURL := fmt.Sprintf("%s/api/v1/versions/%s.json", h.upstreamURL, url.PathEscape(name))
+	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "gem", "api/v1/versions/"+name, versionsURL)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	var versions []gemVersion
+	if err := json.Unmarshal(body, &versions); err != nil {
+		return time.Time{}, false, err
+	}
+	for _, v := range versions {
+		number := v.Number
+		if v.Platform != "" && v.Platform != "ruby" {
+			number += "-" + v.Platform
+		}
+		if number != version {
+			continue
+		}
+		createdAt, err := time.Parse(time.RFC3339, v.CreatedAt)
+		return createdAt, err == nil, nil
+	}
+	return time.Time{}, false, nil
 }
 
 // proxyCached forwards a metadata request with caching.
