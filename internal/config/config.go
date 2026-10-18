@@ -437,7 +437,7 @@ type StorageConfig struct {
 // for days; "0" or empty means never evict by age.
 type RetentionConfig struct {
 	// Default applies to every ecosystem that supports retention and has no
-	// rule of its own.
+	// rule of its own, except generic, which requires an explicit rule.
 	Default string `json:"default" yaml:"default"`
 
 	// Ecosystems overrides the default per ecosystem key (e.g. "npm", "oci").

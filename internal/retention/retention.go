@@ -23,7 +23,7 @@ import (
 // yet is not supported by this version.
 var KnownKeys = []string{
 	"alpine", "cargo", "composer", "conan", "conda", "cran", "deb", "gem",
-	"golang", "helm", "hex", "julia", "maven", "npm", "nuget", "oci", "pub",
+	"generic", "golang", "helm", "hex", "julia", "maven", "npm", "nuget", "oci", "pub",
 	"pypi", "rpm", "swift",
 }
 
@@ -168,7 +168,8 @@ func (r *Registry) Canonical(p *purl.PURL) (string, bool) {
 // Rules are resolved retention durations. A duration of zero means an
 // artifact is never evicted by age.
 type Rules struct {
-	// Default applies to registered ecosystems without their own rule.
+	// Default applies to registered ecosystems without their own rule,
+	// except generic, which requires an explicit rule.
 	Default time.Duration
 	// Ecosystems holds rules keyed by registered ecosystem key.
 	Ecosystems map[string]time.Duration
@@ -178,13 +179,17 @@ type Rules struct {
 
 // For returns the retention for an artifact of the given ecosystem key and
 // stored package PURL: the package rule, else the ecosystem rule, else the
-// default.
+// default. Generic artifacts require an explicit package or ecosystem rule.
 func (r Rules) For(key, packagePURL string) time.Duration {
 	if d, ok := r.Packages[packagePURL]; ok {
 		return d
 	}
 	if d, ok := r.Ecosystems[key]; ok {
 		return d
+	}
+	// Release assets may disappear upstream, so keep generic opt-in.
+	if key == "generic" {
+		return 0
 	}
 	return r.Default
 }

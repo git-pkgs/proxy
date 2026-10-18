@@ -855,7 +855,7 @@ storage:
   url: "file:///var/cache/proxy/artifacts"
   max_size: "10GB"  # Optional: evict LRU when exceeded
   retention:
-    default: "30d"  # Optional: evict artifacts not downloaded for 30 days
+    default: "30d"  # Optional: evict unused artifacts after 30 days; excludes generic
 
 database:
   driver: "sqlite"

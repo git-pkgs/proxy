@@ -91,12 +91,16 @@ storage:
   # The default only applies to ecosystems that support retention; naming an
   # ecosystem or package that does not is a configuration error. See
   # docs/configuration.md for the supported ecosystems.
+  # Generic downloads require an explicit ecosystem or package rule;
+  # they never inherit default, since an upstream release may disappear.
   retention:
     default: ""
     # ecosystems:
     #   npm: "30d"
+    #   generic: "30d"
     # packages:
     #   "pkg:npm/lodash": "0"
+    #   "pkg:generic/owner%2Frepo": "90d"
     # How often to look for expired artifacts; at least "1m".
     sweep_interval: "10m"
 

@@ -85,7 +85,19 @@ storage:
 
 Each cached file ages on its own, counted from the last time the proxy served it, or from when it was fetched if it has not been served since. A newer release of the same package does not shorten the life of older versions. Durations take a `d` suffix for days, and `"0"` or an empty value means never evict by age. With no retention configured, artifacts stay until `max_size` evicts them. `sweep_interval` must be at least `1m`.
 
-A package rule wins over an ecosystem rule, which wins over `default`. Package rules are keyed by package PURL without a version, written in one of the forms the table below lists for the ecosystem. The ecosystems and package rules can only name ecosystems that support retention in the running version; anything else, including a typo, stops the proxy at startup with an error naming the setting. `default` applies only to supported ecosystems. Support is added one ecosystem at a time, so a later release can make an existing `default` cover more ecosystems. On startup the proxy logs which ecosystems retention covers (`covered`) and which ones `default` does not reach yet (`default_not_applied`).
+A package rule wins over an ecosystem rule, which wins over `default`. Package rules are keyed by package PURL without a version, written in one of the forms the table below lists for the ecosystem. The ecosystems and package rules can only name ecosystems that support retention in the running version; anything else, including a typo, stops the proxy at startup with an error naming the setting. `default` applies only to supported ecosystems, except `generic`, which requires an explicit rule. Support is added one ecosystem at a time, so a later release can make an existing `default` cover more ecosystems. On startup the proxy logs which ecosystems retention supports (`covered`) and which ones `default` does not reach (`default_not_applied`), including `generic`.
+
+Generic retention is opt-in because release assets may disappear upstream and cannot then be downloaded again after eviction. An existing `default` never starts evicting generic downloads. Set `ecosystems.generic: "30d"` to cover all generic artifacts, or configure only selected GitHub repositories:
+
+```yaml
+storage:
+  retention:
+    default: "30d"  # Other supported ecosystems; never generic.
+    packages:
+      "pkg:generic/jqlang%2Fjq": "30d"
+```
+
+The package rule covers every release and asset in that repository, but each cached file ages separately. Other generic repositories remain exempt from age-based eviction. A package rule of `"0"` also exempts that repository when `ecosystems.generic` is enabled. The independent `storage.max_size` limit still applies.
 
 | Ecosystem key | Retention supported | Package rule form |
 |---------------|---------------------|-------------------|
@@ -97,6 +109,7 @@ A package rule wins over an ecosystem rule, which wins over `default`. Package r
 | `cran` | yes | `pkg:cran/ggplot2`, the package name as published, case included (`pkg:cran/Rcpp`). A rule covers source and binary builds alike. |
 | `deb` | yes | `pkg:deb/curl`; case doesn't matter. A vendor namespace such as `pkg:deb/debian/curl` is accepted and dropped, so a rule covers the package from every configured archive. Debian and Ubuntu archives only keep the current version per suite, so an evicted older one can't be fetched again. |
 | `gem` | yes | `pkg:gem/rails`, the gem name as published, case included. |
+| `generic` | yes, explicit rules only | `pkg:generic/owner%2Frepo` for a GitHub Release repository such as `jqlang/jq`. The ecosystem rule covers all cached version-pinned generic downloads, including GitHub Release assets and configured `generic_artifacts`. The global `default` never applies; metadata/API responses are not artifact retention candidates. |
 | `golang` | yes | `pkg:golang/github.com/stretchr/testify`, the module path as in `go.mod`; case doesn't matter. A major version like `/v2` (or `.v3` on gopkg.in) is a module of its own and needs its own rule. The `!`-escaped form from proxy URLs and the module cache (`github.com/!azure/...`) is refused. |
 | `helm` | yes | No package rules: charts are cached per repository and digest, not under the chart name. The `helm` rule and `default` cover charts from HTTP repositories; charts pulled over OCI fall under `oci`. |
 | `hex` | yes | `pkg:hex/phoenix`, the package name as published. |

@@ -18,10 +18,11 @@ import (
 
 const retentionDay = 24 * time.Hour
 
-// retentionRegistry registers npm and gem the way their handlers would, in a
+// retentionRegistry registers generic, npm and gem the way their handlers would, in a
 // registry of the test's own so the handlers' registrations stay untouched.
 func retentionRegistry() *retention.Registry {
 	reg := retention.NewRegistry()
+	reg.Register(retention.Spec{Key: "generic", CanonicalPackage: retention.DefaultCanonical("generic")})
 	reg.Register(retention.Spec{Key: "npm", CanonicalPackage: retention.DefaultCanonical("npm")})
 	reg.Register(retention.Spec{Key: "gem", CanonicalPackage: retention.DefaultCanonical("gem")})
 	return reg
@@ -83,6 +84,7 @@ func TestSweepRetentionAppliesEachRule(t *testing.T) {
 		Default:    30 * retentionDay,
 		Ecosystems: map[string]time.Duration{"npm": 14 * retentionDay},
 		Packages: map[string]time.Duration{
+			"pkg:generic/jqlang%2Fjq":    90 * retentionDay,
 			"pkg:npm/pinned":             0,
 			"pkg:npm/long-lived":         90 * retentionDay,
 			"pkg:npm/long-lived-expired": 90 * retentionDay,
@@ -104,6 +106,9 @@ func TestSweepRetentionAppliesEachRule(t *testing.T) {
 		{"gem", "gem", "default-applies", ago(40), ago(40), false},
 		{"gem", "gem", "within-default", ago(40), ago(20), true},
 		{"rubygems", "gem", "mirrored", ago(40), time.Time{}, false},
+		{"generic", "generic", "jqlang%2Fjq", ago(120), ago(100), false},
+		{"generic", "generic", "frequently-used", ago(120), ago(5), true},
+		{"generic", "generic", "default-does-not-apply", ago(120), ago(100), true},
 		{"gem", "gem", "short", ago(3), ago(3), false},
 		{"pypi", "pypi", "unregistered", ago(400), ago(400), true},
 	}
@@ -250,12 +255,15 @@ func TestSweepRetentionWithoutRulesDoesNothing(t *testing.T) {
 }
 
 func TestNotCovered(t *testing.T) {
-	got := notCovered([]string{"npm", "pypi"})
+	got := notCovered([]string{"generic", "npm", "pypi"})
 	if slices.Contains(got, "npm") || slices.Contains(got, "pypi") {
 		t.Errorf("notCovered = %v, includes a covered key", got)
 	}
 	if len(got) != len(retention.KnownKeys)-2 {
 		t.Errorf("notCovered returned %d keys, want %d", len(got), len(retention.KnownKeys)-2)
+	}
+	if !slices.Contains(got, "generic") {
+		t.Error("notCovered must include generic even when its handler is registered")
 	}
 }
 
