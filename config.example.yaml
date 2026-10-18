@@ -347,8 +347,9 @@ upstream:
 # Gradle HttpBuildCache configuration
 gradle:
   build_cache:
-    # Set to true to disable PUT uploads (read-only cache mode)
-    read_only: false
+    # PUT uploads are rejected by default; set to false on the instance
+    # your CI jobs upload to
+    read_only: true
 
     # Maximum accepted Gradle cache upload body size
     # Required and must be > 0

@@ -379,6 +379,9 @@ func (s *Server) serve(listener net.Listener) error {
 		"ui_url", s.cfg.UIBaseURL,
 		"storage", s.storage.URL(),
 		"database", s.cfg.Database.String())
+	for _, warning := range s.cfg.EnvWarnings() {
+		s.logger.Warn(warning)
+	}
 	go s.updateCacheStatsMetrics()
 	go s.startEvictionLoop(bgCtx)
 	go s.startRetentionLoop(bgCtx)

@@ -674,7 +674,7 @@ The `/gradle` endpoint supports optional safeguards for upload control and cache
 ```yaml
 gradle:
   build_cache:
-    read_only: false
+    read_only: true
     max_upload_size: "100MB"
     max_age: "168h"
     max_size: "20GB"
@@ -683,11 +683,13 @@ gradle:
 
 | Config | Environment | Description |
 |--------|-------------|-------------|
-| `gradle.build_cache.read_only` | `PROXY_GRADLE_BUILD_CACHE_READ_ONLY` | Disable PUT uploads and keep GET/HEAD read-only |
+| `gradle.build_cache.read_only` | `PROXY_GRADLE_BUILD_CACHE_READ_ONLY` | Reject PUT uploads and serve GET/HEAD only (default `true`; the variable takes `true`/`false` or `1`/`0`, any other value keeps uploads off and logs a warning) |
 | `gradle.build_cache.max_upload_size` | `PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE` | Maximum accepted PUT body size (must be > 0) |
 | `gradle.build_cache.max_age` | `PROXY_GRADLE_BUILD_CACHE_MAX_AGE` | Delete entries older than this duration (default `168h`, also accepts days such as `7d`; set `0` to disable) |
 | `gradle.build_cache.max_size` | `PROXY_GRADLE_BUILD_CACHE_MAX_SIZE` | Total size cap for `_gradle/http-build-cache`, deleting oldest first (`0` disables) |
 | `gradle.build_cache.sweep_interval` | `PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL` | Frequency for background eviction sweeps |
+
+Uploads are off by default, so a client that can reach the proxy cannot overwrite cache entries that end up in other people's builds. Set `read_only: false` (or `PROXY_GRADLE_BUILD_CACHE_READ_ONLY=false`) on the instance your CI jobs upload to, and let only CI push (`isPush = System.getenv("CI") != null`). Before this default changed, uploads were accepted without configuration; setups that upload need the setting now.
 
 `max_age` and `max_size` are independent and can be combined. When both are set, age-based eviction runs first, then size-based eviction trims remaining entries oldest-first.
 

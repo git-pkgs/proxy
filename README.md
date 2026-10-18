@@ -302,7 +302,7 @@ pluginManagement {
 
 ### Gradle HTTP Build Cache
 
-Configure in `settings.gradle(.kts)`:
+Configure in `settings.gradle.kts`:
 
 ```kotlin
 buildCache {
@@ -311,10 +311,12 @@ buildCache {
   }
   remote<HttpBuildCache> {
     url = uri("http://localhost:8080/gradle/")
-    push = true
+    isPush = System.getenv("CI") != null
   }
 }
 ```
+
+The proxy rejects uploads unless `gradle.build_cache.read_only` is set to `false`, see [docs/configuration.md](docs/configuration.md#gradle-build-cache).
 
 ### NuGet
 

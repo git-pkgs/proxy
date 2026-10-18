@@ -82,7 +82,7 @@
 //	PROXY_LOG_FORMAT       - Log format
 //	PROXY_ACCESS_LOG_PATH  - JSONL access log path
 //	PROXY_UPSTREAM_*       - Upstream URLs and network access controls
-//	PROXY_GRADLE_BUILD_CACHE_READ_ONLY       - Disable Gradle PUT uploads
+//	PROXY_GRADLE_BUILD_CACHE_READ_ONLY       - Set false to allow Gradle PUT uploads (default true)
 //	PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE - Max Gradle PUT request body size
 //	PROXY_GRADLE_BUILD_CACHE_MAX_AGE         - Gradle cache max age eviction
 //	PROXY_GRADLE_BUILD_CACHE_MAX_SIZE        - Gradle cache max total size
@@ -257,7 +257,7 @@ func runServe() {
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_OCI_DEFAULT          Default OCI registry upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_DEBIAN               Debian repository upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_RPM                  RPM repository upstream URL\n")
-		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_READ_ONLY       Disable Gradle PUT uploads\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_READ_ONLY       Set false to allow Gradle PUT uploads (default true)\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE Max Gradle PUT request body size\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_AGE         Gradle cache max age eviction\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_SIZE        Gradle cache max total size\n")

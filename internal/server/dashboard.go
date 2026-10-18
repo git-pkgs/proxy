@@ -359,13 +359,14 @@ index-url = ` + baseURL + `/pypi/simple/</code></pre>`),
 			Language: "Java/Kotlin",
 			Endpoint: "/gradle/",
 			Instructions: template.HTML(`<p class="config-note">Configure Gradle to use the proxy for HttpBuildCache:</p>
-<pre><code>// In settings.gradle(.kts)
+<pre><code>// In settings.gradle.kts
 buildCache {
   remote&lt;HttpBuildCache&gt; {
     url = uri("` + baseURL + `/gradle/")
-    push = true
+    isPush = System.getenv("CI") != null
   }
-}</code></pre>`),
+}</code></pre>
+<p class="config-note">Uploads need <code>gradle.build_cache.read_only: false</code> on the proxy.</p>`),
 		},
 		{
 			ID:       "nuget",

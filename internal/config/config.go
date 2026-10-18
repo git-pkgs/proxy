@@ -198,6 +198,9 @@ type Config struct {
 
 	// Health configures the /health endpoint behavior.
 	Health HealthConfig `json:"health" yaml:"health"`
+
+	// envWarnings collects environment values LoadFromEnv ignored.
+	envWarnings []string
 }
 
 // CooldownConfig configures version cooldown periods.
@@ -463,6 +466,7 @@ type GradleConfig struct {
 // GradleBuildCacheConfig configures Gradle HttpBuildCache safeguards.
 type GradleBuildCacheConfig struct {
 	// ReadOnly disables PUT uploads and keeps cache reads (GET/HEAD) enabled.
+	// Default: true; set false on the instance that CI uploads to.
 	ReadOnly bool `json:"read_only" yaml:"read_only"`
 
 	// MaxUploadSize caps a single PUT body size (e.g., "100MB"). Must be > 0.
@@ -1064,7 +1068,7 @@ func Default() *Config {
 		},
 		Gradle: GradleConfig{
 			BuildCache: GradleBuildCacheConfig{
-				ReadOnly:      false,
+				ReadOnly:      true,
 				MaxUploadSize: defaultGradleMaxUploadSizeStr,
 				MaxAge:        "168h",
 				MaxSize:       "",
@@ -1118,6 +1122,28 @@ func setEnvBool(dst *bool, key string) {
 	if v := os.Getenv(key); v != "" {
 		*dst = envBool(v)
 	}
+}
+
+// setGradleReadOnlyFromEnv parses strictly: an unrecognised value keeps
+// uploads off instead of opening them, and is reported via EnvWarnings.
+func (c *Config) setGradleReadOnlyFromEnv() {
+	const key = "PROXY_GRADLE_BUILD_CACHE_READ_ONLY"
+	v := os.Getenv(key)
+	if v == "" {
+		return
+	}
+	readOnly, err := strconv.ParseBool(strings.TrimSpace(v))
+	if err != nil {
+		c.Gradle.BuildCache.ReadOnly = true
+		c.envWarnings = append(c.envWarnings, fmt.Sprintf("ignoring %s=%q: not a boolean, keeping the Gradle build cache read-only", key, v))
+		return
+	}
+	c.Gradle.BuildCache.ReadOnly = readOnly
+}
+
+// EnvWarnings returns the environment values LoadFromEnv ignored.
+func (c *Config) EnvWarnings() []string {
+	return c.envWarnings
 }
 
 func setEnvStringSlice(dst *[]string, key string) {
@@ -1222,7 +1248,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.ArtifactMaxSize, "PROXY_ARTIFACT_MAX_SIZE")
 	setEnvString(&c.MetadataRewriteCacheSize, "PROXY_METADATA_REWRITE_CACHE_SIZE")
 	setEnvString(&c.HTTPTimeout, "PROXY_HTTP_TIMEOUT")
-	setEnvBool(&c.Gradle.BuildCache.ReadOnly, "PROXY_GRADLE_BUILD_CACHE_READ_ONLY")
+	c.setGradleReadOnlyFromEnv()
 	setEnvString(&c.Gradle.BuildCache.MaxUploadSize, "PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE")
 	setEnvString(&c.Gradle.BuildCache.MaxAge, "PROXY_GRADLE_BUILD_CACHE_MAX_AGE")
 	setEnvString(&c.Gradle.BuildCache.MaxSize, "PROXY_GRADLE_BUILD_CACHE_MAX_SIZE")
