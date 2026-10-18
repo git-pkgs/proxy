@@ -1204,6 +1204,17 @@ var ErrUpstreamNotFound = fmt.Errorf("upstream: %w", fetch.ErrNotFound)
 // upstreamNotFoundError.
 const upstreamNotFoundBodyLimit = 4 << 10
 
+// upstreamStatusError is a definitive answer from upstream, not a transport
+// failure or a retryable status. npm relays it instead of serving the cached
+// copy.
+type upstreamStatusError struct {
+	status int
+}
+
+func (e *upstreamStatusError) Error() string {
+	return fmt.Sprintf("upstream returned %d", e.status)
+}
+
 // upstreamNotFoundError is ErrUpstreamNotFound with the start of the
 // upstream's 404 body, for handlers that relay the reason to clients.
 type upstreamNotFoundError struct {
@@ -1389,6 +1400,16 @@ func (p *Proxy) fetchMetadataFromUpstream(ctx context.Context, ecosystem, cacheK
 			}
 		}
 		return metadataResult{body: meta.body, contentType: meta.contentType, contentEncoding: meta.contentEncoding, digest: digest}
+	}
+
+	// npm relays a definitive answer from the registry: serving the cached
+	// copy would hide an unpublished package (404) or credentials it rejected
+	// (401/403). Other ecosystems keep their documented stale fallback, and
+	// transport failures and retryable statuses (429, 5xx) fall back for npm
+	// too.
+	var upstreamStatus *upstreamStatusError
+	if ecosystem == "npm" && (errors.Is(err, ErrUpstreamNotFound) || errors.As(err, &upstreamStatus)) {
+		return metadataResult{err: err}
 	}
 
 	// Upstream failed -- fall back to cache if available
@@ -1607,6 +1628,12 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		return nil, &upstreamNotFoundError{body: body}
 	}
 	if resp.StatusCode != http.StatusOK {
+		// 401 and 403 are the upstream answering, not failing: record them
+		// as definitive so npm can relay them instead of serving the cached
+		// copy.
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			return nil, &upstreamStatusError{status: resp.StatusCode}
+		}
 		return nil, fmt.Errorf("upstream returned %d", resp.StatusCode)
 	}
 

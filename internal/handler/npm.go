@@ -201,6 +201,7 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 	h.proxy.Logger.Info("npm metadata request", "package", packageName, "path", packagePath)
 
 	registryURL, cacheKey := h.sourceFor(packageName)
+	_, routed := h.routes.match(packageName)
 	// A version or dist-tag is its own path segment. Escaping the whole path
 	// turns "lodash/4.17.21" into "lodash%2F4.17.21", which the registry
 	// rejects with 405.
@@ -226,15 +227,7 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 
 	upstream := h.proxy.fetchMetadataDocument(r.Context(), "npm", metadataCacheKey, upstreamURL, accept)
 	if err := upstream.err; err != nil {
-		if errors.Is(err, ErrUpstreamNotFound) {
-			if versionLookup {
-				JSONError(w, http.StatusNotFound, ErrVersionNotFound.Error())
-			} else {
-				JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
-			}
-			return
-		}
-		if writeUpstreamHeld(w, err) {
+		if h.writeNPMMetadataError(w, err, versionLookup, routed) {
 			return
 		}
 		h.proxy.Logger.Error("failed to fetch npm metadata", "error", err)
@@ -269,7 +262,32 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	rewritten.stale = upstream.stale
 	serveRewrittenMetadata(w, r, rewritten)
+}
+
+// writeNPMMetadataError writes the response for a failed npm metadata lookup
+// and reports whether it did. When it reports false the caller answers the
+// upstream it could not reach with 502.
+func (h *NPMHandler) writeNPMMetadataError(w http.ResponseWriter, err error, versionLookup, routed bool) bool {
+	if errors.Is(err, ErrUpstreamNotFound) {
+		if versionLookup {
+			JSONError(w, http.StatusNotFound, ErrVersionNotFound.Error())
+		} else {
+			JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
+		}
+		return true
+	}
+	// A route's own credentials are the proxy's business, not the client's:
+	// relaying its 401 would send npm off authenticating to the proxy. The
+	// default registry's answer is relayed instead, so broken upstream
+	// credentials fail loudly rather than serving a stale 200.
+	var upstreamStatus *upstreamStatusError
+	if errors.As(err, &upstreamStatus) && !routed {
+		JSONError(w, upstreamStatus.status, "upstream rejected the request")
+		return true
+	}
+	return writeUpstreamHeld(w, err)
 }
 
 // packumentAccept returns the Accept header packuments are requested with.

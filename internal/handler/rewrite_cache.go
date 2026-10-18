@@ -81,11 +81,13 @@ type metadataValidators struct {
 
 // rewrittenMetadata is a rewritten metadata document with its validators.
 // gzipped is the document gzip-compressed, or nil when there is no
-// compressed copy to serve.
+// compressed copy to serve. stale is set when the body is the cached copy
+// served because upstream failed.
 type rewrittenMetadata struct {
 	body []byte
 	metadataValidators
 	gzipped []byte
+	stale   bool
 }
 
 // metadataETag returns the strong ETag of a rewritten document.
@@ -350,6 +352,9 @@ func serveRewrittenMetadata(w http.ResponseWriter, r *http.Request, m rewrittenM
 	if notModified(r, etag, m.lastModified) {
 		w.WriteHeader(http.StatusNotModified)
 		return
+	}
+	if m.stale {
+		w.Header().Set("Warning", `110 - "Response is Stale"`)
 	}
 	w.Header().Set(headerContentType, contentTypeJSON)
 	if compressed {
