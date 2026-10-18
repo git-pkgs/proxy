@@ -46,8 +46,9 @@ func newGenericRetentionProxy(t *testing.T, upstream *httptest.Server) (*httptes
 	return srv, db
 }
 
-func genericReleaseArtifact(t *testing.T, db *database.DB, versionPURL string) database.Artifact {
+func genericReleaseArtifact(t *testing.T, db *database.DB) database.Artifact {
 	t.Helper()
+	const versionPURL = "pkg:generic/jqlang%2Fjq@jq-1.7.1"
 	var art database.Artifact
 	query := db.Rebind(`SELECT * FROM artifacts WHERE version_purl = ?`)
 	if err := db.Get(&art, query, versionPURL); err != nil {
@@ -90,7 +91,7 @@ func TestGenericRetentionRequiresExplicitRule(t *testing.T) {
 				t.Fatalf("RetentionRules() error = %v", err)
 			}
 			sweepRetention(context.Background(), db, discardLogger(), retention.Default, rules, now)
-			if art := genericReleaseArtifact(t, db, versionPURL); art.StoragePath.Valid != tt.wantCached {
+			if art := genericReleaseArtifact(t, db); art.StoragePath.Valid != tt.wantCached {
 				t.Errorf("release cached = %v, want %v", art.StoragePath.Valid, tt.wantCached)
 			}
 		})
@@ -111,7 +112,7 @@ func TestGenericRetentionEvictsAndRefetchesReleaseAsset(t *testing.T) {
 	if got := downloads.Load(); got != 1 {
 		t.Fatalf("upstream downloads = %d, want 1 (second request from cache)", got)
 	}
-	art := genericReleaseArtifact(t, db, versionPURL)
+	art := genericReleaseArtifact(t, db)
 	if !art.LastAccessedAt.Valid {
 		t.Fatalf("cached release artifact = %+v; want a recorded cache hit", art)
 	}
@@ -127,14 +128,14 @@ func TestGenericRetentionEvictsAndRefetchesReleaseAsset(t *testing.T) {
 	backdate(t, db, "fetched_at", versionPURL, old)
 	backdate(t, db, "last_accessed_at", versionPURL, now)
 	sweepRetention(context.Background(), db, discardLogger(), retention.Default, rules, now)
-	art = genericReleaseArtifact(t, db, versionPURL)
+	art = genericReleaseArtifact(t, db)
 	if !art.StoragePath.Valid {
 		t.Fatalf("recently accessed release was evicted: %+v", art)
 	}
 
 	backdate(t, db, "last_accessed_at", versionPURL, old)
 	sweepRetention(context.Background(), db, discardLogger(), retention.Default, rules, now)
-	art = genericReleaseArtifact(t, db, versionPURL)
+	art = genericReleaseArtifact(t, db)
 	if art.StoragePath.Valid {
 		t.Fatalf("unused release was not evicted: %+v", art)
 	}
@@ -143,12 +144,12 @@ func TestGenericRetentionEvictsAndRefetchesReleaseAsset(t *testing.T) {
 	if got := downloads.Load(); got != 2 {
 		t.Errorf("upstream downloads = %d, want 2 after retention eviction", got)
 	}
-	art = genericReleaseArtifact(t, db, versionPURL)
+	art = genericReleaseArtifact(t, db)
 	if !art.StoragePath.Valid {
 		t.Fatalf("refetched release artifact = %+v; want cached artifact", art)
 	}
 	sweepRetention(context.Background(), db, discardLogger(), retention.Default, rules, time.Now())
-	art = genericReleaseArtifact(t, db, versionPURL)
+	art = genericReleaseArtifact(t, db)
 	if !art.StoragePath.Valid {
 		t.Errorf("refetched release was evicted using its old access time: %+v", art)
 	}
