@@ -329,6 +329,34 @@ func (p *Proxy) GetCachedArtifact(ctx context.Context, ecosystem, name, version,
 	return p.checkCache(ctx, pkgPURL, versionPURL, filename)
 }
 
+// HasCachedArtifact reports whether an artifact is cached and its object is
+// stored, without opening it or counting a cache hit, so a mirror run does
+// not look like client traffic.
+func (p *Proxy) HasCachedArtifact(ctx context.Context, ecosystem, name, version, filename string) (bool, error) {
+	pkgPURL, versionPURL, err := packagePURLStrings(ecosystem, name, version)
+	if err != nil {
+		return false, err
+	}
+	if p.Denylist.Denied(versionPURL) {
+		return false, fmt.Errorf("%w: %s", ErrVersionDenied, versionPURL)
+	}
+	if p.StreamArtifacts {
+		return false, nil
+	}
+	artifact, err := p.DB.GetCachedArtifact(pkgPURL, versionPURL, filename)
+	if err != nil {
+		return false, fmt.Errorf("checking artifact cache: %w", err)
+	}
+	if artifact == nil {
+		return false, nil
+	}
+	// An unusable record is a miss; the fetch that follows clears it.
+	if _, err := newIntegrityChecks(artifact.Artifact.Digest.Encoded(), artifact.Integrity.String); err != nil {
+		return false, nil
+	}
+	return p.Storage.Exists(ctx, artifact.StoragePath)
+}
+
 // ClearCachedArtifact clears an artifact cache record after an external
 // integrity check fails, and queues its stored bytes for deletion.
 func (p *Proxy) ClearCachedArtifact(ecosystem, name, version, filename string) error {

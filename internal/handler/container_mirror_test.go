@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"database/sql"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -448,5 +449,57 @@ func TestMirrorImageKeepsTagMovedByPullDuringWalk(t *testing.T) {
 	registry.offline.Store(true)
 	if response := pull(t, h, "/team/app/manifests/single", dockerManifestAccept); response.Body.String() != moved.body {
 		t.Errorf("offline tag points to %s, want the newer target %s", sha256Digest(response.Body.Bytes()), image.amd64Digest)
+	}
+}
+
+func TestMirrorImageCountsNoCacheHits(t *testing.T) {
+	registry, _ := newFakeImageRegistry(t)
+	proxy := newMirrorTestProxy(t, registry)
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example", registry.server.URL)
+	ref := ImageRef{Name: "team/app", References: []string{"multi"}}
+
+	if _, err := h.MirrorImage(context.Background(), ref, nil); err != nil {
+		t.Fatalf("first MirrorImage: %v", err)
+	}
+	var hits int
+	var lastAccess sql.NullString
+	if err := proxy.DB.QueryRow("SELECT COALESCE(SUM(hit_count), 0), MAX(last_accessed_at) FROM artifacts").Scan(&hits, &lastAccess); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := h.MirrorImage(context.Background(), ref, nil); err != nil {
+		t.Fatalf("second MirrorImage: %v", err)
+	}
+	var hitsAfter int
+	var lastAccessAfter sql.NullString
+	if err := proxy.DB.QueryRow("SELECT COALESCE(SUM(hit_count), 0), MAX(last_accessed_at) FROM artifacts").Scan(&hitsAfter, &lastAccessAfter); err != nil {
+		t.Fatal(err)
+	}
+	if hitsAfter != hits || lastAccessAfter != lastAccess {
+		t.Errorf("second run changed hits %d -> %d and last access %v -> %v, want no change", hits, hitsAfter, lastAccess, lastAccessAfter)
+	}
+}
+
+func TestMirrorImageRefetchesBlobMissingFromStorage(t *testing.T) {
+	registry, image := newFakeImageRegistry(t)
+	proxy := newMirrorTestProxy(t, registry)
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example", registry.server.URL)
+	ref := ImageRef{Name: "team/app", References: []string{"multi"}}
+
+	if _, err := h.MirrorImage(context.Background(), ref, nil); err != nil {
+		t.Fatalf("first MirrorImage: %v", err)
+	}
+	var path string
+	if err := proxy.DB.QueryRow("SELECT storage_path FROM artifacts WHERE filename = ?", image.amd64Layer).Scan(&path); err != nil {
+		t.Fatal(err)
+	}
+	if err := proxy.Storage.Delete(context.Background(), path); err != nil {
+		t.Fatal(err)
+	}
+	gets := registry.blobGets.Load()
+	if _, err := h.MirrorImage(context.Background(), ref, nil); err != nil {
+		t.Fatalf("second MirrorImage: %v", err)
+	}
+	if got := registry.blobGets.Load() - gets; got != 1 {
+		t.Errorf("second run fetched %d blobs, want the one missing from storage", got)
 	}
 }
