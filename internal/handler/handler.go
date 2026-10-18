@@ -20,12 +20,12 @@ import (
 	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/denylist"
-	"github.com/git-pkgs/proxy/internal/httpclient"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/proxy/internal/scanner"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
+	registryclient "github.com/git-pkgs/registries/client"
 	"github.com/git-pkgs/registries/fetch"
 	"github.com/opencontainers/go-digest"
 )
@@ -178,7 +178,7 @@ type Proxy struct {
 
 	// RateLimits is the gate under the upstream clients. Artifact fetches
 	// check it before calling Fetcher, so held hosts never reach its breaker.
-	RateLimits *httpclient.RateLimitGate
+	RateLimits *registryclient.RateLimitGate
 
 	// HostedNPMScopes and HostedComposerVendors name namespaces served from
 	// pushed packages alone, without asking the upstream.

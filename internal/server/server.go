@@ -81,6 +81,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/proxy/internal/scanner"
 	"github.com/git-pkgs/proxy/internal/storage"
+	registryclient "github.com/git-pkgs/registries/client"
 	"github.com/git-pkgs/registries/fetch"
 	"github.com/git-pkgs/registries/safehttp"
 	"github.com/git-pkgs/spdx"
@@ -117,7 +118,7 @@ type Server struct {
 	accessLog   *accesslog.Logger
 	ecr         *ecrTokens
 	breakers    *breakerMonitor
-	rateLimits  *upstreamhttp.RateLimitGate
+	rateLimits  *registryclient.RateLimitGate
 	ecoStats    ecosystemStatsCache
 	sources     sourceTracker
 
@@ -227,7 +228,7 @@ func (s *Server) serve(listener net.Listener) error {
 	metadataClient, artifactClient := s.newUpstreamClients(serverWriteTimeout)
 
 	// Create shared components with circuit breaker.
-	baseFetcher := fetch.NewFetcher(fetch.WithHTTPClient(artifactClient))
+	baseFetcher := fetch.NewFetcher(fetch.WithHTTPClient(artifactClient), fetch.WithMaxArtifactSize(s.cfg.ParseArtifactMaxSize()))
 	fetcher := fetch.NewCircuitBreakerFetcher(baseFetcher)
 	s.breakers = newBreakerMonitor(fetcher, s.logger)
 	resolver := fetch.NewResolver()
@@ -236,7 +237,7 @@ func (s *Server) serve(listener net.Listener) error {
 		Ecosystems: s.cfg.Cooldown.Ecosystems,
 		Packages:   s.cfg.Cooldown.NormalizedPackages(),
 	}
-	proxy := handler.NewProxy(s.db, s.storage, handler.LimitArtifactSize(fetcher, s.cfg.ParseArtifactMaxSize()), resolver, s.logger)
+	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
 	proxy.HTTPClient = metadataClient
 	proxy.RateLimits = s.rateLimits
 	cooldownPolicy, err := cooldownpolicy.New(cd, s.cfg.Cooldown.PackagePatterns)
@@ -497,9 +498,24 @@ func (s *Server) newUpstreamClients(artifactTimeout time.Duration) (metadataClie
 	}
 	// The gate sits under the auth transport so it sees every final upstream
 	// answer, including the retry after a bearer challenge.
-	gate := upstreamhttp.NewRateLimitGate(baseTransport)
-	gate.Logger = s.logger
-	gate.OnHold = metrics.RecordUpstreamRateLimitHold
+	gate := registryclient.NewRateLimitGate(baseTransport)
+	gate.OnHold = func(event registryclient.HoldEvent) {
+		metrics.RecordUpstreamRateLimitHold(event.Host)
+		if s.logger != nil {
+			source := "default"
+			if event.FromHeader {
+				source = "retry-after"
+			}
+			s.logger.Warn("upstream rate limited this proxy, holding its requests",
+				"host", event.Host, "hold", event.RetryAfter.Round(time.Second).String(), "source", source,
+				"until", event.Until.UTC().Format(time.RFC3339))
+		}
+	}
+	gate.OnRelease = func(host string) {
+		if s.logger != nil {
+			s.logger.Info("upstream rate limit cleared", "host", host)
+		}
+	}
 	s.rateLimits = gate
 	authTransport := upstreamhttp.NewTransport(gate, upstreamhttp.AuthFunc(s.authForURL))
 	metadata := *safeClient
@@ -517,7 +533,7 @@ func (s *Server) newUpstreamClients(artifactTimeout time.Duration) (metadataClie
 func NewMirrorProxy(cfg *config.Config, db *database.DB, store storage.Storage, logger *slog.Logger) (*handler.Proxy, *handler.ContainerHandler) {
 	s := &Server{cfg: cfg, db: db, storage: store, logger: logger, ecr: newECRTokens(logger)}
 	metadataClient, artifactClient := s.newUpstreamClients(0)
-	fetcher := handler.LimitArtifactSize(fetch.NewFetcher(fetch.WithHTTPClient(artifactClient)), cfg.ParseArtifactMaxSize())
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(artifactClient), fetch.WithMaxArtifactSize(cfg.ParseArtifactMaxSize()))
 	proxy := handler.NewProxy(db, store, fetcher, fetch.NewResolver(), logger)
 	proxy.HTTPClient = metadataClient
 	proxy.RateLimits = s.rateLimits

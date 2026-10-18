@@ -12,10 +12,10 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/database"
-	"github.com/git-pkgs/proxy/internal/httpclient"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
+	registryclient "github.com/git-pkgs/registries/client"
 	"github.com/git-pkgs/registries/fetch"
 )
 
@@ -1278,7 +1278,7 @@ func TestRPMHandler_DownloadCacheMiss(t *testing.T) {
 }
 
 func TestMavenHandler_UpstreamHeldReturns503(t *testing.T) {
-	held := &httpclient.HeldError{Host: "repo1.maven.org", Until: time.Now().Add(90 * time.Second), RetryAfter: 90 * time.Second}
+	held := &registryclient.HeldError{Host: "repo1.maven.org", Until: time.Now().Add(90 * time.Second), RetryAfter: 90 * time.Second}
 
 	t.Run("artifact", func(t *testing.T) {
 		proxy, _, _, fetcher := setupTestProxy(t)
@@ -1326,7 +1326,7 @@ func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) 
 func TestMavenHandler_HeldArtifactMissesSkipCircuitBreaker(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
 	upstreamCalls := 0
-	gate := httpclient.NewRateLimitGate(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	gate := registryclient.NewRateLimitGate(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		upstreamCalls++
 		return &http.Response{
 			StatusCode: http.StatusTooManyRequests,
@@ -1366,7 +1366,7 @@ func TestMavenHandler_HeldArtifactMissesSkipCircuitBreaker(t *testing.T) {
 }
 
 func TestHandlers_UpstreamHeldMetadataReturns503(t *testing.T) {
-	held := &httpclient.HeldError{Host: "upstream.example", Until: time.Now().Add(42 * time.Second), RetryAfter: 42 * time.Second}
+	held := &registryclient.HeldError{Host: "upstream.example", Until: time.Now().Add(42 * time.Second), RetryAfter: 42 * time.Second}
 	tests := []struct {
 		name    string
 		handler func(*Proxy) http.Handler

@@ -16,7 +16,7 @@ require (
 	github.com/git-pkgs/integrity v0.2.0
 	github.com/git-pkgs/magic v0.5.0
 	github.com/git-pkgs/purl v0.1.21
-	github.com/git-pkgs/registries v0.9.3
+	github.com/git-pkgs/registries v0.9.4-0.20261018134111-af84ef7650ff
 	github.com/git-pkgs/spdx v0.3.3
 	github.com/git-pkgs/vers v0.7.2
 	github.com/git-pkgs/vulns v0.2.4
