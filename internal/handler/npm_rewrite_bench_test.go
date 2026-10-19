@@ -43,7 +43,7 @@ func BenchmarkNPMRewriteMetadata(b *testing.B) {
 	b.SetBytes(int64(len(body)))
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := h.rewriteMetadata("big", body); err != nil {
+		if _, _, err := h.rewriteMetadataKeeping("big", body); err != nil {
 			b.Fatal(err)
 		}
 	}

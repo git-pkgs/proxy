@@ -13,6 +13,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/jsonscan"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
 )
@@ -226,7 +227,7 @@ func (h *ComposerHandler) rewriteMetadataWithLocal(body []byte, localPackage str
 	if !json.Valid(body) {
 		return nil, nil, errors.New("composer metadata is not valid JSON")
 	}
-	format, _, err := lookupJSONString(body, "minified")
+	format, _, err := jsonscan.LookupString(body, "minified")
 	if err != nil {
 		return nil, nil, err
 	}
@@ -236,17 +237,17 @@ func (h *ComposerHandler) rewriteMetadataWithLocal(body []byte, localPackage str
 	var kept []string
 	listed := false
 	out.Grow(len(body) + len(body)/8)
-	err = rewriteJSONMembers(&out, body, func(out *bytes.Buffer, m jsonMember) (bool, error) {
-		packages := m.value(body)
-		if !jsonKeyIs(m.key(body), "packages") || packages[0] != '{' {
+	err = jsonscan.RewriteMembers(&out, body, func(out *bytes.Buffer, m jsonscan.Member) (bool, error) {
+		packages := m.Value(body)
+		if !jsonscan.KeyIs(m.Key(body), "packages") || packages[0] != '{' {
 			return false, nil
 		}
-		return true, rewriteJSONMembers(out, packages, func(out *bytes.Buffer, p jsonMember) (bool, error) {
-			versions := p.value(packages)
+		return true, jsonscan.RewriteMembers(out, packages, func(out *bytes.Buffer, p jsonscan.Member) (bool, error) {
+			versions := p.Value(packages)
 			if versions[0] != '[' {
 				return false, nil
 			}
-			packageName, err := jsonKey(p.key(packages))
+			packageName, err := jsonscan.Key(p.Key(packages))
 			if err != nil {
 				return false, err
 			}
@@ -286,8 +287,8 @@ func (h *ComposerHandler) writeVersions(out *bytes.Buffer, packageName string, v
 	_, routed := h.routes.match(packageName)
 
 	out.WriteByte('[')
-	err := forEachJSONElement(versions, func(entry []byte) error {
-		if minified && jsonStringIs(entry, composerDevReset) {
+	err := jsonscan.EachElement(versions, func(entry []byte) error {
+		if minified && jsonscan.StringIs(entry, composerDevReset) {
 			upstream.reset()
 			written.reset()
 			devReset = true
@@ -428,15 +429,15 @@ func disableDefaultNotification(fields *composerFields) {
 // rewriteDist returns a version's dist object with its url pointing at this
 // proxy. A dist without a string url is returned unchanged.
 func (h *ComposerHandler) rewriteDist(packageName, version string, dist []byte) []byte {
-	urlMember, ok, err := findJSONMember(dist, "url")
-	if err != nil || !ok || dist[urlMember.valStart] != '"' {
+	urlMember, ok, err := jsonscan.FindMember(dist, "url")
+	if err != nil || !ok || dist[urlMember.ValStart] != '"' {
 		return dist
 	}
 	var upstreamURL string
-	if err := json.Unmarshal(urlMember.value(dist), &upstreamURL); err != nil {
+	if err := json.Unmarshal(urlMember.Value(dist), &upstreamURL); err != nil {
 		return dist
 	}
-	distType, _, _ := lookupJSONString(dist, "type")
+	distType, _, _ := jsonscan.LookupString(dist, "type")
 
 	proxyURL, ok := h.proxyDistURL(packageName, version, upstreamURL, distType)
 	if !ok {
@@ -446,10 +447,10 @@ func (h *ComposerHandler) rewriteDist(packageName, version string, dist []byte) 
 	if err != nil {
 		return dist
 	}
-	rewritten := make([]byte, 0, len(dist)-len(urlMember.value(dist))+len(encoded))
-	rewritten = append(rewritten, dist[:urlMember.valStart]...)
+	rewritten := make([]byte, 0, len(dist)-len(urlMember.Value(dist))+len(encoded))
+	rewritten = append(rewritten, dist[:urlMember.ValStart]...)
 	rewritten = append(rewritten, encoded...)
-	return append(rewritten, dist[urlMember.valEnd:]...)
+	return append(rewritten, dist[urlMember.ValEnd:]...)
 }
 
 // proxyDistURL returns the URL this proxy serves a version's archive at, or
@@ -593,9 +594,9 @@ func (f *composerFields) set(name string, key, value []byte) {
 // apply overlays the members of a version entry. In minified metadata the
 // value "__unset" removes the field instead.
 func (f *composerFields) apply(entry []byte, minified bool) error {
-	return forEachJSONMember(entry, func(m jsonMember) error {
-		key, value := m.key(entry), m.value(entry)
-		if minified && jsonStringIs(value, composerUnset) {
+	return jsonscan.EachMember(entry, func(m jsonscan.Member) error {
+		key, value := m.Key(entry), m.Value(entry)
+		if minified && jsonscan.StringIs(value, composerUnset) {
 			value = nil
 		}
 		if bytes.IndexByte(key, '\\') < 0 {
@@ -604,7 +605,7 @@ func (f *composerFields) apply(entry []byte, minified bool) error {
 				return nil
 			}
 		}
-		name, err := jsonKey(key)
+		name, err := jsonscan.Key(key)
 		if err != nil {
 			return err
 		}
@@ -877,11 +878,11 @@ func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaU
 // the minified format as it needs, since it runs on each archive the proxy
 // has not cached yet.
 func composerDistURL(body []byte, packageName, version string) (composerDist, error) {
-	format, _, err := lookupJSONString(body, "minified")
+	format, _, err := jsonscan.LookupString(body, "minified")
 	if err != nil {
 		return composerDist{}, err
 	}
-	versions, err := lookupJSON(body, "packages", packageName)
+	versions, err := jsonscan.Lookup(body, "packages", packageName)
 	if err != nil || len(versions) == 0 || versions[0] != '[' {
 		return composerDist{}, err
 	}
@@ -889,8 +890,8 @@ func composerDistURL(body []byte, packageName, version string) (composerDist, er
 
 	fields := newComposerFields()
 	var dist composerDist
-	err = forEachJSONElement(versions, func(entry []byte) error {
-		if minified && jsonStringIs(entry, composerDevReset) {
+	err = jsonscan.EachElement(versions, func(entry []byte) error {
+		if minified && jsonscan.StringIs(entry, composerDevReset) {
 			fields.reset()
 			return nil
 		}
@@ -903,20 +904,20 @@ func composerDistURL(body []byte, packageName, version string) (composerDist, er
 		if err := fields.apply(entry, minified); err != nil {
 			return err
 		}
-		if !jsonStringIs(fields.get("version"), version) {
+		if !jsonscan.StringIs(fields.get("version"), version) {
 			return nil
 		}
 		distRaw := fields.get("dist")
-		dist.url, _, _ = lookupJSONString(distRaw, "url")
+		dist.url, _, _ = jsonscan.LookupString(distRaw, "url")
 		if dist.url != "" {
-			dist.distType, _, _ = lookupJSONString(distRaw, "type")
-			dist.shasum, _, _ = lookupJSONString(distRaw, "shasum")
+			dist.distType, _, _ = jsonscan.LookupString(distRaw, "type")
+			dist.shasum, _, _ = jsonscan.LookupString(distRaw, "shasum")
 			dist.published = fields.get("time")
-			return errStopScan
+			return jsonscan.ErrStop
 		}
 		return nil
 	})
-	if errors.Is(err, errStopScan) {
+	if errors.Is(err, jsonscan.ErrStop) {
 		err = nil
 	}
 	return dist, err

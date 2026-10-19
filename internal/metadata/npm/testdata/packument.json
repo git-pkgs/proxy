@@ -1,0 +1,12 @@
+{
+  "name": "@example/widgets",
+  "dist-tags": {"latest": "3.0.0", "beta": "2.0.0"},
+  "versions": {
+    "1.0.0": {"name": "@example/widgets", "version": "1.0.0", "dependencies": {"left-pad": "^1.3.0"}, "dist": {"integrity": "sha512-example", "tarball": "https://registry.npmjs.org/@example/widgets/-/widgets-1.0.0.tgz"}},
+    "2.0.0": {"name": "@example/widgets", "version": "2.0.0", "dist": {"tarball": "https://registry.npmjs.org/@example/widgets/-/widgets-2.0.0.tgz"}},
+    "3.0.0": {"name": "@example/widgets", "version": "3.0.0", "dist": {"tarball": "https://cdn.example/abcdef.tgz"}}
+  },
+  "time": {"created": "2020-01-01T00:00:00Z", "1.0.0": "2020-01-01T00:00:00Z", "2.0.0": "2021-01-01T00:00:00Z", "3.0.0": "2099-01-01T00:00:00Z"},
+  "readme": "<b>Widgets & tools</b>",
+  "downloads": 12345678901234567890
+}

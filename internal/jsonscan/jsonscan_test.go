@@ -1,4 +1,4 @@
-package handler
+package jsonscan
 
 import (
 	"bytes"
@@ -34,7 +34,7 @@ func TestLookupJSONString(t *testing.T) {
 		{[]string{"name", "x"}, "", false},
 	}
 	for _, c := range cases {
-		got, ok, err := lookupJSONString(doc, c.path...)
+		got, ok, err := LookupString(doc, c.path...)
 		if err != nil || ok != c.wantOK || got != c.want {
 			t.Errorf("lookup %v = %q, %v, %v; want %q, %v", c.path, got, ok, err, c.want, c.wantOK)
 		}
@@ -43,7 +43,7 @@ func TestLookupJSONString(t *testing.T) {
 
 func TestLookupJSONEscapedKey(t *testing.T) {
 	doc := []byte(`{"versions": {"1.0.0": {"dist": {"tarball": "u"}}}}`)
-	got, ok, err := lookupJSONString(doc, "versions", "1.0.0", "dist", "tarball")
+	got, ok, err := LookupString(doc, "versions", "1.0.0", "dist", "tarball")
 	if err != nil || !ok || got != "u" {
 		t.Errorf("lookup = %q, %v, %v", got, ok, err)
 	}
@@ -57,9 +57,9 @@ func TestLookupJSONMalformed(t *testing.T) {
 		`{"a": "unterminated}`,
 		`{"a": [1, 2}`,
 	} {
-		_, _, err := lookupJSONString([]byte(doc), "versions", "1.0.0", "dist", "tarball")
-		if !errors.Is(err, errMalformedJSON) {
-			t.Errorf("%s: err = %v, want errMalformedJSON", doc, err)
+		_, _, err := LookupString([]byte(doc), "versions", "1.0.0", "dist", "tarball")
+		if !errors.Is(err, ErrMalformed) {
+			t.Errorf("%s: err = %v, want ErrMalformed", doc, err)
 		}
 	}
 }
@@ -67,8 +67,8 @@ func TestLookupJSONMalformed(t *testing.T) {
 func TestForEachJSONMemberOffsets(t *testing.T) {
 	doc := []byte(` { "a" : 1 , "b":{"c":[true,null]} ,"d":"x\"y" } `)
 	var got [][2]string
-	err := forEachJSONMember(doc, func(m jsonMember) error {
-		got = append(got, [2]string{string(m.key(doc)), string(m.value(doc))})
+	err := EachMember(doc, func(m Member) error {
+		got = append(got, [2]string{string(m.Key(doc)), string(m.Value(doc))})
 		return nil
 	})
 	want := [][2]string{{`"a"`, `1`}, {`"b"`, `{"c":[true,null]}`}, {`"d"`, `"x\"y"`}}
@@ -81,17 +81,17 @@ func TestForEachJSONMemberOffsets(t *testing.T) {
 		}
 	}
 
-	if err := forEachJSONMember([]byte(`[1]`), func(jsonMember) error { return nil }); !errors.Is(err, errNotJSONObject) {
-		t.Errorf("array: err = %v, want errNotJSONObject", err)
+	if err := EachMember([]byte(`[1]`), func(Member) error { return nil }); !errors.Is(err, ErrNotObject) {
+		t.Errorf("array: err = %v, want ErrNotObject", err)
 	}
-	if err := forEachJSONMember([]byte(`{}`), func(jsonMember) error { t.Error("called for empty object"); return nil }); err != nil {
+	if err := EachMember([]byte(`{}`), func(Member) error { t.Error("called for empty object"); return nil }); err != nil {
 		t.Errorf("empty object: err = %v", err)
 	}
 }
 
 func TestWriteFilteredJSONObject(t *testing.T) {
 	var out bytes.Buffer
-	err := writeFilteredJSONObject(&out, []byte(`{"a": 1, "b": {"x": 2}, "c": 3}`), func(k string) bool { return k != "b" })
+	err := WriteFilteredObject(&out, []byte(`{"a": 1, "b": {"x": 2}, "c": 3}`), func(k string) bool { return k != "b" }, nil)
 	if err != nil || out.String() != `{"a": 1,"c": 3}` {
 		t.Errorf("filtered = %s, %v", out.String(), err)
 	}
@@ -99,7 +99,7 @@ func TestWriteFilteredJSONObject(t *testing.T) {
 
 func TestForEachJSONElement(t *testing.T) {
 	var got []string
-	err := forEachJSONElement([]byte(` [ 1, "a,]", {"b": [2]} ,[] ] `), func(e []byte) error {
+	err := EachElement([]byte(` [ 1, "a,]", {"b": [2]} ,[] ] `), func(e []byte) error {
 		got = append(got, string(e))
 		return nil
 	})
@@ -113,11 +113,11 @@ func TestForEachJSONElement(t *testing.T) {
 		}
 	}
 
-	if err := forEachJSONElement([]byte(`[]`), func([]byte) error { t.Error("called for empty array"); return nil }); err != nil {
+	if err := EachElement([]byte(`[]`), func([]byte) error { t.Error("called for empty array"); return nil }); err != nil {
 		t.Errorf("empty array: err = %v", err)
 	}
 	for _, bad := range []string{`{}`, `[1,`, `[1 2]`, `[1`} {
-		if err := forEachJSONElement([]byte(bad), func([]byte) error { return nil }); err == nil {
+		if err := EachElement([]byte(bad), func([]byte) error { return nil }); err == nil {
 			t.Errorf("%s: expected an error", bad)
 		}
 	}
@@ -126,8 +126,8 @@ func TestForEachJSONElement(t *testing.T) {
 func TestRewriteJSONMembers(t *testing.T) {
 	obj := []byte(`{ "a": 1,  "b": [2], "c" : 3 }`)
 	var out bytes.Buffer
-	err := rewriteJSONMembers(&out, obj, func(out *bytes.Buffer, m jsonMember) (bool, error) {
-		if !jsonKeyIs(m.key(obj), "b") {
+	err := RewriteMembers(&out, obj, func(out *bytes.Buffer, m Member) (bool, error) {
+		if !KeyIs(m.Key(obj), "b") {
 			return false, nil
 		}
 		out.WriteString(`"B"`)
@@ -148,8 +148,8 @@ func TestJSONStringIs(t *testing.T) {
 		``:            false,
 		`["~dev"]`:    false,
 	} {
-		if got := jsonStringIs([]byte(raw), "~dev"); got != want {
-			t.Errorf("jsonStringIs(%s) = %v, want %v", raw, got, want)
+		if got := StringIs([]byte(raw), "~dev"); got != want {
+			t.Errorf("StringIs(%s) = %v, want %v", raw, got, want)
 		}
 	}
 }

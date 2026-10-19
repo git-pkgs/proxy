@@ -1,4 +1,4 @@
-package handler
+package jsonscan
 
 import (
 	"bytes"
@@ -16,24 +16,24 @@ import (
 // the document. Callers that copy unvisited bytes into a response validate the
 // whole document first with json.Valid.
 
-var errMalformedJSON = errors.New("malformed JSON")
+var ErrMalformed = errors.New("malformed JSON")
 
-// errNotJSONObject is returned when a value expected to be an object is not.
-var errNotJSONObject = errors.New("JSON value is not an object")
+// ErrNotObject is returned when a value expected to be an object is not.
+var ErrNotObject = errors.New("JSON value is not an object")
 
-// errStopScan is returned by a callback to end a walk early once it has
+// ErrStop is returned by a callback to end a walk early once it has
 // found what it was looking for.
-var errStopScan = errors.New("stop scanning")
+var ErrStop = errors.New("stop scanning")
 
-// jsonMember is one member of a JSON object as offsets into the bytes that
+// Member is one member of a JSON object as offsets into the bytes that
 // were scanned. The key span includes its quotes.
-type jsonMember struct {
-	keyStart, keyEnd int
-	valStart, valEnd int
+type Member struct {
+	KeyStart, KeyEnd int
+	ValStart, ValEnd int
 }
 
-func (m jsonMember) key(data []byte) []byte   { return data[m.keyStart:m.keyEnd] }
-func (m jsonMember) value(data []byte) []byte { return data[m.valStart:m.valEnd] }
+func (m Member) Key(data []byte) []byte   { return data[m.KeyStart:m.KeyEnd] }
+func (m Member) Value(data []byte) []byte { return data[m.ValStart:m.ValEnd] }
 
 func skipJSONSpace(data []byte, i int) int {
 	for i < len(data) {
@@ -57,13 +57,13 @@ func skipJSONString(data []byte, i int) (int, error) {
 			return j + 1, nil
 		}
 	}
-	return 0, errMalformedJSON
+	return 0, ErrMalformed
 }
 
 // skipJSONValue returns the index just past the value starting at data[i].
 func skipJSONValue(data []byte, i int) (int, error) {
 	if i >= len(data) {
-		return 0, errMalformedJSON
+		return 0, ErrMalformed
 	}
 	switch data[i] {
 	case '"':
@@ -87,9 +87,9 @@ func skipJSONValue(data []byte, i int) (int, error) {
 				}
 			}
 		}
-		return 0, errMalformedJSON
+		return 0, ErrMalformed
 	case '}', ']', ',', ':':
-		return 0, errMalformedJSON
+		return 0, ErrMalformed
 	default:
 		// A number, true, false or null runs to the next delimiter.
 		j := i
@@ -104,13 +104,13 @@ func skipJSONValue(data []byte, i int) (int, error) {
 	}
 }
 
-// forEachJSONMember calls fn for each member of the object obj holds, in
-// document order. It returns errNotJSONObject if obj is not an object, and
+// EachMember calls fn for each member of the object obj holds, in
+// document order. It returns ErrNotObject if obj is not an object, and
 // stops early with fn's error if fn returns one.
-func forEachJSONMember(obj []byte, fn func(jsonMember) error) error {
+func EachMember(obj []byte, fn func(Member) error) error {
 	i := skipJSONSpace(obj, 0)
 	if i >= len(obj) || obj[i] != '{' {
-		return errNotJSONObject
+		return ErrNotObject
 	}
 	i = skipJSONSpace(obj, i+1)
 	if i < len(obj) && obj[i] == '}' {
@@ -118,27 +118,27 @@ func forEachJSONMember(obj []byte, fn func(jsonMember) error) error {
 	}
 	for {
 		if i >= len(obj) || obj[i] != '"' {
-			return errMalformedJSON
+			return ErrMalformed
 		}
-		keyEnd, err := skipJSONString(obj, i)
+		KeyEnd, err := skipJSONString(obj, i)
 		if err != nil {
 			return err
 		}
-		colon := skipJSONSpace(obj, keyEnd)
+		colon := skipJSONSpace(obj, KeyEnd)
 		if colon >= len(obj) || obj[colon] != ':' {
-			return errMalformedJSON
+			return ErrMalformed
 		}
-		valStart := skipJSONSpace(obj, colon+1)
-		valEnd, err := skipJSONValue(obj, valStart)
+		ValStart := skipJSONSpace(obj, colon+1)
+		ValEnd, err := skipJSONValue(obj, ValStart)
 		if err != nil {
 			return err
 		}
-		if err := fn(jsonMember{keyStart: i, keyEnd: keyEnd, valStart: valStart, valEnd: valEnd}); err != nil {
+		if err := fn(Member{KeyStart: i, KeyEnd: KeyEnd, ValStart: ValStart, ValEnd: ValEnd}); err != nil {
 			return err
 		}
-		next := skipJSONSpace(obj, valEnd)
+		next := skipJSONSpace(obj, ValEnd)
 		if next >= len(obj) {
-			return errMalformedJSON
+			return ErrMalformed
 		}
 		switch obj[next] {
 		case ',':
@@ -146,17 +146,17 @@ func forEachJSONMember(obj []byte, fn func(jsonMember) error) error {
 		case '}':
 			return nil
 		default:
-			return errMalformedJSON
+			return ErrMalformed
 		}
 	}
 }
 
-// forEachJSONElement calls fn with each element of the array arr holds, in
+// EachElement calls fn with each element of the array arr holds, in
 // order, and stops early with fn's error if fn returns one.
-func forEachJSONElement(arr []byte, fn func(element []byte) error) error {
+func EachElement(arr []byte, fn func(element []byte) error) error {
 	i := skipJSONSpace(arr, 0)
 	if i >= len(arr) || arr[i] != '[' {
-		return errMalformedJSON
+		return ErrMalformed
 	}
 	i = skipJSONSpace(arr, i+1)
 	if i < len(arr) && arr[i] == ']' {
@@ -172,7 +172,7 @@ func forEachJSONElement(arr []byte, fn func(element []byte) error) error {
 		}
 		next := skipJSONSpace(arr, end)
 		if next >= len(arr) {
-			return errMalformedJSON
+			return ErrMalformed
 		}
 		switch arr[next] {
 		case ',':
@@ -180,22 +180,22 @@ func forEachJSONElement(arr []byte, fn func(element []byte) error) error {
 		case ']':
 			return nil
 		default:
-			return errMalformedJSON
+			return ErrMalformed
 		}
 	}
 }
 
-// rewriteJSONMembers copies the object obj holds to out byte for byte,
+// RewriteMembers copies the object obj holds to out byte for byte,
 // except that rewrite may write a member's value itself. It returns true
 // when it did; otherwise the original value is copied.
-func rewriteJSONMembers(out *bytes.Buffer, obj []byte, rewrite func(out *bytes.Buffer, m jsonMember) (bool, error)) error {
+func RewriteMembers(out *bytes.Buffer, obj []byte, rewrite func(out *bytes.Buffer, m Member) (bool, error)) error {
 	copied := 0
-	err := forEachJSONMember(obj, func(m jsonMember) error {
-		out.Write(obj[copied:m.valStart])
-		copied = m.valStart
+	err := EachMember(obj, func(m Member) error {
+		out.Write(obj[copied:m.ValStart])
+		copied = m.ValStart
 		rewritten, err := rewrite(out, m)
 		if rewritten {
-			copied = m.valEnd
+			copied = m.ValEnd
 		}
 		return err
 	})
@@ -203,8 +203,8 @@ func rewriteJSONMembers(out *bytes.Buffer, obj []byte, rewrite func(out *bytes.B
 	return err
 }
 
-// jsonKey decodes a quoted key as forEachJSONMember reports it.
-func jsonKey(raw []byte) (string, error) {
+// Key decodes a quoted key as EachMember reports it.
+func Key(raw []byte) (string, error) {
 	if bytes.IndexByte(raw, '\\') < 0 {
 		return string(raw[1 : len(raw)-1]), nil
 	}
@@ -213,27 +213,27 @@ func jsonKey(raw []byte) (string, error) {
 	return key, err
 }
 
-// jsonKeyIs reports whether a quoted key decodes to name.
-func jsonKeyIs(raw []byte, name string) bool {
+// KeyIs reports whether a quoted key decodes to name.
+func KeyIs(raw []byte, name string) bool {
 	if bytes.IndexByte(raw, '\\') < 0 {
 		return string(raw[1:len(raw)-1]) == name
 	}
-	key, err := jsonKey(raw)
+	key, err := Key(raw)
 	return err == nil && key == name
 }
 
-// jsonStringIs reports whether raw is a JSON string that decodes to s.
-func jsonStringIs(raw []byte, s string) bool {
-	return len(raw) >= 2 && raw[0] == '"' && jsonKeyIs(raw, s)
+// StringIs reports whether raw is a JSON string that decodes to s.
+func StringIs(raw []byte, s string) bool {
+	return len(raw) >= 2 && raw[0] == '"' && KeyIs(raw, s)
 }
 
-// findJSONMember returns the member of obj named name. When the key repeats,
+// FindMember returns the member of obj named name. When the key repeats,
 // the last one wins, as it does for JSON.parse and encoding/json.
-func findJSONMember(obj []byte, name string) (jsonMember, bool, error) {
-	var found jsonMember
+func FindMember(obj []byte, name string) (Member, bool, error) {
+	var found Member
 	ok := false
-	err := forEachJSONMember(obj, func(m jsonMember) error {
-		if jsonKeyIs(m.key(obj), name) {
+	err := EachMember(obj, func(m Member) error {
+		if KeyIs(m.Key(obj), name) {
 			found, ok = m, true
 		}
 		return nil
@@ -241,28 +241,28 @@ func findJSONMember(obj []byte, name string) (jsonMember, bool, error) {
 	return found, ok, err
 }
 
-// lookupJSON follows path through nested objects in doc and returns the
+// Lookup follows path through nested objects in doc and returns the
 // value at its end. It returns nil and no error when a key along the path is
 // missing or names something other than an object.
-func lookupJSON(doc []byte, path ...string) ([]byte, error) {
+func Lookup(doc []byte, path ...string) ([]byte, error) {
 	value := doc
 	for _, name := range path {
-		m, ok, err := findJSONMember(value, name)
-		if errors.Is(err, errNotJSONObject) {
+		m, ok, err := FindMember(value, name)
+		if errors.Is(err, ErrNotObject) {
 			return nil, nil
 		}
 		if err != nil || !ok {
 			return nil, err
 		}
-		value = m.value(value)
+		value = m.Value(value)
 	}
 	return value, nil
 }
 
-// lookupJSONString is lookupJSON for a string value. ok is false when the
+// LookupString is Lookup for a string value. ok is false when the
 // value is missing or is not a string.
-func lookupJSONString(doc []byte, path ...string) (string, bool, error) {
-	raw, err := lookupJSON(doc, path...)
+func LookupString(doc []byte, path ...string) (string, bool, error) {
+	raw, err := Lookup(doc, path...)
 	if err != nil || len(raw) == 0 || raw[0] != '"' {
 		return "", false, err
 	}
@@ -271,4 +271,39 @@ func lookupJSONString(doc []byte, path ...string) (string, bool, error) {
 		return "", false, err
 	}
 	return s, true, nil
+}
+
+// WriteFilteredObject writes the object obj holds, keeping the members
+// whose decoded key keep accepts, followed by extra string members.
+func WriteFilteredObject(out *bytes.Buffer, obj []byte, keep func(string) bool, extra [][2]string) error {
+	out.WriteByte('{')
+	first := true
+	err := EachMember(obj, func(m Member) error {
+		key, err := Key(m.Key(obj))
+		if err != nil {
+			return err
+		}
+		if !keep(key) {
+			return nil
+		}
+		if !first {
+			out.WriteByte(',')
+		}
+		first = false
+		out.Write(obj[m.KeyStart:m.ValEnd])
+		return nil
+	})
+	for _, member := range extra {
+		if !first {
+			out.WriteByte(',')
+		}
+		first = false
+		key, _ := json.Marshal(member[0])
+		value, _ := json.Marshal(member[1])
+		out.Write(key)
+		out.WriteByte(':')
+		out.Write(value)
+	}
+	out.WriteByte('}')
+	return err
 }
