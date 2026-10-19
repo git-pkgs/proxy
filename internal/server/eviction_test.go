@@ -487,3 +487,58 @@ func TestEvictBatch_SkipsRecordThatMoved(t *testing.T) {
 		t.Errorf("queue = %v, want the old path kept for reclaim", got)
 	}
 }
+
+// TestEvictBatch_KeepsRecordWhenQueueingFails evicts while the queue refuses
+// writes. The record must keep its path and the object stay, or a crash before
+// the delete would leave a file nothing points at.
+func TestEvictBatch_KeepsRecordWhenQueueingFails(t *testing.T) {
+	db, store := setupEvictionTest(t)
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	seedArtifact(t, ctx, db, store, "unqueued", 1000, time.Now().Add(-time.Hour))
+
+	rows, err := db.GetLeastRecentlyUsedArtifacts(evictionBatch)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("reading LRU rows: %v, %v", rows, err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER refuse_queue BEFORE INSERT ON pending_deletes
+		BEGIN SELECT RAISE(ABORT, 'queue refused'); END`); err != nil {
+		t.Fatalf("creating trigger: %v", err)
+	}
+
+	cleared, freed := evictBatch(ctx, db, store, logger, rows, 0, 1000)
+	if cleared != 0 || freed != 0 {
+		t.Errorf("cleared %d records freeing %d bytes, want nothing", cleared, freed)
+	}
+	path := rows[0].StoragePath.String
+	record, err := db.GetArtifact(rows[0].VersionPURL, rows[0].Filename)
+	if err != nil || record == nil || record.StoragePath.String != path {
+		t.Fatalf("record = %+v (err %v), want it kept at %q", record, err, path)
+	}
+	if ok, _ := store.Exists(ctx, path); !ok {
+		t.Error("object deleted although its record was kept")
+	}
+}
+
+// TestEvictBatch_DequeuesDeletedObjects checks that an object eviction deleted
+// does not stay in the queue for reclaim to delete again.
+func TestEvictBatch_DequeuesDeletedObjects(t *testing.T) {
+	db, store := setupEvictionTest(t)
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	seedArtifact(t, ctx, db, store, "gone", 1000, time.Now().Add(-time.Hour))
+
+	rows, err := db.GetLeastRecentlyUsedArtifacts(evictionBatch)
+	if err != nil || len(rows) != 1 {
+		t.Fatalf("reading LRU rows: %v, %v", rows, err)
+	}
+	if cleared, _ := evictBatch(ctx, db, store, logger, rows, 0, 1000); cleared != 1 {
+		t.Fatalf("cleared %d records, want 1", cleared)
+	}
+	if ok, _ := store.Exists(ctx, rows[0].StoragePath.String); ok {
+		t.Error("object still in storage")
+	}
+	if got := queuedPaths(t, db); len(got) != 0 {
+		t.Errorf("queue = %v, want it empty", got)
+	}
+}

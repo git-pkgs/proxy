@@ -9,6 +9,7 @@ import (
 
 	"github.com/git-pkgs/artifacts"
 	"github.com/git-pkgs/purl"
+	"github.com/jmoiron/sqlx"
 	"github.com/opencontainers/go-digest"
 )
 
@@ -340,26 +341,42 @@ func (db *DB) UpsertArtifact(a *Artifact) error {
 		if err := db.Get(&previous, query, a.VersionPURL, a.Filename); err != nil && !errors.Is(err, sql.ErrNoRows) {
 			return fmt.Errorf("reading artifact: %w", err)
 		}
-		applied, err := db.upsertArtifactFrom(a, previous)
+		applied, err := db.upsertArtifactQueuing(a, previous)
 		if err != nil {
 			return err
 		}
-		if !applied {
-			continue
+		if applied {
+			return nil
 		}
-		if previous.Valid && previous.String != a.StoragePath.String {
-			if err := db.QueuePendingDelete(previous.String); err != nil {
-				return fmt.Errorf("queueing replaced artifact: %w", err)
-			}
-		}
-		return nil
 	}
 	return errors.New("upserting artifact: record kept changing")
 }
 
+// upsertArtifactQueuing writes a as upsertArtifactFrom does and queues the
+// path it replaced in the same transaction, so a failed queue leaves the
+// record on the old path instead of orphaning it.
+func (db *DB) upsertArtifactQueuing(a *Artifact, previous sql.NullString) (bool, error) {
+	tx, err := db.Beginx()
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	applied, err := db.upsertArtifactFrom(tx, a, previous)
+	if err != nil || !applied {
+		return false, err
+	}
+	if previous.Valid && previous.String != a.StoragePath.String {
+		if _, err := tx.Exec(db.Rebind(queuePendingDeleteQuery), previous.String, time.Now().UTC()); err != nil {
+			return false, fmt.Errorf("queueing replaced artifact: %w", err)
+		}
+	}
+	return true, tx.Commit()
+}
+
 // upsertArtifactFrom writes a if the record is absent or still holds
 // previous, and reports whether it did.
-func (db *DB) upsertArtifactFrom(a *Artifact, previous sql.NullString) (bool, error) {
+func (db *DB) upsertArtifactFrom(ex sqlx.Execer, a *Artifact, previous sql.NullString) (bool, error) {
 	now := time.Now()
 	var query string
 
@@ -401,7 +418,7 @@ func (db *DB) upsertArtifactFrom(a *Artifact, previous sql.NullString) (bool, er
 		`
 	}
 
-	res, err := db.Exec(query,
+	res, err := ex.Exec(query,
 		a.VersionPURL, a.Filename, a.UpstreamURL, a.StoragePath, a.ContentHash,
 		a.Size, a.ContentType, inUTC(a.FetchedAt), a.HitCount, inUTC(a.LastAccessedAt), now, now,
 		a.sourceOrUpstream(), a.Manifest, previous,
@@ -482,33 +499,43 @@ func (db *DB) GetCachedArtifactCount() (int64, error) {
 }
 
 // ClearArtifactCache marks an artifact uncached if its record still points at
-// storagePath, and reports whether it did. A record a newer fetch has moved
-// elsewhere is left alone, so a clear never orphans the object that fetch
-// committed.
+// storagePath, queues storagePath for deletion in the same transaction, and
+// reports whether it did. A record a newer fetch has moved elsewhere is left
+// alone, so a clear never orphans the object that fetch committed. If
+// queueing fails, the record keeps its path.
 func (db *DB) ClearArtifactCache(versionPURL, filename, storagePath string) (bool, error) {
+	tx, err := db.Beginx()
+	if err != nil {
+		return false, err
+	}
+	defer func() { _ = tx.Rollback() }()
+
 	query := db.Rebind(`
 		UPDATE artifacts
 		SET storage_path = NULL, content_hash = NULL, size = NULL,
 		    content_type = NULL, fetched_at = NULL, updated_at = ?
 		WHERE version_purl = ? AND filename = ? AND storage_path = ?
 	`)
-	res, err := db.Exec(query, time.Now(), versionPURL, filename, storagePath)
+	res, err := tx.Exec(query, time.Now(), versionPURL, filename, storagePath)
 	if err != nil {
 		return false, err
 	}
 	n, err := res.RowsAffected()
-	return n > 0, err
+	if err != nil || n == 0 {
+		return false, err
+	}
+	if _, err := tx.Exec(db.Rebind(queuePendingDeleteQuery), storagePath, time.Now().UTC()); err != nil {
+		return false, fmt.Errorf("queueing %s for deletion: %w", storagePath, err)
+	}
+	return true, tx.Commit()
 }
 
-// DiscardArtifact clears the record as ClearArtifactCache does and queues
-// storagePath for deletion, for callers that must not delete an object another
+// DiscardArtifact clears the record and queues storagePath as
+// ClearArtifactCache does, for callers that must not delete an object another
 // request may be reading.
 func (db *DB) DiscardArtifact(versionPURL, filename, storagePath string) error {
-	cleared, err := db.ClearArtifactCache(versionPURL, filename, storagePath)
-	if err != nil || !cleared {
-		return err
-	}
-	return db.QueuePendingDelete(storagePath)
+	_, err := db.ClearArtifactCache(versionPURL, filename, storagePath)
+	return err
 }
 
 // QueuePendingDelete queues a storage path no record points at any more.
