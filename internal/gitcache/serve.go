@@ -1,6 +1,7 @@
 package gitcache
 
 import (
+	"bytes"
 	"compress/gzip"
 	"context"
 	"errors"
@@ -8,7 +9,9 @@ import (
 	"net/http"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"strings"
+	"sync/atomic"
 )
 
 // gitProtocolPattern is what a Git-Protocol header may hold, such as
@@ -86,16 +89,26 @@ func (l *Lease) ServeInfoRefs(w http.ResponseWriter, r *http.Request) {
 // upstream first.
 func (l *Lease) ServeUploadPack(w http.ResponseWriter, r *http.Request) {
 	c := l.cache
-	body := io.Reader(r.Body)
+	// The raw body is limited too: a gzip stream of any length can decode
+	// to almost nothing.
+	raw := &bodyLimit{r: r.Body, remaining: c.maxRequestBody}
+	decoded := raw
 	if r.Header.Get("Content-Encoding") == "gzip" {
-		gz, err := gzip.NewReader(r.Body)
+		gz, err := gzip.NewReader(raw)
 		if err != nil {
 			http.Error(w, "invalid gzip body", http.StatusBadRequest)
 			return
 		}
 		defer func() { _ = gz.Close() }()
-		body = gz
+		decoded = &bodyLimit{r: gz, remaining: c.maxRequestBody}
 	}
+	defer func() {
+		if raw.exceeded.Load() || decoded.exceeded.Load() {
+			c.logger.Warn("git cache: request body passed the limit",
+				"repository", l.repo.key, "limit", c.maxRequestBody)
+		}
+	}()
+	body := io.Reader(decoded)
 	if l.fetchWants {
 		var wants []string
 		wants, body = readWants(body)
@@ -104,10 +117,39 @@ func (l *Lease) ServeUploadPack(w http.ResponseWriter, r *http.Request) {
 			c.logger.Warn("git cache: fetching wanted objects failed", "repository", l.repo.key, "error", err)
 		}
 	}
+	var command string
+	command, body = requestCommand(body)
+	// ls-refs builds no pack, so it does not wait behind clones.
+	if command != "ls-refs" {
+		select {
+		case c.uploadPacks <- struct{}{}:
+			defer func() { <-c.uploadPacks }()
+		case <-r.Context().Done():
+			return
+		}
+	}
 	setNoCache(w)
 	w.Header().Set("Content-Type", resultType)
 	c.uploadPack(w, r, l.repo, gitProtocol(r), body)
 }
+
+// requestCommand returns the protocol v2 command an upload-pack request
+// starts with, such as "fetch", or "" for an earlier protocol, with a reader
+// that replays the whole body.
+func requestCommand(body io.Reader) (string, io.Reader) {
+	var consumed bytes.Buffer
+	_, line, _ := newPktReader(io.TeeReader(body, &consumed)).next()
+	command, ok := strings.CutPrefix(line, "command=")
+	if !ok {
+		command = ""
+	}
+	return command, io.MultiReader(&consumed, body)
+}
+
+// servingConfig gives each pack-objects that upload-pack runs one
+// delta-search thread with a bounded window, where git defaults to a thread
+// per CPU and no bound.
+var servingConfig = []string{"-c", "pack.threads=1", "-c", "pack.windowMemory=64m"}
 
 // uploadPack runs git upload-pack on the cached repository in stateless mode,
 // the way git http-backend does.
@@ -116,7 +158,7 @@ func (c *Cache) uploadPack(w http.ResponseWriter, r *http.Request, rp *repo, pro
 	if protocol != "" {
 		env = append(env, "GIT_PROTOCOL="+protocol)
 	}
-	args = append(append([]string{"upload-pack", "--stateless-rpc"}, args...), rp.dir)
+	args = slices.Concat(servingConfig, []string{"upload-pack", "--stateless-rpc"}, args, []string{rp.dir})
 	cmd := c.command(r.Context(), env, args...)
 	cmd.Stdin = stdin
 	cmd.Stdout = w
@@ -126,6 +168,40 @@ func (c *Cache) uploadPack(w http.ResponseWriter, r *http.Request, rp *repo, pro
 		c.logger.Warn("git cache: upload-pack failed",
 			"repository", rp.key, "error", err, "stderr", strings.TrimSpace(stderr.String()))
 	}
+}
+
+// defaultMaxRequestBody bounds an upload-pack request far above any real
+// negotiation, so a small gzip body cannot feed upload-pack for as long as
+// the request may run.
+const defaultMaxRequestBody = 100 << 20
+
+var errRequestTooLarge = errors.New("request body too large")
+
+// bodyLimit fails reads past remaining bytes, where io.LimitReader would end
+// the body quietly and leave upload-pack a request cut short.
+type bodyLimit struct {
+	r         io.Reader
+	remaining int64
+	exceeded  atomic.Bool
+}
+
+func (b *bodyLimit) Read(p []byte) (int, error) {
+	if b.exceeded.Load() {
+		return 0, errRequestTooLarge
+	}
+	// One byte past the limit tells a longer body from one that ends at it.
+	if int64(len(p)) > b.remaining+1 {
+		p = p[:b.remaining+1]
+	}
+	n, err := b.r.Read(p)
+	if int64(n) <= b.remaining {
+		b.remaining -= int64(n)
+		return n, err
+	}
+	n = int(b.remaining)
+	b.remaining = 0
+	b.exceeded.Store(true)
+	return n, errRequestTooLarge
 }
 
 func gitProtocol(r *http.Request) string {

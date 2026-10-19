@@ -43,6 +43,10 @@ var gitConfig = [][2]string{
 	// receives nothing for that long, so a connection that stalls mid-pack
 	// cannot hold a refresh for fetchTimeout.
 	{"http.lowSpeedLimit", "1"},
+	// index-pack streams blobs larger than this instead of holding them in
+	// memory, and pack-objects stores them without delta compression, so a
+	// large file costs a fetch or a clone little memory.
+	{"core.bigFileThreshold", "8m"},
 }
 
 // command builds a git process with an environment of its own: none of the

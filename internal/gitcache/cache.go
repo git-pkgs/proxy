@@ -16,6 +16,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"regexp"
+	"runtime"
 	"slices"
 	"strings"
 	"sync"
@@ -63,9 +64,12 @@ type Options struct {
 	// else in CacheDir is touched, so it may hold other data.
 	Upstreams map[string]string
 
-	// refCheckTimeout and lowSpeedTime override their defaults in tests.
+	// refCheckTimeout, lowSpeedTime, maxRequestBody and maxUploadPacks
+	// override their defaults in tests.
 	refCheckTimeout time.Duration
 	lowSpeedTime    int
+	maxRequestBody  int64
+	maxUploadPacks  int
 }
 
 // Cache is the Git repository cache. internal/handler serves it at /git.
@@ -77,8 +81,10 @@ type Cache struct {
 	dir             string
 	relay           *relay
 	fetches         chan struct{}
+	uploadPacks     chan struct{}
 	refCheckTimeout time.Duration
 	lowSpeedTime    int
+	maxRequestBody  int64
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -117,6 +123,12 @@ type repo struct {
 // start any number and hang up.
 const maxConcurrentFetches = 16
 
+// uploadPacksPerCPU caps the upload-pack processes building packs at once,
+// so a burst of clones cannot run the proxy out of memory. Each uses one
+// delta-search thread (servingConfig); twice the CPUs keeps them busy while
+// some packs wait on slow clients.
+const uploadPacksPerCPU = 2
+
 // New creates the cache, loading repositories already in CacheDir.
 func New(opts Options) (*Cache, error) {
 	gitPath, err := exec.LookPath("git")
@@ -135,6 +147,10 @@ func New(opts Options) (*Cache, error) {
 	client.Timeout = 0
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
 
+	uploadPacks := uploadPacksPerCPU * runtime.GOMAXPROCS(0)
+	if opts.maxUploadPacks > 0 {
+		uploadPacks = opts.maxUploadPacks
+	}
 	c := &Cache{
 		opts:            opts,
 		client:          &client,
@@ -142,8 +158,10 @@ func New(opts Options) (*Cache, error) {
 		gitPath:         gitPath,
 		dir:             dir,
 		fetches:         make(chan struct{}, maxConcurrentFetches),
+		uploadPacks:     make(chan struct{}, uploadPacks),
 		refCheckTimeout: defaultRefCheckTimeout,
 		lowSpeedTime:    defaultLowSpeedTime,
+		maxRequestBody:  defaultMaxRequestBody,
 		repos:           make(map[string]*repo),
 		tooLarge:        make(map[string]time.Time),
 		failedWants:     make(map[string]time.Time),
@@ -153,6 +171,9 @@ func New(opts Options) (*Cache, error) {
 	}
 	if opts.lowSpeedTime > 0 {
 		c.lowSpeedTime = opts.lowSpeedTime
+	}
+	if opts.maxRequestBody > 0 {
+		c.maxRequestBody = opts.maxRequestBody
 	}
 	if err := c.load(); err != nil {
 		return nil, err

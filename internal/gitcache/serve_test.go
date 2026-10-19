@@ -7,10 +7,12 @@ import (
 	"io"
 	"net/http"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strings"
 	"sync"
 	"testing"
+	"time"
 )
 
 // TestRequestBodies sends the bodies git sends for large requests: gzipped,
@@ -49,6 +51,135 @@ func TestRequestBodies(t *testing.T) {
 		_ = resp.Body.Close()
 		if resp.StatusCode != http.StatusOK || !strings.Contains(string(out), "refs/heads/main") {
 			t.Errorf("%s: status %d, body %q", tt.name, resp.StatusCode, out)
+		}
+	}
+}
+
+// TestRequestBodyLimit refuses a request past the limit, before or after
+// gzip, including one that is small compressed.
+func TestRequestBodyLimit(t *testing.T) {
+	const limit = 4096
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) { o.maxRequestBody = limit })
+	tc.clone(t, "repo")
+
+	lsRefs := func(prefixes int) string {
+		return pktLine("command=ls-refs\n") + pktDelim +
+			strings.Repeat(pktLine("ref-prefix refs/heads/\n"), prefixes) + pktFlush
+	}
+	gzipped := func(body string) *bytes.Buffer {
+		var buf bytes.Buffer
+		gz := gzip.NewWriter(&buf)
+		_, _ = io.WriteString(gz, body)
+		_ = gz.Close()
+		return &buf
+	}
+	small, large := lsRefs(10), lsRefs(200)
+	if len(small) > limit || len(large) <= limit {
+		t.Fatalf("bodies of %d and %d bytes do not straddle the limit", len(small), len(large))
+	}
+	compressed := gzipped(large)
+	if compressed.Len() > limit {
+		t.Fatalf("compressed body is %d bytes, over the limit", compressed.Len())
+	}
+	// Empty gzip members before a small body: long on the wire, short decoded.
+	var padded bytes.Buffer
+	for empty := gzipped(""); padded.Len() <= limit; {
+		padded.Write(empty.Bytes())
+	}
+	padded.Write(gzipped(small).Bytes())
+	for _, tt := range []struct {
+		name     string
+		body     io.Reader
+		encoding string
+		served   bool
+	}{
+		{"small", strings.NewReader(small), "", true},
+		{"small gzip", gzipped(small), "gzip", true},
+		{"large", strings.NewReader(large), "", false},
+		{"large gzip", compressed, "gzip", false},
+		{"padded gzip", &padded, "gzip", false},
+	} {
+		req, _ := http.NewRequest(http.MethodPost, tc.url("repo")+"/git-upload-pack", tt.body)
+		req.Header.Set("Content-Type", requestType)
+		req.Header.Set("Git-Protocol", "version=2")
+		if tt.encoding != "" {
+			req.Header.Set("Content-Encoding", tt.encoding)
+		}
+		resp, err := http.DefaultClient.Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		out, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if served := strings.Contains(string(out), "refs/heads/main"); served != tt.served {
+			t.Errorf("%s: served %t, want %t (status %d, body %q)", tt.name, served, tt.served, resp.StatusCode, out)
+		}
+	}
+}
+
+// TestUploadPackSlots holds the only upload-pack slot: a clone waits for it,
+// while listing refs, which builds no pack, does not.
+func TestUploadPackSlots(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) { o.maxUploadPacks = 1 })
+	tc.clone(t, "repo")
+
+	start := func(args ...string) <-chan error {
+		done := make(chan error, 1)
+		go func() {
+			out, err := tryGit(t, "", args...)
+			if err != nil {
+				err = fmt.Errorf("%w\n%s", err, out)
+			}
+			done <- err
+		}()
+		return done
+	}
+
+	tc.uploadPacks <- struct{}{}
+	held := true
+	release := func() {
+		if held {
+			held = false
+			<-tc.uploadPacks
+		}
+	}
+	// A failure while the slot is held must free it for the cache to close.
+	defer release()
+	select {
+	case err := <-start("-c", "protocol.version=2", "ls-remote", tc.url("repo")):
+		if err != nil {
+			t.Fatalf("ls-remote: %v", err)
+		}
+	case <-time.After(10 * time.Second):
+		t.Fatal("ls-remote waited for the slot")
+	}
+	clone := start("clone", "--quiet", tc.url("repo"), filepath.Join(t.TempDir(), "clone"))
+	select {
+	case err := <-clone:
+		t.Fatalf("clone finished while the slot was held: %v", err)
+	case <-time.After(time.Second):
+	}
+	release()
+	if err := <-clone; err != nil {
+		t.Errorf("clone: %v", err)
+	}
+}
+
+func TestRequestCommand(t *testing.T) {
+	for _, tt := range []struct{ body, want string }{
+		{pktLine("command=ls-refs\n") + pktDelim + pktFlush, "ls-refs"},
+		{pktLine("command=fetch\n") + pktDelim + pktLine("done\n") + pktFlush, "fetch"},
+		{pktLine("want "+strings.Repeat("a", 40)+"\n") + pktFlush, ""},
+		{"", ""},
+	} {
+		command, body := requestCommand(strings.NewReader(tt.body))
+		replayed, _ := io.ReadAll(body)
+		if command != tt.want || string(replayed) != tt.body {
+			t.Errorf("requestCommand(%q) = %q, %q; want %q and the whole body", tt.body, command, replayed, tt.want)
 		}
 	}
 }

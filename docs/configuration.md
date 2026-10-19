@@ -732,7 +732,13 @@ that does not fit is refused, and the repository kept.
 Least recently used repositories are evicted after each fetch that takes the
 cache past `max_size`, never one a request is reading. A transfer
 that receives nothing for 10 minutes is abandoned. Git's automatic garbage
-collection runs as part of fetches.
+collection runs as part of fetches, and files over 8MB are kept without delta
+compression, so one large file does not take a fetch's memory.
+
+Packs for clients are built by at most two `upload-pack` processes per CPU
+the proxy may use, each with one delta-search thread and 64MB of delta
+window, and further clones wait for one to finish; listing refs does not
+wait. An `upload-pack` request is limited to 100MB, before and after gzip.
 
 Repositories are kept under `{cache_dir}/{name}-{hash of the URL}/`, so
 repointing an upstream starts a fresh cache, and the old URL's directory is
