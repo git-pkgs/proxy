@@ -7,7 +7,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.7
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.66.2
-	github.com/git-pkgs/archives v0.8.2-0.20261018121304-37b9a6e2b526
+	github.com/git-pkgs/archives v0.9.0
 	github.com/git-pkgs/artifacts v0.2.1
 	github.com/git-pkgs/cooldown v0.3.0
 	github.com/git-pkgs/enrichment v0.7.2
