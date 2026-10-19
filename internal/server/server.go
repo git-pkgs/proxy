@@ -90,11 +90,10 @@ import (
 )
 
 const (
-	serverReadTimeout  = 30 * time.Second
-	serverWriteTimeout = 5 * time.Minute
-	serverIdleTimeout  = 60 * time.Second
-	dashboardTopN      = 10
-	hoursPerDay        = 24
+	serverReadTimeout = 30 * time.Second
+	serverIdleTimeout = 60 * time.Second
+	dashboardTopN     = 10
+	hoursPerDay       = 24
 
 	// Upstream transport defaults, matching what fetch.NewFetcher would use
 	// if we did not hand it our own client. Go's default transport keeps only
@@ -226,7 +225,7 @@ func (s *Server) Start(listeners ...net.Listener) error {
 }
 
 func (s *Server) serve(listener net.Listener) error {
-	metadataClient, artifactClient := s.newUpstreamClients(serverWriteTimeout)
+	metadataClient, artifactClient := s.newUpstreamClients(s.cfg.ParseArtifactTimeout())
 
 	// Create shared components with circuit breaker.
 	baseFetcher := fetch.NewFetcher(fetch.WithHTTPClient(artifactClient))
@@ -372,7 +371,7 @@ func (s *Server) serve(listener net.Listener) error {
 		Addr:         s.cfg.Listen,
 		Handler:      r,
 		ReadTimeout:  serverReadTimeout,
-		WriteTimeout: serverWriteTimeout, // Large artifacts need time
+		WriteTimeout: s.cfg.ParseWriteTimeout(), // Large artifacts need time
 		IdleTimeout:  serverIdleTimeout,
 	}
 

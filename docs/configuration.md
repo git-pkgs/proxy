@@ -22,6 +22,22 @@ See `config.example.yaml` in the repository root for a complete example.
 | `trust_forwarded_for` | `PROXY_TRUST_FORWARDED_FOR` | - | `false` | Attribute requests to the leftmost `X-Forwarded-For` entry instead of the TCP peer address, in the structured log, the access log and the request-source table on `/ui/analytics`. |
 | `ui_request_sources` | `PROXY_UI_REQUEST_SOURCES` | - | `false` | Show the request-source table on `/ui/analytics`, which reports caller addresses, the tool each ran and how much each pulled. |
 | `ui_failure_details` | `PROXY_UI_FAILURE_DETAILS` | - | `false` | List the latest failures behind each failure count on `/ui/analytics`: the package, its upstream URL or storage path, and the error. URLs are shown without credentials or query strings. |
+| `http_timeout` | `PROXY_HTTP_TIMEOUT` | - | `30s` | Timeout for upstream metadata and pass-through requests. |
+| `write_timeout` | `PROXY_WRITE_TIMEOUT` | - | `5m` | Response write deadline, including download and scanning time before the response starts. |
+| `artifact_timeout` | `PROXY_ARTIFACT_TIMEOUT` | - | `5m` | Timeout for each upstream artifact download while serving requests; excludes subsequent scanning. Does not limit `proxy mirror`. |
+
+These timeouts accept Go durations such as `30s`, `5m`, or `1h`. An omitted value uses the default; `"0"` disables that timeout. Invalid or negative values are rejected at startup. Environment variables override file values.
+
+For long scans, increase `write_timeout` to cover the download, scan, and response transfer. `scanning.timeout` controls the scan separately; changing it alone does not extend the response deadline. `artifact_timeout` is independent of both. For example:
+
+```yaml
+write_timeout: "18m"
+artifact_timeout: "10m"
+scanning:
+  timeout: "16m"
+```
+
+These are independent limits, not reserved time slices: a download approaching 10 minutes followed by a 16-minute scan would still exceed an 18-minute response deadline. Any reverse proxy in front of the server also needs sufficient timeout allowance. The upstream transport's existing response-header timeout remains unchanged.
 
 ## Storage
 

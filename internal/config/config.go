@@ -186,6 +186,15 @@ type Config struct {
 	// response headers within 60 seconds.
 	HTTPTimeout string `json:"http_timeout" yaml:"http_timeout"`
 
+	// WriteTimeout bounds response writes, including time spent downloading and
+	// scanning before the response starts. Default: "5m"; "0" disables it.
+	WriteTimeout string `json:"write_timeout" yaml:"write_timeout"`
+
+	// ArtifactTimeout bounds each upstream artifact download while serving
+	// requests, excluding scanning. Default: "5m"; "0" disables it.
+	// The mirror command keeps its unlimited artifact download timeout.
+	ArtifactTimeout string `json:"artifact_timeout" yaml:"artifact_timeout"`
+
 	// MirrorAPI enables the /api/mirror endpoints for starting mirror jobs via HTTP.
 	// Disabled by default to prevent unauthenticated users from triggering downloads.
 	MirrorAPI bool `json:"mirror_api" yaml:"mirror_api"`
@@ -1258,6 +1267,8 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.ArtifactMaxSize, "PROXY_ARTIFACT_MAX_SIZE")
 	setEnvString(&c.MetadataRewriteCacheSize, "PROXY_METADATA_REWRITE_CACHE_SIZE")
 	setEnvString(&c.HTTPTimeout, "PROXY_HTTP_TIMEOUT")
+	setEnvString(&c.WriteTimeout, "PROXY_WRITE_TIMEOUT")
+	setEnvString(&c.ArtifactTimeout, "PROXY_ARTIFACT_TIMEOUT")
 	c.setGradleReadOnlyFromEnv()
 	setEnvString(&c.Gradle.BuildCache.MaxUploadSize, "PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE")
 	setEnvString(&c.Gradle.BuildCache.MaxAge, "PROXY_GRADLE_BUILD_CACHE_MAX_AGE")
@@ -1357,7 +1368,7 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	if err := validateHTTPTimeout(c.HTTPTimeout); err != nil {
+	if err := c.validateRequestTimeouts(); err != nil {
 		return err
 	}
 
@@ -1481,6 +1492,8 @@ func (g *GradleBuildCacheConfig) Validate() error {
 const (
 	defaultMetadataTTL                   = 5 * time.Minute  //nolint:mnd // sensible default
 	defaultDirectServeTTL                = 15 * time.Minute //nolint:mnd // sensible default
+	defaultWriteTimeout                  = 5 * time.Minute
+	defaultArtifactTimeout               = 5 * time.Minute
 	defaultHTTPTimeout                   = 30 * time.Second //nolint:mnd // sensible default
 	defaultHitFlushInterval              = time.Second
 	defaultMetadataMaxSize               = 100 << 20
@@ -1509,16 +1522,30 @@ func (c *Config) ParseMaxSize() int64 {
 	return size
 }
 
-func validateHTTPTimeout(s string) error {
+func (c *Config) validateRequestTimeouts() error {
+	for _, timeout := range []struct{ field, value string }{
+		{"http_timeout", c.HTTPTimeout},
+		{"write_timeout", c.WriteTimeout},
+		{"artifact_timeout", c.ArtifactTimeout},
+	} {
+		if err := validateRequestTimeout(timeout.field, timeout.value); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateRequestTimeout(field, s string) error {
 	if s == "" || s == "0" {
 		return nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
-		return fmt.Errorf("invalid http_timeout %q: %w", s, err)
+		return fmt.Errorf("invalid %s %q: %w", field, s, err)
 	}
 	if d < 0 {
-		return fmt.Errorf("invalid http_timeout %q: must be non-negative", s)
+		return fmt.Errorf("invalid %s %q: must be non-negative", field, s)
 	}
 	return nil
 }
@@ -1617,15 +1644,28 @@ func (c *Config) ParseArtifactMaxSize() int64 {
 // ParseHTTPTimeout returns the upstream HTTP client timeout.
 // Returns 30s if unset, 0 (no timeout) if explicitly set to "0".
 func (c *Config) ParseHTTPTimeout() time.Duration {
-	if c.HTTPTimeout == "" {
-		return defaultHTTPTimeout
+	return parseRequestTimeout(c.HTTPTimeout, defaultHTTPTimeout)
+}
+
+// ParseWriteTimeout returns the response write timeout, defaulting to 5m.
+// An explicit zero disables the timeout.
+func (c *Config) ParseWriteTimeout() time.Duration {
+	return parseRequestTimeout(c.WriteTimeout, defaultWriteTimeout)
+}
+
+// ParseArtifactTimeout returns the upstream artifact download timeout for
+// serving requests, defaulting to 5m. An explicit zero disables the timeout.
+func (c *Config) ParseArtifactTimeout() time.Duration {
+	return parseRequestTimeout(c.ArtifactTimeout, defaultArtifactTimeout)
+}
+
+func parseRequestTimeout(value string, fallback time.Duration) time.Duration {
+	if value == "" {
+		return fallback
 	}
-	if c.HTTPTimeout == "0" {
-		return 0
-	}
-	d, err := time.ParseDuration(c.HTTPTimeout)
+	d, err := time.ParseDuration(value)
 	if err != nil || d < 0 {
-		return defaultHTTPTimeout
+		return fallback
 	}
 	return d
 }

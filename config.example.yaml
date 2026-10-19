@@ -14,6 +14,14 @@ base_url: "http://localhost:8080"
 # Set to "0" to disable the timeout. Default: "30s".
 # http_timeout: "30s"
 
+# Response write deadline, including download and scan time before sending data.
+# Set to "0" to disable. Default: "5m".
+# write_timeout: "5m"
+
+# Timeout for each upstream artifact download while serving requests; excludes
+# scanning. Set to "0" to disable. Default: "5m". Does not limit proxy mirror.
+# artifact_timeout: "5m"
+
 # Largest upstream artifact to fetch (e.g. "2GB"). Larger ones are refused
 # and not cached. Default: unlimited.
 # artifact_max_size: ""
