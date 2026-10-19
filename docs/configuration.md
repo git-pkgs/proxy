@@ -683,7 +683,12 @@ without `repos` serves every repository on it, and a repository outside
 `repos` answers 404. When `upstream.auth` has credentials for an upstream,
 `repos` is required: everyone who can reach the proxy can read every
 repository it serves, so list only those they may read. Per-client
-permissions are not supported.
+permissions are not supported. `upstream.auth` matches credentials by URL, so
+they are sent by every route to that host, not only `/git`. With a token for
+`https://github.com`, a `generic` upstream at the same URL, such as the one
+the mise setup in the README uses, sends it for any path and checks no
+`repos`, so `/generic/github/acme/private.git/info/refs?service=git-upload-pack`
+would list a private repository's refs to anyone.
 
 Every request for a repository's refs checks the upstream's branches and tags,
 and fetches only when they changed, so a clone right after a push sees the new
