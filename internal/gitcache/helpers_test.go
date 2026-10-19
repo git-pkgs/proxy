@@ -91,8 +91,10 @@ type fakeUpstream struct {
 	gitSessions atomic.Int32
 	unauthed    atomic.Int32
 
-	// stallFetches makes git's own upload-pack requests hang.
+	// stallFetches makes git's own upload-pack requests hang, and
+	// delayFetches holds them for that long.
 	stallFetches atomic.Bool
+	delayFetches atomic.Int64
 
 	bodiesMu sync.Mutex
 	bodies   []string
@@ -169,6 +171,9 @@ func newFakeUpstream(t *testing.T) *fakeUpstream {
 		}
 		if u.v0Only {
 			r.Header.Del("Git-Protocol")
+		}
+		if delay := u.delayFetches.Load(); delay > 0 && r.UserAgent() != gitUserAgent && r.Method == http.MethodPost {
+			time.Sleep(time.Duration(delay))
 		}
 		if u.stallFetches.Load() && r.UserAgent() != gitUserAgent && r.Method == http.MethodPost {
 			// The server notices the client leaving only once the body is read.

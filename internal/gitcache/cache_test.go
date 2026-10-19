@@ -232,6 +232,43 @@ func TestSlowUpstreamServesCachedCopyAfterRefreshWait(t *testing.T) {
 	waitFor(t, func() bool { return strings.Contains(tc.cachedRefs(t), head) })
 }
 
+// TestSlowFetchAfterPushIsWaitedFor has the upstream answer the ref check at
+// once and the fetch after a push take longer than RefreshWait: a clone
+// still gets the pushed commit. RefreshWait leaves the check time to finish
+// on a slow machine.
+func TestSlowFetchAfterPushIsWaitedFor(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) { o.RefreshWait = 2 * time.Second })
+	tc.clone(t, "repo")
+	head := upstream.commit(work, "second")
+	runGit(t, work, "push", "--quiet", "origin", "main")
+
+	upstream.delayFetches.Store(int64(4 * time.Second))
+	if got := runGit(t, tc.clone(t, "repo"), "rev-parse", "HEAD"); got != head {
+		t.Errorf("HEAD = %s, want the pushed %s", got, head)
+	}
+}
+
+// TestStalledFetchAfterPushServesCachedCopy has the fetch after a push
+// stall: once it is abandoned, the clone gets the cached copy.
+func TestStalledFetchAfterPushServesCachedCopy(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) {
+		o.RefreshWait = 100 * time.Millisecond
+		o.lowSpeedTime = 1
+	})
+	old := runGit(t, tc.clone(t, "repo"), "rev-parse", "HEAD")
+	upstream.commit(work, "second")
+	runGit(t, work, "push", "--quiet", "origin", "main")
+
+	upstream.stallFetches.Store(true)
+	if got := runGit(t, tc.clone(t, "repo"), "rev-parse", "HEAD"); got != old {
+		t.Errorf("HEAD = %s, want the cached %s", got, old)
+	}
+}
+
 func TestUpstreamCredentialsReachEveryUpstreamRequest(t *testing.T) {
 	upstream := newFakeUpstream(t)
 	upstream.requireAuth = "Bearer secret"

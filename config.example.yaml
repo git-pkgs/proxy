@@ -380,7 +380,7 @@ upstream:
 #   cache_dir: ./cache/git   # local disk, used by this process only
 #   max_size: ""             # evict least recently used repositories past this
 #   max_repo_size: 5GB       # refuse a repository that grows past this
-#   refresh_wait: 5s         # then serve the cached copy if the upstream is slow
+#   refresh_wait: 5s         # then serve the cached copy if the upstream check is slow
 #   stale_max_age: 24h       # never serve a copy not checked for this long
 
 # Gradle HttpBuildCache configuration

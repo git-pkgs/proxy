@@ -641,7 +641,7 @@ git:
   cache_dir: /data/git   # local disk, used by this process only
   max_size: 50GB         # evict least recently used repositories past this
   max_repo_size: 5GB     # refuse a repository that grows past this
-  refresh_wait: 5s       # then serve the cached copy if the upstream is slow
+  refresh_wait: 5s       # then serve the cached copy if the upstream check is slow
   stale_max_age: 24h     # never serve a copy not checked for this long
 ```
 
@@ -708,10 +708,13 @@ through any other, so a fetch by ID could reach repositories outside `repos`.
 Any commit the cache holds can be fetched by ID, including one a force-push
 left behind, as from the upstream.
 
-If the upstream fails or takes longer than `refresh_wait`, a repository checked
-successfully within `stale_max_age` is served from the cache while the refresh
-continues. A `stale_max_age` of `0` never serves a copy the upstream has not
-just confirmed. A repository the upstream reports missing (404), refuses (401, 403)
+If the upstream fails, or its check of branches and tags takes longer than
+`refresh_wait`, a repository checked successfully within `stale_max_age` is
+served from the cache while the refresh continues. Once the check finds new
+commits, the request waits for their fetch, so a clone right after a push gets
+them; if the fetch fails or stalls, the cached copy is served. A
+`stale_max_age` of `0` never serves a copy the upstream has not just
+confirmed. A repository the upstream reports missing (404), refuses (401, 403)
 or redirects is not served from the cache. Redirects are never followed, so
 point the upstream at a repository's current location.
 

@@ -92,9 +92,9 @@ type GitConfig struct {
 	// would pass it fails. "0" disables the limit. Default: 5GB.
 	MaxRepoSize string `json:"max_repo_size" yaml:"max_repo_size"`
 
-	// RefreshWait is how long a request waits for a repository to be
-	// refreshed from upstream before it is served the cached copy.
-	// Default: 5s.
+	// RefreshWait is how long a request waits for the upstream's branches
+	// and tags to be checked before it is served the cached copy. A fetch of
+	// new commits the check finds is waited for in full. Default: 5s.
 	RefreshWait string `json:"refresh_wait" yaml:"refresh_wait"`
 
 	// StaleMaxAge is how long after the last successful upstream check a

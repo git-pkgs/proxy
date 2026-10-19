@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/metrics"
@@ -38,13 +39,32 @@ var errClosed = errors.New("git cache is closed")
 type refreshCall struct {
 	done chan struct{}
 	err  error
+	// checked is closed once the upstream's branches and tags have been
+	// compared with the cached ones, and fetching then says whether they
+	// differ, so a fetch follows.
+	checked     chan struct{}
+	fetching    bool
+	checkedOnce sync.Once
+}
+
+func newRefreshCall() *refreshCall {
+	return &refreshCall{done: make(chan struct{}), checked: make(chan struct{})}
+}
+
+func (call *refreshCall) markChecked(fetching bool) {
+	call.checkedOnce.Do(func() {
+		call.fetching = fetching
+		close(call.checked)
+	})
 }
 
 // ensureFresh brings the repository up to date with its upstream before it is
 // served. A repository checked successfully within StaleMaxAge is served
-// from the cache if the upstream fails or takes longer than RefreshWait; the
-// refresh carries on in the background either way. One never cloned, or not
-// checked within StaleMaxAge, is served only once the refresh succeeds.
+// from the cache if the upstream fails or its check takes longer than
+// RefreshWait; the refresh carries on in the background either way. Once the
+// check finds new commits, their fetch is waited for, so a clone right after
+// a push gets them. One never cloned, or not checked within StaleMaxAge, is
+// served only once the refresh succeeds.
 func (c *Cache) ensureFresh(ctx context.Context, rp *repo, repoURL string) error {
 	call := c.startRefresh(rp, repoURL)
 	checked := time.Unix(0, rp.lastChecked.Load())
@@ -59,20 +79,28 @@ func (c *Cache) ensureFresh(ctx context.Context, rp *repo, repoURL string) error
 
 	timer := time.NewTimer(c.opts.RefreshWait)
 	defer timer.Stop()
-	select {
-	case <-call.done:
-		if call.err != nil && servesStale(call.err) {
-			c.logger.Warn("git cache: refresh failed, serving cached copy",
-				"repository", rp.key, "checked", checked, "error", call.err)
+	refChecked, timeout := call.checked, timer.C
+	for {
+		select {
+		case <-refChecked:
+			refChecked = nil
+			if call.fetching {
+				timeout = nil
+			}
+		case <-call.done:
+			if call.err != nil && servesStale(call.err) {
+				c.logger.Warn("git cache: refresh failed, serving cached copy",
+					"repository", rp.key, "checked", checked, "error", call.err)
+				return nil
+			}
+			return call.err
+		case <-timeout:
+			c.logger.Info("git cache: upstream check still running, serving cached copy",
+				"repository", rp.key, "checked", checked)
 			return nil
+		case <-ctx.Done():
+			return ctx.Err()
 		}
-		return call.err
-	case <-timer.C:
-		c.logger.Info("git cache: refresh still running, serving cached copy",
-			"repository", rp.key, "checked", checked)
-		return nil
-	case <-ctx.Done():
-		return ctx.Err()
 	}
 }
 
@@ -90,7 +118,7 @@ func (c *Cache) startRefresh(rp *repo, repoURL string) *refreshCall {
 	if rp.refreshing != nil {
 		return rp.refreshing
 	}
-	call := &refreshCall{done: make(chan struct{})}
+	call := newRefreshCall()
 	if c.closed {
 		call.err = errClosed
 		close(call.done)
@@ -103,7 +131,8 @@ func (c *Cache) startRefresh(rp *repo, repoURL string) *refreshCall {
 		defer c.refreshes.Done()
 		ctx, cancel := context.WithTimeout(c.ctx, fetchTimeout)
 		start := time.Now()
-		call.err = c.refresh(ctx, rp, repoURL)
+		call.err = c.refresh(ctx, rp, repoURL, call.markChecked)
+		call.markChecked(false)
 		cancel()
 		metrics.RecordUpstreamFetch(ecosystem, time.Since(start))
 		// A refresh cut short by Close is not an upstream failure.
@@ -125,7 +154,8 @@ func (c *Cache) startRefresh(rp *repo, repoURL string) *refreshCall {
 
 // refresh checks the upstream's branches and tags and fetches if they differ
 // from the cached ones, cloning the repository if it is not cached yet.
-func (c *Cache) refresh(ctx context.Context, rp *repo, repoURL string) error {
+// checked is called once a cached repository's refs have been compared.
+func (c *Cache) refresh(ctx context.Context, rp *repo, repoURL string, checked func(fetching bool)) error {
 	if c.isTooLarge(rp.key) {
 		return ErrTooLarge
 	}
@@ -136,7 +166,7 @@ func (c *Cache) refresh(ctx context.Context, rp *repo, repoURL string) error {
 		return err
 	}
 	if rp.exists() {
-		err = c.update(ctx, rp, repoURL, remote)
+		err = c.update(ctx, rp, repoURL, remote, checked)
 	} else {
 		err = c.clone(ctx, rp, repoURL, remote)
 	}
@@ -187,7 +217,7 @@ func (c *Cache) clone(ctx context.Context, rp *repo, repoURL string, remote remo
 
 // update fetches when the upstream's branches or tags differ from the cached
 // ones, and follows a change of the upstream's default branch.
-func (c *Cache) update(ctx context.Context, rp *repo, repoURL string, remote remoteRefs) error {
+func (c *Cache) update(ctx context.Context, rp *repo, repoURL string, remote remoteRefs, checked func(fetching bool)) error {
 	unlock, err := rp.lockWrites(ctx)
 	if err != nil {
 		return err
@@ -198,6 +228,7 @@ func (c *Cache) update(ctx context.Context, rp *repo, repoURL string, remote rem
 		return err
 	}
 	fetched := !maps.Equal(local, remote.refs)
+	checked(fetched)
 	if fetched {
 		limit, err := c.fetchLimit(rp)
 		if err != nil {
