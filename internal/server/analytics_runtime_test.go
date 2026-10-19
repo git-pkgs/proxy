@@ -152,6 +152,24 @@ func TestRuntimeViewShowsEvictions(t *testing.T) {
 	}
 }
 
+func TestRuntimeViewShowsMetadataEvictions(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	evicted := prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "proxy_metadata_evicted_total", Help: "t"}, []string{"ecosystem"})
+	reg.MustRegister(evicted)
+	evicted.WithLabelValues("golang").Add(3)
+
+	snap, err := metrics.GatherFrom(reg)
+	if err != nil {
+		t.Fatalf("GatherFrom: %v", err)
+	}
+	v := runtimeView(snap, false)
+
+	if len(v.MetadataEvictions) != 1 || v.MetadataEvictions[0].Label != "golang" || v.MetadataEvictions[0].Count != "3" {
+		t.Errorf("MetadataEvictions = %+v, want golang = 3", v.MetadataEvictions)
+	}
+}
+
 // A counter sitting at zero carries no information and would bury the rows
 // that do, so it is left out.
 func TestRuntimeViewDropsZeroCounters(t *testing.T) {

@@ -45,6 +45,7 @@ var metricSurface = map[string]string{
 	"proxy_circuit_breaker_state":              "Runtime: Circuit breakers",
 	"proxy_circuit_breaker_trips_total":        "Runtime: Circuit breaker trips",
 	"proxy_artifacts_evicted_total":            "Runtime: Evicted artifacts",
+	"proxy_metadata_evicted_total":             "Runtime: Evicted metadata",
 	"proxy_scan_duration_seconds":              "Runtime: Pre-cache scanning -- Scans",
 	"proxy_scan_blocked_total":                 "Runtime: Pre-cache scanning -- Artifacts blocked",
 	"proxy_scan_errors_total":                  "Runtime: Pre-cache scanning -- Scan errors",
@@ -73,6 +74,7 @@ func TestEveryMetricIsSurfaced(t *testing.T) {
 	metrics.RecordScanError("npm", "clamav", "timeout", metrics.FailureDetail{})
 	metrics.UpdateCacheStats(1, 1)
 	metrics.RecordArtifactEvicted("retention", "npm")
+	metrics.RecordMetadataEvicted("npm")
 	metrics.UpdateEcosystemStats([]metrics.EcosystemStats{{Ecosystem: "npm", DownloadedBytes: 1}})
 
 	snap, err := metrics.Gather()

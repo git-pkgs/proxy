@@ -33,6 +33,7 @@ type RuntimeView struct {
 	IntegrityFailures []LabelledCount
 	ProbeFailures     []LabelledCount
 	Evictions         []LabelledCount
+	MetadataEvictions []LabelledCount
 
 	Breakers     []BreakerRow
 	BreakerTrips []LabelledCount
@@ -139,6 +140,7 @@ func runtimeView(snap *metrics.Snapshot, failureDetails bool) RuntimeView {
 	v.IntegrityFailures = failures("proxy_integrity_failures_total", "ecosystem")
 	v.ProbeFailures = failures("proxy_health_probe_failures_total", "step")
 	v.Evictions = countRows(snap, "proxy_artifacts_evicted_total", "reason", "ecosystem")
+	v.MetadataEvictions = countRows(snap, "proxy_metadata_evicted_total", "ecosystem")
 
 	v.Breakers = breakerRows(snap)
 	v.BreakerTrips = failures("proxy_circuit_breaker_trips_total", "registry")
