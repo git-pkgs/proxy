@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"io"
 	"log/slog"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -117,5 +118,57 @@ func TestEvictBatch_KeepsMetadataUsedSinceRead(t *testing.T) {
 	}
 	if ok, _ := store.Exists(ctx, path); !ok {
 		t.Error("metadata blob served since it was read was deleted")
+	}
+}
+
+// TestEvictLRU_MetadataLeavesNothingQueued checks that a completed eviction
+// takes the path it queued with the row's delete off the queue again.
+func TestEvictLRU_MetadataLeavesNothingQueued(t *testing.T) {
+	db, store := setupEvictionTest(t)
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	path := seedMetadata(t, ctx, db, store, "tile", time.Now().Add(-time.Hour))
+
+	evictLRU(ctx, db, store, logger, 0)
+
+	if ok, _ := store.Exists(ctx, path); ok {
+		t.Error("metadata blob kept")
+	}
+	if got := queuedPaths(t, db); len(got) != 0 {
+		t.Errorf("queue = %v, want it empty after the delete", got)
+	}
+}
+
+// TestEvictMetadata_InterruptedBeforeDeleteIsReclaimed stops an eviction
+// after the row is gone but before the blob is deleted, as a crash would. The
+// path is queued, so reclaim still deletes the blob.
+func TestEvictMetadata_InterruptedBeforeDeleteIsReclaimed(t *testing.T) {
+	db, store := setupEvictionTest(t)
+	ctx := context.Background()
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	path := seedMetadata(t, ctx, db, store, "tile", time.Now().Add(-time.Hour))
+
+	entries, err := db.GetLeastRecentlyUsedCacheEntries(evictionBatch)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("reading LRU rows: %v, %v", entries, err)
+	}
+	e := entries[0]
+	if ok, err := db.EvictMetadataCache(e.Key, e.Name, path, e.LastAccessedAt); err != nil || !ok {
+		t.Fatalf("EvictMetadataCache = %v, %v", ok, err)
+	}
+	if got := queuedPaths(t, db); !slices.Equal(got, []string{path}) {
+		t.Fatalf("queue = %v, want the evicted path", got)
+	}
+
+	// Nothing left for a restarted eviction pass to retry; reclaim takes it.
+	if again, _ := db.GetLeastRecentlyUsedCacheEntries(evictionBatch); len(again) != 0 {
+		t.Errorf("LRU after interruption = %+v, want nothing", again)
+	}
+	reclaimDue(ctx, db, store, logger, time.Now().Add(time.Hour), time.Minute)
+	if objectExists(t, store, path) {
+		t.Error("blob still stored after reclaim")
+	}
+	if got := queuedPaths(t, db); len(got) != 0 {
+		t.Errorf("queue = %v, want it drained", got)
 	}
 }

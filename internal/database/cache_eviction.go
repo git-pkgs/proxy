@@ -93,8 +93,8 @@ func (e CacheEntry) usedAfter(other CacheEntry) bool {
 }
 
 // EvictMetadataCache deletes a metadata cache row if it still points at
-// storagePath and has not been used since lastAccessed, and reports whether
-// it did. A row a request refreshed or served in the meantime is kept.
+// storagePath and has not been used since lastAccessed, queueing the path in
+// the same transaction so a crash before the blob is deleted cannot orphan it.
 func (db *DB) EvictMetadataCache(ecosystem, name, storagePath string, lastAccessed sql.NullTime) (bool, error) {
 	query := `
 		DELETE FROM metadata_cache
@@ -107,12 +107,22 @@ func (db *DB) EvictMetadataCache(ecosystem, name, storagePath string, lastAccess
 		  AND (last_accessed_at IS NULL OR last_accessed_at <= ?)`
 		args = append(args, lastAccessed.Time)
 	}
-	res, err := db.Exec(db.Rebind(query), args...)
+	tx, err := db.Beginx()
 	if err != nil {
 		return false, err
 	}
-	n, err := res.RowsAffected()
-	return n > 0, err
+	defer func() { _ = tx.Rollback() }()
+	res, err := tx.Exec(db.Rebind(query), args...)
+	if err != nil {
+		return false, err
+	}
+	if n, err := res.RowsAffected(); err != nil || n == 0 {
+		return false, err
+	}
+	if _, err := tx.Exec(db.Rebind(queuePendingDeleteQuery), storagePath, time.Now().UTC()); err != nil {
+		return false, err
+	}
+	return true, tx.Commit()
 }
 
 // RecordMetadataHit marks a cached metadata document as served now. Like

@@ -140,6 +140,11 @@ func evictBatch(ctx context.Context, db *database.DB, store storage.Storage, log
 			if err := db.QueuePendingDelete(path); err != nil {
 				logger.Warn("eviction: failed to queue object for deletion", "path", path, "error", err)
 			}
+		} else if entry.Kind == database.CacheEntryMetadata {
+			// Queued with the row's delete in case the process stopped here.
+			if err := db.RemovePendingDelete(path); err != nil {
+				logger.Warn("eviction: failed to dequeue deleted object", "path", path, "error", err)
+			}
 		}
 
 		if entry.Size.Valid {
