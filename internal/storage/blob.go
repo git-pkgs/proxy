@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -30,11 +31,13 @@ const osWindows = "windows"
 const (
 	uploadBufferSize  = 5 << 20
 	uploadConcurrency = 2
-)
 
-// attrsExt is fileblob's sidecar suffix, kept only to clear sidecars an
-// earlier version wrote.
-const attrsExt = ".attrs"
+	s3Scheme = "s3://"
+
+	// attrsExt is fileblob's sidecar suffix, kept only to clear sidecars an
+	// earlier version wrote.
+	attrsExt = ".attrs"
+)
 
 // Blob implements Storage using gocloud.dev/blob.
 // Supports local filesystem (file://) and S3 (s3://) URLs.
@@ -42,9 +45,27 @@ type Blob struct {
 	bucket *blob.Bucket
 	url    string
 
+	// signBucket, when set, is used by SignedURL to sign S3 presigned URLs for
+	// a public endpoint rather than the internal storage endpoint.
+	signBucket *blob.Bucket
+
 	// fileRoot is the directory backing a file:// bucket, empty for cloud
 	// backends. Used only to clear sidecars an earlier version wrote.
 	fileRoot string
+}
+
+// Option configures OpenBucket.
+type Option func(*options)
+
+type options struct {
+	signEndpoint string
+}
+
+// WithSignEndpoint configures S3 presigned URLs to be signed for the scheme and
+// host of signEndpoint (e.g. "https://storage.example.com") instead of the
+// storage endpoint, since SigV4 includes the Host header in the signature.
+func WithSignEndpoint(signEndpoint string) Option {
+	return func(o *options) { o.signEndpoint = signEndpoint }
 }
 
 // OpenBucket opens a blob bucket from a URL.
@@ -60,7 +81,12 @@ type Blob struct {
 // For local filesystem, the directory is created if it doesn't exist.
 //
 //nolint:ireturn // The URL scheme selects the storage implementation.
-func OpenBucket(ctx context.Context, urlStr string) (Storage, error) {
+func OpenBucket(ctx context.Context, urlStr string, opts ...Option) (Storage, error) {
+	var o options
+	for _, opt := range opts {
+		opt(&o)
+	}
+
 	if strings.HasPrefix(urlStr, "gs://") {
 		return OpenGCS(ctx, urlStr)
 	}
@@ -124,7 +150,42 @@ func OpenBucket(ctx context.Context, urlStr string) (Storage, error) {
 		return nil, fmt.Errorf("opening bucket: %w", err)
 	}
 
-	return &Blob{bucket: bucket, url: urlStr, fileRoot: fileRoot}, nil
+	b := &Blob{bucket: bucket, url: urlStr, fileRoot: fileRoot}
+
+	if o.signEndpoint != "" && strings.HasPrefix(urlStr, s3Scheme) {
+		signBucket, err := openSignBucket(ctx, urlStr, o.signEndpoint)
+		if err != nil {
+			_ = bucket.Close()
+			return nil, err
+		}
+		b.signBucket = signBucket
+	}
+
+	return b, nil
+}
+
+// openSignBucket opens an S3 bucket with the endpoint overridden to signEndpoint
+// while preserving all other storage URL parameters (region, use_path_style, etc.).
+func openSignBucket(ctx context.Context, urlStr, signEndpoint string) (*blob.Bucket, error) {
+	sign, err := url.Parse(signEndpoint)
+	if err != nil || sign.Scheme == "" || sign.Host == "" {
+		return nil, fmt.Errorf("invalid sign endpoint %q: must be an absolute URL", signEndpoint)
+	}
+
+	u, err := url.Parse(urlStr)
+	if err != nil {
+		return nil, fmt.Errorf("parsing storage URL: %w", err)
+	}
+	endpoint := sign.Scheme + "://" + sign.Host
+	q := u.Query()
+	q.Set("endpoint", endpoint)
+	u.RawQuery = q.Encode()
+
+	bucket, err := blob.OpenBucket(ctx, u.String())
+	if err != nil {
+		return nil, fmt.Errorf("opening bucket at sign endpoint %s: %w", endpoint, err)
+	}
+	return bucket, nil
 }
 
 // legacySidecarPath gives the ".attrs" path an earlier version wrote for key,
@@ -299,7 +360,11 @@ func (b *Blob) Delete(ctx context.Context, path string) error {
 }
 
 func (b *Blob) SignedURL(ctx context.Context, path string, expiry time.Duration) (string, error) {
-	url, err := b.bucket.SignedURL(ctx, path, &blob.SignedURLOptions{
+	bucket := b.bucket
+	if b.signBucket != nil {
+		bucket = b.signBucket
+	}
+	url, err := bucket.SignedURL(ctx, path, &blob.SignedURLOptions{
 		Method: http.MethodGet,
 		Expiry: expiry,
 	})
@@ -371,7 +436,13 @@ func (b *Blob) ListPrefix(ctx context.Context, prefix string) ([]ObjectInfo, err
 }
 
 func (b *Blob) Close() error {
-	return b.bucket.Close()
+	err := b.bucket.Close()
+	if b.signBucket != nil {
+		if signErr := b.signBucket.Close(); err == nil {
+			err = signErr
+		}
+	}
+	return err
 }
 
 func (b *Blob) URL() string {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -257,6 +258,67 @@ func TestBlobSignedURLUnsupported(t *testing.T) {
 	_, err := b.SignedURL(ctx, "test/file.txt", time.Minute)
 	if !errors.Is(err, ErrSignedURLUnsupported) {
 		t.Errorf("SignedURL on fileblob = %v, want ErrSignedURLUnsupported", err)
+	}
+}
+
+func TestBlobSignedURLSignEndpoint(t *testing.T) {
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+
+	const (
+		storageURL   = "s3://bucket?region=us-1&endpoint=http://127.0.0.1:9000&use_path_style=true"
+		signEndpoint = "https://cdn.example.com"
+		artifactPath = "npm/lodash/4.17.21/lodash-4.17.21.tgz"
+	)
+
+	tests := []struct {
+		name string
+		opts []Option
+		host string
+	}{
+		{
+			"storage endpoint without a sign endpoint",
+			nil,
+			"127.0.0.1:9000",
+		},
+		{
+			"configured sign endpoint, reached over another host",
+			[]Option{WithSignEndpoint(signEndpoint)},
+			"cdn.example.com",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			b, err := OpenBucket(ctx, storageURL, tt.opts...)
+			if err != nil {
+				t.Fatalf("OpenBucket failed: %v", err)
+			}
+			defer func() { _ = b.Close() }()
+
+			signed, err := b.SignedURL(ctx, artifactPath, time.Minute)
+			if err != nil {
+				t.Fatalf("SignedURL failed: %v", err)
+			}
+
+			u, err := url.Parse(signed)
+			if err != nil {
+				t.Fatalf("parsing signed URL %q: %v", signed, err)
+			}
+			if u.Host != tt.host {
+				t.Errorf("signed URL %q host = %q, want %q", signed, u.Host, tt.host)
+			}
+			// The bucket and key stay where the storage URL puts them, so the
+			// request the client makes still names the object.
+			if want := "/bucket/" + artifactPath; u.Path != want {
+				t.Errorf("signed URL path = %q, want %q", u.Path, want)
+			}
+			if u.Query().Get("X-Amz-Signature") == "" {
+				t.Errorf("signed URL %q carries no signature", signed)
+			}
+		})
 	}
 }
 
