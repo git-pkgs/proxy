@@ -747,7 +747,9 @@ Repositories are kept under `{cache_dir}/{name}-{hash of the URL}/`, so
 repointing an upstream starts a fresh cache, and the old URL's directory is
 removed at startup. Nothing else in `cache_dir` is touched, and the
 directories of upstreams no longer configured are only logged, so remove
-those yourself.
+those yourself. The proxy locks `cache_dir` while it runs, through a
+`.gitcache-lock` file in it, so a second process given the same directory,
+such as another replica on a shared volume, fails to start; give each its own.
 
 Pushing, the dumb HTTP protocol and Git LFS are not supported. The settings
 under `git` can also be set with `PROXY_GIT_CACHE_DIR`, `PROXY_GIT_MAX_SIZE`,

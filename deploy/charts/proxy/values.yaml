@@ -1,6 +1,7 @@
 # More than one replica requires config.data.database on Postgres,
 # config.data.storage on object storage, deploymentStrategy: RollingUpdate,
 # and a PVC access mode other than ReadWriteOnce (or persistence disabled).
+# With upstream.git, each replica also needs its own git.cache_dir.
 replicaCount: 1
 
 nameOverride: ""

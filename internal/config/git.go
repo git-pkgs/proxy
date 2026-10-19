@@ -81,7 +81,7 @@ func matchRepoPattern(pattern, repo string) bool {
 // GitConfig configures the Git repository cache behind /git/{name}/.
 type GitConfig struct {
 	// CacheDir holds the cached bare repositories. It must be local disk
-	// used by this process only. Default: ./cache/git.
+	// used by this process only, which locks it. Default: ./cache/git.
 	CacheDir string `json:"cache_dir" yaml:"cache_dir"`
 
 	// MaxSize evicts the least recently used repositories once their total

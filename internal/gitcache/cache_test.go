@@ -437,6 +437,9 @@ func TestNewLoadsCachedRepositories(t *testing.T) {
 	if err := os.MkdirAll(filepath.Join(tc.tmpDir(), "clone-leftover"), 0o750); err != nil {
 		t.Fatal(err)
 	}
+	if err := tc.Close(); err != nil {
+		t.Fatal(err)
+	}
 
 	reloaded, err := New(Options{
 		Upstreams:   map[string]string{"up": "up"},
@@ -681,6 +684,32 @@ func TestCloseWaitsForRefreshes(t *testing.T) {
 	if got := upstream.requests.Load() - before; got != 0 {
 		t.Errorf("Open after Close made %d upstream requests", got)
 	}
+}
+
+// TestCacheDirInUse opens a second cache on a directory one already uses,
+// as a second pod on a shared volume would, then again once the first has
+// closed.
+func TestCacheDirInUse(t *testing.T) {
+	dir := t.TempDir()
+	open := func() (*Cache, error) { return New(Options{CacheDir: dir, Client: &http.Client{}}) }
+	first, err := open()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if second, err := open(); err == nil {
+		_ = second.Close()
+		t.Fatal("a second cache opened on the same directory")
+	} else if !strings.Contains(err.Error(), "in use by another process") {
+		t.Errorf("error = %v, want one naming the directory as in use", err)
+	}
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	again, err := open()
+	if err != nil {
+		t.Fatalf("reopening after Close: %v", err)
+	}
+	_ = again.Close()
 }
 
 // TestCloseTwice checks closing again does nothing, as a cleanup that also

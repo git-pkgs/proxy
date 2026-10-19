@@ -32,6 +32,10 @@ const (
 	// with an upstream's directory, and the name is specific in case
 	// cache_dir is shared with other data.
 	tmpDirName = ".gitcache-tmp"
+	// lockFileName is locked while the cache is open, so a second process
+	// given the same cache_dir fails to start instead of deleting the first
+	// one's clones in progress.
+	lockFileName = ".gitcache-lock"
 	// usedStampInterval limits how often a repository's last use is written
 	// to disk.
 	usedStampInterval = time.Minute
@@ -44,6 +48,7 @@ const (
 	checkedStamp        = "proxy-checked"
 	usedStamp           = "proxy-used"
 	dirPermissions      = 0o750
+	lockFilePermissions = 0o600
 )
 
 // Options configures a Cache.
@@ -79,6 +84,7 @@ type Cache struct {
 	logger          *slog.Logger
 	gitPath         string
 	dir             string
+	lock            *os.File
 	relay           *relay
 	fetches         chan struct{}
 	uploadPacks     chan struct{}
@@ -118,6 +124,8 @@ type repo struct {
 	usedWritten atomic.Int64
 }
 
+var errLocked = errors.New("locked by another process")
+
 // maxConcurrentFetches caps clones and fetches running at once. Refreshes
 // outlive the requests that start them, so without a cap a client could
 // start any number and hang up.
@@ -139,6 +147,16 @@ func New(opts Options) (*Cache, error) {
 	if err != nil {
 		return nil, err
 	}
+	if err := os.MkdirAll(dir, dirPermissions); err != nil {
+		return nil, err
+	}
+	lock, err := lockFile(filepath.Join(dir, lockFileName))
+	if errors.Is(err, errLocked) {
+		return nil, fmt.Errorf("git.cache_dir %s is in use by another process; each needs its own", dir)
+	}
+	if err != nil {
+		return nil, fmt.Errorf("locking git.cache_dir %s: %w", dir, err)
+	}
 	logger := opts.Logger
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
@@ -157,6 +175,7 @@ func New(opts Options) (*Cache, error) {
 		logger:          logger,
 		gitPath:         gitPath,
 		dir:             dir,
+		lock:            lock,
 		fetches:         make(chan struct{}, maxConcurrentFetches),
 		uploadPacks:     make(chan struct{}, uploadPacks),
 		refCheckTimeout: defaultRefCheckTimeout,
@@ -176,9 +195,11 @@ func New(opts Options) (*Cache, error) {
 		c.maxRequestBody = opts.maxRequestBody
 	}
 	if err := c.load(); err != nil {
+		_ = lock.Close()
 		return nil, err
 	}
 	if c.relay, err = newRelay(c.client, logger); err != nil {
+		_ = lock.Close()
 		return nil, fmt.Errorf("starting git relay: %w", err)
 	}
 	c.ctx, c.cancel = context.WithCancel(context.Background())
@@ -201,7 +222,7 @@ func (c *Cache) Close() error {
 	c.mu.Unlock()
 	c.cancel()
 	c.refreshes.Wait()
-	return c.relay.close()
+	return errors.Join(c.relay.close(), c.lock.Close())
 }
 
 // UpstreamDir names the top-level cache directory of the upstream called
