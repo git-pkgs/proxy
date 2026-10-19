@@ -1,7 +1,6 @@
 package database
 
 import (
-	"database/sql"
 	"fmt"
 	"strings"
 	"time"
@@ -123,7 +122,7 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_metadata_eco_name ON metadata_cache(ecosystem, name);
 CREATE INDEX IF NOT EXISTS idx_metadata_storage_path ON metadata_cache(storage_path);
-CREATE INDEX IF NOT EXISTS idx_metadata_last_accessed ON metadata_cache(last_accessed_at);
+CREATE INDEX IF NOT EXISTS idx_metadata_last_used ON metadata_cache(COALESCE(last_accessed_at, updated_at));
 CREATE INDEX IF NOT EXISTS idx_artifacts_last_used ON artifacts(COALESCE(last_accessed_at, fetched_at));
 
 CREATE TABLE IF NOT EXISTS metadata_dates (
@@ -247,7 +246,7 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_metadata_eco_name ON metadata_cache(ecosystem, name);
 CREATE INDEX IF NOT EXISTS idx_metadata_storage_path ON metadata_cache(storage_path);
-CREATE INDEX IF NOT EXISTS idx_metadata_last_accessed ON metadata_cache(last_accessed_at NULLS FIRST);
+CREATE INDEX IF NOT EXISTS idx_metadata_last_used ON metadata_cache((COALESCE(last_accessed_at, updated_at)) NULLS FIRST);
 CREATE INDEX IF NOT EXISTS idx_artifacts_last_used ON artifacts((COALESCE(last_accessed_at, fetched_at)) NULLS FIRST);
 
 CREATE TABLE IF NOT EXISTS metadata_dates (
@@ -832,8 +831,8 @@ func migrateAddArtifactManifest(db *DB) error {
 }
 
 // migrateAddMetadataLastAccessed records when cached metadata was last served,
-// for size eviction. Existing rows count from their last write; an interrupted
-// backfill is resumed on the next run.
+// for size eviction. Existing rows are backfilled in the background
+// (BackfillMetadataLastAccessed), so startup does not wait for them.
 func migrateAddMetadataLastAccessed(db *DB) error {
 	hasCol, err := db.HasColumn("metadata_cache", "last_accessed_at")
 	if err != nil {
@@ -848,66 +847,19 @@ func migrateAddMetadataLastAccessed(db *DB) error {
 			return fmt.Errorf("adding column last_accessed_at to metadata_cache: %w", err)
 		}
 	}
-	if err := backfillMetadataLastAccessed(db); err != nil {
-		return err
-	}
 	indexes := []string{
 		`CREATE INDEX IF NOT EXISTS idx_metadata_storage_path ON metadata_cache(storage_path)`,
-		`CREATE INDEX IF NOT EXISTS idx_metadata_last_accessed ON metadata_cache(last_accessed_at)`,
+		`CREATE INDEX IF NOT EXISTS idx_metadata_last_used ON metadata_cache(COALESCE(last_accessed_at, updated_at))`,
 		`CREATE INDEX IF NOT EXISTS idx_artifacts_last_used ON artifacts(COALESCE(last_accessed_at, fetched_at))`,
 	}
 	if db.dialect == DialectPostgres {
-		indexes[1] = `CREATE INDEX IF NOT EXISTS idx_metadata_last_accessed ON metadata_cache(last_accessed_at NULLS FIRST)`
+		indexes[1] = `CREATE INDEX IF NOT EXISTS idx_metadata_last_used ON metadata_cache((COALESCE(last_accessed_at, updated_at)) NULLS FIRST)`
 		indexes[2] = `CREATE INDEX IF NOT EXISTS idx_artifacts_last_used ON artifacts((COALESCE(last_accessed_at, fetched_at)) NULLS FIRST)`
 	}
 	for _, q := range indexes {
 		if _, err := db.Exec(q); err != nil {
 			return fmt.Errorf("indexing metadata_cache: %w", err)
 		}
-	}
-	return nil
-}
-
-// backfillMetadataLastAccessed copies updated_at into last_accessed_at as UTC.
-// updated_at was written in local time; Postgres kept only the wall clock,
-// so it is read as local again, assuming the same zone wrote it.
-func backfillMetadataLastAccessed(db *DB) error {
-	var rows []struct {
-		ID        int64        `db:"id"`
-		UpdatedAt sql.NullTime `db:"updated_at"`
-		CreatedAt sql.NullTime `db:"created_at"`
-	}
-	if err := db.Select(&rows, `SELECT id, updated_at, created_at FROM metadata_cache WHERE last_accessed_at IS NULL`); err != nil {
-		return fmt.Errorf("reading metadata_cache write times: %w", err)
-	}
-	tx, err := db.Beginx()
-	if err != nil {
-		return fmt.Errorf("backfilling metadata_cache last_accessed_at: %w", err)
-	}
-	defer func() { _ = tx.Rollback() }()
-	stmt, err := tx.Preparex(db.Rebind(`UPDATE metadata_cache SET last_accessed_at = ? WHERE id = ?`))
-	if err != nil {
-		return fmt.Errorf("backfilling metadata_cache last_accessed_at: %w", err)
-	}
-	defer func() { _ = stmt.Close() }()
-	for _, r := range rows {
-		at := r.UpdatedAt
-		if !at.Valid {
-			at = r.CreatedAt
-		}
-		if !at.Valid {
-			continue
-		}
-		t := at.Time
-		if db.dialect == DialectPostgres {
-			t = time.Date(t.Year(), t.Month(), t.Day(), t.Hour(), t.Minute(), t.Second(), t.Nanosecond(), time.Local)
-		}
-		if _, err := stmt.Exec(t.UTC(), r.ID); err != nil {
-			return fmt.Errorf("backfilling metadata_cache last_accessed_at: %w", err)
-		}
-	}
-	if err := tx.Commit(); err != nil {
-		return fmt.Errorf("backfilling metadata_cache last_accessed_at: %w", err)
 	}
 	return nil
 }

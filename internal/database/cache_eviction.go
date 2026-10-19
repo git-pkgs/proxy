@@ -2,6 +2,7 @@ package database
 
 import (
 	"database/sql"
+	"slices"
 	"time"
 )
 
@@ -14,7 +15,8 @@ const (
 // CacheEntry is a cached object size eviction can remove: an artifact fetched
 // from upstream or a metadata document. For an artifact Key is its version
 // PURL and Name its filename; for metadata Key is the ecosystem and Name the
-// cache key. FetchedAt is only read for artifacts.
+// cache key. FetchedAt is only read for artifacts, UpdatedAt for metadata
+// not backfilled yet.
 type CacheEntry struct {
 	Kind           string         `db:"kind"`
 	Key            string         `db:"cache_key"`
@@ -23,6 +25,7 @@ type CacheEntry struct {
 	Size           sql.NullInt64  `db:"size"`
 	LastAccessedAt sql.NullTime   `db:"last_accessed_at"`
 	FetchedAt      sql.NullTime   `db:"fetched_at"`
+	UpdatedAt      sql.NullTime   `db:"updated_at"`
 }
 
 // GetEvictableCacheSize returns the bytes max_size limits: cached upstream
@@ -54,13 +57,27 @@ func (db *DB) GetLeastRecentlyUsedCacheEntries(limit int) ([]CacheEntry, error) 
 	}
 	if err := db.Select(&metadata, db.Rebind(`
 		SELECT 'metadata' AS kind, ecosystem AS cache_key, name,
-		       storage_path, size, last_accessed_at
+		       storage_path, size, last_accessed_at, updated_at
 		FROM metadata_cache
-		ORDER BY last_accessed_at ASC NULLS FIRST
+		ORDER BY COALESCE(last_accessed_at, updated_at) ASC NULLS FIRST
 		LIMIT ?
 	`), limit); err != nil {
 		return nil, err
 	}
+	// Rows not backfilled yet fall back to updated_at, which Postgres keeps
+	// in local time, so the order is fixed up once it is read as UTC.
+	for i := range metadata {
+		metadata[i].UpdatedAt = db.writtenAtUTC(metadata[i].UpdatedAt)
+	}
+	slices.SortStableFunc(metadata, func(a, b CacheEntry) int {
+		switch {
+		case a.usedAfter(b):
+			return 1
+		case b.usedAfter(a):
+			return -1
+		}
+		return 0
+	})
 
 	entries := make([]CacheEntry, 0, min(limit, len(artifacts)+len(metadata)))
 	for len(entries) < limit && (len(artifacts) > 0 || len(metadata) > 0) {
@@ -79,7 +96,10 @@ func (e CacheEntry) lastUsed() sql.NullTime {
 	if e.LastAccessedAt.Valid {
 		return e.LastAccessedAt
 	}
-	return e.FetchedAt
+	if e.FetchedAt.Valid {
+		return e.FetchedAt
+	}
+	return e.UpdatedAt
 }
 
 // usedAfter reports whether e was used later than other. Entries with no
@@ -143,3 +163,59 @@ const recordMetadataHitQuery = `
 	UPDATE metadata_cache
 	SET last_accessed_at = CASE WHEN last_accessed_at IS NULL OR last_accessed_at < ? THEN ? ELSE last_accessed_at END
 	WHERE ecosystem = ? AND name = ?`
+
+// writtenAtUTC returns a metadata_cache updated_at or created_at as the
+// instant it was written. Both were written in local time, and a Postgres
+// TIMESTAMP keeps only the wall clock, which lib/pq reads back as UTC.
+func (db *DB) writtenAtUTC(t sql.NullTime) sql.NullTime {
+	if t.Valid && db.dialect == DialectPostgres {
+		w := t.Time
+		t.Time = time.Date(w.Year(), w.Month(), w.Day(), w.Hour(), w.Minute(), w.Second(), w.Nanosecond(), time.Local)
+	}
+	if t.Valid {
+		t.Time = t.Time.UTC()
+	}
+	return t
+}
+
+// BackfillMetadataLastAccessed sets last_accessed_at from the write time on
+// up to limit rows that have none, in one transaction, and reports how many it
+// set. Rows served in the meantime keep the time of that hit.
+func (db *DB) BackfillMetadataLastAccessed(limit int) (int, error) {
+	var rows []struct {
+		ID        int64        `db:"id"`
+		UpdatedAt sql.NullTime `db:"updated_at"`
+		CreatedAt sql.NullTime `db:"created_at"`
+	}
+	query := db.Rebind(`SELECT id, updated_at, created_at FROM metadata_cache WHERE last_accessed_at IS NULL LIMIT ?`)
+	if err := db.Select(&rows, query, limit); err != nil {
+		return 0, err
+	}
+	if len(rows) == 0 {
+		return 0, nil
+	}
+	tx, err := db.Beginx()
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = tx.Rollback() }()
+	stmt, err := tx.Preparex(db.Rebind(`UPDATE metadata_cache SET last_accessed_at = ? WHERE id = ? AND last_accessed_at IS NULL`))
+	if err != nil {
+		return 0, err
+	}
+	defer func() { _ = stmt.Close() }()
+	for _, r := range rows {
+		at := db.writtenAtUTC(r.UpdatedAt)
+		if !at.Valid {
+			at = db.writtenAtUTC(r.CreatedAt)
+		}
+		if !at.Valid {
+			// Nothing to go by; counting it as used now at least ends the loop.
+			at = sql.NullTime{Time: time.Now().UTC(), Valid: true}
+		}
+		if _, err := stmt.Exec(at.Time, r.ID); err != nil {
+			return 0, err
+		}
+	}
+	return len(rows), tx.Commit()
+}

@@ -380,6 +380,7 @@ func (s *Server) serve(listener net.Listener) error {
 		"storage", s.storage.URL(),
 		"database", s.cfg.Database.String())
 	go s.updateCacheStatsMetrics()
+	go backfillMetadataAccess(bgCtx, s.db, s.logger, metadataBackfillBatch)
 	go s.startEvictionLoop(bgCtx)
 	go s.startRetentionLoop(bgCtx)
 	go s.startReclaimLoop(bgCtx)

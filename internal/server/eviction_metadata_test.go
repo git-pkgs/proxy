@@ -172,3 +172,23 @@ func TestEvictMetadata_InterruptedBeforeDeleteIsReclaimed(t *testing.T) {
 		t.Errorf("queue = %v, want it drained", got)
 	}
 }
+
+func TestBackfillMetadataAccessDrainsInBatches(t *testing.T) {
+	db, _ := setupEvictionTest(t)
+	for _, name := range []string{"a", "b", "c", "d", "e"} {
+		query := db.Rebind(`INSERT INTO metadata_cache (ecosystem, name, storage_path, size, created_at, updated_at) VALUES (?, ?, ?, ?, ?, ?)`)
+		if _, err := db.Exec(query, "npm", name, "_metadata/npm/"+name+"/metadata", 1, time.Now(), time.Now()); err != nil {
+			t.Fatalf("inserting: %v", err)
+		}
+	}
+
+	backfillMetadataAccess(context.Background(), db, slog.New(slog.NewTextHandler(io.Discard, nil)), 2)
+
+	var left int
+	if err := db.Get(&left, `SELECT COUNT(*) FROM metadata_cache WHERE last_accessed_at IS NULL`); err != nil {
+		t.Fatalf("counting: %v", err)
+	}
+	if left != 0 {
+		t.Errorf("%d rows left without an access time", left)
+	}
+}
