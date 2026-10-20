@@ -393,12 +393,8 @@ func (s *Server) browseFile(w http.ResponseWriter, r *http.Request, ecosystem, n
 	// Find the file and stream it straight from the archive
 	fileReader, err := archive.Extract(filePath)
 	switch {
-	case errors.Is(err, fs.ErrNotExist):
+	case errors.Is(err, fs.ErrNotExist), errors.Is(err, archives.ErrIsDir):
 		notFound(w, "file not found")
-		return
-	case errors.Is(err, archives.ErrIsDir):
-		s.logger.Error("failed to extract file", "error", err, "path", filePath)
-		internalError(w, "failed to extract file")
 		return
 	case err != nil:
 		s.browseArchiveError(w, err, cachedArtifact.Filename)

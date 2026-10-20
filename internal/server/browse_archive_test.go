@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -329,6 +330,39 @@ func TestBrowseFileContents(t *testing.T) {
 				t.Errorf("missing file status = %d, want 404", w.Code)
 			}
 		})
+	}
+}
+
+func TestBrowseFileDirectoryNotFound(t *testing.T) {
+	for _, format := range []string{"tar.gz", "zip"} {
+		for _, explicit := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/explicit=%t", format, explicit), func(t *testing.T) {
+				ts := newTestServer(t)
+				defer ts.close()
+				var logs bytes.Buffer
+				ts.server.logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelError}))
+
+				entries := []archiveEntry{{name: "pkg/src/main.go", body: "package main\n"}}
+				if explicit {
+					entries = append([]archiveEntry{{name: "pkg/src/", dir: true}}, entries...)
+				}
+				data := buildTarGz(t, entries)
+				if format == "zip" {
+					data = buildZip(t, entries)
+				}
+				cacheBrowseArtifact(t, ts, "cargo", "demo", "demo."+format, data)
+
+				for _, dir := range []string{"src", "src/"} {
+					response := browseGet(ts, browseFileURL("cargo", "demo", dir))
+					if response.Code != http.StatusNotFound {
+						t.Errorf("directory %q returned %d, want 404: %s", dir, response.Code, response.Body.String())
+					}
+				}
+				if logs.Len() != 0 {
+					t.Errorf("directory request logged an error: %s", logs.String())
+				}
+			})
+		}
 	}
 }
 
