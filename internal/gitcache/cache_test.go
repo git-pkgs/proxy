@@ -367,27 +367,36 @@ func TestRepositoryOverMaxRepoSizeIsRefused(t *testing.T) {
 	runGit(t, work, "add", "big.bin")
 	runGit(t, work, "commit", "--quiet", "-m", "big")
 	runGit(t, work, "push", "--quiet", "origin", "main")
-	tc := newTestCache(t, upstream.server.URL, func(o *Options) { o.MaxRepoSize = 64 << 10 })
 
-	resp, err := http.Get(tc.url("repo") + "/info/refs?service=git-upload-pack")
-	if err != nil {
-		t.Fatal(err)
-	}
-	_ = resp.Body.Close()
-	if resp.StatusCode != http.StatusInsufficientStorage {
-		t.Errorf("status %d, want 507", resp.StatusCode)
-	}
-	waitForRepos(t, tc.Cache, 0)
-	if entries, _ := os.ReadDir(tc.tmpDir()); len(entries) != 0 {
-		t.Errorf("left %d entries in the temporary directory", len(entries))
-	}
+	// max_size caps max_repo_size.
+	for name, configure := range map[string]func(*Options){
+		"max_repo_size": func(o *Options) { o.MaxRepoSize = 64 << 10 },
+		"max_size":      func(o *Options) { o.MaxSize = 64 << 10 },
+	} {
+		t.Run(name, func(t *testing.T) {
+			tc := newTestCache(t, upstream.server.URL, configure)
 
-	requests := upstream.requests.Load()
-	if out, err := tryGit(t, "", "ls-remote", tc.url("repo")); err == nil {
-		t.Errorf("second attempt succeeded:\n%s", out)
-	}
-	if got := upstream.requests.Load(); got != requests {
-		t.Errorf("second attempt made %d upstream requests, want none", got-requests)
+			resp, err := http.Get(tc.url("repo") + "/info/refs?service=git-upload-pack")
+			if err != nil {
+				t.Fatal(err)
+			}
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusInsufficientStorage {
+				t.Errorf("status %d, want 507", resp.StatusCode)
+			}
+			waitForRepos(t, tc.Cache, 0)
+			if entries, _ := os.ReadDir(tc.tmpDir()); len(entries) != 0 {
+				t.Errorf("left %d entries in the temporary directory", len(entries))
+			}
+
+			requests := upstream.requests.Load()
+			if out, err := tryGit(t, "", "ls-remote", tc.url("repo")); err == nil {
+				t.Errorf("second attempt succeeded:\n%s", out)
+			}
+			if got := upstream.requests.Load(); got != requests {
+				t.Errorf("second attempt made %d upstream requests, want none", got-requests)
+			}
+		})
 	}
 }
 

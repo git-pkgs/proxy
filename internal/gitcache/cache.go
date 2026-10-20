@@ -164,6 +164,11 @@ func New(opts Options) (*Cache, error) {
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
+	// A repository larger than the whole cache would be evicted once
+	// released and cloned again by the next request.
+	if opts.MaxSize > 0 && (opts.MaxRepoSize <= 0 || opts.MaxRepoSize > opts.MaxSize) {
+		opts.MaxRepoSize = opts.MaxSize
+	}
 	client := *opts.Client
 	client.Timeout = 0
 	client.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }

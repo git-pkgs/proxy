@@ -30,8 +30,9 @@ var (
 	// copy is not served after one, since the upstream may have withdrawn
 	// access to it.
 	ErrRefused = errors.New("upstream refused the request")
-	// ErrTooLarge is returned for a repository larger than git.max_repo_size.
-	ErrTooLarge = errors.New("repository is larger than git.max_repo_size")
+	// ErrTooLarge is returned for a repository larger than git.max_repo_size,
+	// or than git.max_size where that is smaller.
+	ErrTooLarge = errors.New("repository is larger than git.max_repo_size or git.max_size")
 )
 
 // remoteRefs is what a repository advertises: its branch and tag tips, and

@@ -89,7 +89,8 @@ type GitConfig struct {
 	MaxSize string `json:"max_size" yaml:"max_size"`
 
 	// MaxRepoSize is the most one repository may take; a clone or fetch that
-	// would pass it fails. "0" disables the limit. Default: 5GB.
+	// would pass it fails. "0" disables the limit. Default: 5GB. MaxSize
+	// caps it when set.
 	MaxRepoSize string `json:"max_repo_size" yaml:"max_repo_size"`
 
 	// RefreshWait is how long a request waits for the upstream's branches

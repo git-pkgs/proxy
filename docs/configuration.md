@@ -725,7 +725,9 @@ upstream client as every other request, so the address checks
 (`allow_loopback`, `allow_private_hosts`), `upstream.auth` and the access log
 apply, and credentials are never passed to `git`.
 
-`max_repo_size` defaults to 5GB, and `max_size` to no limit. A clone or fetch
+`max_repo_size` defaults to 5GB, and `max_size` to no limit. `max_size` also
+caps `max_repo_size`, since a repository larger than the whole cache would be
+evicted as soon as no request was reading it. A clone or fetch
 that would pass `max_repo_size` is stopped, and nothing of it is kept. A new
 repository is then refused for an hour. When a refresh of one already cached
 does not fit, it is served as it is and dropped once no request is reading
