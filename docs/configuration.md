@@ -647,12 +647,18 @@ entry.
 `upstream.maven_repositories` is additive. `/maven/…` keeps serving
 `upstream.maven` with unchanged cache identities. A repository name is matched
 before the default repository, so it hides every group ID whose first segment
-is the same name there: a repository named `org` would take
-`/maven/org/apache/…` away from Maven Central. Names of two letters or less and
-common top-level domains such as `com`, `org`, `net` and `io` are refused at
-config load. Group IDs are free-form, so the check can't catch everything; pick
-names that can't be the start of a group ID, such as `grails` or
-`company-releases`.
+is the same name there: a repository named `tools` would take
+`/maven/tools/jackson/…` away from Maven Central. At config load the proxy
+refuses names of two characters or less, common top-level domains such as `com`
+and `io`, and every first segment of a group ID on Maven Central and Google's
+Maven repository (about 1,070 names, such as `javax`, `junit` or `software`).
+Names are compared case-sensitively, as paths are. Other repositories can
+have group IDs the list doesn't know, so pick names that can't be the start of
+a group ID, such as `grails` or `company-releases`.
+
+A repository's files are cached under its name and a hash of its upstream URL,
+so pointing a repository at a different URL stops serving what the old one
+sent.
 
 This field has no environment variable, as with the other named upstream maps.
 `PROXY_UPSTREAM_MAVEN` still sets `upstream.maven`.

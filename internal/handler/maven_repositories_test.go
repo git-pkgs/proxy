@@ -112,3 +112,28 @@ func TestMavenRepositoryRootIsNotFound(t *testing.T) {
 		t.Errorf("repository root went to the default upstream %d times", n)
 	}
 }
+
+func TestMavenRepositoryRepointedServesTheNewUpstream(t *testing.T) {
+	central, _ := mavenRepoUpstream(t, "central")
+	portal, _ := mavenRepoUpstream(t, "portal")
+	staging, _ := mavenRepoUpstream(t, "staging", mavenJarPath)
+	production, _ := mavenRepoUpstream(t, "production", mavenJarPath)
+
+	proxy, _, store, _ := setupTestProxy(t)
+	store.seekable = true
+	proxy.HTTPClient = central.Client()
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(central.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+
+	for _, upstream := range []struct {
+		srv   *httptest.Server
+		label string
+	}{{staging, "staging"}, {production, "production"}} {
+		h := NewMavenHandler(proxy, "http://localhost", central.URL, portal.URL).
+			WithRepositories(map[string]string{"grails": upstream.srv.URL}).Routes()
+		if w := getMaven(h, "/grails"+mavenJarPath); w.Code != http.StatusOK || w.Body.String() != upstream.label+" "+mavenJarPath {
+			t.Errorf("%s: status = %d, body = %q", upstream.label, w.Code, w.Body)
+		}
+	}
+}

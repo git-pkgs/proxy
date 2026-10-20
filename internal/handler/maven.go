@@ -148,14 +148,21 @@ func (s mavenSource) metadataCacheKey(urlPath string) string {
 }
 
 // cacheFilename is the name a file is cached under. A named repository's
-// files are prefixed with its name, so the same coordinates in two
-// repositories, which may hold different bytes, are cached apart.
+// files are prefixed with its name and a hash of its upstream URL, so the
+// same coordinates in two repositories, which may hold different bytes, are
+// cached apart, and repointing a repository stops serving what the old
+// upstream sent.
 func (s mavenSource) cacheFilename(filename string) string {
 	if s.name == "" {
 		return filename
 	}
-	return s.name + "/" + filename
+	digest := sha256.Sum256([]byte(s.upstreamURL))
+	return s.name + "/" + hex.EncodeToString(digest[:mavenUpstreamHashBytes]) + "/" + filename
 }
+
+// mavenUpstreamHashBytes is how much of the upstream URL's hash a named
+// repository's cache filenames carry: enough to tell its upstreams apart.
+const mavenUpstreamHashBytes = 8
 
 func (h *MavenHandler) handleMetadata(w http.ResponseWriter, r *http.Request, source mavenSource, urlPath string) {
 	cacheKey := source.metadataCacheKey(urlPath)

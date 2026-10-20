@@ -220,7 +220,7 @@ upstream:
   maven: "https://repo1.maven.org/maven2"
 
   # Additional Maven repositories, served at /maven/{name}/. A name must not
-  # be the start of a group ID (such as "org" or "com"), since it would hide
+  # be the start of a group ID (such as "org" or "tools"), since it would hide
   # those groups in the default repository.
   # maven_repositories:
   #   grails: "https://repo.grails.org/grails/restricted"

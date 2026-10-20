@@ -60,6 +60,7 @@
 package config
 
 import (
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -69,7 +70,6 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
-	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -645,7 +645,7 @@ type UpstreamConfig struct {
 	// MavenRepositories maps repository names to additional Maven repository
 	// base URLs, served at /maven/{name}/. upstream.maven stays the default
 	// at /maven/. A name must not be the first segment of a group ID, such
-	// as "org" or "com", since it would hide those groups in the default
+	// as "org" or "tools", since it would hide those groups in the default
 	// repository; see validateMavenRepositoryName.
 	// Example: {"grails": "https://repo.grails.org/grails/restricted"}.
 	MavenRepositories map[string]string `json:"maven_repositories" yaml:"maven_repositories"`
@@ -910,26 +910,48 @@ func CompileGenericArtifactPattern(pattern string) (*regexp.Regexp, error) {
 	return re, nil
 }
 
-// mavenGroupRoots are first segments of group IDs that are not country-code
-// top-level domains: generic top-level domains that group IDs are commonly
-// reversed from. Two-letter names are refused separately, as they cover
-// every country code.
-var mavenGroupRoots = []string{
-	"app", "biz", "cloud", "com", "dev", "edu", "gov", "info", "int",
-	"io", "mil", "name", "net", "org", "pro", "tech", "xyz",
-}
+// mavenGroupRootList lists the first path segments of group IDs on Maven
+// Central and Google's Maven repository, one per line.
+//
+//go:embed maven_group_roots.txt
+var mavenGroupRootList string
+
+// mavenGroupRoots are the first segments of group IDs a repository name
+// must not take: those in mavenGroupRootList, and generic top-level domains
+// group IDs are commonly reversed from.
+var mavenGroupRoots = func() map[string]bool {
+	roots := map[string]bool{}
+	for _, tld := range []string{"app", "biz", "cloud", "com", "dev", "edu", "gov", "info", "int",
+		"io", "mil", "name", "net", "org", "pro", "tech", "xyz"} {
+		roots[tld] = true
+	}
+	for line := range strings.Lines(mavenGroupRootList) {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			roots[line] = true
+		}
+	}
+	return roots
+}()
+
+// countryCodeLength is the length of a country-code top-level domain.
+const countryCodeLength = 2
 
 // validateMavenRepositoryName refuses names that are likely the first
 // segment of a group ID. /maven/{name}/ is matched before the default
 // repository, so such a name would hide every group under it there:
-// a repository named "org" would take /maven/org/apache/... away from
-// Maven Central. The list can't be complete, since group IDs are free-form,
-// so the documentation also asks for names that can't be a group root.
+// a repository named "tools" would take /maven/tools/jackson/... away from
+// Maven Central. Paths are case-sensitive, so names are compared as they
+// are. Names of two characters or less are refused as country codes. The
+// list can't be complete, since group IDs are free-form, so the
+// documentation also asks for names that can't be a group root.
 func validateMavenRepositoryName(name string) error {
-	lower := strings.ToLower(name)
-	if len(lower) <= 2 || slices.Contains(mavenGroupRoots, lower) {
+	if len(name) <= countryCodeLength {
+		return fmt.Errorf("invalid upstream.maven_repositories name %q: names of two characters or less "+
+			"could hide country-code group IDs in the default repository", name)
+	}
+	if mavenGroupRoots[name] {
 		return fmt.Errorf("invalid upstream.maven_repositories name %q: it would hide group IDs starting with %q "+
-			"in the default repository; use a name such as \"%s-repo\"", name, lower, lower)
+			"in the default repository; use a name such as \"%s-repo\"", name, name, name)
 	}
 	return nil
 }
