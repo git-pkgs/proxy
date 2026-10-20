@@ -444,7 +444,9 @@ func (h *NPMHandler) rewriteMetadataWithLocal(packageName string, body []byte, l
 				return nil, nil, ErrVersionDenied
 			}
 			var out bytes.Buffer
-			h.writeNPMVersion(&out, packageName, version, body)
+			if h.writeNPMVersion(&out, packageName, version, body) {
+				h.logTarballRewrites(packageName, 1)
+			}
 			return out.Bytes(), []string{version}, nil
 		}
 		if len(h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName))) != 0 {
@@ -596,6 +598,7 @@ func (d *npmPackument) write(writeValue func(out *bytes.Buffer, i int) error) ([
 func (h *NPMHandler) writeNPMVersions(out *bytes.Buffer, packageName string, versionsRaw []byte, keep map[string]any, local []npmLocalEntry) error {
 	out.WriteByte('{')
 	first := true
+	rewritten := 0
 	err := forEachJSONMember(versionsRaw, func(m jsonMember) error {
 		version, err := jsonKey(m.key(versionsRaw))
 		if err != nil {
@@ -610,9 +613,12 @@ func (h *NPMHandler) writeNPMVersions(out *bytes.Buffer, packageName string, ver
 		first = false
 		out.Write(m.key(versionsRaw))
 		out.WriteByte(':')
-		h.writeNPMVersion(out, packageName, version, m.value(versionsRaw))
+		if h.writeNPMVersion(out, packageName, version, m.value(versionsRaw)) {
+			rewritten++
+		}
 		return nil
 	})
+	h.logTarballRewrites(packageName, rewritten)
 	for _, e := range local {
 		if !first {
 			out.WriteByte(',')
@@ -628,38 +634,46 @@ func (h *NPMHandler) writeNPMVersions(out *bytes.Buffer, packageName string, ver
 }
 
 // writeNPMVersion writes one version entry with its dist.tarball pointing at
-// this proxy. An entry without a string tarball is written unchanged.
-func (h *NPMHandler) writeNPMVersion(out *bytes.Buffer, packageName, version string, raw []byte) {
+// this proxy, and reports whether it rewrote the tarball. An entry without a
+// string tarball is written unchanged.
+func (h *NPMHandler) writeNPMVersion(out *bytes.Buffer, packageName, version string, raw []byte) bool {
 	dist, ok, err := findJSONMember(raw, "dist")
 	if err != nil || !ok {
 		out.Write(raw)
-		return
+		return false
 	}
 	distRaw := dist.value(raw)
 	tarball, ok, err := findJSONMember(distRaw, "tarball")
 	if err != nil || !ok || distRaw[tarball.valStart] != '"' {
 		out.Write(raw)
-		return
+		return false
 	}
 	var oldTarball string
 	if err := json.Unmarshal(tarball.value(distRaw), &oldTarball); err != nil {
 		out.Write(raw)
-		return
+		return false
 	}
 
 	newTarball := h.proxyTarballURL(packageName, version, oldTarball)
 	encoded, err := json.Marshal(newTarball)
 	if err != nil {
 		out.Write(raw)
-		return
+		return false
 	}
 	out.Write(raw[:dist.valStart+tarball.valStart])
 	out.Write(encoded)
 	out.Write(raw[dist.valStart+tarball.valEnd:])
+	return true
+}
 
-	h.proxy.Logger.Debug("rewrote tarball URL",
-		"package", packageName, "version", version,
-		"old", oldTarball, "new", newTarball)
+// logTarballRewrites logs once per document how many tarball URLs it
+// rewrote. A line per version flooded debug logs: packages such as eslint
+// list hundreds of versions, and with cooldown on every request rewrites
+// the document again.
+func (h *NPMHandler) logTarballRewrites(packageName string, count int) {
+	if count > 0 {
+		h.proxy.Logger.Debug("rewrote tarball URLs", "package", packageName, "count", count)
+	}
 }
 
 // writeFilteredJSONObjectWith keeps members whose decoded keys match keep,
