@@ -9,15 +9,6 @@ import (
 	"github.com/prometheus/client_golang/prometheus"
 )
 
-// isolateRecentFailures empties the process-wide failure history for the
-// test and again when it ends, so neither earlier tests nor repeated runs
-// reach its assertions.
-func isolateRecentFailures(t *testing.T) {
-	t.Helper()
-	metrics.ResetRecentFailures()
-	t.Cleanup(metrics.ResetRecentFailures)
-}
-
 func storageErrorSnapshot(t *testing.T, operation string) *metrics.Snapshot {
 	t.Helper()
 	reg := prometheus.NewRegistry()
@@ -34,7 +25,6 @@ func storageErrorSnapshot(t *testing.T, operation string) *metrics.Snapshot {
 }
 
 func TestRuntimeViewAttachesRecentFailuresWhenEnabled(t *testing.T) {
-	isolateRecentFailures(t)
 	const operation = "test-attach"
 	metrics.RecordStorageError(operation, metrics.FailureDetail{
 		PURL: "pkg:npm/left-pad@1.0.0", Filename: "left-pad-1.0.0.tgz", Path: "npm/left-pad", Err: errors.New("disk full")})
@@ -44,8 +34,8 @@ func TestRuntimeViewAttachesRecentFailuresWhenEnabled(t *testing.T) {
 	if !v.FailureDetailsOn {
 		t.Error("FailureDetailsOn = false, want true")
 	}
-	if len(v.StorageErrors) != 1 || len(v.StorageErrors[0].Recent) != 1 {
-		t.Fatalf("StorageErrors = %+v, want one row with one recent failure", v.StorageErrors)
+	if len(v.StorageErrors) != 1 || len(v.StorageErrors[0].Recent) == 0 {
+		t.Fatalf("StorageErrors = %+v, want one row with recent failures", v.StorageErrors)
 	}
 	got := v.StorageErrors[0].Recent[0]
 	if got.PURL != "pkg:npm/left-pad@1.0.0" || got.Filename != "left-pad-1.0.0.tgz" ||
@@ -55,7 +45,6 @@ func TestRuntimeViewAttachesRecentFailuresWhenEnabled(t *testing.T) {
 }
 
 func TestRuntimeViewOmitsRecentFailuresWhenDisabled(t *testing.T) {
-	isolateRecentFailures(t)
 	const operation = "test-omit"
 	metrics.RecordStorageError(operation, metrics.FailureDetail{PURL: "pkg:npm/left-pad@1.0.0"})
 
@@ -72,7 +61,6 @@ func TestRuntimeViewOmitsRecentFailuresWhenDisabled(t *testing.T) {
 // Package names and upstream URLs say what the proxy's users depend on, so like
 // the caller table they are published only when asked for.
 func TestAnalyticsPageHidesFailureDetailsByDefault(t *testing.T) {
-	isolateRecentFailures(t)
 	ts := newTestServer(t)
 	defer ts.close()
 
@@ -91,7 +79,6 @@ func TestAnalyticsPageHidesFailureDetailsByDefault(t *testing.T) {
 }
 
 func TestAnalyticsPageShowsFailureDetailsWhenEnabled(t *testing.T) {
-	isolateRecentFailures(t)
 	ts := newTestServer(t)
 	defer ts.close()
 

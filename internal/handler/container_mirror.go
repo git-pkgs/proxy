@@ -461,14 +461,11 @@ func (m *imageMirror) mirrorBlobs(ctx context.Context, manifest *ociManifest) er
 // mirrorBlob stores a blob under the same identity handleBlobDownload uses.
 func (m *imageMirror) mirrorBlob(ctx context.Context, digest string) error {
 	proxy := m.h.proxy
-	cached, err := proxy.GetCachedArtifact(ctx, "oci", m.cacheName, digest, digest)
+	cached, err := proxy.HasCachedArtifact(ctx, "oci", m.cacheName, digest, digest)
 	if err != nil {
 		return fmt.Errorf("blob %s: %w", digest, err)
 	}
-	if cached != nil {
-		if cached.Reader != nil {
-			_ = cached.Reader.Close()
-		}
+	if cached {
 		return nil
 	}
 	result, err := proxy.GetOrFetchArtifactFromURLWithDigest(ctx, "oci", m.cacheName, digest, digest,

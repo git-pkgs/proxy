@@ -26,6 +26,10 @@ type Mirror struct {
 	// Images mirrors docker and oci items. Without it they fail like any
 	// other unsupported ecosystem.
 	Images ImageMirrorer
+
+	// RefusePackages, when set, fails every item Images does not take with
+	// this reason instead of fetching it, so nothing is cached.
+	RefusePackages string
 }
 
 // New creates a new Mirror with the given dependencies.
@@ -209,6 +213,13 @@ func (m *Mirror) RunDryRun(ctx context.Context, source Source) ([]PackageVersion
 func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *progressTracker) {
 	if isImageEcosystem(pv.Ecosystem) && m.Images != nil {
 		m.mirrorImage(ctx, pv, tracker)
+		return
+	}
+	if m.RefusePackages != "" {
+		tracker.failed.Add(1)
+		tracker.addError(pv.Ecosystem, pv.Name, pv.Version, m.RefusePackages)
+		m.logger.Warn("mirror refused",
+			"ecosystem", pv.Ecosystem, "name", pv.Name, "version", pv.Version, "reason", m.RefusePackages)
 		return
 	}
 	result, err := m.proxy.GetOrFetchArtifact(ctx, pv.Ecosystem, pv.Name, pv.Version, "")

@@ -33,6 +33,7 @@ func upstreamConfigValues(upstream UpstreamConfig) map[string]string {
 		"composer":             upstream.Composer,
 		"composer_repository":  upstream.ComposerRepository,
 		"conan":                upstream.Conan,
+		"chef":                 upstream.Chef,
 		"conda":                upstream.Conda,
 		"cran":                 upstream.CRAN,
 		"julia":                upstream.Julia,
@@ -64,6 +65,7 @@ func defaultUpstreamValues() map[string]string {
 		"composer":             "https://packagist.org",
 		"composer_repository":  "https://repo.packagist.org",
 		"conan":                "https://center.conan.io",
+		"chef":                 "https://supermarket.chef.io",
 		"conda":                "https://conda.anaconda.org",
 		"cran":                 "https://cloud.r-project.org",
 		"julia":                "https://pkg.julialang.org",
@@ -95,6 +97,7 @@ func upstreamEnvironmentVariables() map[string]string {
 		"composer":             "PROXY_UPSTREAM_COMPOSER",
 		"composer_repository":  "PROXY_UPSTREAM_COMPOSER_REPOSITORY",
 		"conan":                "PROXY_UPSTREAM_CONAN",
+		"chef":                 "PROXY_UPSTREAM_CHEF",
 		"conda":                "PROXY_UPSTREAM_CONDA",
 		"cran":                 "PROXY_UPSTREAM_CRAN",
 		"julia":                "PROXY_UPSTREAM_JULIA",
@@ -137,6 +140,9 @@ func TestDefault(t *testing.T) {
 	}
 	if cfg.Gradle.BuildCache.MaxAge != "168h" {
 		t.Errorf("Gradle.BuildCache.MaxAge = %q, want %q", cfg.Gradle.BuildCache.MaxAge, "168h")
+	}
+	if !cfg.Gradle.BuildCache.ReadOnly {
+		t.Error("Gradle.BuildCache.ReadOnly = false, want true by default")
 	}
 	if len(cfg.Upstream.AllowPrivateHosts) != 0 {
 		t.Errorf("Upstream.AllowPrivateHosts = %v, want empty", cfg.Upstream.AllowPrivateHosts)
@@ -385,6 +391,7 @@ upstream:
   composer: "https://upstream.example.com/composer"
   composer_repository: "https://upstream.example.com/composer_repository"
   conan: "https://upstream.example.com/conan"
+  chef: "https://upstream.example.com/chef"
   conda: "https://upstream.example.com/conda"
   cran: "https://upstream.example.com/cran"
   julia: "https://upstream.example.com/julia"
@@ -414,6 +421,64 @@ upstream:
 	}
 	if !cfg.Upstream.AllowLoopback {
 		t.Error("Upstream.AllowLoopback = false, want true")
+	}
+}
+
+func TestLoadGradleBuildCacheReadOnly(t *testing.T) {
+	tests := []struct {
+		name    string
+		content string
+		want    bool
+	}{
+		{"block without read_only keeps default", "gradle:\n  build_cache:\n    max_age: \"12h\"\n", true},
+		{"explicit false allows uploads", "gradle:\n  build_cache:\n    read_only: false\n", false},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			path := filepath.Join(t.TempDir(), "config.yaml")
+			if err := os.WriteFile(path, []byte(tt.content), 0644); err != nil {
+				t.Fatalf("writing config file: %v", err)
+			}
+			cfg, err := Load(path)
+			if err != nil {
+				t.Fatalf("Load() error = %v", err)
+			}
+			if cfg.Gradle.BuildCache.ReadOnly != tt.want {
+				t.Errorf("Gradle.BuildCache.ReadOnly = %v, want %v", cfg.Gradle.BuildCache.ReadOnly, tt.want)
+			}
+		})
+	}
+}
+
+func TestLoadGradleBuildCacheReadOnlyFromEnv(t *testing.T) {
+	tests := []struct {
+		value    string
+		fileRO   bool
+		want     bool
+		warnings int
+	}{
+		{"false", true, false, 0},
+		{"0", true, false, 0},
+		{" FALSE ", true, false, 0},
+		{"True", false, true, 0},
+		{"1", false, true, 0},
+		{"yes", false, true, 1},
+		{"off", false, true, 1},
+		{"", false, false, 0},
+	}
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			t.Setenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY", tt.value)
+			cfg := Default()
+			cfg.Gradle.BuildCache.ReadOnly = tt.fileRO
+			cfg.LoadFromEnv()
+			if cfg.Gradle.BuildCache.ReadOnly != tt.want {
+				t.Errorf("Gradle.BuildCache.ReadOnly = %v, want %v", cfg.Gradle.BuildCache.ReadOnly, tt.want)
+			}
+			if got := len(cfg.EnvWarnings()); got != tt.warnings {
+				t.Errorf("len(EnvWarnings()) = %d, want %d: %v", got, tt.warnings, cfg.EnvWarnings())
+			}
+		})
 	}
 }
 
@@ -466,7 +531,7 @@ func TestLoadFromEnv(t *testing.T) {
 	t.Setenv("PROXY_UI_FAILURE_DETAILS", "true")
 	t.Setenv("PROXY_UPSTREAM_ALLOW_PRIVATE_HOSTS", "registry.internal, 10.0.0.12")
 	t.Setenv("PROXY_UPSTREAM_ALLOW_LOOPBACK", "true")
-	t.Setenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY", "true")
+	t.Setenv("PROXY_GRADLE_BUILD_CACHE_READ_ONLY", "false")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE", "32MB")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_AGE", "12h")
 	t.Setenv("PROXY_GRADLE_BUILD_CACHE_MAX_SIZE", "10GB")
@@ -517,8 +582,8 @@ func TestLoadFromEnv(t *testing.T) {
 		t.Errorf("Upstream.AllowPrivateHosts after empty env = %q, want unchanged", got)
 	}
 
-	if !cfg.Gradle.BuildCache.ReadOnly {
-		t.Error("Gradle.BuildCache.ReadOnly = false, want true")
+	if cfg.Gradle.BuildCache.ReadOnly {
+		t.Error("Gradle.BuildCache.ReadOnly = true, want false from the environment")
 	}
 	if cfg.Gradle.BuildCache.MaxUploadSize != "32MB" {
 		t.Errorf("Gradle.BuildCache.MaxUploadSize = %q, want %q", cfg.Gradle.BuildCache.MaxUploadSize, "32MB")

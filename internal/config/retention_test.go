@@ -12,6 +12,7 @@ const retentionDay = 24 * time.Hour
 
 func retentionTestRegistry() *retention.Registry {
 	reg := retention.NewRegistry()
+	reg.Register(retention.Spec{Key: "generic", CanonicalPackage: retention.DefaultCanonical("generic")})
 	reg.Register(retention.Spec{Key: "npm", CanonicalPackage: retention.DefaultCanonical("npm")})
 	reg.Register(retention.Spec{Key: "julia"})
 	reg.Register(retention.Spec{Key: "helm"})
@@ -34,8 +35,9 @@ func TestRetentionRulesResolves(t *testing.T) {
 		Default:    "30d",
 		Ecosystems: map[string]string{"npm": "14d"},
 		Packages: map[string]string{
-			"pkg:npm/lodash":      "0",
-			"pkg:npm/@babel/core": "90d",
+			"pkg:npm/lodash":          "0",
+			"pkg:npm/@babel/core":     "90d",
+			"pkg:generic/jqlang%2Fjq": "7d",
 		},
 		SweepInterval: "5m",
 	}
@@ -55,6 +57,12 @@ func TestRetentionRulesResolves(t *testing.T) {
 	}
 	if got := rules.For("npm", "pkg:npm/%40babel/core"); got != 90*retentionDay {
 		t.Errorf("babel rule = %v, want 90d under its canonical key", got)
+	}
+	if got := rules.For("generic", "pkg:generic/jqlang%2Fjq"); got != 7*retentionDay {
+		t.Errorf("generic package rule = %v, want 7d", got)
+	}
+	if got := rules.For("generic", "pkg:generic/other%2Frepo"); got != 0 {
+		t.Errorf("unconfigured generic package rule = %v, want 0 despite the global default", got)
 	}
 	if got := cfg.ParseRetentionSweepInterval(); got != 5*time.Minute {
 		t.Errorf("ParseRetentionSweepInterval() = %v, want 5m", got)
@@ -76,7 +84,6 @@ func TestRetentionRulesErrors(t *testing.T) {
 		{"sweep interval below a minute", func(r *RetentionConfig) { r.SweepInterval = "30s" }, "must be at least 1m0s"},
 		{"bad sweep interval", func(r *RetentionConfig) { r.SweepInterval = "often" }, "sweep_interval"},
 		{"unknown ecosystem", func(r *RetentionConfig) { r.Ecosystems = map[string]string{"nmp": "1d"} }, "unknown ecosystem"},
-		{"generic is not an ecosystem key", func(r *RetentionConfig) { r.Ecosystems = map[string]string{"generic": "1d"} }, "unknown ecosystem"},
 		{"ecosystem not registered", func(r *RetentionConfig) { r.Ecosystems = map[string]string{"oci": "14d"} },
 			`storage.retention.ecosystems.oci: retention is not supported for "oci"`},
 		{"bad ecosystem duration", func(r *RetentionConfig) { r.Ecosystems = map[string]string{"npm": "soon"} }, "storage.retention.ecosystems.npm"},

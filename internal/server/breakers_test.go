@@ -12,8 +12,8 @@ import (
 	"testing"
 	"time"
 
-	upstreamhttp "github.com/git-pkgs/proxy/internal/httpclient"
 	"github.com/git-pkgs/proxy/internal/metrics"
+	registryclient "github.com/git-pkgs/registries/client"
 	"github.com/git-pkgs/registries/fetch"
 	"github.com/prometheus/client_golang/prometheus"
 	dto "github.com/prometheus/client_model/go"
@@ -352,7 +352,7 @@ func TestHealthEndpoint_ReportsUpstreamHolds(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
 
-	gate := upstreamhttp.NewRateLimitGate(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	gate := registryclient.NewRateLimitGate(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		return &http.Response{
 			StatusCode: http.StatusTooManyRequests,
 			Header:     http.Header{"Retry-After": []string{"600"}},

@@ -186,7 +186,7 @@ func newBenchmarkNPMServer(b *testing.B) *benchmarkNPMServer {
 	b.Cleanup(func() { _ = store.Close() })
 
 	content := bytes.Repeat([]byte("x"), benchmarkArtifactSize)
-	storagePath := storage.ArtifactPath("npm", "", "lodash", "4.17.21", "lodash-4.17.21.tgz")
+	storagePath := "npm/lodash/4.17.21/lodash-4.17.21.tgz"
 	size, hash, err := store.Store(ctx, storagePath, bytes.NewReader(content))
 	if err != nil {
 		b.Fatalf("store artifact: %v", err)

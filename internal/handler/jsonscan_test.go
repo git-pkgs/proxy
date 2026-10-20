@@ -91,7 +91,7 @@ func TestForEachJSONMemberOffsets(t *testing.T) {
 
 func TestWriteFilteredJSONObject(t *testing.T) {
 	var out bytes.Buffer
-	err := writeFilteredJSONObject(&out, []byte(`{"a": 1, "b": {"x": 2}, "c": 3}`), func(k string) bool { return k != "b" })
+	err := writeFilteredJSONObjectWith(&out, []byte(`{"a": 1, "b": {"x": 2}, "c": 3}`), func(k string) bool { return k != "b" }, nil)
 	if err != nil || out.String() != `{"a": 1,"c": 3}` {
 		t.Errorf("filtered = %s, %v", out.String(), err)
 	}

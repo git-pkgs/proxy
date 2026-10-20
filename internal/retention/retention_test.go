@@ -56,7 +56,7 @@ func TestRegistryRegisterPanics(t *testing.T) {
 		name  string
 		specs []Spec
 	}{
-		{"unknown key", []Spec{{Key: "generic"}}},
+		{"unknown key", []Spec{{Key: "not-an-ecosystem"}}},
 		{"duplicate key", []Spec{{Key: "npm"}, {Key: "npm"}}},
 		{"overlapping ecosystem value", []Spec{{Key: "gem"}, {Key: "npm", ExtraDBEcosystems: []string{"rubygems"}}}},
 	}
@@ -145,6 +145,37 @@ func TestRulesFor(t *testing.T) {
 		if got := rules.For(tt.key, tt.pkg); got != tt.want {
 			t.Errorf("For(%q, %q) = %v, want %v", tt.key, tt.pkg, got, tt.want)
 		}
+	}
+}
+
+func TestGenericRulesRequireExplicitConfiguration(t *testing.T) {
+	day := 24 * time.Hour
+	const pkg = "pkg:generic/jqlang%2Fjq"
+	tests := []struct {
+		name       string
+		ecosystems map[string]time.Duration
+		packages   map[string]time.Duration
+		want       time.Duration
+	}{
+		{"global default ignored", nil, nil, 0},
+		{"ecosystem rule", map[string]time.Duration{"generic": 7 * day}, nil, 7 * day},
+		{"ecosystem disabled", map[string]time.Duration{"generic": 0}, nil, 0},
+		{"package only", nil, map[string]time.Duration{pkg: 14 * day}, 14 * day},
+		{"other package ignored", nil, map[string]time.Duration{"pkg:generic/other%2Frepo": day}, 0},
+		{"package overrides ecosystem", map[string]time.Duration{"generic": 7 * day}, map[string]time.Duration{pkg: 14 * day}, 14 * day},
+		{"package disables eviction", map[string]time.Duration{"generic": 7 * day}, map[string]time.Duration{pkg: 0}, 0},
+		{"package enables eviction", map[string]time.Duration{"generic": 0}, map[string]time.Duration{pkg: day}, day},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			rules := Rules{Default: 30 * day, Ecosystems: tt.ecosystems, Packages: tt.packages}
+			if got := rules.For("generic", pkg); got != tt.want {
+				t.Errorf("generic retention = %v, want %v", got, tt.want)
+			}
+			if got := rules.For("npm", "pkg:npm/lodash"); got != 30*day {
+				t.Errorf("npm default retention = %v, want 30d", got)
+			}
+		})
 	}
 }
 

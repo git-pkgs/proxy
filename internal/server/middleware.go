@@ -106,7 +106,7 @@ func requestEcosystem(path string) string {
 	segment, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
 	switch segment {
 	case "npm", "cargo", "hex", "pub", "pypi", "maven", "gradle", "nuget",
-		"conan", "conda", "cran", "julia", "debian", "rpm", "arch",
+		"conan", "chef", "conda", "cran", "julia", "debian", "rpm", "arch",
 		"helm", "homebrew", "generic", "swift":
 		return segment
 	case "apk":

@@ -5,16 +5,23 @@ import (
 	"errors"
 	"fmt"
 	"net/http"
+	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/retention"
 )
 
 const (
-	pubUpstream  = "https://pub.dev"
-	pubPathParts = 2 // name + version in path split by /versions/
+	pubUpstream   = "https://pub.dev"
+	pubPathParts  = 2 // name + version in path split by /versions/
+	pubArchiveExt = ".tar.gz"
 )
+
+// pubPackageName matches pub package names, which have to be Dart identifiers.
+var pubPackageName = regexp.MustCompile(`^[A-Za-z_][A-Za-z0-9_]*$`)
 
 // Packages are stored under pkg:pub/{name} with the name from the download
 // path, and purl keeps pub names as they are, so package rules use the
@@ -69,19 +76,27 @@ func (h *PubHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	name := parts[0]
-	version := strings.TrimSuffix(parts[1], ".tar.gz")
+	// Only the archive is cached. Without the suffix the upstream path is the
+	// HTML version page on pub.dev, which must not land under the archive key.
+	version, ok := strings.CutSuffix(parts[1], pubArchiveExt)
+	if !ok {
+		http.Error(w, "not found", http.StatusNotFound)
+		return
+	}
 
-	if name == "" || version == "" {
+	if !pubPackageName.MatchString(name) || version == "" || strings.Contains(version, "/") {
 		http.Error(w, "invalid request", http.StatusBadRequest)
 		return
 	}
 
-	filename := fmt.Sprintf("%s-%s.tar.gz", name, version)
+	filename := name + "-" + version + pubArchiveExt
 
 	h.proxy.Logger.Info("pub download request",
 		"name", name, "version", version)
 
-	downloadURL := h.upstreamURL + r.URL.Path
+	downloadURL := fmt.Sprintf("%s/packages/%s/versions/%s%s",
+		h.upstreamURL, url.PathEscape(name), url.PathEscape(version), pubArchiveExt)
+	h.discardVersionPage(name, version, filename)
 	result, err := h.proxy.GetOrFetchArtifactFromURL(
 		r.Context(), "pub", name, version, filename, downloadURL,
 	)
@@ -91,6 +106,32 @@ func (h *PubHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	ServeArtifactRequest(w, r, result)
+}
+
+// discardVersionPage clears a cached archive that was fetched from a path
+// without the archive suffix. Proxy versions before the suffix check cached
+// pub.dev's HTML version page under the archive's name that way.
+func (h *PubHandler) discardVersionPage(name, version, filename string) {
+	_, versionPURL, err := packagePURLStrings("pub", name, version)
+	if err != nil {
+		return
+	}
+	record, err := h.proxy.DB.GetArtifact(versionPURL, filename)
+	if err != nil {
+		h.proxy.Logger.Warn("failed to read pub cache record",
+			"purl", versionPURL, "filename", filename, "error", err)
+		return
+	}
+	if record == nil || !record.StoragePath.Valid || record.Source == database.SourceLocal ||
+		strings.HasSuffix(record.UpstreamURL, pubArchiveExt) {
+		return
+	}
+	h.proxy.Logger.Warn("cached pub archive was fetched without the archive suffix, discarding",
+		"purl", versionPURL, "filename", filename, "upstream_url", record.UpstreamURL)
+	if err := h.proxy.DB.DiscardArtifact(versionPURL, filename, record.StoragePath.String); err != nil {
+		h.proxy.Logger.Warn("failed to discard pub cache record",
+			"purl", versionPURL, "filename", filename, "error", err)
+	}
 }
 
 // handlePackageMetadata proxies package metadata and rewrites archive URLs.

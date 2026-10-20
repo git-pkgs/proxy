@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bufio"
 	"compress/gzip"
 	"encoding/json"
 	"io"
@@ -9,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/jsonstream"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
 )
@@ -209,75 +211,90 @@ func (h *CondaHandler) handleRepodata(w http.ResponseWriter, r *http.Request) {
 		defer func() { _ = decoded.Close() }()
 		reader = decoded
 	}
-	body, err := h.proxy.ReadMetadata(reader)
-	if err != nil {
-		http.Error(w, "failed to read response", http.StatusBadGateway)
-		return
-	}
-
-	filtered, err := h.applyCooldownFiltering(body)
-	if err != nil {
-		h.proxy.Logger.Warn("failed to filter repodata, proxying original", "error", err)
-		w.Header().Set(headerContentType, "application/json")
-		_, _ = w.Write(body)
-		return
-	}
-
+	// conda-forge's linux-64 repodata.json is several hundred MB, so it is
+	// filtered as it streams rather than read through ReadMetadata. Once
+	// output has started, an error aborts the response so the client never
+	// takes a truncated or unfiltered index as complete.
+	out := &countingWriter{w: w}
+	buffered := bufio.NewWriterSize(out, repodataWriteBuffer)
 	w.Header().Set(headerContentType, "application/json")
-	_, _ = w.Write(filtered)
+	err = h.filterRepodata(io.LimitReader(reader, maxRepodataSize), buffered)
+	if err == nil {
+		err = buffered.Flush()
+	}
+	if err != nil {
+		h.proxy.Logger.Error("failed to filter conda repodata", "url", upstreamURL, "error", err)
+		if out.n == 0 {
+			http.Error(w, "failed to read response", http.StatusBadGateway)
+			return
+		}
+		panic(http.ErrAbortHandler)
+	}
+}
+
+// countingWriter records whether anything has reached the response yet.
+type countingWriter struct {
+	w io.Writer
+	n int64
+}
+
+func (c *countingWriter) Write(p []byte) (int, error) {
+	n, err := c.w.Write(p)
+	c.n += int64(n)
+	return n, err
 }
 
 // condaTimestampDivisor converts Conda's millisecond timestamps to seconds.
 const condaTimestampDivisor = 1000
 
-// applyCooldownFiltering removes entries from repodata.json that were
-// published too recently based on their timestamp field.
-func (h *CondaHandler) applyCooldownFiltering(body []byte) ([]byte, error) {
-	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		return body, nil
-	}
+const (
+	repodataWriteBuffer = 64 << 10
+	// maxRepodataSize stops a runaway upstream body. It is well above the
+	// largest conda-forge index, which is under 500 MB.
+	maxRepodataSize = 4 << 30
+)
 
-	var repodata map[string]any
-	if err := json.Unmarshal(body, &repodata); err != nil {
-		return nil, err
-	}
-
-	for _, key := range []string{"packages", "packages.conda"} {
-		packages, ok := repodata[key].(map[string]any)
-		if !ok {
-			continue
+// filterRepodata copies repodata.json from r to w, leaving out entries in
+// packages and packages.conda that are still inside their cooldown. Kept
+// entries and every other member are written with their upstream bytes.
+func (h *CondaHandler) filterRepodata(r io.Reader, w io.Writer) error {
+	return jsonstream.CopyObject(json.NewDecoder(r), w, func(m *jsonstream.Member) error {
+		if m.Key != "packages" && m.Key != "packages.conda" {
+			return m.Copy()
 		}
-
-		for filename, entry := range packages {
-			entryMap, ok := entry.(map[string]any)
-			if !ok {
-				continue
+		return m.Object(func(entry *jsonstream.Member) error {
+			raw, err := entry.Raw()
+			if err != nil {
+				return err
 			}
-
-			ts, ok := entryMap["timestamp"].(float64)
-			if !ok || ts == 0 {
-				continue
+			if h.inCooldown(entry.Key, raw) {
+				return nil
 			}
+			return entry.Write(raw)
+		})
+	})
+}
 
-			publishedAt := time.Unix(int64(ts)/condaTimestampDivisor, 0)
+type repodataEntry struct {
+	Name      string  `json:"name"`
+	Version   string  `json:"version"`
+	Timestamp float64 `json:"timestamp"`
+}
 
-			name, _ := entryMap["name"].(string)
-			if name == "" {
-				continue
-			}
-
-			packagePURL := canonicalPackagePURL("conda", name)
-
-			if !h.proxy.Cooldown.IsAllowed("conda", packagePURL, publishedAt) {
-				version, _ := entryMap["version"].(string)
-				h.proxy.Logger.Info("cooldown: filtering conda package",
-					"name", name, "version", version, "filename", filename)
-				delete(packages, filename)
-			}
-		}
+// inCooldown reports whether a repodata entry was published too recently.
+// Entries without a name or timestamp are kept.
+func (h *CondaHandler) inCooldown(filename string, raw []byte) bool {
+	var entry repodataEntry
+	if err := json.Unmarshal(raw, &entry); err != nil || entry.Name == "" || entry.Timestamp == 0 {
+		return false
 	}
-
-	return json.Marshal(repodata)
+	publishedAt := time.Unix(int64(entry.Timestamp)/condaTimestampDivisor, 0)
+	if h.proxy.Cooldown.IsAllowed("conda", canonicalPackagePURL("conda", entry.Name), publishedAt) {
+		return false
+	}
+	h.proxy.Logger.Info("cooldown: filtering conda package",
+		"name", entry.Name, "version", entry.Version, "filename", filename)
+	return true
 }
 
 // proxyCached forwards a metadata request with caching.

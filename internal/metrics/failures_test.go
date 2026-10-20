@@ -14,8 +14,13 @@ import (
 // reach its assertions.
 func isolateRecentFailures(t *testing.T) {
 	t.Helper()
-	ResetRecentFailures()
-	t.Cleanup(ResetRecentFailures)
+	reset := func() {
+		recentFailures.Lock()
+		defer recentFailures.Unlock()
+		recentFailures.series = make(map[string][]Failure)
+	}
+	reset()
+	t.Cleanup(reset)
 }
 
 func TestRecentFailuresNewestFirst(t *testing.T) {
