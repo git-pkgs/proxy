@@ -46,7 +46,7 @@ type MavenHandler struct {
 	upstreamURL             string
 	pluginPortalUpstreamURL string
 	proxyURL                string
-	repositories            map[string]string
+	repositories            map[string]mavenSource
 }
 
 // mavenSource is the repository a request is served from.
@@ -57,13 +57,22 @@ type mavenSource struct {
 	// fallbackURL is tried when upstreamURL doesn't have a file. Only the
 	// default repository has one, the Gradle Plugin Portal.
 	fallbackURL string
+	// cachePrefix is prepended to cached filenames: empty for the default
+	// repository, {name}/{hash of upstreamURL}/ for a named one.
+	cachePrefix string
 }
 
 // WithRepositories adds named repositories, served at /maven/{name}/.
 func (h *MavenHandler) WithRepositories(repositories map[string]string) *MavenHandler {
-	h.repositories = make(map[string]string, len(repositories))
+	h.repositories = make(map[string]mavenSource, len(repositories))
 	for name, upstreamURL := range repositories {
-		h.repositories[name] = strings.TrimSuffix(upstreamURL, "/")
+		upstreamURL = strings.TrimSuffix(upstreamURL, "/")
+		digest := sha256.Sum256([]byte(upstreamURL))
+		h.repositories[name] = mavenSource{
+			name:        name,
+			upstreamURL: upstreamURL,
+			cachePrefix: name + "/" + hex.EncodeToString(digest[:mavenUpstreamHashBytes]) + "/",
+		}
 	}
 	return h
 }
@@ -106,8 +115,8 @@ func (h *MavenHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 
 	source := mavenSource{upstreamURL: h.upstreamURL, fallbackURL: h.pluginPortalUpstreamURL}
 	if name, rest, ok := strings.Cut(urlPath, "/"); ok {
-		if upstreamURL, found := h.repositories[name]; found {
-			source = mavenSource{name: name, upstreamURL: upstreamURL}
+		if named, found := h.repositories[name]; found {
+			source = named
 			urlPath = rest
 		}
 	} else if _, found := h.repositories[urlPath]; found {
@@ -153,11 +162,7 @@ func (s mavenSource) metadataCacheKey(urlPath string) string {
 // cached apart, and repointing a repository stops serving what the old
 // upstream sent.
 func (s mavenSource) cacheFilename(filename string) string {
-	if s.name == "" {
-		return filename
-	}
-	digest := sha256.Sum256([]byte(s.upstreamURL))
-	return s.name + "/" + hex.EncodeToString(digest[:mavenUpstreamHashBytes]) + "/" + filename
+	return s.cachePrefix + filename
 }
 
 // mavenUpstreamHashBytes is how much of the upstream URL's hash a named

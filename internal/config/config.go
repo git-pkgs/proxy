@@ -933,6 +933,10 @@ var mavenGroupRoots = func() map[string]bool {
 	return roots
 }()
 
+// mavenRepositoryNamePattern is what a repository name may look like: the
+// characters of a group ID segment, which clients send unescaped.
+var mavenRepositoryNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
 // countryCodeLength is the length of a country-code top-level domain.
 const countryCodeLength = 2
 
@@ -940,11 +944,16 @@ const countryCodeLength = 2
 // segment of a group ID. /maven/{name}/ is matched before the default
 // repository, so such a name would hide every group under it there:
 // a repository named "tools" would take /maven/tools/jackson/... away from
-// Maven Central. Paths are case-sensitive, so names are compared as they
+// Maven Central. Names are limited to characters that reach the handler
+// unescaped. Paths are case-sensitive, so names are compared as they
 // are. Names of two characters or less are refused as country codes. The
 // list can't be complete, since group IDs are free-form, so the
 // documentation also asks for names that can't be a group root.
 func validateMavenRepositoryName(name string) error {
+	if !mavenRepositoryNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid upstream.maven_repositories name %q: use letters, digits, '.', '_' and '-', "+
+			"starting with a letter or digit, so the name works as a URL path segment", name)
+	}
 	if len(name) <= countryCodeLength {
 		return fmt.Errorf("invalid upstream.maven_repositories name %q: names of two characters or less "+
 			"could hide country-code group IDs in the default repository", name)

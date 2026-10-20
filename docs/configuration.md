@@ -650,9 +650,10 @@ before the default repository, so it hides every group ID whose first segment
 is the same name there: a repository named `tools` would take
 `/maven/tools/jackson/…` away from Maven Central. At config load the proxy
 refuses names of two characters or less, common top-level domains such as `com`
-and `io`, and every first segment of a group ID on Maven Central and Google's
-Maven repository (about 1,070 names, such as `javax`, `junit` or `software`).
-Names are compared case-sensitively, as paths are. Other repositories can
+and `io`, and every first segment of a group ID on Maven Central, the Gradle
+Plugin Portal and Google's Maven repository (about 1,200 names, such as `javax`,
+`junit`, `software` or `gradle`). Names are compared case-sensitively, as paths
+are, and may only use letters, digits, `.`, `_` and `-`. Other repositories can
 have group IDs the list doesn't know, so pick names that can't be the start of
 a group ID, such as `grails` or `company-releases`.
 
