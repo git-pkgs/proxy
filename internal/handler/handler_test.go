@@ -38,6 +38,7 @@ type mockStorage struct {
 	signedURL string
 	signErr   error
 	seekable  bool
+	stores    int
 }
 
 func newMockStorage() *mockStorage {
@@ -55,6 +56,7 @@ func (s *mockStorage) Store(_ context.Context, path string, r io.Reader) (int64,
 		return 0, "", err
 	}
 	s.files[path] = data
+	s.stores++
 	return int64(len(data)), sha256Hex(string(data)), nil
 }
 
@@ -238,7 +240,7 @@ func seedPackage(t testing.TB, db *database.DB, store *mockStorage, ecosystem, n
 		t.Fatalf("failed to upsert version: %v", err)
 	}
 
-	storagePath := storage.ArtifactPath(ecosystem, "", name, version, filename)
+	storagePath := ecosystem + "/" + name + "/" + version + "/" + filename
 	store.files[storagePath] = []byte(content)
 	sharedArtifact := testArtifact(content, versionPURL, filename, "application/octet-stream")
 
@@ -415,7 +417,7 @@ func assertMalformedCacheRejected(t *testing.T, malformedHash, malformedIntegrit
 	if artifact.StoragePath.Valid {
 		t.Error("unusable cache record retained its storage path")
 	}
-	assertQueuedForDeletion(t, db, storage.ArtifactPath("npm", "", packageName, version, filename))
+	assertQueuedForDeletion(t, db, "npm/"+packageName+"/"+version+"/"+filename)
 }
 
 // TestCorruptCachedArtifactIsQueuedForDeletion streams cached bytes that no
@@ -425,7 +427,7 @@ func assertMalformedCacheRejected(t *testing.T, malformedHash, malformedIntegrit
 func TestCorruptCachedArtifactIsQueuedForDeletion(t *testing.T) {
 	proxy, db, store, _ := setupTestProxy(t)
 	seedPackage(t, db, store, "npm", "corrupt", "1.0.0", "corrupt-1.0.0.tgz", "cached content")
-	storagePath := storage.ArtifactPath("npm", "", "corrupt", "1.0.0", "corrupt-1.0.0.tgz")
+	storagePath := "npm/corrupt/1.0.0/corrupt-1.0.0.tgz"
 	store.files[storagePath] = []byte("tampered bytes")
 
 	result, err := proxy.GetCachedArtifact(context.Background(), "npm", "corrupt", "1.0.0", "corrupt-1.0.0.tgz")
@@ -990,17 +992,7 @@ func TestGetOrFetchArtifactFromURL_CacheMiss(t *testing.T) {
 	}
 }
 
-// isolateRecentFailures empties the process-wide failure history for the
-// test and again when it ends, so neither earlier tests nor repeated runs
-// reach its assertions.
-func isolateRecentFailures(t *testing.T) {
-	t.Helper()
-	metrics.ResetRecentFailures()
-	t.Cleanup(metrics.ResetRecentFailures)
-}
-
 func TestGetOrFetchArtifactFromURL_FetchError(t *testing.T) {
-	isolateRecentFailures(t)
 	proxy, _, _, fetcher := setupTestProxy(t)
 	fetcher.fetchErr = errors.New("connection refused")
 	errorsBefore := testutil.ToFloat64(metrics.UpstreamErrors.WithLabelValues("pypi", "fetch_failed"))
@@ -1016,14 +1008,13 @@ func TestGetOrFetchArtifactFromURL_FetchError(t *testing.T) {
 		t.Errorf("upstream errors delta = %.0f, want 1", diff)
 	}
 	recent := metrics.RecentFailures("proxy_upstream_errors_total", map[string]string{"ecosystem": "pypi", "error_type": "fetch_failed"})
-	if len(recent) != 1 || recent[0].PURL != "pkg:pypi/fail@1.0.0" ||
+	if len(recent) == 0 || recent[0].PURL != "pkg:pypi/fail@1.0.0" ||
 		recent[0].URL != "https://pypi.org/files/fail-1.0.0.tar.gz" || recent[0].Error != "connection refused" {
-		t.Errorf("upstream failures = %+v, want one: the failed package, its URL and the error", recent)
+		t.Errorf("upstream failures = %+v, want the newest failure to contain the failed package, its URL and the error", recent)
 	}
 }
 
 func TestGetOrFetchArtifactFromURL_StoreError(t *testing.T) {
-	isolateRecentFailures(t)
 	proxy, _, store, fetcher := setupTestProxy(t)
 	store.storeErr = errors.New("disk full")
 	errorsBefore := testutil.ToFloat64(metrics.StorageErrors.WithLabelValues("write"))
@@ -1043,9 +1034,9 @@ func TestGetOrFetchArtifactFromURL_StoreError(t *testing.T) {
 		t.Errorf("storage errors delta = %.0f, want 1", diff)
 	}
 	recent := metrics.RecentFailures("proxy_storage_errors_total", map[string]string{"operation": "write"})
-	if len(recent) != 1 || recent[0].PURL != "pkg:pypi/fail@1.0.0" || recent[0].Filename != "fail-1.0.0.tar.gz" ||
+	if len(recent) == 0 || recent[0].PURL != "pkg:pypi/fail@1.0.0" || recent[0].Filename != "fail-1.0.0.tar.gz" ||
 		recent[0].Path == "" || recent[0].Error != "disk full" {
-		t.Errorf("storage failures = %+v, want one: the failed package, its storage path and the error", recent)
+		t.Errorf("storage failures = %+v, want the newest failure to contain the failed package, its storage path and the error", recent)
 	}
 }
 

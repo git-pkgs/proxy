@@ -12,10 +12,28 @@ import (
 
 	"github.com/git-pkgs/proxy/internal/config"
 	upstreamhttp "github.com/git-pkgs/proxy/internal/httpclient"
+	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/registries/fetch"
 )
 
 const testReleaseAssetPath = "/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64"
+
+func TestGenericRetentionConfig(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.Retention.Ecosystems = map[string]string{"generic": "30d"}
+	cfg.Storage.Retention.Packages = map[string]string{"pkg:generic/jqlang%2Fjq": "90d"}
+
+	rules, err := cfg.RetentionRules(retention.Default)
+	if err != nil {
+		t.Fatalf("RetentionRules() error = %v", err)
+	}
+	if got := rules.For(genericEcosystem, "pkg:generic/jqlang%2Fjq"); got != 90*24*time.Hour {
+		t.Errorf("jqlang/jq retention = %v, want 90d", got)
+	}
+	if got := rules.For(genericEcosystem, "pkg:generic/other%2Frepo"); got != 30*24*time.Hour {
+		t.Errorf("generic ecosystem retention = %v, want 30d", got)
+	}
+}
 
 func TestParseGitHubReleaseAsset(t *testing.T) {
 	tests := []struct {
@@ -328,7 +346,7 @@ func TestGenericHandler_ReleaseAssetIsCachedAndServedWhenUpstreamDown(t *testing
 	}))
 	defer upstream.Close()
 
-	proxy, _, store, _ := setupTestProxy(t)
+	proxy, db, store, _ := setupTestProxy(t)
 	store.seekable = true
 	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
 	proxy.Fetcher = fetcher
@@ -345,6 +363,13 @@ func TestGenericHandler_ReleaseAssetIsCachedAndServedWhenUpstreamDown(t *testing
 	}
 	if got := upstreamRequests.Load(); got != 1 {
 		t.Fatalf("upstream requests = %d, want 1", got)
+	}
+	pkg, err := db.GetPackageByEcosystemName(genericEcosystem, "jqlang/jq")
+	if err != nil || pkg == nil {
+		t.Fatalf("release package = %v, %v; want a cached package", pkg, err)
+	}
+	if pkg.PURL != "pkg:generic/jqlang%2Fjq" {
+		t.Errorf("release package PURL = %q, want pkg:generic/jqlang%%2Fjq", pkg.PURL)
 	}
 
 	// Second request must be served from cache, even with the upstream down.

@@ -495,7 +495,7 @@ func seedLegacySidecar(t *testing.T, dir, key, payload string) string {
 // An interrupted setAttrs leaves a partial sidecar that fails every read of the
 // key, and nothing rewrites one now, so a store has to clear it.
 //
-// One key per storage path the proxy builds: ArtifactPath across ecosystems,
+// One key per storage path the proxy builds: legacy artifact keys across ecosystems,
 // metadata blobs, and the Gradle build cache. Scoped npm names, Go's "!" case
 // escaping and the ":" in OCI digests and Debian epochs are the characters
 // most likely to part fileblob's mapping from a plain path join.

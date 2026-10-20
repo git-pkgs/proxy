@@ -277,7 +277,7 @@ func TestContainerHandler_TagsListRewritesRelativePaginationLinkForNamedRegistry
 
 	proxy, _, _, _ := setupTestProxy(t)
 	proxy.HTTPClient = upstream.Client()
-	h := NewContainerHandler(proxy, "http://proxy.example.test", map[string]string{"test": upstream.URL})
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example.test", "", map[string]string{"test": upstream.URL})
 	routes := http.StripPrefix("/v2", h.Routes())
 
 	first := httptest.NewRecorder()
@@ -326,7 +326,7 @@ func TestContainerHandler_NamedOCIRegistryServesHelmArtifacts(t *testing.T) {
 	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
 	proxy.Fetcher = fetcher
 	t.Cleanup(func() { _ = fetcher.Close() })
-	h := NewContainerHandler(proxy, "http://proxy.example", map[string]string{"ghcr": upstream.URL})
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example", "", map[string]string{"ghcr": upstream.URL})
 
 	manifestResponse := httptest.NewRecorder()
 	h.Routes().ServeHTTP(manifestResponse,
@@ -1317,7 +1317,7 @@ func TestContainerHandler_ManifestByTag_StaleHeadChecksUpstream(t *testing.T) {
 }
 
 func TestContainerHandler_Routes_VersionCheck(t *testing.T) {
-	h := NewContainerHandler(nil, "http://localhost:8080")
+	h := NewContainerHandlerWithRegistry(nil, "http://localhost:8080", "")
 
 	handler := h.Routes()
 	if handler == nil {

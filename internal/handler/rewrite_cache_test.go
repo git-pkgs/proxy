@@ -261,3 +261,13 @@ func TestMetadataHandlers_ServeCachedRewrite(t *testing.T) {
 		}
 	}
 }
+
+// len reports how many rewrites are cached.
+func (c *rewriteCache) len() int {
+	if c == nil {
+		return 0
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return len(c.entries)
+}

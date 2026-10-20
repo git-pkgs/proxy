@@ -186,9 +186,21 @@ type Config struct {
 	// response headers within 60 seconds.
 	HTTPTimeout string `json:"http_timeout" yaml:"http_timeout"`
 
+	// WriteTimeout bounds response writes, including time spent downloading and
+	// scanning before the response starts. Default: "5m"; "0" disables it.
+	WriteTimeout string `json:"write_timeout" yaml:"write_timeout"`
+
+	// ArtifactTimeout bounds each upstream artifact download while serving
+	// requests, excluding scanning. Default: "5m"; "0" disables it.
+	// The mirror command keeps its unlimited artifact download timeout.
+	ArtifactTimeout string `json:"artifact_timeout" yaml:"artifact_timeout"`
+
 	// MirrorAPI enables the /api/mirror endpoints for starting mirror jobs via HTTP.
 	// Disabled by default to prevent unauthenticated users from triggering downloads.
 	MirrorAPI bool `json:"mirror_api" yaml:"mirror_api"`
+
+	// Mirror configures scheduled mirroring.
+	Mirror MirrorConfig `json:"mirror" yaml:"mirror"`
 
 	// Hosted configures pushing packages to the proxy (/api/hosted).
 	Hosted HostedConfig `json:"hosted" yaml:"hosted"`
@@ -198,6 +210,9 @@ type Config struct {
 
 	// Health configures the /health endpoint behavior.
 	Health HealthConfig `json:"health" yaml:"health"`
+
+	// envWarnings collects environment values LoadFromEnv ignored.
+	envWarnings []string
 }
 
 // CooldownConfig configures version cooldown periods.
@@ -437,7 +452,7 @@ type StorageConfig struct {
 // for days; "0" or empty means never evict by age.
 type RetentionConfig struct {
 	// Default applies to every ecosystem that supports retention and has no
-	// rule of its own.
+	// rule of its own, except generic, which requires an explicit rule.
 	Default string `json:"default" yaml:"default"`
 
 	// Ecosystems overrides the default per ecosystem key (e.g. "npm", "oci").
@@ -463,6 +478,7 @@ type GradleConfig struct {
 // GradleBuildCacheConfig configures Gradle HttpBuildCache safeguards.
 type GradleBuildCacheConfig struct {
 	// ReadOnly disables PUT uploads and keeps cache reads (GET/HEAD) enabled.
+	// Default: true; set false on the instance that CI uploads to.
 	ReadOnly bool `json:"read_only" yaml:"read_only"`
 
 	// MaxUploadSize caps a single PUT body size (e.g., "100MB"). Must be > 0.
@@ -652,6 +668,11 @@ type UpstreamConfig struct {
 	// Conan is the upstream Conan registry URL.
 	// Default: https://center.conan.io
 	Conan string `json:"conan" yaml:"conan"`
+
+	// Chef is the upstream Chef Supermarket URL, served at /chef/. Point it
+	// at a private Supermarket to proxy that instead of the public one.
+	// Default: https://supermarket.chef.io
+	Chef string `json:"chef" yaml:"chef"`
 
 	// Conda is the upstream Conda channel base URL.
 	// Default: https://conda.anaconda.org
@@ -1052,6 +1073,7 @@ func Default() *Config {
 			Composer:           "https://packagist.org",
 			ComposerRepository: "https://repo.packagist.org",
 			Conan:              "https://center.conan.io",
+			Chef:               "https://supermarket.chef.io",
 			Conda:              "https://conda.anaconda.org",
 			CRAN:               "https://cloud.r-project.org",
 			Julia:              "https://pkg.julialang.org",
@@ -1064,7 +1086,7 @@ func Default() *Config {
 		},
 		Gradle: GradleConfig{
 			BuildCache: GradleBuildCacheConfig{
-				ReadOnly:      false,
+				ReadOnly:      true,
 				MaxUploadSize: defaultGradleMaxUploadSizeStr,
 				MaxAge:        "168h",
 				MaxSize:       "",
@@ -1118,6 +1140,28 @@ func setEnvBool(dst *bool, key string) {
 	if v := os.Getenv(key); v != "" {
 		*dst = envBool(v)
 	}
+}
+
+// setGradleReadOnlyFromEnv parses strictly: an unrecognised value keeps
+// uploads off instead of opening them, and is reported via EnvWarnings.
+func (c *Config) setGradleReadOnlyFromEnv() {
+	const key = "PROXY_GRADLE_BUILD_CACHE_READ_ONLY"
+	v := os.Getenv(key)
+	if v == "" {
+		return
+	}
+	readOnly, err := strconv.ParseBool(strings.TrimSpace(v))
+	if err != nil {
+		c.Gradle.BuildCache.ReadOnly = true
+		c.envWarnings = append(c.envWarnings, fmt.Sprintf("ignoring %s=%q: not a boolean, keeping the Gradle build cache read-only", key, v))
+		return
+	}
+	c.Gradle.BuildCache.ReadOnly = readOnly
+}
+
+// EnvWarnings returns the environment values LoadFromEnv ignored.
+func (c *Config) EnvWarnings() []string {
+	return c.envWarnings
 }
 
 func setEnvStringSlice(dst *[]string, key string) {
@@ -1195,6 +1239,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Upstream.Composer, "PROXY_UPSTREAM_COMPOSER")
 	setEnvString(&c.Upstream.ComposerRepository, "PROXY_UPSTREAM_COMPOSER_REPOSITORY")
 	setEnvString(&c.Upstream.Conan, "PROXY_UPSTREAM_CONAN")
+	setEnvString(&c.Upstream.Chef, "PROXY_UPSTREAM_CHEF")
 	setEnvString(&c.Upstream.Conda, "PROXY_UPSTREAM_CONDA")
 	setEnvString(&c.Upstream.CRAN, "PROXY_UPSTREAM_CRAN")
 	setEnvString(&c.Upstream.Julia, "PROXY_UPSTREAM_JULIA")
@@ -1222,7 +1267,9 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.ArtifactMaxSize, "PROXY_ARTIFACT_MAX_SIZE")
 	setEnvString(&c.MetadataRewriteCacheSize, "PROXY_METADATA_REWRITE_CACHE_SIZE")
 	setEnvString(&c.HTTPTimeout, "PROXY_HTTP_TIMEOUT")
-	setEnvBool(&c.Gradle.BuildCache.ReadOnly, "PROXY_GRADLE_BUILD_CACHE_READ_ONLY")
+	setEnvString(&c.WriteTimeout, "PROXY_WRITE_TIMEOUT")
+	setEnvString(&c.ArtifactTimeout, "PROXY_ARTIFACT_TIMEOUT")
+	c.setGradleReadOnlyFromEnv()
 	setEnvString(&c.Gradle.BuildCache.MaxUploadSize, "PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE")
 	setEnvString(&c.Gradle.BuildCache.MaxAge, "PROXY_GRADLE_BUILD_CACHE_MAX_AGE")
 	setEnvString(&c.Gradle.BuildCache.MaxSize, "PROXY_GRADLE_BUILD_CACHE_MAX_SIZE")
@@ -1321,7 +1368,7 @@ func (c *Config) Validate() error {
 		return err
 	}
 
-	if err := validateHTTPTimeout(c.HTTPTimeout); err != nil {
+	if err := c.validateRequestTimeouts(); err != nil {
 		return err
 	}
 
@@ -1343,6 +1390,8 @@ func (c *Config) validateCacheArtifacts() error {
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with storage.direct_serve: no artifacts are stored to redirect to")
 	case c.MirrorAPI:
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror_api: mirrored artifacts would never be served")
+	case len(c.Mirror.Schedules) > 0:
+		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror.schedules: mirrored artifacts would never be served")
 	case c.Hosted.Enabled:
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with hosted.enabled: pushed packages would never be served")
 	}
@@ -1375,6 +1424,10 @@ func (c *Config) validateComponents() error {
 	}
 
 	if err := c.Hosted.Validate(); err != nil {
+		return err
+	}
+
+	if err := c.Mirror.Validate(); err != nil {
 		return err
 	}
 
@@ -1439,6 +1492,8 @@ func (g *GradleBuildCacheConfig) Validate() error {
 const (
 	defaultMetadataTTL                   = 5 * time.Minute  //nolint:mnd // sensible default
 	defaultDirectServeTTL                = 15 * time.Minute //nolint:mnd // sensible default
+	defaultWriteTimeout                  = 5 * time.Minute
+	defaultArtifactTimeout               = 5 * time.Minute
 	defaultHTTPTimeout                   = 30 * time.Second //nolint:mnd // sensible default
 	defaultHitFlushInterval              = time.Second
 	defaultMetadataMaxSize               = 100 << 20
@@ -1467,16 +1522,30 @@ func (c *Config) ParseMaxSize() int64 {
 	return size
 }
 
-func validateHTTPTimeout(s string) error {
+func (c *Config) validateRequestTimeouts() error {
+	for _, timeout := range []struct{ field, value string }{
+		{"http_timeout", c.HTTPTimeout},
+		{"write_timeout", c.WriteTimeout},
+		{"artifact_timeout", c.ArtifactTimeout},
+	} {
+		if err := validateRequestTimeout(timeout.field, timeout.value); err != nil {
+			return err
+		}
+	}
+
+	return nil
+}
+
+func validateRequestTimeout(field, s string) error {
 	if s == "" || s == "0" {
 		return nil
 	}
 	d, err := time.ParseDuration(s)
 	if err != nil {
-		return fmt.Errorf("invalid http_timeout %q: %w", s, err)
+		return fmt.Errorf("invalid %s %q: %w", field, s, err)
 	}
 	if d < 0 {
-		return fmt.Errorf("invalid http_timeout %q: must be non-negative", s)
+		return fmt.Errorf("invalid %s %q: must be non-negative", field, s)
 	}
 	return nil
 }
@@ -1575,15 +1644,28 @@ func (c *Config) ParseArtifactMaxSize() int64 {
 // ParseHTTPTimeout returns the upstream HTTP client timeout.
 // Returns 30s if unset, 0 (no timeout) if explicitly set to "0".
 func (c *Config) ParseHTTPTimeout() time.Duration {
-	if c.HTTPTimeout == "" {
-		return defaultHTTPTimeout
+	return parseRequestTimeout(c.HTTPTimeout, defaultHTTPTimeout)
+}
+
+// ParseWriteTimeout returns the response write timeout, defaulting to 5m.
+// An explicit zero disables the timeout.
+func (c *Config) ParseWriteTimeout() time.Duration {
+	return parseRequestTimeout(c.WriteTimeout, defaultWriteTimeout)
+}
+
+// ParseArtifactTimeout returns the upstream artifact download timeout for
+// serving requests, defaulting to 5m. An explicit zero disables the timeout.
+func (c *Config) ParseArtifactTimeout() time.Duration {
+	return parseRequestTimeout(c.ArtifactTimeout, defaultArtifactTimeout)
+}
+
+func parseRequestTimeout(value string, fallback time.Duration) time.Duration {
+	if value == "" {
+		return fallback
 	}
-	if c.HTTPTimeout == "0" {
-		return 0
-	}
-	d, err := time.ParseDuration(c.HTTPTimeout)
+	d, err := time.ParseDuration(value)
 	if err != nil || d < 0 {
-		return defaultHTTPTimeout
+		return fallback
 	}
 	return d
 }

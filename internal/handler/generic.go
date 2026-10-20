@@ -10,6 +10,7 @@ import (
 	"strings"
 
 	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/retention"
 )
 
 const (
@@ -27,6 +28,10 @@ const (
 // asset to one release, so these downloads are cached in the artifact cache
 // and served without revalidation once fetched.
 var githubReleaseAssetPattern = regexp.MustCompile(`^([^/]+)/([^/]+)/releases/download/([^/]+)/([^/]+)$`)
+
+func init() {
+	retention.Default.Register(retention.Spec{Key: genericEcosystem, CanonicalPackage: retention.DefaultCanonical(genericEcosystem)})
+}
 
 // builtinGenericArtifacts maps well-known download hosts to patterns for
 // their version-pinned paths. They apply to any generic upstream configured

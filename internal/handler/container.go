@@ -121,14 +121,6 @@ type containerRegistry struct {
 	registryURL      string
 }
 
-// NewContainerHandler creates a new container registry protocol handler.
-// Named registries are selected with the repository prefix
-// upstream/{name}/, leaving unprefixed requests compatible with the Docker Hub
-// mirror behavior.
-func NewContainerHandler(proxy *Proxy, proxyURL string, namedRegistries ...map[string]string) *ContainerHandler {
-	return newContainerHandler(proxy, proxyURL, dockerHubRegistry, namedRegistries...)
-}
-
 // NewContainerHandlerWithRegistry creates a container handler with a custom
 // default registry and optional named registries.
 func NewContainerHandlerWithRegistry(

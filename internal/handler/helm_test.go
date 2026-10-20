@@ -14,7 +14,6 @@ import (
 
 	"github.com/git-pkgs/cooldown"
 	upstreamhttp "github.com/git-pkgs/proxy/internal/httpclient"
-	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/registries/fetch"
 	"gopkg.in/yaml.v3"
 )
@@ -169,7 +168,7 @@ func TestHelmHandler_RejectsChartDigestMismatch(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listing queued deletes: %v", err)
 	}
-	chartDir := storage.ArtifactPath(helmMetadataEcosystem, "", "test", digest, "")
+	chartDir := helmMetadataEcosystem + "/test/" + digest + "/"
 	stored := 0
 	for path := range store.files {
 		if !strings.HasPrefix(path, chartDir) {

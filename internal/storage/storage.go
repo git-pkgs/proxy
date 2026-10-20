@@ -77,18 +77,6 @@ type Storage interface {
 	Close() error
 }
 
-// ArtifactPath builds the storage path artifacts were cached under before each
-// fetch got its own; records from then still point at such paths. Only tests
-// call it, to build such records.
-// Format: {ecosystem}/{namespace}/{name}/{version}/{filename}
-// For packages without namespace: {ecosystem}/{name}/{version}/{filename}
-func ArtifactPath(ecosystem, namespace, name, version, filename string) string {
-	if namespace != "" {
-		return ecosystem + "/" + namespace + "/" + name + "/" + version + "/" + filename
-	}
-	return ecosystem + "/" + name + "/" + version + "/" + filename
-}
-
 // FetchPath builds the storage path for one fetch of an artifact:
 // {ecosystem}/{name}/{version}/{fetchID}/{filename}. Each fetch writes its own
 // object, so no fetch overwrites or deletes another's.

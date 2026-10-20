@@ -254,16 +254,6 @@ func (c *rewriteCache) add(e *rewriteEntry) {
 	}
 }
 
-// len reports how many rewrites are cached.
-func (c *rewriteCache) len() int {
-	if c == nil {
-		return 0
-	}
-	c.mu.Lock()
-	defer c.mu.Unlock()
-	return len(c.entries)
-}
-
 // cachedRewrite rewrites a metadata document through the proxy's rewrite
 // cache and returns it with its validators. digest identifies in when the
 // metadata cache stored it, and is empty otherwise. Cooldown filtering depends

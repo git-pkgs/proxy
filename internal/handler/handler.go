@@ -20,12 +20,12 @@ import (
 	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/denylist"
-	"github.com/git-pkgs/proxy/internal/httpclient"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/proxy/internal/scanner"
 	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
+	registryclient "github.com/git-pkgs/registries/client"
 	"github.com/git-pkgs/registries/fetch"
 	"github.com/opencontainers/go-digest"
 )
@@ -178,7 +178,7 @@ type Proxy struct {
 
 	// RateLimits is the gate under the upstream clients. Artifact fetches
 	// check it before calling Fetcher, so held hosts never reach its breaker.
-	RateLimits *httpclient.RateLimitGate
+	RateLimits *registryclient.RateLimitGate
 
 	// HostedNPMScopes and HostedComposerVendors name namespaces served from
 	// pushed packages alone, without asking the upstream.
@@ -327,6 +327,34 @@ func (p *Proxy) GetCachedArtifact(ctx context.Context, ecosystem, name, version,
 		return nil, err
 	}
 	return p.checkCache(ctx, pkgPURL, versionPURL, filename)
+}
+
+// HasCachedArtifact reports whether an artifact is cached and its object is
+// stored, without opening it or counting a cache hit, so a mirror run does
+// not look like client traffic.
+func (p *Proxy) HasCachedArtifact(ctx context.Context, ecosystem, name, version, filename string) (bool, error) {
+	pkgPURL, versionPURL, err := packagePURLStrings(ecosystem, name, version)
+	if err != nil {
+		return false, err
+	}
+	if p.Denylist.Denied(versionPURL) {
+		return false, fmt.Errorf("%w: %s", ErrVersionDenied, versionPURL)
+	}
+	if p.StreamArtifacts {
+		return false, nil
+	}
+	artifact, err := p.DB.GetCachedArtifact(pkgPURL, versionPURL, filename)
+	if err != nil {
+		return false, fmt.Errorf("checking artifact cache: %w", err)
+	}
+	if artifact == nil {
+		return false, nil
+	}
+	// An unusable record is a miss; the fetch that follows clears it.
+	if _, err := newIntegrityChecks(artifact.Artifact.Digest.Encoded(), artifact.Integrity.String); err != nil {
+		return false, nil
+	}
+	return p.Storage.Exists(ctx, artifact.StoragePath)
 }
 
 // ClearCachedArtifact clears an artifact cache record after an external
@@ -1355,7 +1383,10 @@ func (p *Proxy) fetchMetadataFromUpstream(ctx context.Context, ecosystem, cacheK
 	if err == nil {
 		var digest string
 		if p.CacheMetadata {
-			digest = p.cacheMetadataBlob(ctx, ecosystem, cacheKey, metadataStoragePath(ecosystem, cacheKey), meta)
+			digest = p.refreshMetadataBlob(ecosystem, cacheKey, meta)
+			if digest == "" {
+				digest = p.cacheMetadataBlob(ctx, ecosystem, cacheKey, metadataStoragePath(ecosystem, cacheKey), meta)
+			}
 		}
 		return metadataResult{body: meta.body, contentType: meta.contentType, contentEncoding: meta.contentEncoding, digest: digest}
 	}
@@ -1514,6 +1545,9 @@ type upstreamMetadata struct {
 	contentEncoding string
 	etag            string
 	lastModified    time.Time
+	// notModified is the cache row upstream answered 304 for, whose stored
+	// bytes body holds. It is nil for a document upstream sent.
+	notModified *database.MetadataCacheEntry
 }
 
 // fetchUpstreamMetadata fetches metadata from upstream, using ETag for conditional revalidation.
@@ -1555,7 +1589,7 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		if readErr != nil {
 			return nil, errStale304
 		}
-		meta := &upstreamMetadata{body: data, contentType: contentTypeJSON, etag: entry.ETag.String}
+		meta := &upstreamMetadata{body: data, contentType: contentTypeJSON, etag: entry.ETag.String, notModified: entry}
 		if entry.ContentType.Valid {
 			meta.contentType = entry.ContentType.String
 		}
@@ -1594,6 +1628,29 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		meta.lastModified, _ = http.ParseTime(lm)
 	}
 	return meta, nil
+}
+
+// refreshMetadataBlob records that upstream answered 304 for the cached
+// document meta was read from, by moving the row's fetched_at on. The bytes in
+// storage are unchanged, so they are neither written nor hashed again. It
+// returns the row's digest, or "" when the caller has to store meta as for a
+// new document: when upstream sent one, the row records no digest, or a
+// concurrent fetch has replaced the document since it was read.
+func (p *Proxy) refreshMetadataBlob(ecosystem, cacheKey string, meta *upstreamMetadata) string {
+	entry := meta.notModified
+	if entry == nil || p.DB == nil || !entry.ContentDigest.Valid {
+		return ""
+	}
+	refreshed, err := p.DB.RefreshMetadataCache(ecosystem, cacheKey, entry.ContentDigest.String, time.Now())
+	if err != nil {
+		p.Logger.Warn("failed to refresh cached metadata", "ecosystem", ecosystem, "key", cacheKey, "error", err)
+		return ""
+	}
+	if !refreshed {
+		return ""
+	}
+	p.recordMetadataRead(entry)
+	return entry.ContentDigest.String
 }
 
 // cacheMetadataBlob stores metadata bytes in storage and updates the

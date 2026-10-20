@@ -82,7 +82,7 @@
 //	PROXY_LOG_FORMAT       - Log format
 //	PROXY_ACCESS_LOG_PATH  - JSONL access log path
 //	PROXY_UPSTREAM_*       - Upstream URLs and network access controls
-//	PROXY_GRADLE_BUILD_CACHE_READ_ONLY       - Disable Gradle PUT uploads
+//	PROXY_GRADLE_BUILD_CACHE_READ_ONLY       - Set false to allow Gradle PUT uploads (default true)
 //	PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE - Max Gradle PUT request body size
 //	PROXY_GRADLE_BUILD_CACHE_MAX_AGE         - Gradle cache max age eviction
 //	PROXY_GRADLE_BUILD_CACHE_MAX_SIZE        - Gradle cache max total size
@@ -250,6 +250,7 @@ func runServe() {
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_COMPOSER             Packagist API upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_COMPOSER_REPOSITORY  Packagist repository upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_CONAN                Conan registry upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_CHEF                 Chef Supermarket upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_CONDA                Conda channel upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_CRAN                 CRAN mirror upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_JULIA                Julia package server upstream URL\n")
@@ -257,7 +258,7 @@ func runServe() {
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_OCI_DEFAULT          Default OCI registry upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_DEBIAN               Debian repository upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_RPM                  RPM repository upstream URL\n")
-		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_READ_ONLY       Disable Gradle PUT uploads\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_READ_ONLY       Set false to allow Gradle PUT uploads (default true)\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE Max Gradle PUT request body size\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_AGE         Gradle cache max age eviction\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_GRADLE_BUILD_CACHE_MAX_SIZE        Gradle cache max total size\n")
@@ -558,9 +559,7 @@ func runMirror() {
 	m := mirror.New(proxy, db, store, logger, *concurrency)
 	m.Images = images
 	if cfg.Scanning.Enabled {
-		// Scanners fetch staged layers from the running server, which this
-		// command does not start.
-		m.Images = mirror.UnavailableImages{Reason: "container images cannot be mirrored by this command while scanning is enabled; use the mirror API of the running server"}
+		refuseUnscannedMirroring(m)
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -599,6 +598,39 @@ func runMirror() {
 			fmt.Fprintf(os.Stderr, "  %s/%s@%s: %s\n", e.Ecosystem, e.Name, e.Version, e.Error)
 		}
 	}
+
+	// A partial mirror has to be visible in the exit status, or a CI step
+	// that prewarms the cache passes even when every download failed.
+	if code := mirrorExitCode(progress); code != 0 {
+		_ = db.Close()
+		os.Exit(code) //nolint:gocritic // db closed above
+	}
+}
+
+// mirrorExitCode returns the exit status for a finished mirror run: 1 when any
+// package version failed to mirror, 0 otherwise.
+func mirrorExitCode(progress *mirror.Progress) int {
+	if progress != nil && progress.Failed > 0 {
+		return 1
+	}
+	return 0
+}
+
+// Reasons the mirror command gives for refusing items while scanning is
+// enabled.
+const (
+	mirrorScanningImagesReason   = "container images cannot be mirrored by this command while scanning is enabled; use the mirror API of the running server"
+	mirrorScanningPackagesReason = "packages cannot be mirrored by this command while scanning is enabled; use the mirror API of the running server"
+)
+
+// refuseUnscannedMirroring makes m fail every item instead of caching it.
+// Scanners fetch the staged bytes from the running server, which this command
+// does not start, so anything it cached would skip the pre-cache scan and
+// later be served from the cache unscanned. The mirror API's jobs run inside
+// the server with its scanners and are unaffected.
+func refuseUnscannedMirroring(m *mirror.Mirror) {
+	m.Images = mirror.UnavailableImages{Reason: mirrorScanningImagesReason}
+	m.RefusePackages = mirrorScanningPackagesReason
 }
 
 func printStats(db *database.DB, popular, recent int, asJSON bool) error {

@@ -14,6 +14,14 @@ base_url: "http://localhost:8080"
 # Set to "0" to disable the timeout. Default: "30s".
 # http_timeout: "30s"
 
+# Response write deadline, including download and scan time before sending data.
+# Set to "0" to disable. Default: "5m".
+# write_timeout: "5m"
+
+# Timeout for each upstream artifact download while serving requests; excludes
+# scanning. Set to "0" to disable. Default: "5m". Does not limit proxy mirror.
+# artifact_timeout: "5m"
+
 # Largest upstream artifact to fetch (e.g. "2GB"). Larger ones are refused
 # and not cached. Default: unlimited.
 # artifact_max_size: ""
@@ -91,19 +99,24 @@ storage:
   # The default only applies to ecosystems that support retention; naming an
   # ecosystem or package that does not is a configuration error. See
   # docs/configuration.md for the supported ecosystems.
+  # Generic downloads require an explicit ecosystem or package rule;
+  # they never inherit default, since an upstream release may disappear.
   retention:
     default: ""
     # ecosystems:
     #   npm: "30d"
+    #   generic: "30d"
     # packages:
     #   "pkg:npm/lodash": "0"
+    #   "pkg:generic/owner%2Frepo": "90d"
     # How often to look for expired artifacts; at least "1m".
     sweep_interval: "10m"
 
   # Store fetched artifacts. Set to false to stream every download from
   # upstream without storing it; metadata filtering, cooldown and the
   # denylist still apply. Useful when another cache sits in front of the
-  # proxy. false is incompatible with direct_serve, scanning and mirror_api.
+  # proxy. false is incompatible with direct_serve, scanning, mirror_api and
+  # mirror.schedules.
   cache_artifacts: true
 
   # Redirect cached artifact downloads to presigned storage URLs (HTTP 302)
@@ -223,6 +236,10 @@ upstream:
 
   # Conan registry URL
   conan: "https://center.conan.io"
+
+  # Chef Supermarket URL (used by /chef/). Point it at a private
+  # Supermarket to proxy that instead.
+  chef: "https://supermarket.chef.io"
 
   # Conda channel base URL
   conda: "https://conda.anaconda.org"
@@ -347,8 +364,9 @@ upstream:
 # Gradle HttpBuildCache configuration
 gradle:
   build_cache:
-    # Set to true to disable PUT uploads (read-only cache mode)
-    read_only: false
+    # PUT uploads are rejected by default; set to false on the instance
+    # your CI jobs upload to
+    read_only: true
 
     # Maximum accepted Gradle cache upload body size
     # Required and must be > 0
@@ -375,6 +393,14 @@ gradle:
 #   # about them, so nobody can mix in versions by publishing the same name.
 #   npm_scopes: ["@acme"]
 #   composer_vendors: ["acme"]
+
+# Re-mirror container image tags on a schedule, so a moved tag is picked up
+# even when nobody pulls it. An unchanged tag costs one HEAD request.
+# mirror:
+#   schedules:
+#     - images: ["pkg:docker/library/alpine@3.20", "pkg:docker/library/nginx@stable"]
+#       interval: "6h"
+#       platforms: ["linux/amd64"]
 
 # Health endpoint configuration.
 health:

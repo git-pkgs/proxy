@@ -22,6 +22,22 @@ See `config.example.yaml` in the repository root for a complete example.
 | `trust_forwarded_for` | `PROXY_TRUST_FORWARDED_FOR` | - | `false` | Attribute requests to the leftmost `X-Forwarded-For` entry instead of the TCP peer address, in the structured log, the access log and the request-source table on `/ui/analytics`. |
 | `ui_request_sources` | `PROXY_UI_REQUEST_SOURCES` | - | `false` | Show the request-source table on `/ui/analytics`, which reports caller addresses, the tool each ran and how much each pulled. |
 | `ui_failure_details` | `PROXY_UI_FAILURE_DETAILS` | - | `false` | List the latest failures behind each failure count on `/ui/analytics`: the package, its upstream URL or storage path, and the error. URLs are shown without credentials or query strings. |
+| `http_timeout` | `PROXY_HTTP_TIMEOUT` | - | `30s` | Timeout for upstream metadata and pass-through requests. |
+| `write_timeout` | `PROXY_WRITE_TIMEOUT` | - | `5m` | Response write deadline, including download and scanning time before the response starts. |
+| `artifact_timeout` | `PROXY_ARTIFACT_TIMEOUT` | - | `5m` | Timeout for each upstream artifact download while serving requests; excludes subsequent scanning. Does not limit `proxy mirror`. |
+
+These timeouts accept Go durations such as `30s`, `5m`, or `1h`. An omitted value uses the default; `"0"` disables that timeout. Invalid or negative values are rejected at startup. Environment variables override file values.
+
+For long scans, increase `write_timeout` to cover the download, scan, and response transfer. `scanning.timeout` controls the scan separately; changing it alone does not extend the response deadline. `artifact_timeout` is independent of both. For example:
+
+```yaml
+write_timeout: "18m"
+artifact_timeout: "10m"
+scanning:
+  timeout: "16m"
+```
+
+These are independent limits, not reserved time slices: a download approaching 10 minutes followed by a 16-minute scan would still exceed an 18-minute response deadline. Any reverse proxy in front of the server also needs sufficient timeout allowance. The upstream transport's existing response-header timeout remains unchanged.
 
 ## Storage
 
@@ -63,7 +79,7 @@ storage:
 
 Every download is a fresh upstream fetch, and concurrent requests for the same artifact are not combined. Artifacts with a digest known up front (OCI blobs, Swift archives, Helm charts) are verified while streaming: the response is sent chunked, and on a mismatch the connection is aborted before the response completes so the client never receives a tampered artifact as a good one. The same happens when the upstream connection fails mid-download.
 
-`cache_artifacts: false` cannot be combined with `scanning.enabled`, `storage.direct_serve` or `mirror_api`, which all need stored artifacts, and the `mirror` command refuses to run with it.
+`cache_artifacts: false` cannot be combined with `scanning.enabled`, `storage.direct_serve`, `mirror_api` or `mirror.schedules`, which all need stored artifacts, and the `mirror` command refuses to run with it.
 
 ### Retention
 
@@ -85,7 +101,19 @@ storage:
 
 Each cached file ages on its own, counted from the last time the proxy served it, or from when it was fetched if it has not been served since. A newer release of the same package does not shorten the life of older versions. Durations take a `d` suffix for days, and `"0"` or an empty value means never evict by age. With no retention configured, artifacts stay until `max_size` evicts them. `sweep_interval` must be at least `1m`.
 
-A package rule wins over an ecosystem rule, which wins over `default`. Package rules are keyed by package PURL without a version, written in one of the forms the table below lists for the ecosystem. The ecosystems and package rules can only name ecosystems that support retention in the running version; anything else, including a typo, stops the proxy at startup with an error naming the setting. `default` applies only to supported ecosystems. Support is added one ecosystem at a time, so a later release can make an existing `default` cover more ecosystems. On startup the proxy logs which ecosystems retention covers (`covered`) and which ones `default` does not reach yet (`default_not_applied`).
+A package rule wins over an ecosystem rule, which wins over `default`. Package rules are keyed by package PURL without a version, written in one of the forms the table below lists for the ecosystem. The ecosystems and package rules can only name ecosystems that support retention in the running version; anything else, including a typo, stops the proxy at startup with an error naming the setting. `default` applies only to supported ecosystems, except `generic`, which requires an explicit rule. Support is added one ecosystem at a time, so a later release can make an existing `default` cover more ecosystems. On startup the proxy logs which ecosystems retention supports (`covered`) and which ones `default` does not reach (`default_not_applied`), including `generic`.
+
+Generic retention is opt-in because release assets may disappear upstream and cannot then be downloaded again after eviction. An existing `default` never starts evicting generic downloads. Set `ecosystems.generic: "30d"` to cover all generic artifacts, or configure only selected GitHub repositories:
+
+```yaml
+storage:
+  retention:
+    default: "30d"  # Other supported ecosystems; never generic.
+    packages:
+      "pkg:generic/jqlang%2Fjq": "30d"
+```
+
+The package rule covers every release and asset in that repository, but each cached file ages separately. Other generic repositories remain exempt from age-based eviction. A package rule of `"0"` also exempts that repository when `ecosystems.generic` is enabled. The independent `storage.max_size` limit still applies.
 
 | Ecosystem key | Retention supported | Package rule form |
 |---------------|---------------------|-------------------|
@@ -97,6 +125,7 @@ A package rule wins over an ecosystem rule, which wins over `default`. Package r
 | `cran` | yes | `pkg:cran/ggplot2`, the package name as published, case included (`pkg:cran/Rcpp`). A rule covers source and binary builds alike. |
 | `deb` | yes | `pkg:deb/curl`; case doesn't matter. A vendor namespace such as `pkg:deb/debian/curl` is accepted and dropped, so a rule covers the package from every configured archive. Debian and Ubuntu archives only keep the current version per suite, so an evicted older one can't be fetched again. |
 | `gem` | yes | `pkg:gem/rails`, the gem name as published, case included. |
+| `generic` | yes, explicit rules only | `pkg:generic/owner%2Frepo` for a GitHub Release repository such as `jqlang/jq`. The ecosystem rule covers all cached version-pinned generic downloads, including GitHub Release assets and configured `generic_artifacts`. The global `default` never applies; metadata/API responses are not artifact retention candidates. |
 | `golang` | yes | `pkg:golang/github.com/stretchr/testify`, the module path as in `go.mod`; case doesn't matter. A major version like `/v2` (or `.v3` on gopkg.in) is a module of its own and needs its own rule. The `!`-escaped form from proxy URLs and the module cache (`github.com/!azure/...`) is refused. |
 | `helm` | yes | No package rules: charts are cached per repository and digest, not under the chart name. The `helm` rule and `default` cover charts from HTTP repositories; charts pulled over OCI fall under `oci`. |
 | `hex` | yes | `pkg:hex/phoenix`, the package name as published. |
@@ -250,6 +279,7 @@ Each upstream used by a built-in package route can be set in YAML or JSON under 
 | `upstream.composer` | `PROXY_UPSTREAM_COMPOSER` | `https://packagist.org` |
 | `upstream.composer_repository` | `PROXY_UPSTREAM_COMPOSER_REPOSITORY` | `https://repo.packagist.org` |
 | `upstream.conan` | `PROXY_UPSTREAM_CONAN` | `https://center.conan.io` |
+| `upstream.chef` | `PROXY_UPSTREAM_CHEF` | `https://supermarket.chef.io` |
 | `upstream.conda` | `PROXY_UPSTREAM_CONDA` | `https://conda.anaconda.org` |
 | `upstream.cran` | `PROXY_UPSTREAM_CRAN` | `https://cloud.r-project.org` |
 | `upstream.julia` | `PROXY_UPSTREAM_JULIA` | `https://pkg.julialang.org` |
@@ -283,6 +313,17 @@ upstream:
 ```
 
 `upstream.hex_api` is used for cooldown timestamps and must expose Hex's `/api/packages/{name}` JSON endpoint.
+
+`upstream.chef` is the Supermarket served at `/chef/`, for Berkshelf (`source "https://proxy.example.com/chef"`) and Policyfiles (`default_source :supermarket, "https://proxy.example.com/chef"`). The upstream has to serve the Supermarket API: `/universe`, `/api/v1/cookbooks/{name}`, its versions and their downloads. A private Supermarket that needs credentials takes them from `upstream.auth`, scoped to its URL. A download redirect to another host, such as the storage bucket behind Supermarket, does not receive them:
+
+```yaml
+upstream:
+  chef: "https://supermarket.example.com"
+  auth:
+    "https://supermarket.example.com":
+      type: bearer
+      token: "${SUPERMARKET_TOKEN}"
+```
 
 ### Private package routes
 
@@ -674,7 +715,7 @@ The `/gradle` endpoint supports optional safeguards for upload control and cache
 ```yaml
 gradle:
   build_cache:
-    read_only: false
+    read_only: true
     max_upload_size: "100MB"
     max_age: "168h"
     max_size: "20GB"
@@ -683,11 +724,13 @@ gradle:
 
 | Config | Environment | Description |
 |--------|-------------|-------------|
-| `gradle.build_cache.read_only` | `PROXY_GRADLE_BUILD_CACHE_READ_ONLY` | Disable PUT uploads and keep GET/HEAD read-only |
+| `gradle.build_cache.read_only` | `PROXY_GRADLE_BUILD_CACHE_READ_ONLY` | Reject PUT uploads and serve GET/HEAD only (default `true`; the variable takes `true`/`false` or `1`/`0`, any other value keeps uploads off and logs a warning) |
 | `gradle.build_cache.max_upload_size` | `PROXY_GRADLE_BUILD_CACHE_MAX_UPLOAD_SIZE` | Maximum accepted PUT body size (must be > 0) |
 | `gradle.build_cache.max_age` | `PROXY_GRADLE_BUILD_CACHE_MAX_AGE` | Delete entries older than this duration (default `168h`, also accepts days such as `7d`; set `0` to disable) |
 | `gradle.build_cache.max_size` | `PROXY_GRADLE_BUILD_CACHE_MAX_SIZE` | Total size cap for `_gradle/http-build-cache`, deleting oldest first (`0` disables) |
 | `gradle.build_cache.sweep_interval` | `PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL` | Frequency for background eviction sweeps |
+
+Uploads are off by default, so a client that can reach the proxy cannot overwrite cache entries that end up in other people's builds. Set `read_only: false` (or `PROXY_GRADLE_BUILD_CACHE_READ_ONLY=false`) on the instance your CI jobs upload to, and let only CI push (`isPush = System.getenv("CI") != null`). Before this default changed, uploads were accepted without configuration; setups that upload need the setting now.
 
 `max_age` and `max_size` are independent and can be combined. When both are set, age-based eviction runs first, then size-based eviction trims remaining entries oldest-first.
 
@@ -860,6 +903,8 @@ Scanners configured for the same ecosystem all run concurrently, never sequentia
 
 A blocked download surfaces to the client as `403 Forbidden` with the scanner's reason, across every ecosystem handler.
 
+Because scanners pull the staged bytes from the running server, the `proxy mirror` command cannot scan what it fetches. While scanning is enabled it refuses every package and container image instead of caching them unscanned. Mirror through the `/api/mirror` endpoints of the running server, whose jobs are scanned like any other download.
+
 ### Scanner HTTP contract
 
 Any external service that implements this contract can act as a scanner — a trivy wrapper, a clamav-rest bridge, a Wiz connector, or an in-house service. The proxy POSTs a notify request to `scanning.scanners[].url` and waits for a JSON verdict.
@@ -926,6 +971,8 @@ cache_metadata: true
 
 Or via environment variable: `PROXY_CACHE_METADATA=true`.
 
+Composer archive downloads look up their upstream URL in the same cached metadata, so a cached archive is served without asking Packagist again and stays installable while it is down. Only a version or file the cached metadata does not list yet is looked up upstream.
+
 The `proxy mirror` command always enables metadata caching regardless of this setting.
 
 ### Metadata TTL
@@ -944,7 +991,7 @@ When upstream is unreachable and the cached entry is past its TTL, the proxy ser
 
 ### Metadata size limit
 
-Upstream metadata responses are buffered in memory before being rewritten and served. `metadata_max_size` caps that buffer to protect against OOM from a misbehaving upstream. Some npm packages with thousands of versions (for example `renovate`) exceed the 100 MB default, so raise this if you see `metadata response exceeds size limit` in the logs.
+Upstream metadata responses are buffered in memory before being rewritten and served. `metadata_max_size` caps that buffer to protect against OOM from a misbehaving upstream. Some npm packages with thousands of versions (for example `renovate`) exceed the 100 MB default, so raise this if you see `metadata response exceeds size limit` in the logs. Conda `repodata.json` with cooldown enabled is filtered as it streams and isn't held in memory, so this limit doesn't apply to it.
 
 ```yaml
 metadata_max_size: "100MB"   # default
@@ -1140,6 +1187,33 @@ proxy mirror 'pkg:oci/debian@sha256:...?repository_url=docker.io/library/debian&
 - Without `--platform` every platform of an index is mirrored, including Windows images, which can be large. Attestation manifests of the selected platforms are mirrored too, because Docker fetches them on every pull.
 - Non-distributable (foreign) layers are skipped.
 - While `scanning.enabled` is set, the command refuses images, because scanners fetch staged layers from the running server. Use the mirror API instead.
+
+### Scheduled refresh
+
+Tags such as `alpine:3.20` move. The server can re-mirror them on its own, so the cache follows the tag even when nobody pulls it or the proxy is offline later:
+
+```yaml
+mirror:
+  schedules:
+    - images: [pkg:docker/library/alpine@3.20, pkg:docker/library/nginx@stable]
+      interval: 6h
+      platforms: [linux/amd64]
+```
+
+| Setting | Env | Description |
+|---------|-----|-------------|
+| `mirror.schedules[].images` | - | `pkg:docker` or `pkg:oci` PURLs with a tag, resolved like the `mirror` command |
+| `mirror.schedules[].interval` | - | How often the images are mirrored, at least `1m` |
+| `mirror.schedules[].platforms` | - | `os/arch[/variant]` entries limiting the platforms; empty mirrors all |
+
+Each run checks the tag with a HEAD request. If the tag still points to the cached digest, nothing else is fetched. If it moved, the new manifests and blobs are fetched first and the tag is switched only when all of them are cached, so a failed run leaves the previous image pullable. Images of one schedule are mirrored one after the other.
+
+- The first run starts within ten minutes of startup, later runs every `interval` ±10 %, so restarts and several instances don't hit the registry at once. Each instance runs the schedules on its own.
+- Digest-pinned PURLs never move and are rejected. A `pkg:oci` digest with `tag=` is accepted; the tag is refreshed and a warning is logged when it no longer matches the digest.
+- The previous digest stays cached, so pulls by digest keep working, until eviction or retention removes it.
+- Docker Hub does not count HEAD requests against its pull limit, but every changed manifest is a pull. Set `platforms` and `upstream.auth` for `registry-1.docker.io` to stay under the anonymous limit.
+- Mirrored layers are scanned when `scanning.enabled` is set. A blocked layer fails the run and keeps the previous image.
+- Schedules are read at startup; changes need a restart. They do not need `mirror_api`.
 
 ## Docker
 

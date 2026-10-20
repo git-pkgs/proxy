@@ -56,9 +56,40 @@ func TestFetchOrCacheMetadata_CacheHitMarksAccess(t *testing.T) {
 	assertMetadataAccessedAfter(t, db, "test", "pkg", old)
 }
 
+func TestProxyCached_NotModifiedMarksAccess(t *testing.T) {
+	const body = `{"v":1}`
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1"`)
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(upstream.Close)
+
+	proxy, db, store, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Nanosecond
+	proxy.HTTPClient = upstream.Client()
+
+	for range 2 {
+		response := httptest.NewRecorder()
+		proxy.ProxyCached(response, httptest.NewRequest(http.MethodGet, "/pkg", nil), upstream.URL+"/pkg", "test", "pkg")
+		if response.Code != http.StatusOK || response.Body.String() != body {
+			t.Fatalf("response = %d %q, want 200 %q", response.Code, response.Body.String(), body)
+		}
+		if store.stores != 1 {
+			t.Fatalf("document stored %d times, want once", store.stores)
+		}
+		assertMetadataAccessedAfter(t, db, "test", "pkg", time.Now().Add(-time.Hour))
+		ageMetadataAccess(t, db, "test", "pkg")
+	}
+}
+
 func TestLoadContainerMetadata_MarksAccess(t *testing.T) {
 	proxy, db, _, _ := setupTestProxy(t)
-	h := NewContainerHandler(proxy, "http://proxy.example.test")
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example.test", "")
 	ctx := context.Background()
 
 	if _, err := h.storeContainerMetadata(ctx, "oci-test", "key", []byte("{}"), "", "", "application/json", "", time.Time{}, time.Now()); err != nil {
@@ -73,7 +104,7 @@ func TestLoadContainerMetadata_MarksAccess(t *testing.T) {
 
 func TestLoadContainerManifest_MarksAccess(t *testing.T) {
 	proxy, db, _, _ := setupTestProxy(t)
-	h := NewContainerHandler(proxy, "http://proxy.example.test")
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example.test", "")
 	ctx := context.Background()
 
 	manifest := &cachedContainerManifest{body: []byte("{}"), contentType: "application/json", fetchedAt: time.Now()}
@@ -89,7 +120,7 @@ func TestLoadContainerManifest_MarksAccess(t *testing.T) {
 
 func TestLoadContainerTags_MarksAccess(t *testing.T) {
 	proxy, db, _, _ := setupTestProxy(t)
-	h := NewContainerHandler(proxy, "http://proxy.example.test")
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example.test", "")
 	ctx := context.Background()
 
 	tags := &cachedContainerTags{body: []byte(`{"tags":[]}`), contentType: "application/json", fetchedAt: time.Now()}
