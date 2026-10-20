@@ -1838,3 +1838,35 @@ func TestLoadArtifactMaxSizeFromEnv(t *testing.T) {
 		t.Errorf("ArtifactMaxSize = %q, want %q", cfg.ArtifactMaxSize, "2GB")
 	}
 }
+
+func TestMavenRepositoryNames(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		wantErr bool
+	}{
+		{"grails", false},
+		{"grails-restricted", false},
+		{"company-releases", false},
+		{"org", true},
+		{"com", true},
+		{"ORG", true},
+		{"io", true},
+		{"de", true},
+		{"x", true},
+		{"net", true},
+		{"a/b", true},
+	} {
+		cfg := Default()
+		cfg.Upstream.MavenRepositories = map[string]string{tt.name: "https://repo.example/maven"}
+		err := cfg.Validate()
+		if (err != nil) != tt.wantErr {
+			t.Errorf("maven_repositories name %q: error = %v, want error %v", tt.name, err, tt.wantErr)
+		}
+	}
+
+	cfg := Default()
+	cfg.Upstream.MavenRepositories = map[string]string{"grails": "not a url"}
+	if err := cfg.Validate(); err == nil {
+		t.Error("maven_repositories with an invalid URL: want an error")
+	}
+}

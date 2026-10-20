@@ -435,7 +435,7 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 		s.cfg.BaseURL,
 		s.cfg.Upstream.Maven,
 		s.cfg.Upstream.GradlePluginPortal,
-	)
+	).WithRepositories(s.cfg.Upstream.MavenRepositories)
 	gradleHandler := handler.NewGradleBuildCacheHandler(proxy)
 	nugetHandler := handler.NewNuGetHandlerWithUpstreams(
 		proxy,

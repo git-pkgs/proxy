@@ -623,6 +623,40 @@ those names unless the shadowing is intended.
 This field has no environment variable, as with the other named upstream maps.
 `PROXY_UPSTREAM_DEBIAN` still sets `upstream.debian`.
 
+### Maven repositories
+
+```yaml
+upstream:
+
+  # The default repository, served at /maven/.
+  maven: "https://repo1.maven.org/maven2"
+
+  # Additional Maven repositories, served at /maven/{name}/.
+  maven_repositories:
+    grails: "https://repo.grails.org/grails/restricted"
+```
+
+Builds often need more than one Maven repository. Each entry in
+`upstream.maven_repositories` is served at `/maven/{name}/` with the upstream's
+layout, e.g. `/maven/grails/org/grails/grails-core/6.0.0/grails-core-6.0.0.pom`,
+and is fetched from that upstream alone: unlike the default repository, a named
+one doesn't fall back to the Gradle Plugin Portal. Files are cached per
+repository, so the same coordinates in two repositories never share a cache
+entry.
+
+`upstream.maven_repositories` is additive. `/maven/…` keeps serving
+`upstream.maven` with unchanged cache identities. A repository name is matched
+before the default repository, so it hides every group ID whose first segment
+is the same name there: a repository named `org` would take
+`/maven/org/apache/…` away from Maven Central. Names of two letters or less and
+common top-level domains such as `com`, `org`, `net` and `io` are refused at
+config load. Group IDs are free-form, so the check can't catch everything; pick
+names that can't be the start of a group ID, such as `grails` or
+`company-releases`.
+
+This field has no environment variable, as with the other named upstream maps.
+`PROXY_UPSTREAM_MAVEN` still sets `upstream.maven`.
+
 ## Authentication
 
 Configure authentication for private upstream registries. The same authentication-aware client is used for metadata and artifact downloads, and credentials can reference environment variables using `${VAR_NAME}` syntax.

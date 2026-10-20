@@ -290,6 +290,8 @@ Add to your `~/.m2/settings.xml`:
 
 The `/maven/` endpoint uses Maven Central as primary upstream and falls back to the Gradle Plugin Portal for Gradle plugin marker metadata and related artifacts when the primary upstream returns not found.
 
+Further Maven repositories can be configured under `upstream.maven_repositories` and are served at `/maven/{name}/`, each from its own upstream (see [Maven repositories](docs/configuration.md#maven-repositories)). Point a second `<repository>` or Gradle `maven(url = ...)` entry at `http://localhost:8080/maven/{name}/`.
+
 For Gradle plugin resolution via the same proxy endpoint:
 
 ```kotlin

@@ -69,6 +69,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -641,6 +642,14 @@ type UpstreamConfig struct {
 	// Default: https://repo1.maven.org/maven2
 	Maven string `json:"maven" yaml:"maven"`
 
+	// MavenRepositories maps repository names to additional Maven repository
+	// base URLs, served at /maven/{name}/. upstream.maven stays the default
+	// at /maven/. A name must not be the first segment of a group ID, such
+	// as "org" or "com", since it would hide those groups in the default
+	// repository; see validateMavenRepositoryName.
+	// Example: {"grails": "https://repo.grails.org/grails/restricted"}.
+	MavenRepositories map[string]string `json:"maven_repositories" yaml:"maven_repositories"`
+
 	// GradlePluginPortal is the upstream Gradle Plugin Portal Maven URL.
 	// Used to resolve Gradle plugin marker artifacts.
 	// Default: https://plugins.gradle.org/m2
@@ -837,6 +846,14 @@ func (u *UpstreamConfig) Validate() error {
 	if err := u.validateGenericArtifacts(); err != nil {
 		return err
 	}
+	if err := validateNamedUpstreams("upstream.maven_repositories", u.MavenRepositories); err != nil {
+		return err
+	}
+	for name := range u.MavenRepositories {
+		if err := validateMavenRepositoryName(name); err != nil {
+			return err
+		}
+	}
 	if err := validateNamedUpstreams("upstream.debian_repositories", u.DebianRepositories); err != nil {
 		return err
 	}
@@ -891,6 +908,30 @@ func CompileGenericArtifactPattern(pattern string) (*regexp.Regexp, error) {
 		}
 	}
 	return re, nil
+}
+
+// mavenGroupRoots are first segments of group IDs that are not country-code
+// top-level domains: generic top-level domains that group IDs are commonly
+// reversed from. Two-letter names are refused separately, as they cover
+// every country code.
+var mavenGroupRoots = []string{
+	"app", "biz", "cloud", "com", "dev", "edu", "gov", "info", "int",
+	"io", "mil", "name", "net", "org", "pro", "tech", "xyz",
+}
+
+// validateMavenRepositoryName refuses names that are likely the first
+// segment of a group ID. /maven/{name}/ is matched before the default
+// repository, so such a name would hide every group under it there:
+// a repository named "org" would take /maven/org/apache/... away from
+// Maven Central. The list can't be complete, since group IDs are free-form,
+// so the documentation also asks for names that can't be a group root.
+func validateMavenRepositoryName(name string) error {
+	lower := strings.ToLower(name)
+	if len(lower) <= 2 || slices.Contains(mavenGroupRoots, lower) {
+		return fmt.Errorf("invalid upstream.maven_repositories name %q: it would hide group IDs starting with %q "+
+			"in the default repository; use a name such as \"%s-repo\"", name, lower, lower)
+	}
+	return nil
 }
 
 // debianReservedRepositoryNames are the upstream.debian archive's own root
