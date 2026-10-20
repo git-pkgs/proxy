@@ -102,6 +102,9 @@ type Cache struct {
 	closed   bool
 	repos    map[string]*repo
 	tooLarge map[string]time.Time
+	// overBudget records that eviction left the cache over MaxSize because
+	// the rest of it was in use.
+	overBudget bool
 	// failedWants records, by repository key and object ID, wants the
 	// upstream could not provide.
 	failedWants map[string]time.Time
@@ -348,8 +351,9 @@ func (c *Cache) release(rp *repo) {
 		delete(c.repos, rp.key)
 	}
 	_, tooLarge := c.tooLarge[rp.key]
+	retry := tooLarge || c.overBudget
 	c.mu.Unlock()
-	if idle && exists && tooLarge {
+	if idle && exists && retry {
 		c.evict()
 	}
 }
@@ -377,9 +381,10 @@ func (rp *repo) exists() bool {
 // the cache fits in MaxSize, and any that could not be refreshed within
 // MaxRepoSize, so the next request clones them again with only their
 // branches and tags. It runs after every fetch, since only fetches grow the
-// cache, and when a repository too large to refresh is released. A
-// repository is moved aside under the lock, so a request that comes after it
-// clones it again instead of reading it while it is deleted.
+// cache, and when a repository it had to skip is released: one too large to
+// refresh, or any while the cache is over MaxSize. A repository is moved
+// aside under the lock, so a request that comes after it clones it again
+// instead of reading it while it is deleted.
 func (c *Cache) evict() {
 	c.mu.Lock()
 	var total int64
@@ -420,6 +425,7 @@ func (c *Cache) evict() {
 		metrics.RecordArtifactEvicted(reason, ecosystem)
 		c.logger.Info("git cache: evicted repository", "repository", rp.key, "size", rp.size.Load(), "reason", reason)
 	}
+	c.overBudget = c.opts.MaxSize > 0 && total > c.opts.MaxSize
 	c.mu.Unlock()
 
 	for _, trash := range removed {

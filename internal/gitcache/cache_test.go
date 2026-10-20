@@ -594,6 +594,37 @@ func TestFetchEvictsToMaxSize(t *testing.T) {
 	}
 }
 
+// TestReleaseEvictsWhatEvictionHadToSkip fills the cache past MaxSize while
+// every repository is in use, so eviction after the fetch can remove none.
+// The first release brings the cache back within MaxSize.
+func TestReleaseEvictsWhatEvictionHadToSkip(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("first")
+	upstream.newRepo("second")
+	size := repoSize(t, upstream, "first")
+
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) { o.MaxSize = size + size/2 })
+	first := tc.acquire("up/first.git")
+	tc.clone(t, "first")
+	second := tc.acquire("up/second.git")
+	defer tc.release(second)
+	tc.clone(t, "second")
+	waitFor(t, func() bool {
+		tc.mu.Lock()
+		defer tc.mu.Unlock()
+		return tc.overBudget
+	})
+
+	tc.release(first)
+	if fileExists(first.dir) {
+		t.Error("first is still cached once released")
+	}
+	if !fileExists(second.dir) {
+		t.Error("evicted second while in use")
+	}
+	tc.clone(t, "second")
+}
+
 // TestNewRemovesRepointedUpstreams starts a cache whose directory holds an
 // upstream's cache at its old URL, and one of an upstream no longer
 // configured. Only the first is known to be the cache's to remove.
