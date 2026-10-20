@@ -318,7 +318,7 @@ func testFront(c *Cache, upstreamURL string, fetchWants bool) http.Handler {
 		case errors.Is(err, ErrNotFound):
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
-		case errors.Is(err, ErrTooLarge):
+		case errors.Is(err, ErrTooLarge), errors.Is(err, ErrCacheFull):
 			http.Error(w, err.Error(), http.StatusInsufficientStorage)
 			return
 		case err != nil:

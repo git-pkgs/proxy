@@ -727,18 +727,27 @@ apply, and credentials are never passed to `git`.
 
 `max_repo_size` defaults to 5GB, and `max_size` to no limit. `max_size` also
 caps `max_repo_size`, since a repository larger than the whole cache would be
-evicted as soon as no request was reading it. A clone or fetch
-that would pass `max_repo_size` is stopped, and nothing of it is kept. A new
-repository is then refused for an hour. When a refresh of one already cached
-does not fit, it is served as it is and dropped once no request is reading
-it, so the next request clones it again with only its branches and tags; if
-that is still too large, it is refused for an hour. A commit fetched by ID
-that does not fit is refused, and the repository kept.
-Least recently used repositories are evicted after each fetch that takes the
-cache past `max_size`, never one a request is reading. A transfer
-that receives nothing for 10 minutes is abandoned. Git's automatic garbage
-collection runs as part of fetches, and files over 8MB are kept without delta
-compression, so one large file does not take a fetch's memory.
+evicted as soon as no request was reading it. A clone or fetch that would
+pass `max_repo_size` is stopped, and nothing of it is kept. A new repository
+is then refused for an hour. When a refresh of one already cached does not
+fit, it is served as it is and dropped once no request is reading it, so the
+next request clones it again with only its branches and tags; if that is
+still too large, it is refused for an hour. A commit fetched by ID that does
+not fit is refused, and the repository kept.
+
+`max_size` counts fetches in progress as well as cached repositories, so the
+cache stays within it however many fetches run at once. As a fetch receives
+data, the least recently used repositories are evicted to make room, never
+one a request is reading; those are evicted once released if the cache is
+still over. When evicting every idle repository would not make room, none is
+evicted for the fetch, and it is stopped and nothing of it is kept, but the
+repository is not refused: a clone answers 507, and a refresh serves the
+cached copy, as when the upstream fails. The count is of bytes received, so
+index files and garbage collection can take the cache a little past
+`max_size` until the fetch ends and the repository is measured.
+A transfer that receives nothing for 10 minutes is abandoned. Git's automatic
+garbage collection runs as part of fetches, and files over 8MB are kept
+without delta compression, so one large file does not take a fetch's memory.
 
 Packs for clients are built by at most two `upload-pack` processes per CPU
 the proxy may use, each with one delta-search thread and 64MB of delta

@@ -39,10 +39,14 @@ type relay struct {
 
 type relayRoute struct {
 	repoURL string
-	// limit caps the response bytes the route relays, 0 for no cap.
+	// limit caps the response bytes the route relays, 0 for no cap, and
+	// budget, when set, holds space within MaxSize for them. exceeded and
+	// full record which of them stopped the route.
 	limit    int64
+	budget   *reservation
 	relayed  atomic.Int64
 	exceeded atomic.Bool
+	full     atomic.Bool
 	// answered records that the upstream answered a git-upload-pack
 	// request, so a failed fetch was not an outage.
 	answered atomic.Bool
@@ -77,11 +81,11 @@ func (rl *relay) close() error {
 
 // register adds a route to repoURL and returns the URL git fetches from and
 // a function that removes the route.
-func (rl *relay) register(repoURL string, limit int64) (string, *relayRoute, func()) {
+func (rl *relay) register(repoURL string, limit int64, budget *reservation) (string, *relayRoute, func()) {
 	var b [relayIDBytes]byte
 	_, _ = rand.Read(b[:])
 	id := hex.EncodeToString(b[:])
-	route := &relayRoute{repoURL: repoURL, limit: limit}
+	route := &relayRoute{repoURL: repoURL, limit: limit, budget: budget}
 
 	rl.mu.Lock()
 	rl.routes[id] = route
@@ -147,8 +151,8 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", ct)
 	}
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, &routeReader{r: resp.Body, route: route}); err != nil {
-		if route.exceeded.Load() {
+	if _, err := io.Copy(w, &routeReader{ctx: r.Context(), r: resp.Body, route: route}); err != nil {
+		if route.exceeded.Load() || route.full.Load() {
 			// Cut the connection so git fails rather than keeping a pack
 			// that merely looks short.
 			panic(http.ErrAbortHandler)
@@ -159,17 +163,27 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// routeReader counts relayed bytes against the route's limit.
+// routeReader counts relayed bytes against the route's limit and budget.
 type routeReader struct {
+	ctx   context.Context
 	r     io.Reader
 	route *relayRoute
 }
 
 func (rr *routeReader) Read(p []byte) (int, error) {
 	n, err := rr.r.Read(p)
-	if total := rr.route.relayed.Add(int64(n)); rr.route.limit > 0 && total > rr.route.limit {
+	total := rr.route.relayed.Add(int64(n))
+	if rr.route.limit > 0 && total > rr.route.limit {
 		rr.route.exceeded.Store(true)
 		return 0, ErrTooLarge
+	}
+	if rr.route.budget != nil {
+		if err := rr.route.budget.cover(rr.ctx, total); err != nil {
+			if errors.Is(err, ErrCacheFull) {
+				rr.route.full.Store(true)
+			}
+			return 0, err
+		}
 	}
 	return n, err
 }

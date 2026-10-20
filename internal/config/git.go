@@ -84,8 +84,9 @@ type GitConfig struct {
 	// used by this process only, which locks it. Default: ./cache/git.
 	CacheDir string `json:"cache_dir" yaml:"cache_dir"`
 
-	// MaxSize evicts the least recently used repositories once their total
-	// size passes it. Empty or "0" disables the limit.
+	// MaxSize bounds the cache, counting fetches in progress; the least
+	// recently used repositories not in use are evicted to stay within it.
+	// Empty or "0" disables the limit.
 	MaxSize string `json:"max_size" yaml:"max_size"`
 
 	// MaxRepoSize is the most one repository may take; a clone or fetch that

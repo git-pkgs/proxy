@@ -33,6 +33,9 @@ var (
 	// ErrTooLarge is returned for a repository larger than git.max_repo_size,
 	// or than git.max_size where that is smaller.
 	ErrTooLarge = errors.New("repository is larger than git.max_repo_size or git.max_size")
+	// ErrCacheFull is returned for a fetch cut off because repositories in
+	// use take what git.max_size leaves.
+	ErrCacheFull = errors.New("git cache is full")
 )
 
 // remoteRefs is what a repository advertises: its branch and tag tips, and

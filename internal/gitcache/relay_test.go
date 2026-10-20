@@ -27,7 +27,7 @@ func TestRelayOnlyForwardsFetchRequests(t *testing.T) {
 	}))
 	defer upstream.Close()
 	rl := newTestRelay(t)
-	base, _, unregister := rl.register(upstream.URL+"/repo", 0)
+	base, _, unregister := rl.register(upstream.URL+"/repo", 0, nil)
 
 	refused := []struct{ method, url string }{
 		{http.MethodGet, rl.base + "/unknown/info/refs?service=git-upload-pack"},
@@ -71,7 +71,7 @@ func TestRelayStopsAtLimit(t *testing.T) {
 	}))
 	defer upstream.Close()
 	rl := newTestRelay(t)
-	base, route, unregister := rl.register(upstream.URL+"/repo", limit)
+	base, route, unregister := rl.register(upstream.URL+"/repo", limit, nil)
 	defer unregister()
 
 	resp, err := http.Post(base+"/git-upload-pack", requestType, strings.NewReader(pktFlush))

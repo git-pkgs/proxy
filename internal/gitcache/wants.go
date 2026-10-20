@@ -93,10 +93,10 @@ func (c *Cache) fetchMissingWants(ctx context.Context, rp *repo, repoURL string,
 		return err
 	}
 	if len(missing) == 1 || len(missing) > maxWantSplit ||
-		errors.Is(err, ErrTooLarge) || errors.Is(err, errUpstreamUnanswered) {
+		errors.Is(err, ErrTooLarge) || errors.Is(err, ErrCacheFull) || errors.Is(err, errUpstreamUnanswered) {
 		// Fetched one at a time, wants too large for what max_repo_size
-		// leaves would exhaust the same budget, and an upstream that did
-		// not answer would be waited on once per want.
+		// or max_size leaves would exhaust the same budget, and an upstream
+		// that did not answer would be waited on once per want.
 		c.recordFailedWants(rp.key, missing, err)
 		return err
 	}
@@ -130,8 +130,9 @@ func (c *Cache) fetchWants(ctx context.Context, rp *repo, repoURL string, oids [
 	for i, oid := range oids {
 		refspecs[i] = oid + ":" + wantedRef(oid, now)
 	}
-	err = c.fetch(ctx, rp.dir, repoURL, limit, []string{"--atomic"}, refspecs...)
-	rp.size.Store(dirSize(rp.dir))
+	res := c.newReservation()
+	err = c.fetch(ctx, rp.dir, repoURL, limit, res, []string{"--atomic"}, refspecs...)
+	res.settle(rp, dirSize(rp.dir))
 	return err
 }
 

@@ -105,6 +105,13 @@ type Cache struct {
 	// overBudget records that eviction left the cache over MaxSize because
 	// the rest of it was in use.
 	overBudget bool
+	// reserved is the space reservations hold for fetches in progress, and
+	// cutPending counts those cut off and not yet released. freed is closed
+	// and replaced whenever a reservation gives back space or one cut off is
+	// released.
+	reserved   int64
+	cutPending int
+	freed      chan struct{}
 	// failedWants records, by repository key and object ID, wants the
 	// upstream could not provide.
 	failedWants map[string]time.Time
@@ -192,6 +199,7 @@ func New(opts Options) (*Cache, error) {
 		repos:           make(map[string]*repo),
 		tooLarge:        make(map[string]time.Time),
 		failedWants:     make(map[string]time.Time),
+		freed:           make(chan struct{}),
 	}
 	if opts.refCheckTimeout > 0 {
 		c.refCheckTimeout = opts.refCheckTimeout
@@ -385,20 +393,35 @@ func (rp *repo) exists() bool {
 // evict removes repositories nobody is using: the least recently used until
 // the cache fits in MaxSize, and any that could not be refreshed within
 // MaxRepoSize, so the next request clones them again with only their
-// branches and tags. It runs after every fetch, since only fetches grow the
-// cache, and when a repository it had to skip is released: one too large to
-// refresh, or any while the cache is over MaxSize. A repository is moved
-// aside under the lock, so a request that comes after it clones it again
-// instead of reading it while it is deleted.
+// branches and tags. It runs after every fetch, and when a repository it had
+// to skip is released: one too large to refresh, or any while the cache is
+// over MaxSize. Fetches also evict as they receive bytes (reservation.cover).
 func (c *Cache) evict() {
 	c.mu.Lock()
-	var total int64
+	removed, _ := c.evictLocked(0)
+	c.mu.Unlock()
+	c.removeEvicted(removed)
+}
+
+// evictLocked evicts until the cache, counting reservations, has room for
+// extra more bytes, and returns the evicted repositories' directories, to be
+// deleted once c.mu is released, and the size left. When evicting every idle
+// repository would not make that room, it evicts only as evict does. A
+// repository is moved aside under the lock, so a request that comes after it
+// clones it again instead of reading it while it is deleted.
+func (c *Cache) evictLocked(extra int64) ([]string, int64) {
+	total := c.reserved
+	var idleTotal int64
 	idle := make([]*repo, 0, len(c.repos))
 	for _, rp := range c.repos {
 		total += rp.size.Load()
 		if rp.users == 0 {
 			idle = append(idle, rp)
+			idleTotal += rp.size.Load()
 		}
+	}
+	if total-idleTotal+extra > c.opts.MaxSize {
+		extra = 0
 	}
 	slices.SortFunc(idle, func(a, b *repo) int {
 		return cmp.Compare(a.lastUsed.Load(), b.lastUsed.Load())
@@ -407,7 +430,7 @@ func (c *Cache) evict() {
 	for _, rp := range idle {
 		_, marked := c.tooLarge[rp.key]
 		tooLarge := marked && rp.exists()
-		if !tooLarge && (c.opts.MaxSize <= 0 || total <= c.opts.MaxSize) {
+		if !tooLarge && (c.opts.MaxSize <= 0 || total+extra <= c.opts.MaxSize) {
 			continue
 		}
 		trash, err := os.MkdirTemp(c.tmpDir(), "evicted-")
@@ -431,8 +454,10 @@ func (c *Cache) evict() {
 		c.logger.Info("git cache: evicted repository", "repository", rp.key, "size", rp.size.Load(), "reason", reason)
 	}
 	c.overBudget = c.opts.MaxSize > 0 && total > c.opts.MaxSize
-	c.mu.Unlock()
+	return removed, total
+}
 
+func (c *Cache) removeEvicted(removed []string) {
 	for _, trash := range removed {
 		if err := os.RemoveAll(trash); err != nil {
 			c.logger.Warn("git cache: failed to delete evicted repository", "path", trash, "error", err)

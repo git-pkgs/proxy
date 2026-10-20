@@ -185,6 +185,9 @@ func (c *Cache) refresh(ctx context.Context, rp *repo, repoURL string, checked f
 // clone builds the repository in a temporary directory and moves it into
 // place, so no request ever reads a partial clone.
 func (c *Cache) clone(ctx context.Context, rp *repo, repoURL string, remote remoteRefs) error {
+	// Released after the temporary clone is removed.
+	res := c.newReservation()
+	defer res.release()
 	tmp, err := os.MkdirTemp(c.tmpDir(), "clone-")
 	if err != nil {
 		return err
@@ -194,7 +197,7 @@ func (c *Cache) clone(ctx context.Context, rp *repo, repoURL string, remote remo
 	if _, err := c.run(ctx, tmp, "init", "--quiet", "--bare"); err != nil {
 		return err
 	}
-	if err := c.fetch(ctx, tmp, repoURL, c.opts.MaxRepoSize, refreshFlags, branchesAndTags...); err != nil {
+	if err := c.fetch(ctx, tmp, repoURL, c.opts.MaxRepoSize, res, refreshFlags, branchesAndTags...); err != nil {
 		return err
 	}
 	if err := c.setHead(ctx, tmp, remote, ""); err != nil {
@@ -210,7 +213,7 @@ func (c *Cache) clone(ctx context.Context, rp *repo, repoURL string, remote remo
 	if err := os.Rename(tmp, rp.dir); err != nil {
 		return fmt.Errorf("moving clone into place: %w", err)
 	}
-	rp.size.Store(size)
+	res.settle(rp, size)
 	c.logger.Info("git cache: cloned repository", "repository", rp.key, "size", size)
 	return nil
 }
@@ -234,8 +237,9 @@ func (c *Cache) update(ctx context.Context, rp *repo, repoURL string, remote rem
 		if err != nil {
 			return err
 		}
-		err = c.fetch(ctx, rp.dir, repoURL, limit, refreshFlags, branchesAndTags...)
-		rp.size.Store(dirSize(rp.dir))
+		res := c.newReservation()
+		err = c.fetch(ctx, rp.dir, repoURL, limit, res, refreshFlags, branchesAndTags...)
+		res.settle(rp, dirSize(rp.dir))
 		if err != nil {
 			return err
 		}
@@ -271,8 +275,8 @@ func (c *Cache) fetchLimit(rp *repo) (int64, error) {
 
 // fetch fetches refspecs from the upstream into the repository at dir,
 // through the relay, adding flags to git fetch. limit caps the bytes
-// fetched, 0 for no cap.
-func (c *Cache) fetch(ctx context.Context, dir, repoURL string, limit int64, flags []string, refspecs ...string) error {
+// fetched, 0 for no cap, and res holds space within MaxSize for them.
+func (c *Cache) fetch(ctx context.Context, dir, repoURL string, limit int64, res *reservation, flags []string, refspecs ...string) error {
 	select {
 	case c.fetches <- struct{}{}:
 		defer func() { <-c.fetches }()
@@ -280,7 +284,7 @@ func (c *Cache) fetch(ctx context.Context, dir, repoURL string, limit int64, fla
 		return ctx.Err()
 	}
 
-	relayURL, route, unregister := c.relay.register(repoURL, limit)
+	relayURL, route, unregister := c.relay.register(repoURL, limit, res)
 	defer unregister()
 	args := append([]string{"fetch", "--quiet", "--no-write-fetch-head"}, flags...)
 	_, err := c.run(ctx, dir, append(append(args, relayURL), refspecs...)...)
@@ -295,6 +299,9 @@ func (c *Cache) fetch(ctx context.Context, dir, repoURL string, limit int64, fla
 	}
 	if route.exceeded.Load() {
 		return ErrTooLarge
+	}
+	if route.full.Load() {
+		return ErrCacheFull
 	}
 	if err != nil && !route.answered.Load() {
 		return fmt.Errorf("%w: %w", errUpstreamUnanswered, err)
@@ -345,6 +352,8 @@ func errorType(err error) string {
 		return "refused"
 	case errors.Is(err, ErrTooLarge):
 		return "too_large"
+	case errors.Is(err, ErrCacheFull):
+		return "cache_full"
 	}
 	return "fetch_failed"
 }

@@ -207,6 +207,8 @@ func (h *GitHandler) serveError(w http.ResponseWriter, r *http.Request, err erro
 		http.Error(w, "upstream refused the request", http.StatusBadGateway)
 	case errors.Is(err, gitcache.ErrTooLarge):
 		http.Error(w, "repository is larger than git.max_repo_size or git.max_size", http.StatusInsufficientStorage)
+	case errors.Is(err, gitcache.ErrCacheFull):
+		http.Error(w, "git cache is full", http.StatusInsufficientStorage)
 	default:
 		http.Error(w, "upstream unavailable", http.StatusBadGateway)
 	}
