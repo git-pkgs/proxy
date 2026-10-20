@@ -38,7 +38,7 @@ func TestComposerRewriteMetadata(t *testing.T) {
 		}
 	}`
 
-	output, err := h.rewriteMetadata([]byte(input))
+	output, _, err := h.rewriteMetadataKeeping([]byte(input))
 	if err != nil {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
@@ -93,7 +93,7 @@ func TestComposerRewriteMetadataMinifiedInheritance(t *testing.T) {
 		}
 	}`
 
-	output, err := h.rewriteMetadata([]byte(input))
+	output, _, err := h.rewriteMetadataKeeping([]byte(input))
 	if err != nil {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
@@ -153,7 +153,7 @@ func TestComposerRewriteMetadataMinifiedDevReset(t *testing.T) {
 		}
 	}`
 
-	output, err := h.rewriteMetadata([]byte(input))
+	output, _, err := h.rewriteMetadataKeeping([]byte(input))
 	if err != nil {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
@@ -214,7 +214,7 @@ func TestComposerRewriteMetadataUnset(t *testing.T) {
 		}
 	}`
 
-	output, err := h.rewriteMetadata([]byte(input))
+	output, _, err := h.rewriteMetadataKeeping([]byte(input))
 	if err != nil {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
@@ -288,7 +288,7 @@ func TestComposerRewriteMetadataCooldownPreservesNames(t *testing.T) {
 		}
 	}`
 
-	output, err := h.rewriteMetadata([]byte(input))
+	output, _, err := h.rewriteMetadataKeeping([]byte(input))
 	if err != nil {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
@@ -352,7 +352,7 @@ func TestComposerRewriteMetadataGitHubZipballFilenames(t *testing.T) {
 		}
 	}`
 
-	output, err := h.rewriteMetadata([]byte(input))
+	output, _, err := h.rewriteMetadataKeeping([]byte(input))
 	if err != nil {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
@@ -405,7 +405,7 @@ func TestComposerExpandMinifiedSharedDistReferences(t *testing.T) {
 		}
 	}`
 
-	output, err := h.rewriteMetadata([]byte(input))
+	output, _, err := h.rewriteMetadataKeeping([]byte(input))
 	if err != nil {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}
@@ -505,16 +505,16 @@ func TestComposerDownloadDevVersionUsesDevMetadata(t *testing.T) {
 
 	// FIXED behavior: the handler consults the ~dev file (it is first in the
 	// candidate list for dev versions) and resolves the dist URL.
-	urls := h.metadataURLsForVersion(vendor, name, version)
-	if len(urls) == 0 || !strings.HasSuffix(urls[0], "/p2/phpmd/phpmd~dev.json") {
-		t.Fatalf("dev version should consult the ~dev metadata file first, got %v", urls)
+	files := h.metadataFilesForVersion(vendor, name, version)
+	if len(files) == 0 || !strings.HasSuffix(files[0].url, "/p2/phpmd/phpmd~dev.json") || files[0].cacheKey != "phpmd/phpmd~dev" {
+		t.Fatalf("dev version should consult the ~dev metadata file first, got %v", files)
 	}
 
 	var resolved string
-	for _, u := range urls {
-		found, err := h.findDownloadURLFromMetadata(ctx, u, pkg, version)
+	for _, f := range files {
+		found, err := h.findDownloadURLFromMetadata(ctx, f.url, pkg, version)
 		if err != nil {
-			t.Fatalf("unexpected error fetching metadata %q: %v", u, err)
+			t.Fatalf("unexpected error fetching metadata %q: %v", f.url, err)
 		}
 		resolved = found.url
 		if resolved != "" {
@@ -959,7 +959,7 @@ func TestComposerRewriteMetadataCooldown(t *testing.T) {
 		}
 	}`
 
-	output, err := h.rewriteMetadata([]byte(input))
+	output, _, err := h.rewriteMetadataKeeping([]byte(input))
 	if err != nil {
 		t.Fatalf("rewriteMetadata failed: %v", err)
 	}

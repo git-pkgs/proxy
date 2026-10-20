@@ -56,11 +56,6 @@ func init() {
 	retention.Default.Register(retention.Spec{Key: "pypi", CanonicalPackage: retention.DefaultCanonical("pypi")})
 }
 
-// NewPyPIHandler creates a new PyPI protocol handler.
-func NewPyPIHandler(proxy *Proxy, proxyURL string) *PyPIHandler {
-	return NewPyPIHandlerWithUpstreams(proxy, proxyURL, "", "")
-}
-
 // NewPyPIHandlerWithUpstreams creates a PyPI handler with custom API and
 // package download upstreams.
 func NewPyPIHandlerWithUpstreams(proxy *Proxy, proxyURL, upstreamURL, downloadURL string) *PyPIHandler {

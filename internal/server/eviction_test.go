@@ -70,7 +70,7 @@ func seedArtifact(t *testing.T, ctx context.Context, db *database.DB, store stor
 		t.Fatalf("failed to upsert version: %v", err)
 	}
 
-	storagePath := storage.ArtifactPath("npm", "", name, "1.0.0", filename)
+	storagePath := "npm/" + name + "/1.0.0/" + filename
 	data := strings.NewReader(strings.Repeat("x", dataSize))
 	size, hash, err := store.Store(ctx, storagePath, data)
 	if err != nil {
@@ -150,7 +150,7 @@ func TestEvictLRU_EvictsOldestFirst(t *testing.T) {
 	}
 
 	// Storage file should be removed for old-pkg
-	storagePath := storage.ArtifactPath("npm", "", "old-pkg", "1.0.0", "old-pkg-1.0.0.tgz")
+	storagePath := "npm/old-pkg/1.0.0/old-pkg-1.0.0.tgz"
 	exists, _ := store.Exists(ctx, storagePath)
 	if exists {
 		t.Error("expected old-pkg file to be deleted from storage")
@@ -215,7 +215,7 @@ func TestEvictLRU_StorageFileDeleted(t *testing.T) {
 
 	seedArtifact(t, ctx, db, store, "delete-me", 1000, time.Now().Add(-1*time.Hour))
 
-	storagePath := storage.ArtifactPath("npm", "", "delete-me", "1.0.0", "delete-me-1.0.0.tgz")
+	storagePath := "npm/delete-me/1.0.0/delete-me-1.0.0.tgz"
 	exists, _ := store.Exists(ctx, storagePath)
 	if !exists {
 		t.Fatal("expected artifact file to exist before eviction")
@@ -352,8 +352,8 @@ func TestEvictLRU_QueuesObjectsStorageRefusesToDelete(t *testing.T) {
 		t.Errorf("cached artifacts = %d, want 0", count)
 	}
 	want := []string{
-		storage.ArtifactPath("npm", "", "new-pkg", "1.0.0", "new-pkg-1.0.0.tgz"),
-		storage.ArtifactPath("npm", "", "old-pkg", "1.0.0", "old-pkg-1.0.0.tgz"),
+		"npm/new-pkg/1.0.0/new-pkg-1.0.0.tgz",
+		"npm/old-pkg/1.0.0/old-pkg-1.0.0.tgz",
 	}
 	got := queuedPaths(t, db)
 	slices.Sort(got)
@@ -387,7 +387,7 @@ func TestEvictLRU_EndsPassWhenNothingCanBeCleared(t *testing.T) {
 		t.Errorf("cached artifacts = %d, want 2", count)
 	}
 	for _, name := range []string{"old-pkg", "new-pkg"} {
-		if ok, _ := store.Exists(ctx, storage.ArtifactPath("npm", "", name, "1.0.0", name+"-1.0.0.tgz")); !ok {
+		if ok, _ := store.Exists(ctx, "npm/"+name+"/1.0.0/"+name+"-1.0.0.tgz"); !ok {
 			t.Errorf("%s deleted although its record was not cleared", name)
 		}
 	}

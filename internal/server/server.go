@@ -13,6 +13,7 @@
 //   - /nuget/*    - NuGet V3 API protocol
 //   - /composer/* - Composer/Packagist protocol
 //   - /conan/*    - Conan C/C++ protocol
+//   - /chef/*     - Chef Supermarket protocol
 //   - /conda/*    - Conda/Anaconda protocol
 //   - /cran/*     - CRAN (R) protocol
 //   - /julia/*    - Julia Pkg server protocol
@@ -70,7 +71,6 @@ import (
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
 	"github.com/git-pkgs/proxy/internal/accesslog"
 	"github.com/git-pkgs/proxy/internal/config"
-	"github.com/git-pkgs/proxy/internal/cooldownpolicy"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/denylist"
 	"github.com/git-pkgs/proxy/internal/enrichment"
@@ -81,6 +81,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/proxy/internal/scanner"
 	"github.com/git-pkgs/proxy/internal/storage"
+	registryclient "github.com/git-pkgs/registries/client"
 	"github.com/git-pkgs/registries/fetch"
 	"github.com/git-pkgs/registries/safehttp"
 	"github.com/git-pkgs/spdx"
@@ -89,11 +90,10 @@ import (
 )
 
 const (
-	serverReadTimeout  = 30 * time.Second
-	serverWriteTimeout = 5 * time.Minute
-	serverIdleTimeout  = 60 * time.Second
-	dashboardTopN      = 10
-	hoursPerDay        = 24
+	serverReadTimeout = 30 * time.Second
+	serverIdleTimeout = 60 * time.Second
+	dashboardTopN     = 10
+	hoursPerDay       = 24
 
 	// Upstream transport defaults, matching what fetch.NewFetcher would use
 	// if we did not hand it our own client. Go's default transport keeps only
@@ -117,9 +117,10 @@ type Server struct {
 	accessLog   *accesslog.Logger
 	ecr         *ecrTokens
 	breakers    *breakerMonitor
-	rateLimits  *upstreamhttp.RateLimitGate
+	rateLimits  *registryclient.RateLimitGate
 	ecoStats    ecosystemStatsCache
 	sources     sourceTracker
+	scheduler   *mirror.Scheduler
 
 	// browseLimits overrides defaultBrowseLimits when set; tests use it.
 	browseLimits archives.StreamOptions
@@ -224,10 +225,10 @@ func (s *Server) Start(listeners ...net.Listener) error {
 }
 
 func (s *Server) serve(listener net.Listener) error {
-	metadataClient, artifactClient := s.newUpstreamClients(serverWriteTimeout)
+	metadataClient, artifactClient := s.newUpstreamClients(s.cfg.ParseArtifactTimeout())
 
 	// Create shared components with circuit breaker.
-	baseFetcher := fetch.NewFetcher(fetch.WithHTTPClient(artifactClient))
+	baseFetcher := fetch.NewFetcher(fetch.WithHTTPClient(artifactClient), fetch.WithMaxArtifactSize(s.cfg.ParseArtifactMaxSize()))
 	fetcher := fetch.NewCircuitBreakerFetcher(baseFetcher)
 	s.breakers = newBreakerMonitor(fetcher, s.logger)
 	resolver := fetch.NewResolver()
@@ -236,10 +237,10 @@ func (s *Server) serve(listener net.Listener) error {
 		Ecosystems: s.cfg.Cooldown.Ecosystems,
 		Packages:   s.cfg.Cooldown.NormalizedPackages(),
 	}
-	proxy := handler.NewProxy(s.db, s.storage, handler.LimitArtifactSize(fetcher, s.cfg.ParseArtifactMaxSize()), resolver, s.logger)
+	proxy := handler.NewProxy(s.db, s.storage, fetcher, resolver, s.logger)
 	proxy.HTTPClient = metadataClient
 	proxy.RateLimits = s.rateLimits
-	cooldownPolicy, err := cooldownpolicy.New(cd, s.cfg.Cooldown.PackagePatterns)
+	cooldownPolicy, err := cooldown.NewPolicy(cd, s.cfg.Cooldown.PackagePatterns)
 	if err != nil {
 		return fmt.Errorf("configuring cooldown policy: %w", err)
 	}
@@ -358,6 +359,7 @@ func (s *Server) serve(listener net.Listener) error {
 		r.Delete("/api/mirror/{id}", mirrorAPI.HandleCancel)
 		go jobStore.StartCleanup(bgCtx)
 	}
+	s.startMirrorSchedules(bgCtx, proxy)
 
 	// Hosted package endpoints (opt-in via hosted.enabled or PROXY_HOSTED_ENABLED)
 	if s.cfg.Hosted.Enabled {
@@ -369,7 +371,7 @@ func (s *Server) serve(listener net.Listener) error {
 		Addr:         s.cfg.Listen,
 		Handler:      r,
 		ReadTimeout:  serverReadTimeout,
-		WriteTimeout: serverWriteTimeout, // Large artifacts need time
+		WriteTimeout: s.cfg.ParseWriteTimeout(), // Large artifacts need time
 		IdleTimeout:  serverIdleTimeout,
 	}
 
@@ -379,6 +381,9 @@ func (s *Server) serve(listener net.Listener) error {
 		"ui_url", s.cfg.UIBaseURL,
 		"storage", s.storage.URL(),
 		"database", s.cfg.Database.String())
+	for _, warning := range s.cfg.EnvWarnings() {
+		s.logger.Warn(warning)
+	}
 	go s.updateCacheStatsMetrics()
 	go s.startEvictionLoop(bgCtx)
 	go s.startRetentionLoop(bgCtx)
@@ -437,6 +442,7 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 		s.cfg.Upstream.ComposerRepository,
 	).WithPackageRoutes(s.cfg.Upstream.ComposerRoutes)
 	conanHandler := handler.NewConanHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Conan)
+	chefHandler := handler.NewChefHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Chef)
 	condaHandler := handler.NewCondaHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Conda)
 	cranHandler := handler.NewCRANHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.CRAN)
 	juliaHandler := handler.NewJuliaHandlerWithUpstream(proxy, s.cfg.Upstream.Julia)
@@ -469,6 +475,7 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	r.Mount("/nuget", http.StripPrefix("/nuget", nugetHandler.Routes()))
 	r.Mount("/composer", http.StripPrefix("/composer", composerHandler.Routes()))
 	r.Mount("/conan", http.StripPrefix("/conan", conanHandler.Routes()))
+	r.Mount("/chef", http.StripPrefix("/chef", chefHandler.Routes()))
 	r.Mount("/conda", http.StripPrefix("/conda", condaHandler.Routes()))
 	r.Mount("/cran", http.StripPrefix("/cran", cranHandler.Routes()))
 	r.Mount("/julia", http.StripPrefix("/julia", juliaHandler.Routes()))
@@ -497,9 +504,24 @@ func (s *Server) newUpstreamClients(artifactTimeout time.Duration) (metadataClie
 	}
 	// The gate sits under the auth transport so it sees every final upstream
 	// answer, including the retry after a bearer challenge.
-	gate := upstreamhttp.NewRateLimitGate(baseTransport)
-	gate.Logger = s.logger
-	gate.OnHold = metrics.RecordUpstreamRateLimitHold
+	gate := registryclient.NewRateLimitGate(baseTransport)
+	gate.OnHold = func(event registryclient.HoldEvent) {
+		metrics.RecordUpstreamRateLimitHold(event.Host)
+		if s.logger != nil {
+			source := "default"
+			if event.FromHeader {
+				source = "retry-after"
+			}
+			s.logger.Warn("upstream rate limited this proxy, holding its requests",
+				"host", event.Host, "hold", event.RetryAfter.Round(time.Second).String(), "source", source,
+				"until", event.Until.UTC().Format(time.RFC3339))
+		}
+	}
+	gate.OnRelease = func(host string) {
+		if s.logger != nil {
+			s.logger.Info("upstream rate limit cleared", "host", host)
+		}
+	}
 	s.rateLimits = gate
 	authTransport := upstreamhttp.NewTransport(gate, upstreamhttp.AuthFunc(s.authForURL))
 	metadata := *safeClient
@@ -517,7 +539,7 @@ func (s *Server) newUpstreamClients(artifactTimeout time.Duration) (metadataClie
 func NewMirrorProxy(cfg *config.Config, db *database.DB, store storage.Storage, logger *slog.Logger) (*handler.Proxy, *handler.ContainerHandler) {
 	s := &Server{cfg: cfg, db: db, storage: store, logger: logger, ecr: newECRTokens(logger)}
 	metadataClient, artifactClient := s.newUpstreamClients(0)
-	fetcher := handler.LimitArtifactSize(fetch.NewFetcher(fetch.WithHTTPClient(artifactClient)), cfg.ParseArtifactMaxSize())
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(artifactClient), fetch.WithMaxArtifactSize(cfg.ParseArtifactMaxSize()))
 	proxy := handler.NewProxy(db, store, fetcher, fetch.NewResolver(), logger)
 	proxy.HTTPClient = metadataClient
 	proxy.RateLimits = s.rateLimits
@@ -631,6 +653,8 @@ func (s *Server) Shutdown(ctx context.Context) error {
 			errs = append(errs, fmt.Errorf("http shutdown: %w", err))
 		}
 	}
+
+	s.waitForMirrorSchedules(ctx)
 
 	if s.storage != nil {
 		if err := s.storage.Close(); err != nil {

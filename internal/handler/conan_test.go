@@ -94,8 +94,10 @@ func TestConanPingV2(t *testing.T) {
 	}
 }
 
-func TestConanProxyUpstream(t *testing.T) {
+func TestConanMetadata(t *testing.T) {
+	var requests atomic.Int32
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
 		if r.URL.Path != "/v2/conans/search" {
 			w.WriteHeader(http.StatusNotFound)
 			return
@@ -110,27 +112,26 @@ func TestConanProxyUpstream(t *testing.T) {
 	}))
 	defer upstream.Close()
 
-	h := &ConanHandler{
-		proxy:       conanTestProxy(),
-		upstreamURL: upstream.URL,
-		proxyURL:    "http://proxy.local",
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	proxy.HTTPClient = upstream.Client()
+	h := NewConanHandlerWithUpstream(proxy, "http://proxy.local", upstream.URL)
+	routes := h.Routes()
+	for range 2 {
+		req := httptest.NewRequest(http.MethodGet, "/v2/conans/search?q=zlib", nil)
+		w := httptest.NewRecorder()
+		routes.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || w.Body.String() != `{"results":["zlib/1.2.13"]}` {
+			t.Fatalf("response = %d %q", w.Code, w.Body.String())
+		}
 	}
-
-	req := httptest.NewRequest(http.MethodGet, "/v2/conans/search?q=zlib", nil)
-	w := httptest.NewRecorder()
-	h.proxyUpstream(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
-	}
-
-	body := w.Body.String()
-	if !strings.Contains(body, "zlib/1.2.13") {
-		t.Errorf("response body does not contain expected result: %s", body)
+	if got := requests.Load(); got != 1 {
+		t.Errorf("upstream requests = %d, want 1", got)
 	}
 }
 
-func TestConanProxyUpstreamNotFound(t *testing.T) {
+func TestConanMetadataNotFound(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusNotFound)
 	}))
@@ -144,16 +145,16 @@ func TestConanProxyUpstreamNotFound(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/conans/nonexistent", nil)
 	w := httptest.NewRecorder()
-	h.proxyUpstream(w, req)
+	h.Routes().ServeHTTP(w, req)
 
 	if w.Code != http.StatusNotFound {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
 	}
 }
 
-func TestConanProxyUpstreamCopiesHeaders(t *testing.T) {
+func TestConanMetadataCopiesHeaders(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.Header().Set("X-Custom-Header", "test-value")
+		w.Header().Set("ETag", `"metadata"`)
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusOK)
 		_, _ = w.Write([]byte(`{}`))
@@ -168,17 +169,17 @@ func TestConanProxyUpstreamCopiesHeaders(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/conans/test", nil)
 	w := httptest.NewRecorder()
-	h.proxyUpstream(w, req)
+	h.Routes().ServeHTTP(w, req)
 
-	if w.Header().Get("X-Custom-Header") != "test-value" {
-		t.Errorf("X-Custom-Header = %q, want %q", w.Header().Get("X-Custom-Header"), "test-value")
+	if w.Header().Get("ETag") != `"metadata"` {
+		t.Errorf("ETag = %q, want %q", w.Header().Get("ETag"), `"metadata"`)
 	}
 }
 
-func TestConanProxyUpstreamForwardsAuthHeader(t *testing.T) {
+func TestConanMetadataDoesNotForwardClientAuth(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
-		if auth != "Bearer mytoken" {
+		if auth != "" {
 			w.WriteHeader(http.StatusUnauthorized)
 			return
 		}
@@ -196,14 +197,14 @@ func TestConanProxyUpstreamForwardsAuthHeader(t *testing.T) {
 	req := httptest.NewRequest(http.MethodGet, "/v2/conans/test", nil)
 	req.Header.Set("Authorization", "Bearer mytoken")
 	w := httptest.NewRecorder()
-	h.proxyUpstream(w, req)
+	h.Routes().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 }
 
-func TestConanProxyUpstreamBadUpstream(t *testing.T) {
+func TestConanMetadataBadUpstream(t *testing.T) {
 	h := &ConanHandler{
 		proxy:       conanTestProxy(),
 		upstreamURL: "http://127.0.0.1:1", // unreachable
@@ -212,7 +213,7 @@ func TestConanProxyUpstreamBadUpstream(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/conans/test", nil)
 	w := httptest.NewRecorder()
-	h.proxyUpstream(w, req)
+	h.Routes().ServeHTTP(w, req)
 
 	if w.Code != http.StatusBadGateway {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusBadGateway)
@@ -487,9 +488,9 @@ func TestConanRoutes(t *testing.T) {
 	}
 }
 
-func TestConanProxyUpstreamPreservesQueryString(t *testing.T) {
+func TestConanMetadataPreservesQueryString(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Query().Get("q") != "boost" && r.URL.Query().Get("page") != "2" {
+		if r.URL.Query().Get("q") != "boost" || r.URL.Query().Get("page") != "2" {
 			w.WriteHeader(http.StatusBadRequest)
 			return
 		}
@@ -506,14 +507,14 @@ func TestConanProxyUpstreamPreservesQueryString(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/conans/search?q=boost&page=2", nil)
 	w := httptest.NewRecorder()
-	h.proxyUpstream(w, req)
+	h.Routes().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 }
 
-func TestConanProxyUpstreamLargeResponse(t *testing.T) {
+func TestConanMetadataLargeResponse(t *testing.T) {
 	largeBody := strings.Repeat("x", 1024*1024)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
@@ -529,7 +530,7 @@ func TestConanProxyUpstreamLargeResponse(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/conans/test", nil)
 	w := httptest.NewRecorder()
-	h.proxyUpstream(w, req)
+	h.Routes().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -564,7 +565,7 @@ func TestNewConanHandlerNoTrailingSlash(t *testing.T) {
 	}
 }
 
-func TestConanProxyUpstreamNoAuthHeaderWhenNotProvided(t *testing.T) {
+func TestConanMetadataNoAuthHeaderWhenNotProvided(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		auth := r.Header.Get("Authorization")
 		if auth != "" {
@@ -584,14 +585,14 @@ func TestConanProxyUpstreamNoAuthHeaderWhenNotProvided(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/conans/test", nil)
 	w := httptest.NewRecorder()
-	h.proxyUpstream(w, req)
+	h.Routes().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
 	}
 }
 
-func TestConanProxyUpstreamCopiesBody(t *testing.T) {
+func TestConanMetadataCopiesBody(t *testing.T) {
 	expected := `{"name":"zlib","version":"1.2.13","user":"_","channel":"_"}`
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
@@ -608,7 +609,7 @@ func TestConanProxyUpstreamCopiesBody(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "/v2/conans/zlib/1.2.13/_/_/latest", nil)
 	w := httptest.NewRecorder()
-	h.proxyUpstream(w, req)
+	h.Routes().ServeHTTP(w, req)
 
 	if w.Code != http.StatusOK {
 		t.Errorf("status = %d, want %d", w.Code, http.StatusOK)
@@ -620,7 +621,7 @@ func TestConanProxyUpstreamCopiesBody(t *testing.T) {
 	}
 }
 
-func TestConanProxyUpstreamPreservesStatusCodes(t *testing.T) {
+func TestConanMetadataPreservesStatusCodes(t *testing.T) {
 	codes := []int{
 		http.StatusOK,
 		http.StatusNotFound,
@@ -641,7 +642,7 @@ func TestConanProxyUpstreamPreservesStatusCodes(t *testing.T) {
 
 		req := httptest.NewRequest(http.MethodGet, "/v2/test", nil)
 		w := httptest.NewRecorder()
-		h.proxyUpstream(w, req)
+		h.Routes().ServeHTTP(w, req)
 
 		if w.Code != code {
 			t.Errorf("status = %d, want %d", w.Code, code)

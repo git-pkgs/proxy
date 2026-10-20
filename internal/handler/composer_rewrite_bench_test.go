@@ -56,7 +56,7 @@ func BenchmarkComposerRewriteMetadata(b *testing.B) {
 	b.SetBytes(int64(len(body)))
 	b.ReportAllocs()
 	for b.Loop() {
-		if _, err := h.rewriteMetadata(body); err != nil {
+		if _, _, err := h.rewriteMetadataKeeping(body); err != nil {
 			b.Fatal(err)
 		}
 	}

@@ -475,7 +475,7 @@ func TestContainerHandler_ReferrersFollowsNamespace(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
 	proxy.HTTPClient = upstream.Client()
 	proxy.MetadataTTL = time.Hour
-	h := NewContainerHandler(proxy, "http://proxy.example.test", map[string]string{"test": upstream.URL})
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example.test", "", map[string]string{"test": upstream.URL})
 	routes := http.StripPrefix("/v2", h.Routes())
 	host := strings.TrimPrefix(upstream.URL, "http://")
 	target := "/v2/owner/img/referrers/" + testReferrersSubject

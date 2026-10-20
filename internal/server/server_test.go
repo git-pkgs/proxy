@@ -87,7 +87,7 @@ func newTestServer(t *testing.T) *testServer {
 	)
 	gemHandler := handler.NewGemHandler(proxy, cfg.BaseURL)
 	goHandler := handler.NewGoHandler(proxy, cfg.BaseURL)
-	pypiHandler := handler.NewPyPIHandler(proxy, cfg.BaseURL)
+	pypiHandler := handler.NewPyPIHandlerWithUpstreams(proxy, cfg.BaseURL, "", "")
 	gradleHandler := handler.NewGradleBuildCacheHandler(proxy)
 	swiftHandler := handler.NewSwiftHandler(proxy, cfg.BaseURL, cfg.Upstream.Swift)
 

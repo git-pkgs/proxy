@@ -1065,7 +1065,7 @@ func TestNPMMetadataPath(t *testing.T) {
 func TestNPMVersionMetadataKeepsVersionSegment(t *testing.T) {
 	tests := []struct {
 		request, upstreamPath, wantTarball string
-		body                                string
+		body                               string
 	}{
 		{
 			request:      "/lodash/4.17.21",

@@ -2,11 +2,16 @@ package handler
 
 import (
 	"encoding/json"
+	"io"
 	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/registries/fetch"
 )
 
 func TestPubRewriteMetadata(t *testing.T) {
@@ -90,5 +95,114 @@ func TestPubRewriteMetadataCooldown(t *testing.T) {
 	latest := result["latest"].(map[string]any)
 	if latest["version"] != "1.0.0" {
 		t.Errorf("latest version = %v, want 1.0.0", latest["version"])
+	}
+}
+
+// Without the .tar.gz suffix pub.dev answers with the HTML version page, which
+// would otherwise be cached under the archive's key.
+func TestPubDownloadRequiresArchiveSuffix(t *testing.T) {
+	proxy, db, _, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("<html>version page</html>")),
+		ContentType: "text/html",
+	}
+	h := NewPubHandlerWithUpstream(proxy, "http://localhost", "https://pub.example.com")
+
+	req := httptest.NewRequest(http.MethodGet, "/packages/http/versions/1.2.0", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotFound {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusNotFound)
+	}
+	if fetcher.fetchCalled {
+		t.Errorf("upstream fetched %q", fetcher.fetchedURL)
+	}
+	art, err := db.GetArtifact("pkg:pub/http@1.2.0", "http-1.2.0.tar.gz")
+	if err != nil {
+		t.Fatalf("GetArtifact: %v", err)
+	}
+	if art != nil {
+		t.Errorf("artifact cached from %q", art.UpstreamURL)
+	}
+}
+
+func TestPubDownloadRejectsEncodedQueryInName(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("archive")),
+		ContentType: "application/octet-stream",
+	}
+	h := NewPubHandlerWithUpstream(proxy, "http://localhost", "https://pub.example.com")
+
+	for _, path := range []string{
+		"/packages/http%3Fx/versions/1.2.0.tar.gz",
+		"/packages/http%23x/versions/1.2.0.tar.gz",
+		"/packages/http/versions/1.2.0%3Fx.tar.gz",
+	} {
+		fetcher.fetchCalled = false
+		fetcher.fetchedURL = ""
+		req := httptest.NewRequest(http.MethodGet, path, nil)
+		w := httptest.NewRecorder()
+		h.Routes().ServeHTTP(w, req)
+
+		if strings.ContainsAny(fetcher.fetchedURL, "?#") {
+			t.Errorf("%s: upstream URL %q carries a query or fragment", path, fetcher.fetchedURL)
+		}
+		if strings.Contains(path, "/http%") && fetcher.fetchCalled {
+			t.Errorf("%s: invalid package name reached upstream as %q", path, fetcher.fetchedURL)
+		}
+	}
+}
+
+// Older versions cached the HTML version page as the archive. Such an entry
+// is fetched again instead of being served.
+func TestPubDownloadRefetchesCachedVersionPage(t *testing.T) {
+	proxy, db, store, fetcher := setupTestProxy(t)
+	seedPackage(t, db, store, "pub", "http", "1.2.0", "http-1.2.0.tar.gz", "<html>version page</html>")
+	art, err := db.GetArtifact("pkg:pub/http@1.2.0", "http-1.2.0.tar.gz")
+	if err != nil || art == nil {
+		t.Fatalf("GetArtifact: %v", err)
+	}
+	art.UpstreamURL = "https://pub.dev/packages/http/versions/1.2.0"
+	if err := db.UpsertArtifact(art); err != nil {
+		t.Fatalf("UpsertArtifact: %v", err)
+	}
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("archive")),
+		ContentType: "application/octet-stream",
+	}
+	h := NewPubHandlerWithUpstream(proxy, "http://localhost", "https://pub.example.com")
+
+	req := httptest.NewRequest(http.MethodGet, "/packages/http/versions/1.2.0.tar.gz", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if !fetcher.fetchCalled {
+		t.Fatal("cached version page was served without fetching upstream")
+	}
+	if got := w.Body.String(); got != "archive" {
+		t.Errorf("body = %q, want %q", got, "archive")
+	}
+}
+
+func TestPubDownloadServesCachedArchive(t *testing.T) {
+	proxy, db, store, fetcher := setupTestProxy(t)
+	seedPackage(t, db, store, "pub", "http", "1.2.0", "http-1.2.0.tar.gz", "cached archive")
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader("refetched")),
+		ContentType: "application/octet-stream",
+	}
+	h := NewPubHandlerWithUpstream(proxy, "http://localhost", "https://pub.example.com")
+
+	req := httptest.NewRequest(http.MethodGet, "/packages/http/versions/1.2.0.tar.gz", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if fetcher.fetchCalled {
+		t.Errorf("cached archive fetched again from %q", fetcher.fetchedURL)
+	}
+	if got := w.Body.String(); got != "cached archive" {
+		t.Errorf("body = %q, want %q", got, "cached archive")
 	}
 }

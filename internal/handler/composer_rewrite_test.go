@@ -86,7 +86,7 @@ func TestComposerRewriteMetadataKeepsUpstreamBytes(t *testing.T) {
 	input := `{"packages":{"v/p":[{"version":"1.0.0","extra":{"big":12345678901234567890,"html":"<b>&</b>"},` +
 		`"dist":{"type":"zip","url":"https://example.com/abc.zip","reference":"abc"}}]},"security-advisories":[]}`
 
-	out, err := h.rewriteMetadata([]byte(input))
+	out, _, err := h.rewriteMetadataKeeping([]byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -107,7 +107,7 @@ func TestComposerRewriteMetadataStaysMinified(t *testing.T) {
 		`{"version":"1.0.0","require":"__unset"}` +
 		`]}}`
 
-	out, err := h.rewriteMetadata([]byte(input))
+	out, _, err := h.rewriteMetadataKeeping([]byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -136,7 +136,7 @@ func TestComposerRewriteMetadataCooldownCarriesChanges(t *testing.T) {
 		{"version":"5.4.8","time":"` + old + `"}
 	]}}`
 
-	out, err := cooldownComposerHandler().rewriteMetadata([]byte(input))
+	out, _, err := cooldownComposerHandler().rewriteMetadataKeeping([]byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -174,7 +174,7 @@ func TestComposerRewriteMetadataCooldownAfterDevReset(t *testing.T) {
 		{"version":"1.x-dev","time":"` + old + `"}
 	]}}`
 
-	out, err := cooldownComposerHandler().rewriteMetadata([]byte(input))
+	out, _, err := cooldownComposerHandler().rewriteMetadataKeeping([]byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func TestComposerRewriteMetadataCooldownAfterDevReset(t *testing.T) {
 
 func TestComposerRewriteMetadataInvalidJSON(t *testing.T) {
 	h := &ComposerHandler{proxy: testProxy(), proxyURL: "http://proxy"}
-	if _, err := h.rewriteMetadata([]byte(`{"packages":{"v/p":[{"version":"1.0.0"}]}`)); err == nil {
+	if _, _, err := h.rewriteMetadataKeeping([]byte(`{"packages":{"v/p":[{"version":"1.0.0"}]}`)); err == nil {
 		t.Error("expected an error for truncated JSON")
 	}
 }
@@ -204,7 +204,7 @@ func TestComposerRewriteMetadataInvalidJSON(t *testing.T) {
 func TestComposerRewriteMetadataWithoutPackages(t *testing.T) {
 	h := &ComposerHandler{proxy: testProxy(), proxyURL: "http://proxy"}
 	for _, input := range []string{`{"other":1}`, `{"packages":[]}`} {
-		out, err := h.rewriteMetadata([]byte(input))
+		out, _, err := h.rewriteMetadataKeeping([]byte(input))
 		if err != nil {
 			t.Fatalf("%s: %v", input, err)
 		}
@@ -266,7 +266,7 @@ func TestComposerRewriteMetadataRewritesEveryPackage(t *testing.T) {
 		"v/b":[{"version":"2.0.0","dist":{"url":"https://example.com/b.zip","type":"zip"}}],
 		"v/c":"not a list"
 	}}`
-	out, err := h.rewriteMetadata([]byte(input))
+	out, _, err := h.rewriteMetadataKeeping([]byte(input))
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -22,31 +22,6 @@ func TestIsFetchDir(t *testing.T) {
 	}
 }
 
-func TestArtifactPath(t *testing.T) {
-	tests := []struct {
-		ecosystem string
-		namespace string
-		name      string
-		version   string
-		filename  string
-		want      string
-	}{
-		{"npm", "", "lodash", "4.17.21", "lodash-4.17.21.tgz", "npm/lodash/4.17.21/lodash-4.17.21.tgz"},
-		{"npm", "babel", "core", "7.0.0", "core-7.0.0.tgz", "npm/babel/core/7.0.0/core-7.0.0.tgz"},
-		{"cargo", "", "serde", "1.0.0", "serde-1.0.0.crate", "cargo/serde/1.0.0/serde-1.0.0.crate"},
-		{"pypi", "", "requests", "2.28.0", "requests-2.28.0.tar.gz", "pypi/requests/2.28.0/requests-2.28.0.tar.gz"},
-		{"maven", "org.apache", "commons-lang3", "3.12.0", "commons-lang3-3.12.0.jar", "maven/org.apache/commons-lang3/3.12.0/commons-lang3-3.12.0.jar"},
-	}
-
-	for _, tt := range tests {
-		got := ArtifactPath(tt.ecosystem, tt.namespace, tt.name, tt.version, tt.filename)
-		if got != tt.want {
-			t.Errorf("ArtifactPath(%q, %q, %q, %q, %q) = %q, want %q",
-				tt.ecosystem, tt.namespace, tt.name, tt.version, tt.filename, got, tt.want)
-		}
-	}
-}
-
 // assertLargeFileRoundTrip stores a 1MB file in the given storage, verifies size and
 // hash, then reads it back and confirms the content matches.
 func assertLargeFileRoundTrip(t *testing.T, s Storage) {

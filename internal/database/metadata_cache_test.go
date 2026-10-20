@@ -401,3 +401,50 @@ func TestMetadataCacheTimesOffUTC(t *testing.T) {
 		}
 	})
 }
+
+// TestRefreshMetadataCache checks that a refresh moves only fetched_at on, and
+// only while the row still records the digest it was asked for.
+func TestRefreshMetadataCache(t *testing.T) {
+	db := setupMetadataCacheDB(t)
+	fetched := time.Now().Add(-time.Hour).UTC().Truncate(time.Second)
+	entry := &MetadataCacheEntry{
+		Ecosystem:     testEcosystemNPM,
+		Name:          "lodash",
+		StoragePath:   "_metadata/npm/lodash/metadata",
+		ETag:          sql.NullString{String: `"abc123"`, Valid: true},
+		ContentDigest: sql.NullString{String: "sha256:aaaa", Valid: true},
+		Size:          sql.NullInt64{Int64: 1024, Valid: true},
+		FetchedAt:     sql.NullTime{Time: fetched, Valid: true},
+	}
+	if err := db.UpsertMetadataCache(entry); err != nil {
+		t.Fatal(err)
+	}
+
+	refreshed, err := db.RefreshMetadataCache(testEcosystemNPM, "lodash", "sha256:bbbb", time.Now())
+	if err != nil || refreshed {
+		t.Fatalf("refresh with another digest = %v, %v, want false", refreshed, err)
+	}
+	if got, _ := db.GetMetadataCache(testEcosystemNPM, "lodash"); !got.FetchedAt.Time.Equal(fetched) {
+		t.Errorf("fetched_at = %v after a refresh with another digest, want %v", got.FetchedAt.Time, fetched)
+	}
+
+	now := time.Now().Truncate(time.Second)
+	refreshed, err = db.RefreshMetadataCache(testEcosystemNPM, "lodash", "sha256:aaaa", now)
+	if err != nil || !refreshed {
+		t.Fatalf("refresh = %v, %v, want true", refreshed, err)
+	}
+	got, err := db.GetMetadataCache(testEcosystemNPM, "lodash")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.FetchedAt.Time.Equal(now) {
+		t.Errorf("fetched_at = %v, want %v", got.FetchedAt.Time, now)
+	}
+	if got.ETag.String != `"abc123"` || got.ContentDigest.String != "sha256:aaaa" || got.Size.Int64 != 1024 || got.StoragePath != entry.StoragePath {
+		t.Errorf("refresh changed the row: %+v", got)
+	}
+
+	if refreshed, err := db.RefreshMetadataCache(testEcosystemNPM, "missing", "sha256:aaaa", now); err != nil || refreshed {
+		t.Errorf("refresh of a missing row = %v, %v, want false", refreshed, err)
+	}
+}

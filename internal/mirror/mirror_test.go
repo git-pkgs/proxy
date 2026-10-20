@@ -3,10 +3,12 @@ package mirror
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"log/slog"
 	"net/http"
 	"os"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -259,5 +261,92 @@ func TestNewMirrorDefaultWorkers(t *testing.T) {
 	m = New(nil, nil, nil, slog.Default(), -5)
 	if m.workers != 1 {
 		t.Errorf("workers = %d, want 1 (minimum)", m.workers)
+	}
+}
+
+// recordingFetcher fails every fetch and records the URLs it was asked for, so
+// a test can show nothing reached upstream.
+type recordingFetcher struct {
+	mu   sync.Mutex
+	urls []string
+}
+
+func (f *recordingFetcher) record(url string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.urls = append(f.urls, url)
+	return errors.New("recordingFetcher: no upstream in this test")
+}
+
+func (f *recordingFetcher) Fetch(_ context.Context, url string) (*fetch.Artifact, error) {
+	return nil, f.record(url)
+}
+
+func (f *recordingFetcher) FetchWithHeaders(_ context.Context, url string, _ http.Header) (*fetch.Artifact, error) {
+	return nil, f.record(url)
+}
+
+func (f *recordingFetcher) Head(_ context.Context, url string) (int64, string, error) {
+	return 0, "", f.record(url)
+}
+
+func (f *recordingFetcher) fetched() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.urls...)
+}
+
+func TestMirrorRunRefusesPackages(t *testing.T) {
+	m := setupTestMirror(t, 2)
+	fetcher := &recordingFetcher{}
+	m.proxy.Fetcher = fetcher
+	const reason = "packages cannot be mirrored here"
+	m.RefusePackages = reason
+
+	source := &PURLSource{PURLs: []string{"pkg:npm/lodash@4.17.21", "pkg:cargo/serde@1.0.0"}}
+	progress, err := m.Run(context.Background(), source)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+
+	if progress.Failed != 2 || progress.Completed != 0 || progress.Skipped != 0 {
+		t.Errorf("progress = %d failed, %d completed, %d skipped; want 2 failed only",
+			progress.Failed, progress.Completed, progress.Skipped)
+	}
+	if len(progress.Errors) != 2 {
+		t.Fatalf("errors = %+v, want one per package", progress.Errors)
+	}
+	for _, e := range progress.Errors {
+		if e.Error != reason {
+			t.Errorf("%s/%s error = %q, want %q", e.Ecosystem, e.Name, e.Error, reason)
+		}
+	}
+	if urls := fetcher.fetched(); len(urls) != 0 {
+		t.Errorf("refused packages were fetched from upstream: %v", urls)
+	}
+
+	stats, err := m.db.GetCacheStats()
+	if err != nil {
+		t.Fatalf("GetCacheStats: %v", err)
+	}
+	if stats.TotalArtifacts != 0 {
+		t.Errorf("cached artifacts = %d, want 0", stats.TotalArtifacts)
+	}
+}
+
+// Images keep their own refusal, so a mirror refusing packages still hands
+// docker and oci items to Images.
+func TestMirrorRefusePackagesLeavesImagesToImages(t *testing.T) {
+	m := setupTestMirror(t, 1)
+	m.proxy.Fetcher = &recordingFetcher{}
+	m.RefusePackages = "packages refused"
+	m.Images = UnavailableImages{Reason: "images refused"}
+
+	progress, err := m.Run(context.Background(), &PURLSource{PURLs: []string{"pkg:docker/library/alpine@3.20"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if len(progress.Errors) != 1 || progress.Errors[0].Error != "images refused" {
+		t.Errorf("errors = %+v, want the image refusal", progress.Errors)
 	}
 }

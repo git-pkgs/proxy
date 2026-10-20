@@ -82,15 +82,6 @@ func recordFailure(name string, labels map[string]string, detail FailureDetail) 
 	recentFailures.series[key] = stored
 }
 
-// ResetRecentFailures empties the recent failure history. The history is
-// process-wide, so tests that record or read failures call it to start from a
-// known state and to leave none behind.
-func ResetRecentFailures() {
-	recentFailures.Lock()
-	defer recentFailures.Unlock()
-	recentFailures.series = make(map[string][]Failure)
-}
-
 func failureKey(name string, labels map[string]string) string {
 	return name + "{" + labelKey(labels) + "}"
 }

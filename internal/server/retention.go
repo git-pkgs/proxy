@@ -59,11 +59,11 @@ func (s *Server) startRetentionLoop(ctx context.Context) {
 	}
 }
 
-// notCovered returns the known ecosystem keys that are not in covered.
+// notCovered returns the known ecosystem keys the global default cannot reach.
 func notCovered(covered []string) []string {
 	var missing []string
 	for _, key := range retention.KnownKeys {
-		if !slices.Contains(covered, key) {
+		if key == "generic" || !slices.Contains(covered, key) {
 			missing = append(missing, key)
 		}
 	}

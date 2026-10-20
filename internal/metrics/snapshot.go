@@ -94,20 +94,6 @@ func sampleOf(m *dto.Metric) Sample {
 	return s
 }
 
-// Names returns the name of every metric family in the snapshot, sorted.
-func (s *Snapshot) Names() []string {
-	if s == nil {
-		return nil
-	}
-
-	names := make([]string, 0, len(s.families))
-	for name := range s.families {
-		names = append(names, name)
-	}
-	sort.Strings(names)
-	return names
-}
-
 // Samples returns every series of a metric, or nil when it has never been
 // observed. Series are ordered by their label values so that rendering is
 // stable between scrapes.

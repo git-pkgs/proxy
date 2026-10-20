@@ -39,6 +39,8 @@ func TestArtifactDownloadUpstreamNotFoundReturns404(t *testing.T) {
 			func(p *Proxy) http.Handler { return NewGemHandler(p, "http://localhost").Routes() }},
 		{"hex", "/tarballs/phoenix-1.7.10.tar",
 			func(p *Proxy) http.Handler { return NewHexHandler(p, "http://localhost").Routes() }},
+		{"chef", "/api/v1/cookbooks/apt/versions/7.5.22/download",
+			func(p *Proxy) http.Handler { return NewChefHandler(p, "http://localhost", "http://localhost").Routes() }},
 	}
 
 	for _, tt := range tests {

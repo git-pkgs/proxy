@@ -66,7 +66,7 @@ The proxy never uploads artifact bytes to a scanner. Each scanner is notified wi
 | RPM | RHEL/Fedora | | ✓ |
 | Alpine | Alpine Linux | | ✓ |
 | Arch | Arch Linux | | ✓ |
-| Chef | Chef | | ✗ |
+| Chef Supermarket | Chef | | ✓ |
 | Generic | Any | | ✓ |
 | Helm | Kubernetes | Yes | ✓ |
 | Vagrant | Vagrant | | ✗ |
@@ -302,7 +302,7 @@ pluginManagement {
 
 ### Gradle HTTP Build Cache
 
-Configure in `settings.gradle(.kts)`:
+Configure in `settings.gradle.kts`:
 
 ```kotlin
 buildCache {
@@ -311,10 +311,12 @@ buildCache {
   }
   remote<HttpBuildCache> {
     url = uri("http://localhost:8080/gradle/")
-    push = true
+    isPush = System.getenv("CI") != null
   }
 }
 ```
+
+The proxy rejects uploads unless `gradle.build_cache.read_only` is set to `false`, see [docs/configuration.md](docs/configuration.md#gradle-build-cache).
 
 ### NuGet
 
@@ -368,6 +370,24 @@ conan remote disable conancenter
 ```
 
 Or configure in `~/.conan2/remotes.json`.
+
+### Chef Supermarket (Berkshelf, Policyfiles)
+
+Point Berkshelf at the proxy in your `Berksfile`:
+
+```ruby
+source "http://localhost:8080/chef"
+```
+
+Or set the default source of a Policyfile:
+
+```ruby
+default_source :supermarket, "http://localhost:8080/chef"
+```
+
+The proxy serves the `/universe` dependency index and the cookbook API, rewriting every download location to itself while leaving dependency constraints unchanged. Cookbook archives are fetched through the Supermarket download redirect and cached, so they stay available when the Supermarket is down. With `cache_metadata` on, the universe and cookbook metadata follow the usual TTL and stale fallback.
+
+To proxy a private Supermarket instead of `supermarket.chef.io`, set `upstream.chef` (or `PROXY_UPSTREAM_CHEF`) and add credentials under `upstream.auth` if it needs them. See [docs/configuration.md](docs/configuration.md#upstream-registries).
 
 ### Conda
 
@@ -855,7 +875,7 @@ storage:
   url: "file:///var/cache/proxy/artifacts"
   max_size: "10GB"  # Optional: evict LRU when exceeded
   retention:
-    default: "30d"  # Optional: evict artifacts not downloaded for 30 days
+    default: "30d"  # Optional: evict unused artifacts after 30 days; excludes generic
 
 database:
   driver: "sqlite"
@@ -1010,7 +1030,9 @@ proxy mirror --concurrency 8 pkg:npm/lodash@4.17.21
 proxy mirror --platform linux/amd64 pkg:docker/library/alpine@3.20
 ```
 
-The mirror command accepts the same storage and database flags as `serve`. Already-cached artifacts are skipped.
+The mirror command accepts the same storage and database flags as `serve`. Already-cached artifacts are skipped. If any package version fails to mirror, the command lists the errors and exits with status 1, so a CI step that warms the cache fails on a partial mirror.
+
+With `scanning.enabled`, the mirror command refuses every package and container image so nothing is cached unscanned. Each one is reported as failed, so the command exits with status 1. Scanners fetch the staged bytes from the running server, which this command does not start. Use the mirror API below instead, since its jobs run inside the server and go through the pre-cache scan. `--dry-run` still lists what would be mirrored.
 
 A mirror API is also available when the server is running:
 
@@ -1114,6 +1136,7 @@ Recently cached:
 | `GET /nuget/*` | NuGet V3 API |
 | `GET /composer/*` | Composer/Packagist protocol |
 | `GET /conan/*` | Conan C/C++ protocol |
+| `GET /chef/*` | Chef Supermarket protocol (universe, cookbook API and downloads) |
 | `GET /conda/*` | Conda/Anaconda protocol |
 | `GET /cran/*` | CRAN (R) protocol |
 | `GET /julia/*` | Julia Pkg server protocol |

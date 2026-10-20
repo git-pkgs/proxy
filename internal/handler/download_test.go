@@ -12,10 +12,9 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/database"
-	"github.com/git-pkgs/proxy/internal/httpclient"
 	"github.com/git-pkgs/proxy/internal/metrics"
-	"github.com/git-pkgs/proxy/internal/storage"
 	"github.com/git-pkgs/purl"
+	registryclient "github.com/git-pkgs/registries/client"
 	"github.com/git-pkgs/registries/fetch"
 )
 
@@ -44,7 +43,7 @@ func seedPackageWithPURL(t *testing.T, db *database.DB, store *mockStorage, ecos
 		t.Fatalf("failed to upsert version: %v", err)
 	}
 
-	storagePath := storage.ArtifactPath(ecosystem, "", name, version, filename)
+	storagePath := ecosystem + "/" + name + "/" + version + "/" + filename
 	store.files[storagePath] = []byte(content)
 	sharedArtifact := testArtifact(content, versionPURL, filename, "application/octet-stream")
 
@@ -1278,7 +1277,7 @@ func TestRPMHandler_DownloadCacheMiss(t *testing.T) {
 }
 
 func TestMavenHandler_UpstreamHeldReturns503(t *testing.T) {
-	held := &httpclient.HeldError{Host: "repo1.maven.org", Until: time.Now().Add(90 * time.Second), RetryAfter: 90 * time.Second}
+	held := &registryclient.HeldError{Host: "repo1.maven.org", Until: time.Now().Add(90 * time.Second), RetryAfter: 90 * time.Second}
 
 	t.Run("artifact", func(t *testing.T) {
 		proxy, _, _, fetcher := setupTestProxy(t)
@@ -1326,7 +1325,7 @@ func (fn roundTripperFunc) RoundTrip(req *http.Request) (*http.Response, error) 
 func TestMavenHandler_HeldArtifactMissesSkipCircuitBreaker(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
 	upstreamCalls := 0
-	gate := httpclient.NewRateLimitGate(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
+	gate := registryclient.NewRateLimitGate(roundTripperFunc(func(req *http.Request) (*http.Response, error) {
 		upstreamCalls++
 		return &http.Response{
 			StatusCode: http.StatusTooManyRequests,
@@ -1366,15 +1365,19 @@ func TestMavenHandler_HeldArtifactMissesSkipCircuitBreaker(t *testing.T) {
 }
 
 func TestHandlers_UpstreamHeldMetadataReturns503(t *testing.T) {
-	held := &httpclient.HeldError{Host: "upstream.example", Until: time.Now().Add(42 * time.Second), RetryAfter: 42 * time.Second}
+	held := &registryclient.HeldError{Host: "upstream.example", Until: time.Now().Add(42 * time.Second), RetryAfter: 42 * time.Second}
 	tests := []struct {
 		name    string
 		handler func(*Proxy) http.Handler
 		path    string
 	}{
 		{"npm metadata", func(p *Proxy) http.Handler { return NewNPMHandler(p, "http://localhost", "").Routes() }, "/lodash"},
-		{"pypi simple", func(p *Proxy) http.Handler { return NewPyPIHandler(p, "http://localhost").Routes() }, "/simple/requests/"},
-		{"pypi json", func(p *Proxy) http.Handler { return NewPyPIHandler(p, "http://localhost").Routes() }, "/pypi/requests/json"},
+		{"pypi simple", func(p *Proxy) http.Handler {
+			return NewPyPIHandlerWithUpstreams(p, "http://localhost", "", "").Routes()
+		}, "/simple/requests/"},
+		{"pypi json", func(p *Proxy) http.Handler {
+			return NewPyPIHandlerWithUpstreams(p, "http://localhost", "", "").Routes()
+		}, "/pypi/requests/json"},
 		{"cargo index", func(p *Proxy) http.Handler {
 			return NewCargoHandler(p, "http://localhost", "", "").Routes()
 		}, "/se/rd/serde"},

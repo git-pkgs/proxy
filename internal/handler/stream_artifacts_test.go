@@ -303,7 +303,7 @@ func TestStreamArtifactsOCIBlobShorterThanContentLengthIsIncomplete(t *testing.T
 	proxy, _, store, _ := setupTestProxy(t)
 	proxy.StreamArtifacts = true
 	useRealFetcher(t, proxy, upstream)
-	h := NewContainerHandler(proxy, "http://proxy.example", map[string]string{"ghcr": upstream.URL})
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example", "", map[string]string{"ghcr": upstream.URL})
 	srv := httptest.NewServer(h.Routes())
 	defer srv.Close()
 

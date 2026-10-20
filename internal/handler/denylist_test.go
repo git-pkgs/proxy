@@ -144,7 +144,7 @@ func TestPyPIDenylistSimpleRepresentations(t *testing.T) {
 func TestPyPIDenylistJSONMetadata(t *testing.T) {
 	p := testProxy()
 	setTestDenylist(t, p, "pkg:pypi/demo@1.0.0")
-	h := NewPyPIHandler(p, "https://proxy.example")
+	h := NewPyPIHandlerWithUpstreams(p, "https://proxy.example", "", "")
 	body := `{"info":{"name":"Demo","version":"1.0.0"},"releases":{"1.0.0":[{"url":"https://files.pythonhosted.org/packages/demo-1.0.0.tar.gz"}],"2.0.0":[]},"urls":[{"url":"https://files.pythonhosted.org/packages/demo-1.0.0.tar.gz"}]}`
 	out, err := h.rewriteJSONMetadata([]byte(body))
 	if err != nil {
@@ -170,7 +170,9 @@ func TestDenylistDownloadRoutes(t *testing.T) {
 		handler                   func(*Proxy) http.Handler
 	}{
 		{"npm", "/demo/-/demo-1.0.0.tgz", "demo-1.0.0.tgz", func(p *Proxy) http.Handler { return NewNPMHandler(p, "http://proxy.test", "").Routes() }},
-		{"pypi", "/packages/a/b/demo-1.0.0.tar.gz", "demo-1.0.0.tar.gz", func(p *Proxy) http.Handler { return NewPyPIHandler(p, "http://proxy.test").Routes() }},
+		{"pypi", "/packages/a/b/demo-1.0.0.tar.gz", "demo-1.0.0.tar.gz", func(p *Proxy) http.Handler {
+			return NewPyPIHandlerWithUpstreams(p, "http://proxy.test", "", "").Routes()
+		}},
 		{"cargo", "/crates/demo/1.0.0/download", "demo-1.0.0.crate", func(p *Proxy) http.Handler { return NewCargoHandler(p, "http://proxy.test", "", "").Routes() }},
 		{"deb", "/pool/main/d/demo/demo_1.0.0_amd64.deb", "demo_1.0.0_amd64.deb", func(p *Proxy) http.Handler { return NewDebianHandler(p, "http://proxy.test", "", nil).Routes() }},
 	} {
@@ -229,8 +231,12 @@ func TestDenylistMalformedMetadataFailsClosed(t *testing.T) {
 		handler                       func(*Proxy) http.Handler
 	}{
 		{"npm", "/demo", `{"versions":`, contentTypeJSON, func(p *Proxy) http.Handler { return NewNPMHandler(p, "https://proxy.test", "").Routes() }},
-		{"pypi-json", "/pypi/demo/json", `{"releases":`, contentTypeJSON, func(p *Proxy) http.Handler { return NewPyPIHandler(p, "https://proxy.test").Routes() }},
-		{"pypi-simple", "/simple/demo/", `{"files":{}}`, pypiSimpleJSON, func(p *Proxy) http.Handler { return NewPyPIHandler(p, "https://proxy.test").Routes() }},
+		{"pypi-json", "/pypi/demo/json", `{"releases":`, contentTypeJSON, func(p *Proxy) http.Handler {
+			return NewPyPIHandlerWithUpstreams(p, "https://proxy.test", "", "").Routes()
+		}},
+		{"pypi-simple", "/simple/demo/", `{"files":{}}`, pypiSimpleJSON, func(p *Proxy) http.Handler {
+			return NewPyPIHandlerWithUpstreams(p, "https://proxy.test", "", "").Routes()
+		}},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			p := testProxy()

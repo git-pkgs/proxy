@@ -3,6 +3,8 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -194,7 +196,6 @@ func TestCondaRepodataCooldownRejectsInvalidGzip(t *testing.T) {
 	}{
 		{"invalid header", []byte("not gzip")},
 		{"truncated body", compressed[:len(compressed)-4]},
-		{"decoded size exceeds limit", compressed},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
 			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -205,9 +206,6 @@ func TestCondaRepodataCooldownRejectsInvalidGzip(t *testing.T) {
 			proxy := testProxy()
 			proxy.HTTPClient = upstream.Client()
 			proxy.Cooldown = &cooldown.Config{Default: "3d"}
-			if tt.name == "decoded size exceeds limit" {
-				proxy.MetadataMaxSize = int64(len(compressed))
-			}
 			handler := NewCondaHandlerWithUpstream(proxy, "http://proxy.local", upstream.URL).Routes()
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/conda-forge/linux-64/repodata.json", nil))
@@ -215,5 +213,101 @@ func TestCondaRepodataCooldownRejectsInvalidGzip(t *testing.T) {
 				t.Fatalf("status = %d, want 502", w.Code)
 			}
 		})
+	}
+}
+
+// largeRepodata builds repodata with n old and n new entries in each of
+// packages and packages.conda.
+func largeRepodata(n int) []byte {
+	old := time.Now().Add(-30 * 24 * time.Hour).UnixMilli()
+	recent := time.Now().UnixMilli()
+	var b strings.Builder
+	b.WriteString(`{"info":{"subdir":"linux-64"},"repodata_version":1`)
+	for _, key := range []string{"packages", "packages.conda"} {
+		fmt.Fprintf(&b, `,%q:{`, key)
+		for i := range 2 * n {
+			if i > 0 {
+				b.WriteByte(',')
+			}
+			ts, kind := old, "old"
+			if i%2 == 1 {
+				ts, kind = recent, "new"
+			}
+			fmt.Fprintf(&b, `"pkg-%d-%s.conda":{"name":"pkg%d","version":"1.0","timestamp":%d,"depends":["python >=3.10,<4","libgcc >=13"],"md5":"%032d"}`,
+				i, kind, i, ts, i)
+		}
+		b.WriteByte('}')
+	}
+	b.WriteString(`,"removed":[]}`)
+	return []byte(b.String())
+}
+
+func TestCondaRepodataCooldownStreamsPastMetadataLimit(t *testing.T) {
+	plain := largeRepodata(2000)
+	compressed := gzipPayload(t, plain)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(headerContentEncoding, "gzip")
+		_, _ = w.Write(compressed)
+	}))
+	defer upstream.Close()
+
+	proxy := testProxy()
+	proxy.HTTPClient = upstream.Client()
+	proxy.Cooldown = &cooldown.Config{Default: "3d"}
+	proxy.MetadataMaxSize = int64(len(plain) / 10)
+	handler := NewCondaHandlerWithUpstream(proxy, "http://proxy.local", upstream.URL).Routes()
+
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/conda-forge/linux-64/repodata.json", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200 for repodata %d times the metadata limit", w.Code, len(plain)/int(proxy.MetadataMaxSize))
+	}
+	var result struct {
+		Info     map[string]any             `json:"info"`
+		Packages map[string]json.RawMessage `json:"packages"`
+		Conda    map[string]json.RawMessage `json:"packages.conda"`
+		Removed  []string                   `json:"removed"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &result); err != nil {
+		t.Fatalf("response is not valid JSON: %v", err)
+	}
+	if len(result.Packages) != 2000 || len(result.Conda) != 2000 || result.Info["subdir"] != "linux-64" || result.Removed == nil {
+		t.Fatalf("got %d packages, %d conda packages, info %v", len(result.Packages), len(result.Conda), result.Info)
+	}
+	for name := range result.Packages {
+		if strings.HasSuffix(name, "-new.conda") {
+			t.Fatalf("%s is inside the cooldown but was kept", name)
+		}
+	}
+	want := `"pkg-0-old.conda":{"name":"pkg0","version":"1.0","timestamp":`
+	if !strings.Contains(w.Body.String(), want) {
+		t.Errorf("kept entries should keep their upstream bytes")
+	}
+}
+
+func TestCondaRepodataCooldownAbortsTruncatedStream(t *testing.T) {
+	compressed := gzipPayload(t, largeRepodata(2000))
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set(headerContentEncoding, "gzip")
+		_, _ = w.Write(compressed[:len(compressed)*3/4])
+	}))
+	defer upstream.Close()
+
+	proxy := testProxy()
+	proxy.HTTPClient = upstream.Client()
+	proxy.Cooldown = &cooldown.Config{Default: "3d"}
+	server := httptest.NewServer(NewCondaHandlerWithUpstream(proxy, "http://proxy.local", upstream.URL).Routes())
+	defer server.Close()
+
+	resp, err := server.Client().Get(server.URL + "/conda-forge/linux-64/repodata.json")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("status = %d; want the stream to start before the upstream body breaks", resp.StatusCode)
+	}
+	if _, err := io.ReadAll(resp.Body); err == nil {
+		t.Fatal("read a truncated repodata response without an error")
 	}
 }
