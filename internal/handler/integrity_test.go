@@ -14,8 +14,6 @@ import (
 	"strings"
 	"testing"
 	"testing/iotest"
-
-	"github.com/git-pkgs/proxy/internal/storage"
 )
 
 func sha256Hex(data string) string {
@@ -361,10 +359,13 @@ func TestCorruptCachedArtifactAbortsResponse(t *testing.T) {
 	proxy, db, store, _ := setupTestProxy(t)
 	content := strings.Repeat("cached content ", 10000)
 	seedPackage(t, db, store, "npm", "corrupt", "1.0.0", "corrupt-1.0.0.tgz", content)
-	storagePath := storage.ArtifactPath("npm", "", "corrupt", "1.0.0", "corrupt-1.0.0.tgz")
+	seeded, err := db.GetArtifact("pkg:npm/corrupt@1.0.0", "corrupt-1.0.0.tgz")
+	if err != nil || seeded == nil || !seeded.StoragePath.Valid {
+		t.Fatalf("seeded record = %+v (err %v), want a storage path", seeded, err)
+	}
 	tampered := []byte(content)
 	tampered[len(tampered)-1] = '!'
-	store.files[storagePath] = tampered
+	store.files[seeded.StoragePath.String] = tampered
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		result, err := proxy.GetCachedArtifact(r.Context(), "npm", "corrupt", "1.0.0", "corrupt-1.0.0.tgz")
