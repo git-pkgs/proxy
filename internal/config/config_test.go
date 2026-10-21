@@ -1838,3 +1838,50 @@ func TestLoadArtifactMaxSizeFromEnv(t *testing.T) {
 		t.Errorf("ArtifactMaxSize = %q, want %q", cfg.ArtifactMaxSize, "2GB")
 	}
 }
+
+func TestMavenRepositoryNames(t *testing.T) {
+	for _, tt := range []struct {
+		name    string
+		wantErr bool
+	}{
+		{"grails", false},
+		{"grails-restricted", false},
+		{"company-releases", false},
+		{"org", true},
+		{"com", true},
+		{"tools", true},
+		{"software", true},
+		{"jakarta", true},
+		{"javax", true},
+		{"junit", true},
+		{"androidx", true},
+		{"gradle", true},
+		{"nebula", true},
+		{"my repo", true},
+		{"rel#1", true},
+		{"rel?x", true},
+		{"-releases", true},
+		{"repo_2.x", false},
+		{"ORG", false},
+		{"Tools", false},
+		{"io", true},
+		{"IO", true},
+		{"de", true},
+		{"x", true},
+		{"net", true},
+		{"a/b", true},
+	} {
+		cfg := Default()
+		cfg.Upstream.MavenRepositories = map[string]string{tt.name: "https://repo.example/maven"}
+		err := cfg.Validate()
+		if (err != nil) != tt.wantErr {
+			t.Errorf("maven_repositories name %q: error = %v, want error %v", tt.name, err, tt.wantErr)
+		}
+	}
+
+	cfg := Default()
+	cfg.Upstream.MavenRepositories = map[string]string{"grails": "not a url"}
+	if err := cfg.Validate(); err == nil {
+		t.Error("maven_repositories with an invalid URL: want an error")
+	}
+}

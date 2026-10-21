@@ -60,6 +60,7 @@
 package config
 
 import (
+	_ "embed"
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -644,6 +645,14 @@ type UpstreamConfig struct {
 	// Default: https://repo1.maven.org/maven2
 	Maven string `json:"maven" yaml:"maven"`
 
+	// MavenRepositories maps repository names to additional Maven repository
+	// base URLs, served at /maven/{name}/. upstream.maven stays the default
+	// at /maven/. A name must not be the first segment of a group ID, such
+	// as "org" or "tools", since it would hide those groups in the default
+	// repository; see validateMavenRepositoryName.
+	// Example: {"grails": "https://repo.grails.org/grails/restricted"}.
+	MavenRepositories map[string]string `json:"maven_repositories" yaml:"maven_repositories"`
+
 	// GradlePluginPortal is the upstream Gradle Plugin Portal Maven URL.
 	// Used to resolve Gradle plugin marker artifacts.
 	// Default: https://plugins.gradle.org/m2
@@ -848,6 +857,14 @@ func (u *UpstreamConfig) Validate() error {
 	if err := u.validateGitUpstreams(); err != nil {
 		return err
 	}
+	if err := validateNamedUpstreams("upstream.maven_repositories", u.MavenRepositories); err != nil {
+		return err
+	}
+	for name := range u.MavenRepositories {
+		if err := validateMavenRepositoryName(name); err != nil {
+			return err
+		}
+	}
 	if err := validateNamedUpstreams("upstream.debian_repositories", u.DebianRepositories); err != nil {
 		return err
 	}
@@ -902,6 +919,61 @@ func CompileGenericArtifactPattern(pattern string) (*regexp.Regexp, error) {
 		}
 	}
 	return re, nil
+}
+
+// mavenGroupRootList lists the first path segments of group IDs on Maven
+// Central and Google's Maven repository, one per line.
+//
+//go:embed maven_group_roots.txt
+var mavenGroupRootList string
+
+// mavenGroupRoots are the first segments of group IDs a repository name
+// must not take: those in mavenGroupRootList, and generic top-level domains
+// group IDs are commonly reversed from.
+var mavenGroupRoots = func() map[string]bool {
+	roots := map[string]bool{}
+	for _, tld := range []string{"app", "biz", "cloud", "com", "dev", "edu", "gov", "info", "int",
+		"io", "mil", "name", "net", "org", "pro", "tech", "xyz"} {
+		roots[tld] = true
+	}
+	for line := range strings.Lines(mavenGroupRootList) {
+		if line = strings.TrimSpace(line); line != "" && !strings.HasPrefix(line, "#") {
+			roots[line] = true
+		}
+	}
+	return roots
+}()
+
+// mavenRepositoryNamePattern is what a repository name may look like: the
+// characters of a group ID segment, which clients send unescaped.
+var mavenRepositoryNamePattern = regexp.MustCompile(`^[A-Za-z0-9][A-Za-z0-9._-]*$`)
+
+// countryCodeLength is the length of a country-code top-level domain.
+const countryCodeLength = 2
+
+// validateMavenRepositoryName refuses names that are likely the first
+// segment of a group ID. /maven/{name}/ is matched before the default
+// repository, so such a name would hide every group under it there:
+// a repository named "tools" would take /maven/tools/jackson/... away from
+// Maven Central. Names are limited to characters that reach the handler
+// unescaped. Paths are case-sensitive, so names are compared as they
+// are. Names of two characters or less are refused as country codes. The
+// list can't be complete, since group IDs are free-form, so the
+// documentation also asks for names that can't be a group root.
+func validateMavenRepositoryName(name string) error {
+	if !mavenRepositoryNamePattern.MatchString(name) {
+		return fmt.Errorf("invalid upstream.maven_repositories name %q: use letters, digits, '.', '_' and '-', "+
+			"starting with a letter or digit, so the name works as a URL path segment", name)
+	}
+	if len(name) <= countryCodeLength {
+		return fmt.Errorf("invalid upstream.maven_repositories name %q: names of two characters or less "+
+			"could hide country-code group IDs in the default repository", name)
+	}
+	if mavenGroupRoots[name] {
+		return fmt.Errorf("invalid upstream.maven_repositories name %q: it would hide group IDs starting with %q "+
+			"in the default repository; use a name such as \"%s-repo\"", name, name, name)
+	}
+	return nil
 }
 
 // debianReservedRepositoryNames are the upstream.debian archive's own root

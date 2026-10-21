@@ -74,10 +74,18 @@ func golangGet(t *testing.T, url string) {
 }
 
 // golangArtifact returns the record of the zip named filename.
+// golangFilenameMatch matches a zip's cached filename: the plain name, or,
+// for a module path with capitals, the plain name with a hash of the path.
+const golangFilenameMatch = `(filename = ? OR filename LIKE ?)`
+
+func golangFilenameArgs(filename string) []any {
+	return []any{filename, strings.TrimSuffix(filename, ".zip") + "~%.zip"}
+}
+
 func golangArtifact(t *testing.T, db *database.DB, filename string) database.Artifact {
 	t.Helper()
 	var art database.Artifact
-	if err := db.Get(&art, db.Rebind(`SELECT * FROM artifacts WHERE filename = ?`), filename); err != nil {
+	if err := db.Get(&art, db.Rebind(`SELECT * FROM artifacts WHERE `+golangFilenameMatch), golangFilenameArgs(filename)...); err != nil {
 		t.Fatalf("reading artifact %s: %v", filename, err)
 	}
 	return art
@@ -85,8 +93,8 @@ func golangArtifact(t *testing.T, db *database.DB, filename string) database.Art
 
 func golangBackdate(t *testing.T, db *database.DB, filename string, fetched, accessed time.Time) {
 	t.Helper()
-	query := db.Rebind(`UPDATE artifacts SET fetched_at = ?, last_accessed_at = ? WHERE filename = ?`)
-	if _, err := db.Exec(query, fetched, accessed, filename); err != nil {
+	query := db.Rebind(`UPDATE artifacts SET fetched_at = ?, last_accessed_at = ? WHERE ` + golangFilenameMatch)
+	if _, err := db.Exec(query, append([]any{fetched, accessed}, golangFilenameArgs(filename)...)...); err != nil {
 		t.Fatalf("backdating %s: %v", filename, err)
 	}
 }

@@ -219,6 +219,12 @@ upstream:
   # Maven repository URL (used by /maven endpoint)
   maven: "https://repo1.maven.org/maven2"
 
+  # Additional Maven repositories, served at /maven/{name}/. A name must not
+  # be the start of a group ID (such as "org" or "tools"), since it would hide
+  # those groups in the default repository.
+  # maven_repositories:
+  #   grails: "https://repo.grails.org/grails/restricted"
+
   # Gradle Plugin Portal Maven URL (fallback for plugin marker artifacts)
   gradle_plugin_portal: "https://plugins.gradle.org/m2"
 

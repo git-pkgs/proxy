@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/registries/fetch"
 )
@@ -119,12 +121,13 @@ func (h *GoHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, module, version string) {
 	// Decode module path (! followed by lowercase = uppercase)
 	decodedModule := decodeGoModule(module)
-	filename := fmt.Sprintf("%s@%s.zip", lastComponent(decodedModule), version)
+	filename := goZipFilename(decodedModule, version)
 
 	h.proxy.Logger.Info("go module download request",
 		"module", decodedModule, "version", version)
 
 	downloadURL := h.upstreamURL + r.URL.Path
+	h.discardOtherModulesZip(decodedModule, module, version, filename)
 	result, err := h.proxy.GetOrFetchArtifactFromURL(
 		r.Context(), "golang", decodedModule, version, filename, downloadURL,
 	)
@@ -146,6 +149,55 @@ func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, modul
 	}
 
 	ServeArtifactRequest(w, r, result)
+}
+
+// goZipFilename is the name a module zip is cached under. Module paths are
+// case-sensitive, but the zip is stored under the module's PURL, which
+// lowercases golang names, so github.com/Sirupsen/logrus and
+// github.com/sirupsen/logrus share one package. A path with uppercase
+// letters therefore gets a hash of its exact spelling in the filename. An
+// all-lowercase path keeps the plain name, so existing cache entries stay
+// valid.
+func goZipFilename(module, version string) string {
+	base := lastComponent(module) + "@" + version
+	if module == strings.ToLower(module) {
+		return base + ".zip"
+	}
+	digest := sha256.Sum256([]byte(module))
+	return base + "~" + hex.EncodeToString(digest[:goModuleHashBytes]) + ".zip"
+}
+
+// goModuleHashBytes is how much of a module path's hash a cached zip's
+// filename carries: enough to tell apart paths that differ only in case.
+const goModuleHashBytes = 8
+
+// discardOtherModulesZip drops a cached zip that another module stored
+// under filename. Before module paths kept their case, a module with
+// uppercase letters was cached under the plain filename of its lowercase
+// twin, and whichever came first was served for both. The upstream URL a
+// zip was fetched from names its module in escaped form, so a record whose
+// URL names a different module is discarded and fetched again. Only the
+// module path is compared, so pointing upstream.go elsewhere keeps the cache.
+func (h *GoHandler) discardOtherModulesZip(module, escapedModule, version, filename string) {
+	_, versionPURL, err := packagePURLStrings("golang", module, version)
+	if err != nil {
+		return
+	}
+	record, err := h.proxy.DB.GetArtifact(versionPURL, filename)
+	if err != nil || record == nil || !record.StoragePath.Valid || record.Source == database.SourceLocal {
+		return
+	}
+	// Only a URL that names another Go module proves the zip is someone
+	// else's; a record of unknown origin is kept.
+	if !strings.Contains(record.UpstreamURL, "/@v/") ||
+		strings.HasSuffix(record.UpstreamURL, "/"+escapedModule+"/@v/"+version+".zip") {
+		return
+	}
+	h.proxy.Logger.Warn("cached zip belongs to a module that differs only in case, discarding",
+		"module", module, "version", version, "cached_from", record.UpstreamURL)
+	if err := h.proxy.DB.DiscardArtifact(versionPURL, filename, record.StoragePath.String); err != nil {
+		h.proxy.Logger.Warn("failed to discard cached zip", "module", module, "version", version, "error", err)
+	}
 }
 
 // proxyCached forwards a request with metadata caching.

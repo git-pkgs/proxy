@@ -174,6 +174,26 @@ func TestNPMRewriteMetadata(t *testing.T) {
 	}
 }
 
+func TestNPMRewriteMetadataLogsOncePerDocument(t *testing.T) {
+	var logs bytes.Buffer
+	proxy := testProxy()
+	proxy.Logger = slog.New(slog.NewTextHandler(&logs, &slog.HandlerOptions{Level: slog.LevelDebug}))
+	h := &NPMHandler{proxy: proxy, proxyURL: "http://localhost:8080"}
+
+	input := `{"name":"lodash","versions":{
+		"4.17.19":{"dist":{"tarball":"https://registry.npmjs.org/lodash/-/lodash-4.17.19.tgz"}},
+		"4.17.20":{"dist":{"tarball":"https://registry.npmjs.org/lodash/-/lodash-4.17.20.tgz"}},
+		"4.17.21":{"dist":{"tarball":"https://registry.npmjs.org/lodash/-/lodash-4.17.21.tgz"}}}}`
+	if _, err := h.rewriteMetadata("lodash", []byte(input)); err != nil {
+		t.Fatalf("rewriteMetadata failed: %v", err)
+	}
+
+	lines := strings.Split(strings.TrimSpace(logs.String()), "\n")
+	if len(lines) != 1 || !strings.Contains(lines[0], `msg="rewrote tarball URLs"`) || !strings.Contains(lines[0], "count=3") {
+		t.Errorf("logs = %q, want one line counting 3 rewrites", logs.String())
+	}
+}
+
 func TestNPMRewriteMetadataScopedPackage(t *testing.T) {
 	h := &NPMHandler{
 		proxy:    testProxy(),
