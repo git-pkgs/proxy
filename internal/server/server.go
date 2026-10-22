@@ -394,7 +394,7 @@ func (s *Server) serve(listener net.Listener) error {
 	// Hosted package endpoints (opt-in via hosted.enabled or PROXY_HOSTED_ENABLED)
 	if s.cfg.Hosted.Enabled {
 		hostedAPI := NewHostedAPIHandler(proxy, s.cfg.Hosted.MaxUploadBytes(), s.logger)
-		registerHostedRoutes(r, hostedAPI, s.cfg.Hosted.TokenExpanded())
+		registerHostedRoutes(r, hostedAPI, newHostedAuth(s.cfg.Hosted))
 	}
 
 	s.http = &http.Server{
@@ -494,7 +494,13 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	genericHandler := handler.NewGenericHandler(proxy, s.cfg.Upstream.Generic, s.cfg.Upstream.GenericArtifacts)
 
 	r = r.With(sandboxUpstreamContent, rejectQueryInPath)
-	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))
+	npmRoutes := npmHandler.Routes()
+	if s.cfg.Hosted.Enabled {
+		publish := NewHostedAPIHandler(proxy, s.cfg.Hosted.MaxUploadBytes(), s.logger)
+		npmRoutes = withNPMPublish(npmRoutes,
+			requireHostedToken(newHostedAuth(s.cfg.Hosted))(http.HandlerFunc(publish.HandleNPMPublish)))
+	}
+	r.Mount("/npm", http.StripPrefix("/npm", npmRoutes))
 	r.Mount("/cargo", http.StripPrefix("/cargo", cargoHandler.Routes()))
 	r.Mount("/gem", http.StripPrefix("/gem", gemHandler.Routes()))
 	r.Mount("/go", http.StripPrefix("/go", goHandler.Routes()))

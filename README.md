@@ -1187,13 +1187,14 @@ Recently cached:
 
 ### Hosted API
 
-Registered when `hosted.enabled` is set. Pushing and deleting require `Authorization: Bearer <hosted.token>`.
+Registered when `hosted.enabled` is set. Pushing and deleting require a token from `hosted.token` or `hosted.tokens`, sent as `Authorization: Bearer <token>`. `npm publish` to `/npm/` uses the same tokens; see [Publishing with npm](docs/configuration.md#publishing-with-npm).
 
 | Endpoint | Description |
 |----------|-------------|
 | `PUT /api/hosted/{ecosystem}/{name}/{version}` | Push the request body as the archive for a version (npm and composer) |
 | `GET /api/hosted/{ecosystem}/{name}` | List the archives pushed for a package |
 | `DELETE /api/hosted/{ecosystem}/{name}/{version}` | Delete a pushed version |
+| `PUT /npm/{name}` | `npm publish` of one new version |
 
 ### Cache API
 

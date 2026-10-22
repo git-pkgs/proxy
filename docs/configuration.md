@@ -1222,7 +1222,7 @@ Set to `"0"` to disable the timeout entirely (requests then rely only on the ser
 
 Operators can push a package archive into the proxy under a name and version. The proxy serves it in place of the upstream archive with the same version, or in addition to the upstream's versions. Use it to ship a patched build of a dependency without running a separate registry. Files that aren't packages, such as prebuilt binaries other builds download, can be pushed as [generic files](#generic-files).
 
-The `/api/hosted` endpoints are disabled by default. Because a pushed version replaces the upstream one for every client, enabling them requires a token:
+The `/api/hosted` endpoints and `npm publish` are disabled by default. Because a pushed version replaces the upstream one for every client, enabling them requires a token:
 
 ```yaml
 hosted:
@@ -1231,17 +1231,55 @@ hosted:
   max_upload_size: "100MB"
   npm_scopes: ["@acme"]
   composer_vendors: ["acme"]
+  tokens:
+    - name: ci
+      token: "${PROXY_HOSTED_TOKEN_CI}"
+      push: ["npm:@acme/*", "composer:acme/*"]
 ```
 
 | Config | Environment | Description |
 |--------|-------------|-------------|
 | `hosted.enabled` | `PROXY_HOSTED_ENABLED` | Register the `/api/hosted` endpoints (default `false`) |
-| `hosted.token` | `PROXY_HOSTED_TOKEN` | Bearer token required to push and delete; required when enabled, supports `${VAR}` |
+| `hosted.token` | `PROXY_HOSTED_TOKEN` | Token that may push and delete any package; supports `${VAR}` |
+| `hosted.tokens` | | Further tokens limited to some packages, see [Tokens](#tokens). Enabling hosting requires `hosted.token` or at least one of these |
 | `hosted.max_upload_size` | `PROXY_HOSTED_MAX_UPLOAD_SIZE` | Maximum size of one pushed archive or file (default `100MB`) |
 | `hosted.npm_scopes` | `PROXY_HOSTED_NPM_SCOPES` | npm scopes served from pushed packages only (comma-separated in the environment) |
 | `hosted.composer_vendors` | `PROXY_HOSTED_COMPOSER_VENDORS` | Composer vendors served from pushed packages only |
 
 `hosted.enabled` cannot be combined with `storage.cache_artifacts: false`.
+
+### Tokens
+
+Clients send a token as `Authorization: Bearer <token>` (npm, `proxy hosted`, curl), as the password of Basic authentication with any user name, or as the bare header value.
+
+`hosted.token` may push and delete anything. Each entry in `hosted.tokens` may only push and delete the packages its `push` patterns name, so a CI job can publish its own packages without being able to replace any upstream one:
+
+| Field | Description |
+|-------|-------------|
+| `name` | Identifies the token in logs |
+| `token` | The secret; supports `${VAR}` |
+| `push` | Patterns as `{ecosystem}:{pattern}`, where the ecosystem is `npm`, `composer` or `generic`. The pattern is matched against the package name with Go's `path.Match`, so `*` doesn't match `/`: `npm:@acme/*` covers the scope, `npm:acme-*` unscoped packages with that prefix. Composer names are matched case-insensitively. |
+
+A push or delete outside a token's patterns answers 403. Listing pushed packages needs no token.
+
+### Publishing with npm
+
+`npm publish` works against the proxy's npm endpoint. The tarball goes through the same checks as a push to `/api/hosted`, and the version is listed like any pushed version. Point the package's registry at the proxy, for example in its `.npmrc`:
+
+```ini
+@acme:registry=https://proxy.example.com/npm/
+//proxy.example.com/npm/:_authToken=${PROXY_HOSTED_TOKEN_CI}
+```
+
+Then:
+
+```bash
+npm publish
+```
+
+One version is published per request. Pushed versions have no dist-tags of their own: for a package the upstream doesn't know, `latest` is the highest pushed version, otherwise the upstream's dist-tags stay. Publishing with `--tag` is therefore refused with 400. `npm unpublish`, `npm deprecate` and `npm dist-tag` aren't supported; remove a version with `proxy hosted delete` or `DELETE /api/hosted/npm/...`. Publishing a version again answers 409, as with any push.
+
+Put packages you publish into a scope listed in `hosted.npm_scopes`, and give CI a token limited to that scope. Otherwise a published version is listed next to the upstream's versions of the same name.
 
 ### Pushing a patched package
 

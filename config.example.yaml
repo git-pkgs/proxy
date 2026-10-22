@@ -421,6 +421,12 @@ gradle:
 #   # about them, so nobody can mix in versions by publishing the same name.
 #   npm_scopes: ["@acme"]
 #   composer_vendors: ["acme"]
+#   # Tokens that may only push and delete some packages, e.g. for CI jobs
+#   # running npm publish. hosted.token may push anything.
+#   tokens:
+#     - name: ci
+#       token: "${PROXY_HOSTED_TOKEN_CI}"
+#       push: ["npm:@acme/*", "composer:acme/*"]
 
 # Re-mirror container image tags on a schedule, so a moved tag is picked up
 # even when nobody pulls it. An unchanged tag costs one HEAD request.

@@ -2,6 +2,7 @@ package config
 
 import (
 	"slices"
+	"strings"
 	"testing"
 )
 
@@ -33,6 +34,52 @@ func TestHostedConfigValidate(t *testing.T) {
 			err := tt.hosted.Validate()
 			if (err != nil) != tt.wantErr {
 				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestHostedConfigValidateTokens(t *testing.T) {
+	t.Setenv("HOSTED_TEST_CI_TOKEN", "ci-secret")
+	ci := func(push ...string) HostedToken { return HostedToken{Name: "ci", Token: "ci-secret", Push: push} }
+
+	tests := []struct {
+		name    string
+		hosted  HostedConfig
+		wantErr string
+	}{
+		{name: "tokens without hosted.token", hosted: HostedConfig{Enabled: true, Tokens: []HostedToken{ci("npm:@acme/*")}}},
+		{name: "token from env reference", hosted: HostedConfig{Enabled: true,
+			Tokens: []HostedToken{{Name: "ci", Token: "${HOSTED_TEST_CI_TOKEN}", Push: []string{"npm:*"}}}}},
+		{name: "several patterns", hosted: HostedConfig{Enabled: true, Token: "admin",
+			Tokens: []HostedToken{ci("npm:@acme/*", "composer:acme/*", "generic:tools")}}},
+		{name: "missing name", hosted: HostedConfig{Enabled: true,
+			Tokens: []HostedToken{{Token: "x", Push: []string{"npm:*"}}}}, wantErr: "name is required"},
+		{name: "duplicate name", hosted: HostedConfig{Enabled: true,
+			Tokens: []HostedToken{ci("npm:*"), {Name: "ci", Token: "other", Push: []string{"npm:*"}}}}, wantErr: "used twice"},
+		{name: "missing token", hosted: HostedConfig{Enabled: true,
+			Tokens: []HostedToken{{Name: "ci", Push: []string{"npm:*"}}}}, wantErr: "token is required"},
+		{name: "same secret as hosted.token", hosted: HostedConfig{Enabled: true, Token: "ci-secret",
+			Tokens: []HostedToken{ci("npm:*")}}, wantErr: "also used"},
+		{name: "no patterns", hosted: HostedConfig{Enabled: true, Tokens: []HostedToken{ci()}}, wantErr: "at least one pattern"},
+		{name: "pattern without ecosystem", hosted: HostedConfig{Enabled: true, Tokens: []HostedToken{ci("@acme/*")}},
+			wantErr: "{ecosystem}:{pattern}"},
+		{name: "unsupported ecosystem", hosted: HostedConfig{Enabled: true, Tokens: []HostedToken{ci("pypi:acme-*")}},
+			wantErr: "ecosystem must be one of"},
+		{name: "malformed pattern", hosted: HostedConfig{Enabled: true, Tokens: []HostedToken{ci("npm:[acme")}},
+			wantErr: "syntax error"},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := tt.hosted.Validate()
+			if tt.wantErr == "" {
+				if err != nil {
+					t.Errorf("Validate() error = %v", err)
+				}
+				return
+			}
+			if err == nil || !strings.Contains(err.Error(), tt.wantErr) {
+				t.Errorf("Validate() error = %v, want it to contain %q", err, tt.wantErr)
 			}
 		})
 	}

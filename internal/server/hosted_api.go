@@ -42,10 +42,10 @@ type HostedListResponse struct {
 
 // registerHostedRoutes mounts /api/hosted. Listing is open like the rest of
 // the API; pushing and deleting require the bearer token.
-func registerHostedRoutes(r chi.Router, h *HostedAPIHandler, token string) {
+func registerHostedRoutes(r chi.Router, h *HostedAPIHandler, auth *hostedAuth) {
 	r.Get("/api/hosted/{ecosystem}/*", h.HandleList)
 	r.Group(func(w chi.Router) {
-		w.Use(requireBearerToken(token))
+		w.Use(requireHostedToken(auth))
 		w.Put("/api/hosted/{ecosystem}/*", h.HandlePush)
 		w.Delete("/api/hosted/{ecosystem}/*", h.HandleDelete)
 	})
@@ -78,6 +78,10 @@ func (h *HostedAPIHandler) HandlePush(w http.ResponseWriter, r *http.Request) {
 	target, err := handler.HostedTargetFor(path.ecosystem, path.name, path.version, path.filename)
 	if err != nil {
 		badRequest(w, err.Error())
+		return
+	}
+	if !mayPush(r, path.ecosystem, path.name) {
+		writeError(w, http.StatusForbidden, ErrCodeForbidden, mayNotPushMessage(path.ecosystem, path.name))
 		return
 	}
 	wantSHA256 := r.URL.Query().Get("sha256")
@@ -115,20 +119,27 @@ func (h *HostedAPIHandler) HandlePush(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *HostedAPIHandler) pushError(w http.ResponseWriter, err error) {
+	status, code, message := h.pushErrorResponse(err)
+	writeError(w, status, code, message)
+}
+
+// pushErrorResponse maps a push error to the status, code and message
+// clients get, logging the ones that aren't the client's fault.
+func (h *HostedAPIHandler) pushErrorResponse(err error) (int, string, string) {
 	var tooLarge *http.MaxBytesError
 	switch {
 	case errors.As(err, &tooLarge):
-		writeError(w, http.StatusRequestEntityTooLarge, ErrCodeBadRequest, "archive exceeds hosted.max_upload_size")
+		return http.StatusRequestEntityTooLarge, ErrCodeBadRequest, "archive exceeds hosted.max_upload_size"
 	case errors.Is(err, handler.ErrHostedInvalidArchive), errors.Is(err, handler.ErrHostedManifestMismatch),
 		errors.Is(err, handler.ErrHostedChecksumMismatch):
-		badRequest(w, err.Error())
+		return http.StatusBadRequest, ErrCodeBadRequest, err.Error()
 	case errors.Is(err, handler.ErrHostedExists):
-		writeError(w, http.StatusConflict, ErrCodeConflict, err.Error())
+		return http.StatusConflict, ErrCodeConflict, err.Error()
 	case errors.Is(err, handler.ErrVersionDenied), errors.Is(err, handler.ErrArtifactBlocked):
-		writeError(w, http.StatusForbidden, ErrCodeBadRequest, err.Error())
+		return http.StatusForbidden, ErrCodeBadRequest, err.Error()
 	default:
 		h.logger.Error("failed to push package archive", "error", err)
-		internalError(w, "failed to store archive")
+		return http.StatusInternalServerError, ErrCodeInternal, "failed to store archive"
 	}
 }
 
@@ -174,6 +185,7 @@ func (h *HostedAPIHandler) HandleList(w http.ResponseWriter, r *http.Request) {
 // @Param version path string true "Version"
 // @Success 204
 // @Failure 401 {object} ErrorResponse
+// @Failure 403 {object} ErrorResponse
 // @Failure 404 {object} ErrorResponse
 // @Router /api/hosted/{ecosystem}/{name}/{version} [delete]
 func (h *HostedAPIHandler) HandleDelete(w http.ResponseWriter, r *http.Request) {
@@ -183,6 +195,10 @@ func (h *HostedAPIHandler) HandleDelete(w http.ResponseWriter, r *http.Request) 
 	}
 	if err := handler.ValidateHostedPath(path.ecosystem, path.name, path.version, path.filename); err != nil {
 		badRequest(w, err.Error())
+		return
+	}
+	if !mayPush(r, path.ecosystem, path.name) {
+		writeError(w, http.StatusForbidden, ErrCodeForbidden, mayNotPushMessage(path.ecosystem, path.name))
 		return
 	}
 	var err error

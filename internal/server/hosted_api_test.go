@@ -25,6 +25,7 @@ import (
 
 const (
 	testHostedToken     = "push-token"
+	testScopedToken     = "acme-token"
 	testHostedMaxUpload = 4096
 )
 
@@ -78,8 +79,15 @@ func newHostedTestServer(t *testing.T) hostedTestServer {
 	t.Cleanup(upstream.Close)
 
 	r := chi.NewRouter()
-	registerHostedRoutes(r, NewHostedAPIHandler(proxy, testHostedMaxUpload, logger), testHostedToken)
-	r.Mount("/npm", http.StripPrefix("/npm", handler.NewNPMHandler(proxy, "http://proxy.test", upstream.URL).Routes()))
+	auth := newHostedAuth(config.HostedConfig{
+		Token:  testHostedToken,
+		Tokens: []config.HostedToken{{Name: "acme", Token: testScopedToken, Push: []string{"npm:@acme/*", "composer:acme/*"}}},
+	})
+	api := NewHostedAPIHandler(proxy, testHostedMaxUpload, logger)
+	registerHostedRoutes(r, api, auth)
+	npm := handler.NewNPMHandler(proxy, "http://proxy.test", upstream.URL).Routes()
+	publish := requireHostedToken(auth)(http.HandlerFunc(api.HandleNPMPublish))
+	r.Mount("/npm", http.StripPrefix("/npm", withNPMPublish(npm, publish)))
 	composer := handler.NewComposerHandlerWithUpstreams(proxy, "http://proxy.test", upstream.URL, upstream.URL)
 	r.Mount("/composer", http.StripPrefix("/composer", composer.Routes()))
 	r.Mount("/generic", http.StripPrefix("/generic", handler.NewGenericHandler(proxy, nil).Routes()))

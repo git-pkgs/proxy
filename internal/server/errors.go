@@ -11,6 +11,7 @@ const (
 	ErrCodeBadRequest   = "BAD_REQUEST"
 	ErrCodeNotFound     = "NOT_FOUND"
 	ErrCodeUnauthorized = "UNAUTHORIZED"
+	ErrCodeForbidden    = "FORBIDDEN"
 	ErrCodeConflict     = "CONFLICT"
 	ErrCodeUpstream     = "UPSTREAM_ERROR"
 	ErrCodeInternal     = "INTERNAL_ERROR"
