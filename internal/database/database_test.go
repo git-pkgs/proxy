@@ -1164,3 +1164,44 @@ func TestVersionPublishedAtPreserved(t *testing.T) {
 		}
 	})
 }
+
+// Publish times are written in UTC whatever zone the caller's time is in, so
+// a TIMESTAMP column without a zone reads back the same instant.
+func TestVersionPublishedAtIsUTC(t *testing.T) {
+	tokyo, err := time.LoadLocation("Asia/Tokyo")
+	if err != nil {
+		t.Skipf("time zone data unavailable: %v", err)
+	}
+	prev := time.Local
+	time.Local = tokyo
+	t.Cleanup(func() { time.Local = prev })
+
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		written := time.Date(2026, 10, 10, 21, 0, 1, 0, tokyo)
+		want := written.UTC()
+		check := func(purl string) {
+			t.Helper()
+			got, err := db.GetVersionByPURL(purl)
+			if err != nil || got == nil || !got.PublishedAt.Valid {
+				t.Fatalf("GetVersionByPURL(%s) = %+v, %v", purl, got, err)
+			}
+			if !got.PublishedAt.Time.Equal(want) || got.PublishedAt.Time.Location() != time.UTC {
+				t.Errorf("%s PublishedAt read back as %v, want %v", purl, got.PublishedAt.Time, want)
+			}
+		}
+
+		if err := db.SetVersionPublishedAt("pkg:cargo/demo@1.0.0", "pkg:cargo/demo", written); err != nil {
+			t.Fatal(err)
+		}
+		check("pkg:cargo/demo@1.0.0")
+
+		if err := db.UpsertVersion(&Version{
+			PURL:        "pkg:cargo/demo@2.0.0",
+			PackagePURL: "pkg:cargo/demo",
+			PublishedAt: sql.NullTime{Time: written, Valid: true},
+		}); err != nil {
+			t.Fatal(err)
+		}
+		check("pkg:cargo/demo@2.0.0")
+	})
+}
