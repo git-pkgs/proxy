@@ -103,7 +103,7 @@ func (h *MavenHandler) Routes() http.Handler {
 	// e.g., /com/google/guava/guava/32.1.3-jre/guava-32.1.3-jre.jar
 	mux.HandleFunc("GET /", h.handleRequest)
 
-	return mux
+	return rejectQueryChars(mux)
 }
 
 // handleRequest routes Maven requests based on the path.
@@ -146,12 +146,12 @@ func (h *MavenHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 }
 
 // metadataCacheKey is the metadata cache key of urlPath. The default
-// repository keeps its original keys. A named repository's keys are hashed
-// from its name, upstream URL and the path, so repositories never share
-// entries and repointing one drops what it cached.
+// repository's keys are hashed from its upstream URLs and the path. A named
+// repository's keys are hashed from its name, upstream URL and the path, so
+// repositories never share entries and repointing one drops what it cached.
 func (s mavenSource) metadataCacheKey(urlPath string) string {
 	if s.name == "" {
-		return strings.ReplaceAll(urlPath, "/", "_")
+		return hashedCacheKey(s.upstreamURL, s.fallbackURL, urlPath)
 	}
 	digest := sha256.Sum256([]byte(s.name + "\x00" + s.upstreamURL + "\x00" + urlPath))
 	return "repo_" + hex.EncodeToString(digest[:])

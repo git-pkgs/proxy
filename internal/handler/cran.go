@@ -63,7 +63,7 @@ func (h *CRANHandler) Routes() http.Handler {
 	// Binary package downloads
 	mux.HandleFunc("GET /bin/{platform}/contrib/{rversion}/{filename}", h.handleBinaryDownload)
 
-	return mux
+	return rejectQueryChars(mux)
 }
 
 // handleSourceDownload serves a source package, fetching and caching from upstream.
@@ -165,11 +165,14 @@ func (h *CRANHandler) isBinaryPackage(filename string) bool {
 	return strings.HasSuffix(filename, ".zip") || strings.HasSuffix(filename, ".tgz")
 }
 
+// metadataCacheKey is the metadata cache key of a request path.
+func (h *CRANHandler) metadataCacheKey(urlPath string) string {
+	return hashedCacheKey(h.upstreamURL, urlPath)
+}
+
 // proxyCached forwards a metadata request with caching.
 func (h *CRANHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
-	cacheKey := strings.TrimPrefix(r.URL.Path, "/")
-	cacheKey = strings.ReplaceAll(cacheKey, "/", "_")
-	h.proxy.ProxyCached(w, r, h.upstreamURL+r.URL.Path, "cran", cacheKey, "*/*")
+	h.proxy.ProxyCached(w, r, h.upstreamURL+r.URL.Path, "cran", h.metadataCacheKey(r.URL.Path), "*/*")
 }
 
 // proxyUpstream forwards a request to CRAN without caching.

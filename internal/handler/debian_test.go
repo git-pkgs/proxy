@@ -35,9 +35,11 @@ func TestDebianHandler_Routes(t *testing.T) {
 	assertRoutesBasics(t, h.Routes(), "/dists/stable/Release", "/pool/../../../etc/passwd")
 }
 
-// TestDebianHandler_LegacyCacheKeysUnchanged pins the cache identities the
-// main archive used before named repositories existed. Deployments carry warm
-// caches across upgrades, so a changed key here silently discards them.
+// TestDebianHandler_LegacyCacheKeysUnchanged pins the artifact cache identity
+// the main archive used before named repositories existed. Deployments carry
+// warm caches across upgrades, so a changed key here silently discards them.
+// Metadata is cheap to refetch; its keys are covered by
+// TestMetadataCacheKeysUnambiguous.
 func TestDebianHandler_LegacyCacheKeysUnchanged(t *testing.T) {
 	const (
 		poolPath = "pool/main/h/hello/hello_2.10-3_amd64.deb"
@@ -54,17 +56,12 @@ func TestDebianHandler_LegacyCacheKeysUnchanged(t *testing.T) {
 		t.Errorf("legacy artifact cache filename = %q, want %q", got, "hello_2.10-3_amd64.deb")
 	}
 
-	// Metadata cache: path separators replaced with underscores.
-	if got := h.metadataCacheKeyFor("", h.upstreamURL, distPath); got != "dists_trixie_InRelease" {
-		t.Errorf("legacy metadata cache key = %q, want %q", got, "dists_trixie_InRelease")
-	}
-
 	// A named repository must not reuse either identity.
 	if got := h.artifactCacheFilename("security", filename); got == "hello_2.10-3_amd64.deb" {
 		t.Error("named repository reused the legacy artifact cache filename")
 	}
-	if got := h.metadataCacheKeyFor("security", "https://security.test", distPath); got == "dists_trixie_InRelease" {
-		t.Error("named repository reused the legacy metadata cache key")
+	if h.metadataCacheKeyFor("security", "https://security.test", distPath) == h.metadataCacheKeyFor("", h.upstreamURL, distPath) {
+		t.Error("named repository reused the main archive's metadata cache key")
 	}
 }
 

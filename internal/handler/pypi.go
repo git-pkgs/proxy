@@ -84,7 +84,7 @@ func (h *PyPIHandler) Routes() http.Handler {
 	// Package downloads (cache these)
 	mux.HandleFunc("GET /packages/{path...}", h.handleDownload)
 
-	return mux
+	return rejectQueryChars(mux)
 }
 
 // handleSimpleIndex serves the simple API index.

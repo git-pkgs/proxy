@@ -162,11 +162,7 @@ func (h *ConanHandler) shouldCacheFile(filename string) bool {
 
 // proxyCached forwards a request with metadata caching.
 func (h *ConanHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
-	cacheKey := strings.TrimPrefix(r.URL.Path, "/")
-	cacheKey = strings.ReplaceAll(cacheKey, "/", "_")
-	if r.URL.RawQuery != "" {
-		cacheKey += "_" + r.URL.RawQuery
-	}
+	cacheKey := hashedCacheKey(h.upstreamURL, r.URL.Path, r.URL.RawQuery)
 	upstreamURL := h.upstreamURL + r.URL.Path
 	if r.URL.RawQuery != "" {
 		upstreamURL += "?" + r.URL.RawQuery

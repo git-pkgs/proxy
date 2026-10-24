@@ -56,7 +56,7 @@ func (h *CondaHandler) cooldownEnabled() bool {
 func (h *CondaHandler) handleShardIndex(w http.ResponseWriter, r *http.Request) {
 	channel, arch := r.PathValue("channel"), r.PathValue("arch")
 	upstreamURL := h.upstreamURL + r.URL.Path
-	cacheKey := condaCacheKey(r.URL.Path)
+	cacheKey := h.metadataCacheKey(r.URL.Path)
 
 	body, contentType, contentEncoding, err := h.proxy.fetchOrCacheMetadata(r.Context(), "conda", cacheKey, upstreamURL, "identity", nil, "*/*")
 	if err != nil {
@@ -121,7 +121,7 @@ func (h *CondaHandler) handleCooldownShard(w http.ResponseWriter, r *http.Reques
 	}
 	upstreamPath := "/" + channel + "/" + arch + "/" + dir + hex.EncodeToString(masked) + condaShardSuffix
 
-	body, _, _, err := h.proxy.fetchOrCacheMetadata(r.Context(), "conda", condaCacheKey(upstreamPath), h.upstreamURL+upstreamPath, "identity", nil, "*/*")
+	body, _, _, err := h.proxy.fetchOrCacheMetadata(r.Context(), "conda", h.metadataCacheKey(upstreamPath), h.upstreamURL+upstreamPath, "identity", nil, "*/*")
 	if err != nil {
 		h.proxy.writeMetadataFetchError(w, err)
 		return
@@ -453,9 +453,4 @@ func msgpackNumber(v any) float64 {
 	default:
 		return 0
 	}
-}
-
-// condaCacheKey is the metadata cache key for a request path.
-func condaCacheKey(urlPath string) string {
-	return strings.ReplaceAll(strings.TrimPrefix(urlPath, "/"), "/", "_")
 }

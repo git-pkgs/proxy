@@ -82,7 +82,9 @@ func (h *APKHandler) Routes() http.Handler {
 
 		path := strings.TrimPrefix(r.URL.Path, "/")
 
-		if containsPathTraversal(path) {
+		// A decoded '?' or '#' would cut the upstream path short and cache one
+		// file under another file's name.
+		if containsPathTraversal(path) || strings.ContainsAny(path, "?#") {
 			http.Error(w, "invalid path", http.StatusBadRequest)
 			return
 		}

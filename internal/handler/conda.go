@@ -320,9 +320,14 @@ func (h *CondaHandler) recordInCooldown(filename, name, version string, timestam
 	return true
 }
 
+// metadataCacheKey is the metadata cache key of a request path.
+func (h *CondaHandler) metadataCacheKey(urlPath string) string {
+	return hashedCacheKey(h.upstreamURL, urlPath)
+}
+
 // proxyCached forwards a metadata request with caching.
 func (h *CondaHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
-	cacheKey := condaCacheKey(r.URL.Path)
+	cacheKey := h.metadataCacheKey(r.URL.Path)
 	// Large JSON indexes can exceed the metadata limit uncompressed. Conda
 	// clients decode Content-Encoding, so cache and relay gzip verbatim. The
 	// already-compressed repodata.json.bz2 route must stay on identity.

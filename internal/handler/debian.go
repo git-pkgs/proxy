@@ -83,7 +83,9 @@ func (h *DebianHandler) Routes() http.Handler {
 
 		path := strings.TrimPrefix(r.URL.Path, "/")
 
-		if containsPathTraversal(path) {
+		// A decoded '?' or '#' would cut the upstream path short and cache one
+		// file under another file's name.
+		if containsPathTraversal(path) || strings.ContainsAny(path, "?#") {
 			http.Error(w, "invalid path", http.StatusBadRequest)
 			return
 		}
@@ -203,11 +205,11 @@ func (h *DebianHandler) artifactCacheFilename(repository, filename string) strin
 }
 
 // metadataCacheKeyFor returns the metadata cache key for a request. The main
-// archive keeps its separator-based key so existing cache entries stay valid;
-// a named repository hashes its identity as APKHandler.metadataCacheKey does.
+// archive hashes its upstream URL and the path; a named repository hashes its
+// identity as APKHandler.metadataCacheKey does.
 func (h *DebianHandler) metadataCacheKeyFor(repository, upstreamURL, path string) string {
 	if repository == "" {
-		return strings.ReplaceAll(path, "/", "_")
+		return hashedCacheKey(upstreamURL, path)
 	}
 	identity := repository + "\x00" + upstreamURL + "\x00" + path
 	digest := sha256.Sum256([]byte(identity))

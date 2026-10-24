@@ -40,7 +40,8 @@ func TestCondaRepodataGzip(t *testing.T) {
 			if tt.mode == "cached" {
 				proxy.MetadataTTL = time.Hour
 			}
-			handler := NewCondaHandlerWithUpstream(proxy, "http://proxy.local", upstream.URL).Routes()
+			h := NewCondaHandlerWithUpstream(proxy, "http://proxy.local", upstream.URL)
+			handler := h.Routes()
 			serve := func() *httptest.ResponseRecorder {
 				w := httptest.NewRecorder()
 				handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/conda-forge/linux-64/"+tt.filename, nil))
@@ -53,7 +54,7 @@ func TestCondaRepodataGzip(t *testing.T) {
 			if tt.mode == "stream" {
 				return
 			}
-			entry, err := db.GetMetadataCache("conda", "conda-forge_linux-64_"+tt.filename)
+			entry, err := db.GetMetadataCache("conda", h.metadataCacheKey("/conda-forge/linux-64/"+tt.filename))
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -122,7 +123,8 @@ func TestCondaRepodataCacheSizeLimit(t *testing.T) {
 			proxy.HTTPClient = upstream.Client()
 			proxy.CacheMetadata = true
 			proxy.MetadataMaxSize = tt.limit
-			handler := NewCondaHandlerWithUpstream(proxy, "http://proxy.local", upstream.URL).Routes()
+			h := NewCondaHandlerWithUpstream(proxy, "http://proxy.local", upstream.URL)
+			handler := h.Routes()
 			w := httptest.NewRecorder()
 			handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/conda-forge/linux-64/repodata.json", nil))
 			if w.Code != tt.status {
@@ -132,7 +134,7 @@ func TestCondaRepodataCacheSizeLimit(t *testing.T) {
 				if !bytes.Equal(w.Body.Bytes(), plain) || w.Header().Get(headerContentEncoding) != "" {
 					t.Fatal("identity response was changed or mislabeled as gzip")
 				}
-			} else if entry, _ := db.GetMetadataCache("conda", "conda-forge_linux-64_repodata.json"); entry != nil {
+			} else if entry, _ := db.GetMetadataCache("conda", h.metadataCacheKey("/conda-forge/linux-64/repodata.json")); entry != nil {
 				t.Fatal("oversized response was cached")
 			}
 		})
