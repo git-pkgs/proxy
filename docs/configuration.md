@@ -307,6 +307,8 @@ Each upstream used by a built-in package route can be set in YAML or JSON under 
 
 Private, ULA, CGNAT, and loopback addresses are rejected by default. Add each private upstream hostname or IP address to `upstream.allow_private_hosts`. The matching environment variable accepts a comma-separated list. Loopback upstreams also require `upstream.allow_loopback: true`. That setting permits upstream requests and redirects to reach any loopback address.
 
+Upstream requests honour `HTTP_PROXY`, `HTTPS_PROXY` and `NO_PROXY`. When a request goes through a forward proxy, these rules apply twice: to the forward proxy's own address, which therefore has to be listed in `upstream.allow_private_hosts` if it is private, and to the request's destination, which the proxy resolves before handing the request over. Link-local addresses such as `169.254.169.254` are always refused. A destination the proxy cannot resolve itself is passed to the forward proxy, since some networks only resolve public names there; the forward proxy's own policy decides what such a name may reach.
+
 ```yaml
 upstream:
   allow_private_hosts:
