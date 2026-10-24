@@ -18,7 +18,8 @@ const (
 
 // Packages are stored under pkg:nuget/{id} with the id lowercased, since
 // NuGet ids are case-insensitive. purl keeps nuget names as written, so
-// package rules are lowercased the same way before the default mapping.
+// package rules go through its comparison form, which lowercases them the
+// same way, before the default mapping.
 func init() {
 	retention.Default.Register(retention.Spec{Key: "nuget", CanonicalPackage: nugetRetentionKey})
 }
@@ -29,7 +30,8 @@ func nugetRetentionKey(p *purl.PURL) (string, bool) {
 	if p == nil {
 		return "", false
 	}
-	return retention.DefaultCanonical("nuget")(purl.New(p.Type, p.Namespace, strings.ToLower(p.Name), "", nil))
+	c := p.ComparisonForm()
+	return retention.DefaultCanonical("nuget")(purl.New(c.Type, c.Namespace, c.Name, "", nil))
 }
 
 // NuGetHandler handles NuGet V3 API protocol requests.

@@ -3,7 +3,6 @@ package denylist
 
 import (
 	"fmt"
-	"regexp"
 	"strings"
 
 	"github.com/git-pkgs/purl"
@@ -116,65 +115,29 @@ func (id identity) channelKey() string {
 	return id.key + "?channel=" + id.channel
 }
 
-var pypiSeparators = regexp.MustCompile(`[-_.]+`)
-
-// swiftRegistryIdentity returns the registry scope and name of a Swift
-// package. A source coordinate such as pkg:swift/github.com/apple/swift-nio
-// names no registry identity.
-func swiftRegistryIdentity(pkg *purl.PURL) (scope, name string, ok bool) {
-	switch {
-	case pkg.Type == "swift" && pkg.Namespace != "" && !strings.ContainsAny(pkg.Namespace, "./"):
-		return pkg.Namespace, pkg.Name, true
-	case pkg.Type == "generic" && strings.EqualFold(pkg.Namespace, "swift-registry"):
-		scope, name, found := strings.Cut(pkg.Name, ".")
-		return scope, name, found && scope != "" && name != ""
+// genericSwiftRegistry returns the scope and name of a Swift registry archive,
+// which the proxy stores as pkg:generic/swift-registry/{scope}.{name}.
+func genericSwiftRegistry(pkg *purl.PURL) (scope, name string, ok bool) {
+	if pkg.Type != "generic" || !strings.EqualFold(pkg.Namespace, "swift-registry") {
+		return "", "", false
 	}
-	return "", "", false
+	scope, name, found := strings.Cut(pkg.Name, ".")
+	return scope, name, found && scope != "" && name != ""
 }
 
+// identify compares PURLs in purl's comparison form. The generic
+// swift-registry spelling is the proxy's own, so it is mapped here first.
 func identify(pkg *purl.PURL) identity {
-	namespace, name, version := pkg.Namespace, pkg.Name, pkg.Version
-	var channel string
-	switch pkg.Type {
-	case "pypi":
-		// PEP 503: case-insensitive, runs of -, _ and . are equivalent.
-		name = pypiSeparators.ReplaceAllString(strings.ToLower(name), "-")
-	case "nuget":
-		// NuGet ids and versions are case-insensitive.
-		name, version = strings.ToLower(name), strings.ToLower(version)
-	case "conda":
-		// The conda handler names packages "channel/name"; entries may give the
-		// channel as a qualifier or namespace. An entry without one matches
-		// every channel.
-		channel = pkg.Qualifier("channel")
-		if namespace != "" {
-			channel, namespace = namespace, ""
-		}
-		if i := strings.LastIndex(name, "/"); i >= 0 {
-			channel, name = name[:i], name[i+1:]
-		}
-	case "composer":
-		// Packagist keeps a tag's leading v ("v6.1.7"); Composer treats it
-		// as the same version.
-		if len(version) > 1 && (version[0] == 'v' || version[0] == 'V') && version[1] >= '0' && version[1] <= '9' {
-			version = version[1:]
-		}
-	case "oci":
-		// Handlers name the repository as one name, library%2Falpine;
-		// entries write it as a path, library/alpine.
-		if namespace != "" {
-			name, namespace = namespace+"/"+name, ""
-		}
-	case "swift", "generic":
-		// Swift registry archives are stored as
-		// pkg:generic/swift-registry/{scope}.{name}; entries may write
-		// pkg:swift/{scope}/{name}. Registry identities ignore case.
-		if scope, pkgName, ok := swiftRegistryIdentity(pkg); ok {
-			namespace, name = strings.ToLower(scope), strings.ToLower(pkgName)
-			key := purl.New("swift", namespace, name, "", nil).String()
-			return identity{key: key, version: version}
-		}
+	if scope, name, ok := genericSwiftRegistry(pkg); ok {
+		// Registry identities ignore case.
+		pkg = purl.New("swift", strings.ToLower(scope), strings.ToLower(name), pkg.Version, nil)
 	}
-	key := purl.New(pkg.Type, namespace, name, "", nil).String()
-	return identity{key: key, channel: channel, version: version}
+	c := pkg.ComparisonForm()
+	var channel string
+	if c.Type == "conda" {
+		// An entry without a channel matches every channel.
+		channel = c.Qualifier("channel")
+	}
+	key := purl.New(c.Type, c.Namespace, c.Name, "", nil).String()
+	return identity{key: key, channel: channel, version: c.Version}
 }
