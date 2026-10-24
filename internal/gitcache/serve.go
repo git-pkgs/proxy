@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"net/http"
+	"os"
 	"path/filepath"
 	"regexp"
 	"slices"
@@ -73,6 +74,11 @@ func (l *Lease) Release() {
 
 // ServeInfoRefs answers GET info/refs?service=git-upload-pack.
 func (l *Lease) ServeInfoRefs(w http.ResponseWriter, r *http.Request) {
+	c := l.cache
+	if !takeSlot(r.Context(), c.refListings) {
+		return
+	}
+	defer func() { <-c.refListings }()
 	protocol := gitProtocol(r)
 	setNoCache(w)
 	w.Header().Set("Content-Type", advertisementType)
@@ -81,34 +87,32 @@ func (l *Lease) ServeInfoRefs(w http.ResponseWriter, r *http.Request) {
 	if !isProtocolV2(protocol) {
 		_, _ = io.WriteString(w, pktLine("# service=git-upload-pack\n")+pktFlush)
 	}
-	l.cache.uploadPack(w, r, l.repo, protocol, nil, "--advertise-refs")
+	c.uploadPack(w, r, l.repo, protocol, nil, "--advertise-refs")
 }
 
-// ServeUploadPack answers POST git-upload-pack. With OpenOptions.FetchWants,
-// commits the request wants that the cache lacks are fetched from the
-// upstream first.
-func (l *Lease) ServeUploadPack(w http.ResponseWriter, r *http.Request) {
+// ServeUploadPack answers POST git-upload-pack with req, the request's body
+// as ReadRequest read it. With OpenOptions.FetchWants, commits the request
+// wants that the cache lacks are fetched from the upstream first.
+func (l *Lease) ServeUploadPack(w http.ResponseWriter, r *http.Request, req *Request) {
 	c := l.cache
-	// The raw body is limited too: a gzip stream of any length can decode
-	// to almost nothing.
-	raw := &bodyLimit{r: r.Body, remaining: c.maxRequestBody}
-	decoded := raw
-	if r.Header.Get("Content-Encoding") == "gzip" {
-		gz, err := gzip.NewReader(raw)
+	body := req.reader()
+	if req.gzip {
+		gz, err := gzip.NewReader(body)
 		if err != nil {
 			http.Error(w, "invalid gzip body", http.StatusBadRequest)
 			return
 		}
 		defer func() { _ = gz.Close() }()
-		decoded = &bodyLimit{r: gz, remaining: c.maxRequestBody}
+		// A gzip stream of any length can decode to almost nothing.
+		decoded := &bodyLimit{r: gz, remaining: c.maxRequestBody}
+		defer func() {
+			if decoded.exceeded.Load() {
+				c.logger.Warn("git cache: request body passed the limit",
+					"repository", l.repo.key, "limit", c.maxRequestBody)
+			}
+		}()
+		body = decoded
 	}
-	defer func() {
-		if raw.exceeded.Load() || decoded.exceeded.Load() {
-			c.logger.Warn("git cache: request body passed the limit",
-				"repository", l.repo.key, "limit", c.maxRequestBody)
-		}
-	}()
-	body := io.Reader(decoded)
 	if l.fetchWants {
 		var wants []string
 		wants, body = readWants(body)
@@ -119,18 +123,29 @@ func (l *Lease) ServeUploadPack(w http.ResponseWriter, r *http.Request) {
 	}
 	var command string
 	command, body = requestCommand(body)
-	// ls-refs builds no pack, so it does not wait behind clones.
-	if command != "ls-refs" {
-		select {
-		case c.uploadPacks <- struct{}{}:
-			defer func() { <-c.uploadPacks }()
-		case <-r.Context().Done():
-			return
-		}
+	// ls-refs builds no pack, so it waits for a ref listing slot rather than
+	// behind clones.
+	slots := c.uploadPacks
+	if command == "ls-refs" {
+		slots = c.refListings
 	}
+	if !takeSlot(r.Context(), slots) {
+		return
+	}
+	defer func() { <-slots }()
 	setNoCache(w)
 	w.Header().Set("Content-Type", resultType)
 	c.uploadPack(w, r, l.repo, gitProtocol(r), body)
+}
+
+// takeSlot takes a slot from slots, or reports false once ctx is done.
+func takeSlot(ctx context.Context, slots chan struct{}) bool {
+	select {
+	case slots <- struct{}{}:
+		return true
+	case <-ctx.Done():
+		return false
+	}
 }
 
 // requestCommand returns the protocol v2 command an upload-pack request
@@ -175,7 +190,67 @@ func (c *Cache) uploadPack(w http.ResponseWriter, r *http.Request, rp *repo, pro
 // the request may run.
 const defaultMaxRequestBody = 100 << 20
 
-var errRequestTooLarge = errors.New("request body too large")
+// maxMemoryRequest is the most of a request body kept in memory; the rest of
+// a larger one goes to a temporary file.
+const maxMemoryRequest = 1 << 20
+
+// ErrRequestTooLarge is returned by ReadRequest for a body past the limit.
+var ErrRequestTooLarge = errors.New("request body too large")
+
+// Request is the body of a POST git-upload-pack request, read in full
+// before anything is started for it. Stateless requests are complete once
+// sent, so a client that sends one slowly, or not at all, holds no
+// upload-pack process and is bound by the server's read timeout.
+type Request struct {
+	gzip bool
+	data []byte
+	file *os.File
+}
+
+// ReadRequest reads the body of a POST git-upload-pack request, still
+// encoded. A body past the limit fails with ErrRequestTooLarge. Close the
+// request once it is served.
+func (c *Cache) ReadRequest(r *http.Request) (*Request, error) {
+	req := &Request{gzip: r.Header.Get("Content-Encoding") == "gzip"}
+	body := &bodyLimit{r: r.Body, remaining: c.maxRequestBody}
+	var buf bytes.Buffer
+	if _, err := buf.ReadFrom(io.LimitReader(body, maxMemoryRequest)); err != nil {
+		return nil, err
+	}
+	if buf.Len() < maxMemoryRequest {
+		req.data = buf.Bytes()
+		return req, nil
+	}
+	file, err := os.CreateTemp("", "git-upload-pack-*")
+	if err != nil {
+		return nil, err
+	}
+	req.file = file
+	if _, err := buf.WriteTo(file); err != nil {
+		req.Close()
+		return nil, err
+	}
+	if _, err := io.Copy(file, body); err != nil {
+		req.Close()
+		return nil, err
+	}
+	return req, nil
+}
+
+// Close removes any temporary file holding the request.
+func (req *Request) Close() {
+	if req.file != nil {
+		_ = req.file.Close()
+		_ = os.Remove(req.file.Name())
+	}
+}
+
+func (req *Request) reader() io.Reader {
+	if req.file != nil {
+		return io.NewSectionReader(req.file, 0, 1<<63-1)
+	}
+	return bytes.NewReader(req.data)
+}
 
 // bodyLimit fails reads past remaining bytes, where io.LimitReader would end
 // the body quietly and leave upload-pack a request cut short.
@@ -187,7 +262,7 @@ type bodyLimit struct {
 
 func (b *bodyLimit) Read(p []byte) (int, error) {
 	if b.exceeded.Load() {
-		return 0, errRequestTooLarge
+		return 0, ErrRequestTooLarge
 	}
 	// One byte past the limit tells a longer body from one that ends at it.
 	if int64(len(p)) > b.remaining+1 {
@@ -201,7 +276,7 @@ func (b *bodyLimit) Read(p []byte) (int, error) {
 	n = int(b.remaining)
 	b.remaining = 0
 	b.exceeded.Store(true)
-	return n, errRequestTooLarge
+	return n, ErrRequestTooLarge
 }
 
 func gitProtocol(r *http.Request) string {

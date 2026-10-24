@@ -353,6 +353,15 @@ func testFront(c *Cache, upstreamURL string, fetchWants bool) http.Handler {
 			http.Error(w, "not served", http.StatusForbidden)
 			return
 		}
+		var req *Request
+		if !infoRefs {
+			var err error
+			if req, err = c.ReadRequest(r); err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			defer req.Close()
+		}
 		lease, err := c.Open(r.Context(), "up/"+strings.TrimSuffix(repo, ".git")+".git", upstreamURL+"/"+repo,
 			OpenOptions{Refresh: infoRefs, FetchWants: fetchWants})
 		switch {
@@ -370,7 +379,7 @@ func testFront(c *Cache, upstreamURL string, fetchWants bool) http.Handler {
 		if infoRefs {
 			lease.ServeInfoRefs(w, r)
 		} else {
-			lease.ServeUploadPack(w, r)
+			lease.ServeUploadPack(w, r, req)
 		}
 	})
 }

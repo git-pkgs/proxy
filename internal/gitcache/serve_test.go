@@ -3,9 +3,11 @@ package gitcache
 import (
 	"bytes"
 	"compress/gzip"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"slices"
@@ -166,6 +168,105 @@ func TestUploadPackSlots(t *testing.T) {
 	release()
 	if err := <-clone; err != nil {
 		t.Errorf("clone: %v", err)
+	}
+}
+
+// TestRefListingSlots holds the only slot for listing refs: info/refs and
+// ls-refs wait for it.
+func TestRefListingSlots(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) { o.maxRefListings = 1 })
+	tc.clone(t, "repo")
+
+	post := func(body string) <-chan error {
+		done := make(chan error, 1)
+		go func() {
+			req, _ := http.NewRequest(http.MethodPost, tc.url("repo")+"/git-upload-pack", strings.NewReader(body))
+			req.Header.Set("Content-Type", requestType)
+			req.Header.Set("Git-Protocol", "version=2")
+			resp, err := http.DefaultClient.Do(req)
+			if err != nil {
+				done <- err
+				return
+			}
+			out, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if !strings.Contains(string(out), "refs/heads/main") {
+				err = fmt.Errorf("status %d, body %q", resp.StatusCode, out)
+			}
+			done <- err
+		}()
+		return done
+	}
+	get := func() <-chan error {
+		done := make(chan error, 1)
+		go func() {
+			resp, err := http.Get(tc.url("repo") + "/info/refs?service=git-upload-pack")
+			if err != nil {
+				done <- err
+				return
+			}
+			out, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if !strings.Contains(string(out), "refs/heads/main") {
+				err = fmt.Errorf("status %d, body %q", resp.StatusCode, out)
+			}
+			done <- err
+		}()
+		return done
+	}
+
+	tc.refListings <- struct{}{}
+	held := true
+	release := func() {
+		if held {
+			held = false
+			<-tc.refListings
+		}
+	}
+	defer release()
+	lsRefs := post(pktLine("command=ls-refs\n") + pktDelim + pktLine("ref-prefix refs/heads/\n") + pktFlush)
+	infoRefs := get()
+	select {
+	case err := <-lsRefs:
+		t.Fatalf("ls-refs finished while the slot was held: %v", err)
+	case err := <-infoRefs:
+		t.Fatalf("info/refs finished while the slot was held: %v", err)
+	case <-time.After(time.Second):
+	}
+	release()
+	for name, done := range map[string]<-chan error{"ls-refs": lsRefs, "info/refs": infoRefs} {
+		if err := <-done; err != nil {
+			t.Errorf("%s: %v", name, err)
+		}
+	}
+}
+
+// TestReadRequest reads bodies kept in memory and, past maxMemoryRequest, in
+// a temporary file removed on Close.
+func TestReadRequest(t *testing.T) {
+	c := &Cache{maxRequestBody: 4 << 20}
+	for _, size := range []int{0, 100, maxMemoryRequest, 3 << 20} {
+		body := strings.Repeat("x", size)
+		r, _ := http.NewRequest(http.MethodPost, "/", strings.NewReader(body))
+		req, err := c.ReadRequest(r)
+		if err != nil {
+			t.Fatalf("%d bytes: %v", size, err)
+		}
+		if got, _ := io.ReadAll(req.reader()); string(got) != body {
+			t.Errorf("%d bytes: read back %d", size, len(got))
+		}
+		req.Close()
+		if req.file != nil {
+			if _, err := os.Stat(req.file.Name()); !errors.Is(err, os.ErrNotExist) {
+				t.Errorf("%d bytes: temporary file left: %v", size, err)
+			}
+		}
+	}
+	r, _ := http.NewRequest(http.MethodPost, "/", strings.NewReader(strings.Repeat("x", 5<<20)))
+	if _, err := c.ReadRequest(r); !errors.Is(err, ErrRequestTooLarge) {
+		t.Errorf("body past the limit: %v, want ErrRequestTooLarge", err)
 	}
 }
 

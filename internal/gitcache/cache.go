@@ -69,14 +69,15 @@ type Options struct {
 	// else in CacheDir is touched, so it may hold other data.
 	Upstreams map[string]string
 
-	// refCheckTimeout, lowSpeedTime, maxRequestBody and maxUploadPacks
-	// override their defaults in tests, and refreshWaitOver, when set,
-	// replaces the RefreshWait timer.
+	// refCheckTimeout, lowSpeedTime, maxRequestBody, maxUploadPacks and
+	// maxRefListings override their defaults in tests, and refreshWaitOver,
+	// when set, replaces the RefreshWait timer.
 	refCheckTimeout time.Duration
 	refreshWaitOver <-chan time.Time
 	lowSpeedTime    int
 	maxRequestBody  int64
 	maxUploadPacks  int
+	maxRefListings  int
 }
 
 // Cache is the Git repository cache. internal/handler serves it at /git.
@@ -90,6 +91,7 @@ type Cache struct {
 	relay           *relay
 	fetches         chan struct{}
 	uploadPacks     chan struct{}
+	refListings     chan struct{}
 	refCheckTimeout time.Duration
 	lowSpeedTime    int
 	maxRequestBody  int64
@@ -149,6 +151,11 @@ const maxConcurrentFetches = 16
 // some packs wait on slow clients.
 const uploadPacksPerCPU = 2
 
+// refListingsPerCPU caps the upload-pack processes listing refs at once, for
+// info/refs and ls-refs. They build no pack and so do not wait behind
+// clones, but each is still a process.
+const refListingsPerCPU = 4
+
 // New creates the cache, loading repositories already in CacheDir.
 func New(opts Options) (*Cache, error) {
 	gitPath, err := exec.LookPath("git")
@@ -186,6 +193,10 @@ func New(opts Options) (*Cache, error) {
 	if opts.maxUploadPacks > 0 {
 		uploadPacks = opts.maxUploadPacks
 	}
+	refListings := refListingsPerCPU * runtime.GOMAXPROCS(0)
+	if opts.maxRefListings > 0 {
+		refListings = opts.maxRefListings
+	}
 	c := &Cache{
 		opts:            opts,
 		client:          &client,
@@ -195,6 +206,7 @@ func New(opts Options) (*Cache, error) {
 		lock:            lock,
 		fetches:         make(chan struct{}, maxConcurrentFetches),
 		uploadPacks:     make(chan struct{}, uploadPacks),
+		refListings:     make(chan struct{}, refListings),
 		refCheckTimeout: defaultRefCheckTimeout,
 		lowSpeedTime:    defaultLowSpeedTime,
 		maxRequestBody:  defaultMaxRequestBody,

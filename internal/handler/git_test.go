@@ -1,9 +1,12 @@
 package handler
 
 import (
+	"bufio"
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
+	"net"
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
@@ -131,9 +134,13 @@ type gitTestSetup struct {
 	logs   *syncLog
 	// slow delays every upstream request by half a second.
 	slow atomic.Bool
+	// active counts the requests the handler is serving.
+	active atomic.Int32
 }
 
-func newGitTestSetup(t *testing.T, readTimeout time.Duration) *gitTestSetup {
+// newGitTestSetup serves the cache with the given server read timeout and,
+// unless zero, GitHandler.writeStall.
+func newGitTestSetup(t *testing.T, readTimeout, writeStall time.Duration) *gitTestSetup {
 	t.Helper()
 	execPath := runGitCommand(t, "", "--exec-path")
 	backendPath := ""
@@ -180,7 +187,15 @@ func newGitTestSetup(t *testing.T, readTimeout time.Duration) *gitTestSetup {
 	}
 	t.Cleanup(func() { _ = cache.Close() })
 	h := NewGitHandler(&Proxy{Logger: logger}, cache, config.UpstreamConfig{Git: map[string]config.GitUpstream{"up": {URL: upstream.URL}}})
-	g.server = httptest.NewUnstartedServer(http.StripPrefix("/git", h.Routes()))
+	if writeStall > 0 {
+		h.writeStall = writeStall
+	}
+	routes := http.StripPrefix("/git", h.Routes())
+	g.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g.active.Add(1)
+		defer g.active.Add(-1)
+		routes.ServeHTTP(w, r)
+	}))
 	g.server.Config.ReadTimeout = readTimeout
 	g.server.Start()
 	t.Cleanup(g.server.Close)
@@ -212,7 +227,7 @@ func (l *syncLog) String() string {
 // whose haves come after a want the cache must fetch first, so upload-pack
 // reads them after the server's read timeout has passed.
 func TestGitRequestBodyOutlastsServerReadTimeout(t *testing.T) {
-	g := newGitTestSetup(t, 200*time.Millisecond)
+	g := newGitTestSetup(t, 200*time.Millisecond, 0)
 	runGitCommand(t, g.work, "commit", "--quiet", "--allow-empty", "-m", "pull request")
 	runGitCommand(t, g.work, "push", "--quiet", "origin", "HEAD:refs/pull/1/head")
 	sha := runGitCommand(t, g.work, "rev-parse", "HEAD")
@@ -234,6 +249,76 @@ func TestGitRequestBodyOutlastsServerReadTimeout(t *testing.T) {
 	out, _ := io.ReadAll(resp.Body)
 	if resp.StatusCode != http.StatusOK || !strings.Contains(string(out), "PACK") {
 		t.Errorf("status %d, no pack in %d bytes: %.200q", resp.StatusCode, len(out), out)
+	}
+}
+
+// TestGitSlowRequestBodyStartsNothing sends part of a request body and then
+// nothing. The request ends at the server's read timeout, without an
+// upload-pack waiting for the rest.
+func TestGitSlowRequestBodyStartsNothing(t *testing.T) {
+	g := newGitTestSetup(t, 200*time.Millisecond, 0)
+	runGitCommand(t, "", "clone", "--quiet", g.url(), filepath.Join(t.TempDir(), "clone"))
+
+	conn, err := net.Dial("tcp", g.server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	part := pktLine("command=ls-refs\n")
+	_, err = fmt.Fprintf(conn, "POST /git/up/repo/git-upload-pack HTTP/1.1\r\nHost: proxy\r\n"+
+		"Content-Type: %s\r\nGit-Protocol: version=2\r\nContent-Length: 100\r\n\r\n%s", gitRequestType, part)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(10 * time.Second))
+	resp, err := http.ReadResponse(bufio.NewReader(conn), nil)
+	if err != nil {
+		t.Fatalf("no answer to a request whose body stopped: %v", err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusBadRequest {
+		t.Errorf("status %d, want %d", resp.StatusCode, http.StatusBadRequest)
+	}
+}
+
+// TestGitStalledClientIsDropped fetches a pack larger than the connection
+// buffers and never reads it. The request ends once a write has waited
+// writeStall, rather than holding upload-pack.
+func TestGitStalledClientIsDropped(t *testing.T) {
+	g := newGitTestSetup(t, 0, 200*time.Millisecond)
+	data := make([]byte, 16<<20)
+	_, _ = rand.NewChaCha8([32]byte{}).Read(data)
+	if err := os.WriteFile(filepath.Join(g.work, "large"), data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGitCommand(t, g.work, "add", "large")
+	runGitCommand(t, g.work, "commit", "--quiet", "-m", "large")
+	runGitCommand(t, g.work, "push", "--quiet", "origin", "HEAD:main")
+	sha := runGitCommand(t, g.work, "rev-parse", "HEAD")
+	runGitCommand(t, "", "clone", "--quiet", g.url(), filepath.Join(t.TempDir(), "clone"))
+
+	conn, err := net.Dial("tcp", g.server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = conn.Close() }()
+	body := pktLine("want "+sha+" side-band-64k\n") + "0000" + pktLine("done\n")
+	_, err = fmt.Fprintf(conn, "POST /git/up/repo/git-upload-pack HTTP/1.1\r\nHost: proxy\r\n"+
+		"Content-Type: %s\r\nContent-Length: %d\r\n\r\n%s", gitRequestType, len(body), body)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for deadline := time.Now().Add(10 * time.Second); g.active.Load() == 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("request never reached the handler")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	for deadline := time.Now().Add(10 * time.Second); g.active.Load() != 0; {
+		if time.Now().After(deadline) {
+			t.Fatal("the handler still serves a client that stopped reading")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }
 

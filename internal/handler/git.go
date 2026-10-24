@@ -21,10 +21,14 @@ const (
 	gitRequestType = "application/x-git-upload-pack-request"
 
 	// gitRequestTimeout replaces the server's read and write timeouts for Git
-	// requests: a cold clone of a large repository keeps the client waiting
-	// before the first byte, a large pack takes a while to send, and the rest
-	// of a request body is read only after any fetch it needs.
+	// requests once any request body has been read: a cold clone of a large
+	// repository keeps the client waiting before the first byte, and a large
+	// pack takes a while to send.
 	gitRequestTimeout = 2 * time.Hour
+	// gitWriteStallTimeout bounds each write of a Git response, so a client
+	// that stops reading does not hold an upload-pack process for
+	// gitRequestTimeout.
+	gitWriteStallTimeout = 2 * time.Minute
 )
 
 // GitHandler serves Git repositories read-only over smart HTTP at
@@ -35,6 +39,8 @@ type GitHandler struct {
 	proxy     *Proxy
 	cache     *gitcache.Cache
 	upstreams map[string]gitUpstream
+	// writeStall is gitWriteStallTimeout, shorter in tests.
+	writeStall time.Duration
 }
 
 type gitUpstream struct {
@@ -49,7 +55,12 @@ type gitUpstream struct {
 
 // NewGitHandler creates a Git handler serving upstream.git from cache.
 func NewGitHandler(proxy *Proxy, cache *gitcache.Cache, upstream config.UpstreamConfig) *GitHandler {
-	h := &GitHandler{proxy: proxy, cache: cache, upstreams: make(map[string]gitUpstream, len(upstream.Git))}
+	h := &GitHandler{
+		proxy:      proxy,
+		cache:      cache,
+		upstreams:  make(map[string]gitUpstream, len(upstream.Git)),
+		writeStall: gitWriteStallTimeout,
+	}
 	for name, git := range upstream.Git {
 		git.URL = strings.TrimSuffix(git.URL, "/")
 		h.upstreams[name] = gitUpstream{
@@ -84,19 +95,28 @@ func (h *GitHandler) serve(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, msg, status)
 		return
 	}
-	deadline := time.Now().Add(gitRequestTimeout)
+	// An upload-pack request is read in full first, within the server's read
+	// timeout, so nothing waits on a client that is slow to send one.
+	var body *gitcache.Request
+	if !req.infoRefs {
+		var err error
+		if body, err = h.cache.ReadRequest(r); err != nil {
+			h.serveRequestError(w, req, err)
+			return
+		}
+		defer body.Close()
+	}
+	// The read deadline is extended too: once the body is read, an HTTP/1
+	// server watches the connection, and a read timeout there would cancel
+	// the request.
 	rc := http.NewResponseController(w)
+	deadline := time.Now().Add(gitRequestTimeout)
 	if err := errors.Join(rc.SetReadDeadline(deadline), rc.SetWriteDeadline(deadline)); err != nil {
 		h.proxy.Logger.Warn("git: cannot extend the request deadlines", "error", err)
 	}
-	// upload-pack writes its response while its stdin is still attached to
-	// the request body. Without full duplex, an HTTP/1 server reads off and
-	// closes whatever body is left once the response is flushed.
-	if !req.infoRefs {
-		if err := rc.EnableFullDuplex(); err != nil {
-			h.proxy.Logger.Warn("git: cannot enable full duplex", "error", err)
-		}
-	}
+	w = &stallWriter{ResponseWriter: w, rc: rc, stall: h.writeStall, deadline: deadline}
+	// What is left buffered once the handler returns is bounded as well.
+	defer func() { _ = rc.SetWriteDeadline(time.Now().Add(h.writeStall)) }()
 
 	lease, err := h.cache.Open(r.Context(), req.key, req.repoURL,
 		gitcache.OpenOptions{Refresh: req.infoRefs, FetchWants: req.fetchWants})
@@ -106,7 +126,7 @@ func (h *GitHandler) serve(w http.ResponseWriter, r *http.Request) {
 	}
 	defer lease.Release()
 	if !req.infoRefs {
-		lease.ServeUploadPack(w, r)
+		lease.ServeUploadPack(w, r, body)
 		return
 	}
 	if lease.Hit() {
@@ -192,6 +212,37 @@ func validGitSegment(segment string, last bool) bool {
 		}
 	}
 	return true
+}
+
+// serveRequestError answers an upload-pack request whose body could not be
+// read.
+func (h *GitHandler) serveRequestError(w http.ResponseWriter, req gitRequest, err error) {
+	if errors.Is(err, gitcache.ErrRequestTooLarge) {
+		h.proxy.Logger.Warn("git: request body passed the limit", "repository", req.key)
+		http.Error(w, "request body too large", http.StatusRequestEntityTooLarge)
+		return
+	}
+	http.Error(w, "cannot read the request body", http.StatusBadRequest)
+}
+
+// stallWriter bounds each write of a response by stall, where the response
+// as a whole may take until deadline.
+type stallWriter struct {
+	http.ResponseWriter
+	rc       *http.ResponseController
+	stall    time.Duration
+	deadline time.Time
+}
+
+func (w *stallWriter) Write(p []byte) (int, error) {
+	_ = w.rc.SetWriteDeadline(time.Now().Add(w.stall))
+	n, err := w.ResponseWriter.Write(p)
+	_ = w.rc.SetWriteDeadline(w.deadline)
+	return n, err
+}
+
+func (w *stallWriter) Unwrap() http.ResponseWriter {
+	return w.ResponseWriter
 }
 
 // serveError answers a request whose repository could not be opened. The
