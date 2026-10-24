@@ -1764,6 +1764,11 @@ func (p *Proxy) lookupCachedMeta(ecosystem, cacheKey string) cachedMeta {
 	if err != nil || entry == nil {
 		return cachedMeta{}
 	}
+	return p.cachedMetaFor(entry)
+}
+
+// cachedMetaFor returns the cache validators and freshness state of entry.
+func (p *Proxy) cachedMetaFor(entry *database.MetadataCacheEntry) cachedMeta {
 	var cm cachedMeta
 	if entry.ETag.Valid {
 		cm.etag = entry.ETag.String
@@ -1799,6 +1804,10 @@ func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	if p.serveCachedMetadata(w, r, ecosystem, cacheKey) {
+		return
+	}
+
 	body, contentType, contentEncoding, err := p.fetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, acceptEncoding, nil, acceptHeaders...)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
@@ -1829,24 +1838,8 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 // mislabel the bytes.
 func (p *Proxy) writeMetadataCachedResponseWithEncoding(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, body []byte, contentType, contentEncoding string) {
 	cm := p.lookupCachedMeta(ecosystem, cacheKey)
-
-	if cm.etag != "" {
-		w.Header().Set(headerETag, cm.etag)
-	}
-	if !cm.lastModified.IsZero() {
-		w.Header().Set(headerLastModified, cm.lastModified.UTC().Format(http.TimeFormat))
-	}
-	if ifNoneMatchHits(r.Header.Get("If-None-Match"), cm.etag) {
-		w.WriteHeader(http.StatusNotModified)
+	if writeMetadataValidators(w, r, cm) {
 		return
-	}
-	if !cm.lastModified.IsZero() {
-		if ims := r.Header.Get("If-Modified-Since"); ims != "" {
-			if t, err := http.ParseTime(ims); err == nil && !cm.lastModified.After(t) {
-				w.WriteHeader(http.StatusNotModified)
-				return
-			}
-		}
 	}
 
 	w.Header().Set(headerContentType, contentType)
@@ -1859,6 +1852,30 @@ func (p *Proxy) writeMetadataCachedResponseWithEncoding(w http.ResponseWriter, r
 	if r.Method != http.MethodHead {
 		_, _ = w.Write(body)
 	}
+}
+
+// writeMetadataValidators sets cm's ETag and Last-Modified on w and answers
+// a conditional request they satisfy with 304, reporting whether it did.
+func writeMetadataValidators(w http.ResponseWriter, r *http.Request, cm cachedMeta) bool {
+	if cm.etag != "" {
+		w.Header().Set(headerETag, cm.etag)
+	}
+	if !cm.lastModified.IsZero() {
+		w.Header().Set(headerLastModified, cm.lastModified.UTC().Format(http.TimeFormat))
+	}
+	if ifNoneMatchHits(r.Header.Get("If-None-Match"), cm.etag) {
+		w.WriteHeader(http.StatusNotModified)
+		return true
+	}
+	if !cm.lastModified.IsZero() {
+		if ims := r.Header.Get("If-Modified-Since"); ims != "" {
+			if t, err := http.ParseTime(ims); err == nil && !cm.lastModified.After(t) {
+				w.WriteHeader(http.StatusNotModified)
+				return true
+			}
+		}
+	}
+	return false
 }
 
 // proxyMetadataStream forwards an upstream metadata response by streaming it to the client
