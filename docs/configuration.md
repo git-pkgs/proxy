@@ -1522,6 +1522,10 @@ Positional arguments are treated as PURLs:
 proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
 ```
 
+### Unversioned PURLs
+
+A PURL without a version, here or in a mirror API job, mirrors every version the configured upstream lists, through the same client, so `upstream.auth` and `upstream.allow_private_hosts` apply. npm packages in `upstream.npm_routes` are listed from their route. Listing works for npm, gem, golang, hex (from `upstream.hex_api`), pub, pypi, maven, nuget, composer, cran and brew. For cargo, conda and julia the upstream doesn't serve the API used for listing, so versions come from the public registry while the upstream is the default one; with another upstream, and for Composer packages in `upstream.composer_routes` or any other ecosystem, give a version.
+
 ### Container images
 
 `pkg:docker` and `pkg:oci` PURLs mirror a container image the way a pull does: the manifest or index, the platform manifests, then config and layer blobs. Everything is stored under the keys a pull through `/v2` reads, so a later `docker pull` or containerd pull is served from cache, also when the upstream is unreachable.

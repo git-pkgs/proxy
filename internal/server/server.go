@@ -387,8 +387,7 @@ func (s *Server) serve(listener net.Listener) error {
 
 	// Mirror API endpoints (opt-in via mirror_api config or PROXY_MIRROR_API env)
 	if s.cfg.MirrorAPI {
-		mirrorSvc := mirror.New(proxy, s.db, s.storage, s.logger, 4) //nolint:mnd // default concurrency
-		mirrorSvc.Images = s.newContainerHandler(proxy)
+		mirrorSvc := s.newMirror(proxy, 4) //nolint:mnd // default concurrency
 		jobStore := mirror.NewJobStore(bgCtx, mirrorSvc)
 		mirrorAPI := NewMirrorAPIHandler(jobStore)
 		r.Post("/api/mirror", mirrorAPI.HandleCreate)

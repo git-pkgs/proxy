@@ -209,9 +209,9 @@ func (js *JobStore) sourceFromRequest(req JobRequest) (Source, error) { //nolint
 	case len(req.PURLs) > 0 && len(req.SBOM) > 0:
 		return nil, fmt.Errorf("request must include only one of purls or sbom")
 	case len(req.PURLs) > 0:
-		return &PURLSource{PURLs: req.PURLs, Platforms: req.Platforms}, nil
+		return &PURLSource{PURLs: req.PURLs, Versions: js.mirror.Versions, Platforms: req.Platforms}, nil
 	case len(req.SBOM) > 0:
-		return &SBOMSource{Data: req.SBOM, Platforms: req.Platforms}, nil
+		return &SBOMSource{Data: req.SBOM, Versions: js.mirror.Versions, Platforms: req.Platforms}, nil
 	case req.Registry != "":
 		return nil, fmt.Errorf("registry mirroring is not yet implemented; use purls instead")
 	default:

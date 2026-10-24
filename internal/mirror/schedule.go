@@ -102,7 +102,7 @@ func (s *Scheduler) run(ctx context.Context, index int, schedule Schedule) {
 		}
 	}
 	started := time.Now()
-	progress, err := s.mirror.Run(ctx, &PURLSource{PURLs: schedule.PURLs, Platforms: schedule.Platforms})
+	progress, err := s.mirror.Run(ctx, &PURLSource{PURLs: schedule.PURLs, Versions: s.mirror.Versions, Platforms: schedule.Platforms})
 	if ctx.Err() != nil {
 		if s.Claim != nil && s.Release != nil {
 			if err := s.Release(key); err != nil {

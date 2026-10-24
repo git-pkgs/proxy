@@ -17,8 +17,7 @@ func (s *Server) startMirrorSchedules(ctx context.Context, proxy *handler.Proxy)
 		return
 	}
 	// One worker, so a schedule never fans out against the registry.
-	m := mirror.New(proxy, s.db, s.storage, s.logger, 1)
-	m.Images = s.newContainerHandler(proxy)
+	m := s.newMirror(proxy, 1)
 	schedules := make([]mirror.Schedule, len(s.cfg.Mirror.Schedules))
 	for i, schedule := range s.cfg.Mirror.Schedules {
 		schedules[i] = mirror.Schedule{PURLs: schedule.Images, Platforms: schedule.Platforms, Interval: schedule.IntervalDuration()}

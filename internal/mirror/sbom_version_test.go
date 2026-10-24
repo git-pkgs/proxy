@@ -40,7 +40,7 @@ func TestSBOMSourceVersionPrecedence(t *testing.T) {
 		t.Run(test.name, func(t *testing.T) {
 			data := marshalJSON(t, map[string]any{"components": []map[string]any{{"name": "app", "version": test.componentVersion, "purl": test.imagePURL}}})
 			var got []PackageVersion
-			source := &SBOMSource{Data: data, RegClient: registries.NewClient(registries.WithHTTPClient(&http.Client{Transport: rejectingMirrorTransport{}}))}
+			source := &SBOMSource{Data: data, Versions: RegistryVersions{Client: registries.NewClient(registries.WithHTTPClient(&http.Client{Transport: rejectingMirrorTransport{}}))}}
 			if err := source.Enumerate(context.Background(), func(pv PackageVersion) error { got = append(got, pv); return nil }); err != nil {
 				t.Fatal(err)
 			}

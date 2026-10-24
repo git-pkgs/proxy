@@ -27,6 +27,10 @@ type Mirror struct {
 	// other unsupported ecosystem.
 	Images ImageMirrorer
 
+	// Versions lists the versions of unversioned PURLs in mirror jobs and
+	// schedules. Nil lists them from the public registries.
+	Versions VersionLister
+
 	// RefusePackages, when set, fails every item Images does not take with
 	// this reason instead of fetching it, so nothing is cached.
 	RefusePackages string

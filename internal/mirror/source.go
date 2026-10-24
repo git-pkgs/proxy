@@ -5,8 +5,6 @@ import (
 	"fmt"
 
 	"github.com/git-pkgs/purl"
-	"github.com/git-pkgs/registries"
-	_ "github.com/git-pkgs/registries/all"
 	"github.com/git-pkgs/sbom"
 )
 
@@ -44,18 +42,21 @@ type Source interface {
 }
 
 // PURLSource yields packages from PURL strings.
-// Versioned PURLs produce a single item. Unversioned PURLs look up all versions from the registry.
+// Versioned PURLs produce a single item. Unversioned PURLs produce one item
+// per version Versions lists.
 type PURLSource struct {
-	PURLs     []string
-	RegClient *registries.Client
+	PURLs []string
+	// Versions lists the versions of unversioned PURLs. Nil lists them from
+	// the public registries.
+	Versions VersionLister
 	// Platforms limit which platforms of container images are mirrored.
 	Platforms []string
 }
 
 func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) error) error {
-	client := s.RegClient
-	if client == nil {
-		client = registries.DefaultClient()
+	versions := s.Versions
+	if versions == nil {
+		versions = RegistryVersions{}
 	}
 
 	for _, purlStr := range s.PURLs {
@@ -85,11 +86,11 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 		}
 
 		// Unversioned: enumerate all versions
-		versions, err := s.fetchVersions(ctx, client, ecosystem, name)
+		listed, err := versions.ListVersions(ctx, ecosystem, name)
 		if err != nil {
 			return fmt.Errorf("fetching versions for %s/%s: %w", ecosystem, name, err)
 		}
-		for _, v := range versions {
+		for _, v := range listed {
 			if err := fn(PackageVersion{Ecosystem: ecosystem, Name: name, Version: v}); err != nil {
 				return err
 			}
@@ -98,27 +99,13 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 	return nil
 }
 
-func (s *PURLSource) fetchVersions(ctx context.Context, client *registries.Client, ecosystem, name string) ([]string, error) {
-	reg, err := registries.New(purl.EcosystemToPURLType(ecosystem), "", client)
-	if err != nil {
-		return nil, err
-	}
-	versions, err := reg.FetchVersions(ctx, name)
-	if err != nil {
-		return nil, err
-	}
-	result := make([]string, len(versions))
-	for i, v := range versions {
-		result[i] = v.Number
-	}
-	return result, nil
-}
-
 // SBOMSource extracts package versions from CycloneDX or SPDX SBOM data.
 type SBOMSource struct {
-	Data      []byte
-	Name      string
-	RegClient *registries.Client
+	Data []byte
+	Name string
+	// Versions lists the versions of unversioned PURLs. Nil lists them from
+	// the public registries.
+	Versions VersionLister
 	// Platforms limit which platforms of container images are mirrored.
 	Platforms []string
 }
@@ -132,7 +119,7 @@ func (s *SBOMSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 		return fmt.Errorf("parsing SBOM: %w", err)
 	}
 
-	inner := &PURLSource{PURLs: purls, RegClient: s.RegClient, Platforms: s.Platforms}
+	inner := &PURLSource{PURLs: purls, Versions: s.Versions, Platforms: s.Platforms}
 	return inner.Enumerate(ctx, fn)
 }
 
