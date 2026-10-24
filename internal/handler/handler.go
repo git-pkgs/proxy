@@ -222,10 +222,6 @@ type Proxy struct {
 	metaMu       sync.Mutex
 	inFlightMeta map[string]*inflightMetadata
 
-	// metaReads shares cached metadata documents among the requests reading
-	// them, so concurrent cache hits hold one copy.
-	metaReads metadataReads
-
 	// rewrites caches metadata documents after their handler rewrites them.
 	// Nil leaves every request to rewrite its own copy.
 	rewrites *rewriteCache
@@ -1545,18 +1541,13 @@ func (p *Proxy) coalesceMetadata(ctx context.Context, key string, fetch func(con
 	return f.res, false
 }
 
-// readCachedMetadata reads entry's stored document and runs validate on it.
-// Concurrent callers for the same document share one read and one copy of the
-// bytes (see metadataReads), so the result must not be modified.
 func (p *Proxy) readCachedMetadata(ctx context.Context, entry *database.MetadataCacheEntry, validate func([]byte) error) ([]byte, string, error) {
-	data, err := p.metaReads.read(ctx, entry, func(ctx context.Context) ([]byte, error) {
-		cached, err := p.Storage.Open(ctx, entry.StoragePath)
-		if err != nil {
-			return nil, err
-		}
-		defer func() { _ = cached.Close() }()
-		return p.ReadMetadata(cached)
-	})
+	cached, err := p.Storage.Open(ctx, entry.StoragePath)
+	if err != nil {
+		return nil, "", err
+	}
+	defer func() { _ = cached.Close() }()
+	data, err := p.ReadMetadata(cached)
 	if err == nil && validate != nil {
 		err = validate(data)
 	}
