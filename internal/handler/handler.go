@@ -1341,11 +1341,6 @@ func (p *Proxy) serveArtifactError(w http.ResponseWriter, err error, clientMsg s
 // errStale304 is returned when upstream sends 304 but the cached file is missing.
 var errStale304 = fmt.Errorf("upstream returned 304 but cached file is missing")
 
-// metadataStoragePath builds a storage path for cached metadata.
-func metadataStoragePath(ecosystem, cacheKey string) string {
-	return "_metadata/" + ecosystem + "/" + cacheKey + "/metadata"
-}
-
 // FetchOrCacheMetadata fetches metadata from upstream with caching.
 // On success it returns the raw response bytes and content type.
 // If upstream fails and a cached copy exists, the cached version is returned.
@@ -1468,6 +1463,7 @@ func (p *Proxy) cachedMetadataState(ctx context.Context, ecosystem, cacheKey str
 		return nil, nil
 	}
 	entry, _ := p.DB.GetMetadataCache(ecosystem, cacheKey)
+	entry = p.migrateLegacyMetadataEntry(ctx, ecosystem, cacheKey, entry)
 	if entry != nil && p.MetadataTTL > 0 && entry.FetchedAt.Valid && time.Since(entry.FetchedAt.Time) < p.MetadataTTL {
 		data, ct, err := p.readCachedMetadata(ctx, entry, validate)
 		if err == nil {
