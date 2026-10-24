@@ -12,7 +12,7 @@ require (
 	github.com/git-pkgs/archives v0.9.0
 	github.com/git-pkgs/artifacts v0.2.1
 	github.com/git-pkgs/cooldown v0.3.0
-	github.com/git-pkgs/enrichment v0.7.3
+	github.com/git-pkgs/enrichment v0.7.4-0.20261024153145-1e2684f97ead
 	github.com/git-pkgs/gcs v0.1.0
 	github.com/git-pkgs/integrity v0.2.0
 	github.com/git-pkgs/magic v0.5.0
@@ -20,8 +20,6 @@ require (
 	github.com/git-pkgs/registries v0.11.0
 	github.com/git-pkgs/sbom v0.1.7
 	github.com/git-pkgs/spdx v0.3.3
-	github.com/git-pkgs/vers v0.7.2
-	github.com/git-pkgs/vulns v0.2.4
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/jmoiron/sqlx v1.4.0
 	github.com/klauspost/compress v1.20.1
@@ -78,6 +76,8 @@ require (
 	github.com/ecosyste-ms/ecosystems-go v0.5.0 // indirect
 	github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a // indirect
 	github.com/git-pkgs/pom v0.1.8 // indirect
+	github.com/git-pkgs/vers v0.7.2 // indirect
+	github.com/git-pkgs/vulns v0.2.4 // indirect
 	github.com/github/go-spdx/v2 v2.7.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect

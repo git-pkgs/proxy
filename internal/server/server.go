@@ -70,6 +70,7 @@ import (
 
 	"github.com/git-pkgs/archives"
 	"github.com/git-pkgs/cooldown"
+	shared "github.com/git-pkgs/enrichment"
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
 	"github.com/git-pkgs/proxy/internal/accesslog"
 	"github.com/git-pkgs/proxy/internal/config"
@@ -87,7 +88,6 @@ import (
 	registryclient "github.com/git-pkgs/registries/client"
 	"github.com/git-pkgs/registries/fetch"
 	"github.com/git-pkgs/registries/safehttp"
-	"github.com/git-pkgs/spdx"
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
 )
@@ -1470,21 +1470,9 @@ func formatTimeAgo(t time.Time) string {
 	}
 }
 
-// categorizeLicenseCSS returns the CSS class suffix for a license category using the spdx module.
+// categorizeLicenseCSS returns the CSS class suffix for a license category.
 func categorizeLicenseCSS(license string) string {
-	if license == "" {
-		return licenseCategoryUnknown
-	}
-
-	if spdx.HasCopyleft(license) {
-		return "copyleft"
-	}
-
-	if spdx.IsFullyPermissive(license) {
-		return "permissive"
-	}
-
-	return licenseCategoryUnknown
+	return string(shared.CategorizeLicense(license))
 }
 
 // categorizeLicense is a helper that handles sql.NullString.

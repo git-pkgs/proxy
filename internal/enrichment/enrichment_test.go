@@ -5,6 +5,8 @@ import (
 	"log/slog"
 	"os"
 	"testing"
+
+	"github.com/git-pkgs/registries"
 )
 
 func TestNew(t *testing.T) {
@@ -15,12 +17,12 @@ func TestNew(t *testing.T) {
 		t.Fatal("New() returned nil")
 	}
 
-	if svc.regClient == nil {
-		t.Error("regClient is nil")
+	if svc.registries == nil {
+		t.Error("registries is nil")
 	}
 
-	if svc.vulnSource == nil {
-		t.Error("vulnSource is nil")
+	if svc.vulns == nil {
+		t.Error("vulns is nil")
 	}
 }
 
@@ -54,54 +56,23 @@ func TestSwiftRegistryIdentitySkipsPURLDependentLookups(t *testing.T) {
 	}
 }
 
-func TestIsOutdated(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	svc := New(logger)
-
+func TestAdaptVersion(t *testing.T) {
 	tests := []struct {
-		current  string
-		latest   string
-		expected bool
+		status      registries.VersionStatus
+		yanked      bool
+		license     string
+		wantYanked  bool
+		wantLicense string
 	}{
-		{"1.0.0", "2.0.0", true},
-		{"2.0.0", "2.0.0", false},
-		{"2.0.0", "1.0.0", false},
-		{"1.0.0", "", false},
-		{"", "2.0.0", false},
-		{"1.2.3", "1.2.4", true},
-		{"1.2.4", "1.2.3", false},
+		{status: registries.StatusRetracted, license: "mit", wantYanked: true, wantLicense: "MIT"},
+		{status: registries.StatusYanked, yanked: true, wantYanked: true},
+		{status: registries.StatusDeprecated, license: "Custom terms", wantLicense: "Custom terms"},
 	}
-
 	for _, tc := range tests {
-		result := svc.IsOutdated(tc.current, tc.latest)
-		if result != tc.expected {
-			t.Errorf("IsOutdated(%q, %q) = %v, want %v", tc.current, tc.latest, result, tc.expected)
-		}
-	}
-}
-
-func TestCategorizeLicense(t *testing.T) {
-	logger := slog.New(slog.NewTextHandler(os.Stdout, nil))
-	svc := New(logger)
-
-	tests := []struct {
-		license  string
-		expected LicenseCategory
-	}{
-		{"MIT", LicensePermissive},
-		{"Apache-2.0", LicensePermissive},
-		{"BSD-3-Clause", LicensePermissive},
-		{"GPL-3.0", LicenseCopyleft},
-		{"AGPL-3.0", LicenseCopyleft},
-		{"LGPL-2.1", LicenseCopyleft},
-		{"", LicenseUnknown},
-		{"Unknown", LicenseUnknown},
-	}
-
-	for _, tc := range tests {
-		result := svc.CategorizeLicense(tc.license)
-		if result != tc.expected {
-			t.Errorf("CategorizeLicense(%q) = %v, want %v", tc.license, result, tc.expected)
+		info := &VersionInfo{Status: string(tc.status), Yanked: tc.yanked, License: tc.license}
+		adaptVersion(info)
+		if info.Yanked != tc.wantYanked || info.License != tc.wantLicense {
+			t.Errorf("adaptVersion(%s, %q) = yanked %v, license %q; want %v, %q", tc.status, tc.license, info.Yanked, info.License, tc.wantYanked, tc.wantLicense)
 		}
 	}
 }

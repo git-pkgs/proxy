@@ -174,7 +174,7 @@ func (h *APIHandler) HandlePackagePath(w http.ResponseWriter, r *http.Request) {
 			Name:            info.Name,
 			LatestVersion:   info.LatestVersion,
 			License:         info.License,
-			LicenseCategory: string(h.enrichment.CategorizeLicense(info.License)),
+			LicenseCategory: string(shared.CategorizeLicense(info.License)),
 			Description:     info.Description,
 			Homepage:        info.Homepage,
 			Repository:      info.Repository,
@@ -207,7 +207,7 @@ func (h *APIHandler) getPackage(w http.ResponseWriter, r *http.Request, ecosyste
 		Name:            info.Name,
 		LatestVersion:   info.LatestVersion,
 		License:         info.License,
-		LicenseCategory: string(h.enrichment.CategorizeLicense(info.License)),
+		LicenseCategory: string(shared.CategorizeLicense(info.License)),
 		Description:     info.Description,
 		Homepage:        info.Homepage,
 		Repository:      info.Repository,
@@ -235,7 +235,7 @@ func (h *APIHandler) getVersion(w http.ResponseWriter, r *http.Request, ecosyste
 			Name:            result.Package.Name,
 			LatestVersion:   result.Package.LatestVersion,
 			License:         result.Package.License,
-			LicenseCategory: string(h.enrichment.CategorizeLicense(result.Package.License)),
+			LicenseCategory: string(shared.CategorizeLicense(result.Package.License)),
 			Description:     result.Package.Description,
 			Homepage:        result.Package.Homepage,
 			Repository:      result.Package.Repository,
@@ -366,7 +366,7 @@ func (h *APIHandler) HandleOutdated(w http.ResponseWriter, r *http.Request) {
 		latest, err := h.enrichment.GetLatestVersion(r.Context(), pkg.Ecosystem, pkg.Name)
 		if err == nil && latest != "" {
 			result.LatestVersion = latest
-			result.IsOutdated = h.enrichment.IsOutdated(pkg.Version, latest)
+			result.IsOutdated = shared.IsOutdated(pkg.Version, latest)
 		}
 
 		resp.Results = append(resp.Results, result)
@@ -413,7 +413,7 @@ func (h *APIHandler) HandleBulkLookup(w http.ResponseWriter, r *http.Request) {
 						Name:            info.Name,
 						LatestVersion:   info.LatestVersion,
 						License:         info.License,
-						LicenseCategory: string(h.enrichment.CategorizeLicense(info.License)),
+						LicenseCategory: string(shared.CategorizeLicense(info.License)),
 						Description:     info.Description,
 						Homepage:        info.Homepage,
 						Repository:      info.Repository,
@@ -444,7 +444,7 @@ func (h *APIHandler) HandleBulkLookup(w http.ResponseWriter, r *http.Request) {
 					Name:            info.Name,
 					LatestVersion:   info.LatestVersion,
 					License:         info.License,
-					LicenseCategory: string(h.enrichment.CategorizeLicense(info.License)),
+					LicenseCategory: string(shared.CategorizeLicense(info.License)),
 					Description:     info.Description,
 					Homepage:        info.Homepage,
 					Repository:      info.Repository,
@@ -635,9 +635,7 @@ func (h *APIHandler) HandlePackagesList(w http.ResponseWriter, r *http.Request) 
 		licenseCategory := licenseCategoryUnknown
 		if pkg.License.Valid {
 			license = pkg.License.String
-			if h.enrichment != nil {
-				licenseCategory = string(h.enrichment.CategorizeLicense(license))
-			}
+			licenseCategory = string(shared.CategorizeLicense(license))
 		}
 		cachedAt := ""
 		if pkg.CachedAt.Valid {

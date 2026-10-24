@@ -1,106 +1,59 @@
-// Package enrichment provides package metadata enrichment using external data sources.
-// It fetches license information, vulnerability data, and version information
-// from package registries and vulnerability databases.
+// Package enrichment adapts github.com/git-pkgs/enrichment to the proxy's
+// enrichment API. It builds package URLs from the proxy's ecosystem names,
+// normalizes licenses for display and treats retracted versions as yanked.
 package enrichment
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"sync"
-	"time"
 
+	shared "github.com/git-pkgs/enrichment"
 	"github.com/git-pkgs/proxy/internal/packageurl"
-	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries"
-	_ "github.com/git-pkgs/registries/all" // Import all registry implementations
 	"github.com/git-pkgs/spdx"
-	"github.com/git-pkgs/vers"
-	"github.com/git-pkgs/vulns"
-	"github.com/git-pkgs/vulns/osv"
 )
 
-// Service provides package enrichment capabilities.
+// Service looks up package, version and vulnerability data.
 type Service struct {
 	logger     *slog.Logger
-	regClient  *registries.Client
-	vulnSource vulns.Source
+	registries *shared.RegistriesClient
+	vulns      *shared.VulnerabilityClient
 }
 
 // New creates a new enrichment service.
 func New(logger *slog.Logger) *Service {
 	return &Service{
 		logger:     logger,
-		regClient:  registries.DefaultClient(),
-		vulnSource: osv.New(),
+		registries: shared.NewRegistriesClient(),
+		vulns:      shared.NewVulnerabilityClient(),
 	}
 }
 
-// PackageInfo contains enriched package metadata.
-type PackageInfo struct {
-	Ecosystem     string
-	Name          string
-	LatestVersion string
-	License       string
-	Description   string
-	Homepage      string
-	Repository    string
-	RegistryURL   string
-}
+type (
+	PackageInfo = shared.PackageInfo
+	VersionInfo = shared.VersionInfo
+	VulnInfo    = shared.VulnInfo
+)
 
-// VersionInfo contains enriched version metadata.
-type VersionInfo struct {
-	Number      string
-	License     string
-	PublishedAt time.Time
-	Integrity   string
-	Yanked      bool
-}
-
-// VulnInfo contains vulnerability information for a package version.
-type VulnInfo struct {
-	ID           string
-	Summary      string
-	Severity     string
-	CVSSScore    float64
-	FixedVersion string
-	References   []string
-}
-
-// EnrichPackage fetches metadata for a package from registry APIs.
+// EnrichPackage fetches metadata for a package from its registry. It returns
+// nil without an error when the registry doesn't have the package or the name
+// can't be expressed as a PURL.
 func (s *Service) EnrichPackage(ctx context.Context, ecosystem, name string) (*PackageInfo, error) {
 	purlStr := packageurl.MakeString(ecosystem, name, "")
 	if purlStr == "" {
 		return nil, nil
 	}
-
-	pkg, err := registries.FetchPackageFromPURL(ctx, purlStr, s.regClient)
-	if err != nil {
-		return nil, err
-	}
-
-	if pkg == nil {
+	info, err := s.registries.GetPackage(ctx, purlStr)
+	if errors.Is(err, registries.ErrNotFound) {
 		return nil, nil
 	}
-
-	info := &PackageInfo{
-		Ecosystem:     ecosystem,
-		Name:          pkg.Name,
-		LatestVersion: pkg.LatestVersion,
-		Description:   pkg.Description,
-		Homepage:      pkg.Homepage,
-		Repository:    pkg.Repository,
-		RegistryURL:   registries.DefaultURL(ecosystem),
+	if err != nil || info == nil {
+		return nil, err
 	}
-
-	// Normalize license to SPDX format
-	if pkg.Licenses != "" {
-		if normalized, err := spdx.NormalizeExpressionLax(pkg.Licenses); err == nil {
-			info.License = normalized
-		} else {
-			info.License = pkg.Licenses
-		}
-	}
-
+	info.Ecosystem = ecosystem
+	info.License = normalizeLicense(info.License)
 	return info, nil
 }
 
@@ -110,36 +63,24 @@ func (s *Service) EnrichVersion(ctx context.Context, ecosystem, name, version st
 	if purlStr == "" {
 		return nil, nil
 	}
-
-	ver, err := registries.FetchVersionFromPURL(ctx, purlStr, s.regClient)
-	if err != nil {
+	info, err := s.registries.GetVersion(ctx, purlStr)
+	if err != nil || info == nil {
 		return nil, err
 	}
-
-	if ver == nil {
-		return nil, nil
-	}
-
-	info := &VersionInfo{
-		Number:      ver.Number,
-		PublishedAt: ver.PublishedAt,
-		Integrity:   ver.Integrity,
-		Yanked:      ver.Status == registries.StatusYanked || ver.Status == registries.StatusRetracted,
-	}
-
-	// Normalize license
-	if ver.Licenses != "" {
-		if normalized, err := spdx.NormalizeExpressionLax(ver.Licenses); err == nil {
-			info.License = normalized
-		} else {
-			info.License = ver.Licenses
-		}
-	}
-
+	adaptVersion(info)
 	return info, nil
 }
 
-// BulkEnrichPackages fetches metadata for multiple packages in parallel.
+// adaptVersion reports retracted versions as yanked and normalizes the license.
+func adaptVersion(info *VersionInfo) {
+	if info.Status == string(registries.StatusRetracted) {
+		info.Yanked = true
+	}
+	info.License = normalizeLicense(info.License)
+}
+
+// BulkEnrichPackages fetches metadata for multiple packages in parallel,
+// keyed by PURL. Packages that can't be fetched are left out.
 func (s *Service) BulkEnrichPackages(ctx context.Context, packages []struct{ Ecosystem, Name string }) map[string]*PackageInfo {
 	purls := make([]string, 0, len(packages))
 	for _, pkg := range packages {
@@ -150,126 +91,40 @@ func (s *Service) BulkEnrichPackages(ctx context.Context, packages []struct{ Eco
 	if len(purls) == 0 {
 		return map[string]*PackageInfo{}
 	}
-
-	pkgData := registries.BulkFetchPackages(ctx, purls, s.regClient)
-
-	result := make(map[string]*PackageInfo, len(pkgData))
-	for purlStr, pkg := range pkgData {
-		if pkg == nil {
-			continue
-		}
-
-		p, err := purl.Parse(purlStr)
-		if err != nil {
-			continue
-		}
-		info := &PackageInfo{
-			Ecosystem:     p.Type,
-			Name:          pkg.Name,
-			LatestVersion: pkg.LatestVersion,
-			Description:   pkg.Description,
-			Homepage:      pkg.Homepage,
-			Repository:    pkg.Repository,
-			RegistryURL:   registries.DefaultURL(p.Type),
-		}
-
-		if pkg.Licenses != "" {
-			if normalized, err := spdx.NormalizeExpressionLax(pkg.Licenses); err == nil {
-				info.License = normalized
-			} else {
-				info.License = pkg.Licenses
-			}
-		}
-
-		result[purlStr] = info
+	result, _ := s.registries.BulkLookup(ctx, purls)
+	for _, info := range result {
+		info.License = normalizeLicense(info.License)
 	}
-
 	return result
 }
 
 // CheckVulnerabilities queries for vulnerabilities affecting a package version.
 func (s *Service) CheckVulnerabilities(ctx context.Context, ecosystem, name, version string) ([]VulnInfo, error) {
-	p := packageurl.Make(ecosystem, name, version)
-	if p == nil {
+	if packageurl.Make(ecosystem, name, version) == nil {
 		return nil, nil
 	}
-
-	vulnList, err := s.vulnSource.Query(ctx, p)
-	if err != nil {
-		return nil, err
-	}
-
-	results := make([]VulnInfo, 0, len(vulnList))
-	for _, v := range vulnList {
-		info := VulnInfo{
-			ID:           v.ID,
-			Summary:      v.Summary,
-			Severity:     v.SeverityLevel(),
-			CVSSScore:    v.CVSSScore(),
-			FixedVersion: v.FixedVersion(ecosystem, name),
-		}
-
-		for _, ref := range v.References {
-			info.References = append(info.References, ref.URL)
-		}
-
-		results = append(results, info)
-	}
-
-	return results, nil
-}
-
-// IsOutdated checks if a version is older than the latest version.
-func (s *Service) IsOutdated(currentVersion, latestVersion string) bool {
-	if latestVersion == "" || currentVersion == "" {
-		return false
-	}
-	return vers.Compare(currentVersion, latestVersion) < 0
+	return s.vulns.Check(ctx, ecosystem, name, version)
 }
 
 // GetLatestVersion fetches the latest version for a package.
 func (s *Service) GetLatestVersion(ctx context.Context, ecosystem, name string) (string, error) {
-	purlStr := packageurl.MakeString(ecosystem, name, "")
-	if purlStr == "" {
-		return "", nil
-	}
-
-	latest, err := registries.FetchLatestVersionFromPURL(ctx, purlStr, s.regClient)
-	if err != nil {
+	info, err := s.EnrichPackage(ctx, ecosystem, name)
+	if err != nil || info == nil {
 		return "", err
 	}
-
-	if latest == nil {
-		return "", nil
-	}
-
-	return latest.Number, nil
+	return info.LatestVersion, nil
 }
 
-// LicenseCategory represents the category of a license.
-type LicenseCategory string
-
-const (
-	LicensePermissive LicenseCategory = "permissive"
-	LicenseCopyleft   LicenseCategory = "copyleft"
-	LicenseUnknown    LicenseCategory = "unknown"
-)
-
-// CategorizeLicense returns the category of a license.
-func (s *Service) CategorizeLicense(license string) LicenseCategory {
-	if license == "" || license == "Unknown" {
-		return LicenseUnknown
+// normalizeLicense returns license as an SPDX expression when it can be
+// parsed as one, and unchanged otherwise.
+func normalizeLicense(license string) string {
+	if license == "" {
+		return ""
 	}
-
-	if spdx.HasCopyleft(license) {
-		return LicenseCopyleft
+	if normalized, err := spdx.NormalizeExpressionLax(license); err == nil {
+		return normalized
 	}
-
-	if spdx.IsFullyPermissive(license) {
-		return LicensePermissive
-	}
-
-	return LicenseUnknown
+	return license
 }
 
 // EnrichmentResult contains all enrichment data for a package version.
@@ -278,40 +133,21 @@ type EnrichmentResult struct {
 	Version         *VersionInfo
 	Vulnerabilities []VulnInfo
 	IsOutdated      bool
-	LicenseCategory LicenseCategory
+	LicenseCategory shared.LicenseCategory
 }
 
-// EnrichFull performs full enrichment for a package version.
+// EnrichFull fetches package, version and vulnerability data for a package
+// version concurrently. Failed lookups are logged and left empty.
 func (s *Service) EnrichFull(ctx context.Context, ecosystem, name, version string) (*EnrichmentResult, error) {
 	result := &EnrichmentResult{}
 
 	var wg sync.WaitGroup
 	var pkgErr, verErr, vulnErr error
-
-	// Fetch package info
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		result.Package, pkgErr = s.EnrichPackage(ctx, ecosystem, name)
-	}()
-
-	// Fetch version info
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		result.Version, verErr = s.EnrichVersion(ctx, ecosystem, name, version)
-	}()
-
-	// Check vulnerabilities
-	wg.Add(1)
-	go func() {
-		defer wg.Done()
-		result.Vulnerabilities, vulnErr = s.CheckVulnerabilities(ctx, ecosystem, name, version)
-	}()
-
+	wg.Go(func() { result.Package, pkgErr = s.EnrichPackage(ctx, ecosystem, name) })
+	wg.Go(func() { result.Version, verErr = s.EnrichVersion(ctx, ecosystem, name, version) })
+	wg.Go(func() { result.Vulnerabilities, vulnErr = s.CheckVulnerabilities(ctx, ecosystem, name, version) })
 	wg.Wait()
 
-	// Log errors but don't fail
 	if pkgErr != nil {
 		s.logger.Debug("failed to enrich package", "ecosystem", ecosystem, "name", name, "error", pkgErr)
 	}
@@ -322,19 +158,17 @@ func (s *Service) EnrichFull(ctx context.Context, ecosystem, name, version strin
 		s.logger.Debug("failed to check vulnerabilities", "ecosystem", ecosystem, "name", name, "version", version, "error", vulnErr)
 	}
 
-	// Determine outdated status
-	if result.Package != nil && result.Package.LatestVersion != "" {
-		result.IsOutdated = s.IsOutdated(version, result.Package.LatestVersion)
+	if result.Package != nil {
+		result.IsOutdated = shared.IsOutdated(version, result.Package.LatestVersion)
 	}
 
-	// Categorize license
 	license := ""
 	if result.Version != nil && result.Version.License != "" {
 		license = result.Version.License
-	} else if result.Package != nil && result.Package.License != "" {
+	} else if result.Package != nil {
 		license = result.Package.License
 	}
-	result.LicenseCategory = s.CategorizeLicense(license)
+	result.LicenseCategory = shared.CategorizeLicense(license)
 
 	return result, nil
 }

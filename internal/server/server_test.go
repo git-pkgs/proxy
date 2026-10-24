@@ -806,6 +806,9 @@ func TestCategorizeLicenseCSS(t *testing.T) {
 		{"MPL-2.0", "copyleft"},
 		{"", "unknown"},
 		{"Proprietary", "unknown"},
+		{"mit", "permissive"},
+		{"Apache 2.0", "permissive"},
+		{"GPLv3", "copyleft"},
 	}
 
 	for _, tc := range tests {

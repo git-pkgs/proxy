@@ -123,8 +123,8 @@ github.com/git-pkgs/artifacts v0.2.1 h1:VwdxR4yTDaqBZ34h0slxQBVyr2Xfa+QGOKCKviMx
 github.com/git-pkgs/artifacts v0.2.1/go.mod h1:Otosgq52pXT5UNN7lh6s/lszpWKVDO8XrOjN1M70/IA=
 github.com/git-pkgs/cooldown v0.3.0 h1:eAl2CQFwqXxluoVP9hHmropAf1VoV3gSxLMkN+NEu8A=
 github.com/git-pkgs/cooldown v0.3.0/go.mod h1:FnTg8wufEALATC9Sm/9AHjLdA+u9eVn96e9BqXXjGB0=
-github.com/git-pkgs/enrichment v0.7.3 h1:l8bGVUP2Ncg3uyoZz7Gve+pyojUVcIQ3oJOFbYhWSOM=
-github.com/git-pkgs/enrichment v0.7.3/go.mod h1:ZN/cH4PnmzsapEVPvmAwREP7+ox+RX0yfR6KvoB8xKE=
+github.com/git-pkgs/enrichment v0.7.4-0.20261024153145-1e2684f97ead h1:EeR1jvscVwtJCYMaJXoalBLFFDizOBnrnFllx/hLSKg=
+github.com/git-pkgs/enrichment v0.7.4-0.20261024153145-1e2684f97ead/go.mod h1:ZN/cH4PnmzsapEVPvmAwREP7+ox+RX0yfR6KvoB8xKE=
 github.com/git-pkgs/gcs v0.1.0 h1:E3awGtsO0xZyHT9FUfEwMHjMkRxw41Bh+c7lgTmPvBo=
 github.com/git-pkgs/gcs v0.1.0/go.mod h1:bdkCFD66ryaWnU8MBhokVA3WkJfyAEchm9qec5woBpE=
 github.com/git-pkgs/integrity v0.2.0 h1:sxpAk7EUllZnTYttOoPTW/Yfe5J2imglpuJiuBUZOxM=

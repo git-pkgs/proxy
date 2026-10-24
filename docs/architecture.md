@@ -338,7 +338,7 @@ Version age filtering for supply chain attack mitigation, provided by [github.co
 
 ### `internal/enrichment`
 
-Package metadata enrichment. Fetches license, description, homepage, repository URL, and vulnerability data from upstream registries. Powers the `/api/` endpoints and the web UI's package detail pages.
+Package metadata enrichment, built on [github.com/git-pkgs/enrichment](https://github.com/git-pkgs/enrichment). Fetches license, description, homepage, repository URL, and vulnerability data from upstream registries. Powers the `/api/` endpoints and the web UI's package detail pages.
 
 ### `internal/mirror`
 
