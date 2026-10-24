@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"compress/gzip"
+	cryptorand "crypto/rand"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -327,5 +328,69 @@ func TestHexHandlePackagesWithoutCooldown(t *testing.T) {
 
 	if w.Code != http.StatusOK {
 		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	}
+}
+
+func TestHexCooldownMetadataSizeLimit(t *testing.T) {
+	const limit = 1024
+	now := time.Now()
+	releases := []hexRelease{
+		{Version: testVersion100, InsertedAt: now.Add(-7 * 24 * time.Hour).Format(time.RFC3339Nano)},
+		{Version: "2.0.0", InsertedAt: now.Add(-time.Hour).Format(time.RFC3339Nano)},
+	}
+	apiJSON, _ := json.Marshal(hexPackageAPI{Releases: releases})
+	pkg := buildHexPackage("testpkg", []string{testVersion100, "2.0.0"})
+	proto := buildHexSigned(pkg)
+
+	// An unknown bytes field pads the payload: it compresses to a few bytes
+	// but decompresses past the limit.
+	padded := protowire.AppendTag(append([]byte(nil), pkg...), 4, protowire.BytesType)
+	padded = protowire.AppendBytes(padded, make([]byte, 64*limit))
+	bomb := buildHexSigned(padded)
+	if len(bomb) >= limit {
+		t.Fatalf("compressed package is %d bytes, want under %d", len(bomb), limit)
+	}
+	// Padding that doesn't compress makes the response itself too large.
+	noise := make([]byte, 2*limit)
+	_, _ = cryptorand.Read(noise)
+	large := protowire.AppendTag(append([]byte(nil), pkg...), 4, protowire.BytesType)
+	large = buildHexSigned(protowire.AppendBytes(large, noise))
+	if len(large) <= limit {
+		t.Fatalf("compressed package is %d bytes, want over %d", len(large), limit)
+	}
+
+	tests := []struct {
+		name     string
+		pkg, api []byte
+	}{
+		{"package over limit", large, apiJSON},
+		{"package decompresses past limit", bomb, apiJSON},
+		{"API response over limit", proto, append(append([]byte(nil), apiJSON...), bytes.Repeat([]byte(" "), 2*limit)...)},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				switch r.URL.Path {
+				case "/packages/testpkg":
+					_, _ = w.Write(tt.pkg)
+				case "/api/packages/testpkg":
+					_, _ = w.Write(tt.api)
+				default:
+					w.WriteHeader(http.StatusNotFound)
+				}
+			}))
+			defer upstream.Close()
+
+			proxy, _, _, _ := setupTestProxy(t)
+			proxy.Cooldown = &cooldown.Config{Default: "3d"}
+			proxy.MetadataMaxSize = limit
+			h := NewHexHandlerWithUpstreams(proxy, "http://proxy.test", upstream.URL, upstream.URL)
+
+			w := httptest.NewRecorder()
+			h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/packages/testpkg", nil))
+			if w.Code != http.StatusBadGateway {
+				t.Errorf("status = %d, want %d", w.Code, http.StatusBadGateway)
+			}
+		})
 	}
 }

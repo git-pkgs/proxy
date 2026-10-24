@@ -121,10 +121,14 @@ func (h *PyPIHandler) handleSimplePackage(w http.ResponseWriter, r *http.Request
 		return
 	}
 
-	// When cooldown is enabled, fetch JSON metadata to get version timestamps
+	// When cooldown applies, fetch JSON metadata to get version timestamps
 	var filteredVersions map[string]bool
-	if h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() {
-		filteredVersions = h.fetchFilteredVersions(r, name)
+	if h.proxy.cooldownApplies("pypi", name) {
+		filteredVersions, err = h.fetchFilteredVersions(r, name)
+		if err != nil {
+			h.proxy.writeCooldownLookupError(w, "pypi", name, err)
+			return
+		}
 	}
 	for version := range h.proxy.Denylist.Versions(canonicalPackagePURL("pypi", name)) {
 		if filteredVersions == nil {
@@ -137,7 +141,8 @@ func (h *PyPIHandler) handleSimplePackage(w http.ResponseWriter, r *http.Request
 	if isJSONMediaType(contentType) {
 		rewritten, err = h.rewriteSimpleJSON(body, filteredVersions)
 		if err != nil {
-			if len(h.proxy.Denylist.Versions(canonicalPackagePURL("pypi", name))) != 0 {
+			if len(filteredVersions) != 0 {
+				h.proxy.Logger.Error("failed to filter pypi simple json", "package", name, "error", err)
 				http.Error(w, "failed to filter package metadata", http.StatusBadGateway)
 				return
 			}
@@ -263,24 +268,29 @@ func ensureVaryAccept(header http.Header) {
 	header.Add("Vary", "Accept")
 }
 
-// fetchFilteredVersions fetches JSON metadata and returns a set of version strings
-// that should be filtered out due to cooldown.
-func (h *PyPIHandler) fetchFilteredVersions(r *http.Request, name string) map[string]bool {
+// fetchFilteredVersions fetches JSON metadata and returns a set of version
+// strings that should be filtered out due to cooldown. A package the JSON API
+// doesn't know has no publish times to go by and gets an empty set; any other
+// failure to read them is an error.
+func (h *PyPIHandler) fetchFilteredVersions(r *http.Request, name string) (map[string]bool, error) {
 	jsonURL := fmt.Sprintf("%s/pypi/%s/json", h.upstreamURL, name)
 
 	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "pypi", name+"/json", jsonURL)
+	if errors.Is(err, ErrUpstreamNotFound) {
+		return nil, nil
+	}
 	if err != nil {
-		return nil
+		return nil, err
 	}
 
 	var metadata map[string]any
 	if err := json.Unmarshal(body, &metadata); err != nil {
-		return nil
+		return nil, fmt.Errorf("parsing pypi json metadata: %w", err)
 	}
 
 	releases, ok := metadata["releases"].(map[string]any)
 	if !ok {
-		return nil
+		return nil, errors.New("pypi json metadata has no releases")
 	}
 
 	packagePURL := canonicalPackagePURL("pypi", name)
@@ -298,9 +308,9 @@ func (h *PyPIHandler) fetchFilteredVersions(r *http.Request, name string) map[st
 	}
 
 	if len(filtered) == 0 {
-		return nil
+		return nil, nil
 	}
-	return filtered
+	return filtered, nil
 }
 
 // rewriteSimpleHTML rewrites package URLs in simple API HTML to point at this proxy.
@@ -426,7 +436,8 @@ func (h *PyPIHandler) proxyAndRewriteJSON(w http.ResponseWriter, r *http.Request
 
 	rewritten, err := h.rewriteJSONMetadata(body)
 	if err != nil {
-		if len(h.proxy.Denylist.Versions(canonicalPackagePURL("pypi", r.PathValue("name")))) != 0 {
+		if h.proxy.mustFilterMetadata("pypi", r.PathValue("name")) {
+			h.proxy.Logger.Error("failed to filter pypi metadata", "url", upstreamURL, "error", err)
 			http.Error(w, "failed to filter package metadata", http.StatusBadGateway)
 			return
 		}
@@ -501,13 +512,14 @@ func (h *PyPIHandler) shouldFilterRelease(packagePURL string, files any) bool {
 // path without ever reading the index.
 //
 // A release whose upload time cannot be determined is allowed through, matching
-// how fetchFilteredVersions treats it.
-func (h *PyPIHandler) versionInCooldown(r *http.Request, name, version string) bool {
-	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		return false
+// how fetchFilteredVersions treats it. Failing to read the times is an error.
+func (h *PyPIHandler) versionInCooldown(r *http.Request, name, version string) (bool, error) {
+	if !h.proxy.cooldownApplies("pypi", name) {
+		return false, nil
 	}
 
-	return h.fetchFilteredVersions(r, name)[version]
+	filtered, err := h.fetchFilteredVersions(r, name)
+	return filtered[version], err
 }
 
 // rewriteFileEntries rewrites URLs in a list of file entries.
@@ -612,11 +624,18 @@ func (h *PyPIHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	filename := parts[len(parts)-1]
 	name, version := h.parseFilename(filename)
 
-	if name != "" && h.versionInCooldown(r, name, version) {
-		h.proxy.Logger.Info("cooldown: withholding pypi file",
-			"name", name, "version", version, "filename", filename)
-		http.Error(w, "not found", http.StatusNotFound)
-		return
+	if name != "" {
+		inCooldown, err := h.versionInCooldown(r, name, version)
+		if err != nil {
+			h.proxy.writeCooldownLookupError(w, "pypi", name, err)
+			return
+		}
+		if inCooldown {
+			h.proxy.Logger.Info("cooldown: withholding pypi file",
+				"name", name, "version", version, "filename", filename)
+			http.Error(w, "not found", http.StatusNotFound)
+			return
+		}
 	}
 
 	if name == "" {

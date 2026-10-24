@@ -561,10 +561,10 @@ func TestNPMDownloadCooldownDisabled(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
 	h := NewNPMHandler(proxy, "http://proxy.test", "")
 
-	if h.versionInCooldown("leftpad", testVersion100, func() ([]byte, error) {
+	if inCooldown, _ := h.versionInCooldown("leftpad", testVersion100, func() ([]byte, error) {
 		t.Fatal("cooldown must not request metadata when disabled")
 		return nil, nil
-	}) {
+	}); inCooldown {
 		t.Error("versionInCooldown = true, want false when cooldown is not configured")
 	}
 }

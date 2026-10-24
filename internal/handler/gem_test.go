@@ -342,14 +342,12 @@ func TestGemCompactIndexVersionsAPIFails(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.handleCompactIndex(w, req)
 
-	// Should still return OK with unfiltered content
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
+	// Without publish times the index can't be filtered, so it isn't served.
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadGateway)
 	}
-
-	body := w.Body.String()
-	if !strings.Contains(body, "1.0.0") {
-		t.Error("expected unfiltered content when versions API fails")
+	if strings.Contains(w.Body.String(), "1.0.0") {
+		t.Error("served the unfiltered index when the versions API failed")
 	}
 }
 
@@ -398,4 +396,33 @@ func TestGemFetchFilteredVersions(t *testing.T) {
 	}
 
 	_ = fmt.Sprintf // silence unused import
+}
+
+func TestGemCooldownVersionsSizeLimit(t *testing.T) {
+	versionsJSON, _ := json.Marshal([]gemVersion{
+		{Number: "2.0.0", Platform: "ruby", CreatedAt: time.Now().Add(-time.Hour).Format(time.RFC3339)},
+	})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.HasPrefix(r.URL.Path, "/api/v1/versions/") {
+			_, _ = w.Write(versionsJSON)
+			_, _ = w.Write([]byte(strings.Repeat(" ", 4096)))
+			return
+		}
+		_, _ = w.Write([]byte("---\n2.0.0 |checksum:abc\n"))
+	}))
+	defer upstream.Close()
+
+	proxy := testProxy()
+	proxy.Cooldown = &cooldown.Config{Default: "3d"}
+	proxy.MetadataMaxSize = 1024
+	h := &GemHandler{proxy: proxy, upstreamURL: upstream.URL}
+
+	req := httptest.NewRequest(http.MethodGet, "/info/testgem", nil)
+	req.SetPathValue("name", "testgem")
+	w := httptest.NewRecorder()
+	h.handleCompactIndex(w, req)
+
+	if w.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want %d", w.Code, http.StatusBadGateway)
+	}
 }

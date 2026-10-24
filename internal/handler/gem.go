@@ -145,20 +145,19 @@ func gemVersionAndPlatform(s string) bool {
 // handleCompactIndex serves the compact index for a gem, filtering versions
 // based on cooldown when enabled.
 func (h *GemHandler) handleCompactIndex(w http.ResponseWriter, r *http.Request) {
-	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		h.proxyCached(w, r)
-		return
-	}
-
 	name := r.PathValue("name")
 	if name == "" {
 		http.Error(w, "invalid gem name", http.StatusBadRequest)
 		return
 	}
+	if !h.proxy.cooldownApplies("gem", name) {
+		h.proxyCached(w, r)
+		return
+	}
 
 	h.proxy.Logger.Info("gem compact index request with cooldown", "name", name)
 
-	indexResp, filteredVersions, err := h.fetchIndexAndVersions(r, name)
+	indexResp, filteredVersions, versionsErr, err := h.fetchIndexAndVersions(r, name)
 	if err != nil {
 		if writeUpstreamHeld(w, err) {
 			return
@@ -174,19 +173,18 @@ func (h *GemHandler) handleCompactIndex(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if filteredVersions == nil {
-		h.proxy.Logger.Warn("failed to fetch version timestamps, proxying unfiltered", "name", name)
-		h.proxy.relayResponse(w, r, indexResp, nil)
+	if versionsErr != nil {
+		h.proxy.writeCooldownLookupError(w, "gem", name, versionsErr)
 		return
 	}
 
 	h.writeFilteredIndex(w, indexResp, name, filteredVersions)
 }
 
-// fetchIndexAndVersions fetches the compact index and versions API concurrently.
-// Returns the index response, a set of versions to filter (nil if versions API failed),
-// and an error if the index fetch itself failed.
-func (h *GemHandler) fetchIndexAndVersions(r *http.Request, name string) (*http.Response, map[string]bool, error) {
+// fetchIndexAndVersions fetches the compact index and versions API
+// concurrently. It returns the index response and the set of versions to
+// filter, the versions API's error, and the index fetch's error.
+func (h *GemHandler) fetchIndexAndVersions(r *http.Request, name string) (*http.Response, map[string]bool, error, error) {
 	type versionsResult struct {
 		filtered map[string]bool
 		err      error
@@ -203,14 +201,9 @@ func (h *GemHandler) fetchIndexAndVersions(r *http.Request, name string) (*http.
 	versionsRes := <-versionsCh
 
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, nil, err
 	}
-
-	if versionsRes.err != nil {
-		return indexResp, nil, nil
-	}
-
-	return indexResp, versionsRes.filtered, nil
+	return indexResp, versionsRes.filtered, versionsRes.err, nil
 }
 
 // fetchCompactIndex fetches the compact index from upstream.
@@ -308,8 +301,12 @@ func (h *GemHandler) fetchFilteredVersions(r *http.Request, name string) (map[st
 		return nil, fmt.Errorf("versions API returned %d", resp.StatusCode)
 	}
 
+	body, err := h.proxy.ReadMetadata(resp.Body)
+	if err != nil {
+		return nil, err
+	}
 	var versions []gemVersion
-	if err := json.NewDecoder(resp.Body).Decode(&versions); err != nil {
+	if err := json.Unmarshal(body, &versions); err != nil {
 		return nil, err
 	}
 

@@ -277,7 +277,8 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 			JSONError(w, http.StatusNotFound, ErrVersionNotFound.Error())
 			return
 		}
-		if len(h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName))) != 0 {
+		if h.proxy.mustFilterMetadata("npm", packageName) {
+			h.proxy.Logger.Error("failed to filter npm metadata", "package", packageName, "error", err)
 			JSONError(w, http.StatusBadGateway, "failed to filter package metadata")
 			return
 		}
@@ -387,7 +388,8 @@ func (h *NPMHandler) handleFilteredNPMVersionMetadata(w http.ResponseWriter, r *
 			JSONError(w, http.StatusNotFound, ErrVersionNotFound.Error())
 			return
 		}
-		if len(h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName))) != 0 {
+		if h.proxy.mustFilterMetadata("npm", packageName) {
+			h.proxy.Logger.Error("failed to filter npm metadata", "package", packageName, "error", err)
 			JSONError(w, http.StatusBadGateway, "failed to filter package metadata")
 			return
 		}
@@ -923,7 +925,17 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		body, _, _, err := h.proxy.fetchOrCacheMetadata(r.Context(), "npm", cacheKey, upstreamURL, "", h.packumentValidator(), h.packumentAccept())
 		return body, err
 	})
-	if h.versionInCooldown(packageName, version, metadata) {
+	inCooldown, err := h.versionInCooldown(packageName, version, metadata)
+	if err != nil {
+		if writeUpstreamHeld(w, err) {
+			return
+		}
+		h.proxy.Logger.Warn("cooldown: could not read npm publish time",
+			"package", packageName, "version", version, "error", err)
+		JSONError(w, http.StatusBadGateway, "failed to check cooldown")
+		return
+	}
+	if inCooldown {
 		h.proxy.Logger.Info("cooldown: withholding npm tarball",
 			"package", packageName, "version", version)
 		JSONError(w, http.StatusNotFound, ErrVersionNotFound.Error())
@@ -1031,7 +1043,8 @@ func validateTarballURL(raw, registryURL string) (string, error) {
 // proxy has never seen, persisting the parsed time so the packument is
 // fetched and parsed at most once per version. A version with no usable
 // publish time is allowed through, matching how applyCooldownFiltering
-// treats it.
+// treats it. A packument that can't be fetched or parsed is an error, so a
+// failing upstream can't let a version through.
 //
 // The versions row is keyed by the plain version PURL, which does not say
 // which registry the version came from, so routed packages leave it alone:
@@ -1040,39 +1053,38 @@ func validateTarballURL(raw, registryURL string) (string, error) {
 // for a private version of the same name, a private time would hold back the
 // public version, and moving a route to another upstream would keep the old
 // one's times.
-func (h *NPMHandler) versionInCooldown(packageName, version string, metadata func() ([]byte, error)) bool {
-	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		return false
+func (h *NPMHandler) versionInCooldown(packageName, version string, metadata func() ([]byte, error)) (bool, error) {
+	if !h.proxy.cooldownApplies("npm", packageName) {
+		return false, nil
 	}
 
 	_, routed := h.routes.match(packageName)
 	versionPURL := canonicalVersionPURL("npm", packageName, version)
 	if !routed {
 		if ver, err := h.proxy.DB.GetVersionByPURL(versionPURL); err == nil && ver != nil && ver.PublishedAt.Valid {
-			return !h.proxy.Cooldown.IsAllowed("npm", canonicalPackagePURL("npm", packageName), ver.PublishedAt.Time)
+			return !h.proxy.Cooldown.IsAllowed("npm", canonicalPackagePURL("npm", packageName), ver.PublishedAt.Time), nil
 		}
 	}
 
 	body, err := metadata()
+	if errors.Is(err, ErrUpstreamNotFound) {
+		return false, nil
+	}
 	if err != nil {
-		h.proxy.Logger.Warn("cooldown: could not fetch npm metadata for download check",
-			"package", packageName, "version", version, "error", err)
-		return false
+		return false, err
 	}
 
 	published, ok, err := lookupJSONString(body, "time", version)
 	if err != nil {
-		h.proxy.Logger.Warn("cooldown: could not parse npm metadata for download check",
-			"package", packageName, "version", version, "error", err)
-		return false
+		return false, fmt.Errorf("parsing npm metadata: %w", err)
 	}
 	if !ok {
-		return false
+		return false, nil
 	}
 
 	publishedAt, err := time.Parse(time.RFC3339, published)
 	if err != nil {
-		return false
+		return false, nil
 	}
 
 	if !routed {
@@ -1082,7 +1094,7 @@ func (h *NPMHandler) versionInCooldown(packageName, version string, metadata fun
 		}
 	}
 
-	return !h.proxy.Cooldown.IsAllowed("npm", canonicalPackagePURL("npm", packageName), publishedAt)
+	return !h.proxy.Cooldown.IsAllowed("npm", canonicalPackagePURL("npm", packageName), publishedAt), nil
 }
 
 // npmMetadataPath returns the package name and the encoded registry path.

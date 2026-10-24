@@ -162,6 +162,11 @@ func (h *PubHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 
 	rewritten, err := h.rewriteMetadata(name, body)
 	if err != nil {
+		if h.proxy.mustFilterMetadata("pub", name) {
+			h.proxy.Logger.Error("failed to filter pub metadata", "package", name, "error", err)
+			http.Error(w, "failed to filter package metadata", http.StatusBadGateway)
+			return
+		}
 		h.proxy.Logger.Warn("failed to rewrite metadata, proxying original", "error", err)
 		w.Header().Set(headerContentType, "application/json")
 		w.WriteHeader(http.StatusOK)

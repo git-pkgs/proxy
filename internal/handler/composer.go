@@ -188,6 +188,11 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 		if r.Context().Err() != nil {
 			return // the client left while waiting on a shared rewrite
 		}
+		if h.proxy.mustFilterMetadata("composer", basePackage) {
+			h.proxy.Logger.Error("failed to filter composer metadata", "package", basePackage, "error", err)
+			http.Error(w, "failed to filter package metadata", http.StatusBadGateway)
+			return
+		}
 		h.proxy.Logger.Warn("failed to rewrite metadata, proxying original", "error", err)
 		markStale(w, upstream.stale)
 		w.Header().Set(headerContentType, "application/json")
