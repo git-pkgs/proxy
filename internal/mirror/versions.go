@@ -42,9 +42,15 @@ func (r RegistryVersions) ListVersions(ctx context.Context, ecosystem, name stri
 	if err != nil {
 		return nil, err
 	}
-	result := make([]string, len(versions))
-	for i, v := range versions {
-		result[i] = v.Number
+	result := make([]string, 0, len(versions))
+	for _, v := range versions {
+		// The Homebrew client also lists a formula's versioned siblings,
+		// openssl@3.6 for openssl@3, as versions marked with the sibling's
+		// name. They are other formulae, not versions of this one.
+		if _, sibling := v.Metadata["formula"]; sibling {
+			continue
+		}
+		result = append(result, v.Number)
 	}
 	return result, nil
 }

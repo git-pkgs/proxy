@@ -86,6 +86,8 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: p.Version, Qualifiers: qualifiers}
 			if isImageEcosystem(ecosystem) {
 				pv.Qualifiers = p.Qualifiers.Map()
+			}
+			if takesPlatforms(ecosystem) {
 				pv.Platforms = s.Platforms
 			}
 			if err := fn(pv); err != nil {
@@ -100,7 +102,11 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 			return fmt.Errorf("fetching versions for %s/%s: %w", ecosystem, name, err)
 		}
 		for _, v := range listed {
-			if err := fn(PackageVersion{Ecosystem: ecosystem, Name: name, Version: v, Qualifiers: qualifiers}); err != nil {
+			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: v, Qualifiers: qualifiers}
+			if takesPlatforms(ecosystem) {
+				pv.Platforms = s.Platforms
+			}
+			if err := fn(pv); err != nil {
 				return err
 			}
 		}

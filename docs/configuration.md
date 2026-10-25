@@ -1665,6 +1665,22 @@ proxy mirror 'pkg:oci/debian@sha256:...?repository_url=docker.io/library/debian&
 - Non-distributable (foreign) layers are skipped.
 - While `scanning.enabled` is set, the command refuses images, because scanners fetch staged layers from the running server. Use the mirror API instead.
 
+### Homebrew bottles
+
+`pkg:brew` PURLs mirror a homebrew/core formula's bottles, which Homebrew publishes as an image on `upstream.homebrew_artifact`. They are mirrored like that image, under the keys brew reads through `HOMEBREW_ARTIFACT_DOMAIN`, so `brew install` is served from cache, also when the upstream is unreachable:
+
+```bash
+proxy mirror --platform linux/arm64 pkg:brew/hello@2.12.3 pkg:brew/openssl%403
+```
+
+- A formula name with `@` is written with `%40`, since `@` starts the version: `pkg:brew/openssl%403` is `openssl@3`, and `pkg:brew/openssl@3` is version 3 of `openssl`.
+
+- The formula's JSON API on `upstream.homebrew_api` gives the image tag for the current version, which carries the formula's revision and the bottles' rebuild (`hello` 2.12.3 is tagged `2.12.3-1`). Only the current version is described there; another version is used as the tag as given, so give the full tag, such as `2.12.2` or `2.12.3-1`, for older bottles.
+- A PURL without a version mirrors the current version.
+- `--platform` selects bottles like image platforms: `linux/arm64`, `linux/amd64`, or `darwin/arm64` for every macOS release's arm64 bottle. Without it every bottle of the version is mirrored.
+- Dependencies aren't mirrored with a formula; list them too. brew also needs the JSON API, which the proxy keeps with `cache_metadata`.
+- Casks, source archives and taps other than homebrew/core aren't mirrored.
+
 ### Scheduled refresh
 
 Tags such as `alpine:3.20` move. The server can re-mirror them on its own, so the cache follows the tag even when nobody pulls it or the proxy is offline later:

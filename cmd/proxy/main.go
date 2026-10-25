@@ -619,6 +619,7 @@ func newCommandMirror(cfg *config.Config, proxy *handler.Proxy, images *handler.
 	db *database.DB, store storage.Storage, logger *slog.Logger, workers int) *mirror.Mirror {
 	m := mirror.New(proxy, db, store, logger, workers)
 	m.Images = images
+	m.Bottles = handler.NewHomebrewHandler(proxy, cfg.Upstream.HomebrewAPI)
 	m.Charts = handler.NewHelmHandler(proxy, cfg.BaseURL, cfg.Upstream.Helm)
 	server.UseMirrorUpstreams(m, cfg.Upstream, proxy.HTTPClient)
 	if cfg.Scanning.Enabled {

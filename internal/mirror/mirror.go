@@ -32,6 +32,11 @@ type Mirror struct {
 	// Charts mirrors helm charts. Without it they fail.
 	Charts ChartMirrorer
 
+	// Bottles resolves Homebrew formula versions to the images their
+	// bottles are published under, which Images mirrors. Without it brew
+	// PURLs fail.
+	Bottles BottleResolver
+
 	// Versions lists the versions of unversioned PURLs in mirror jobs and
 	// schedules. Nil lists them from the public registries.
 	Versions VersionLister
@@ -226,6 +231,10 @@ func (m *Mirror) RunDryRun(ctx context.Context, source Source) ([]PackageVersion
 func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *progressTracker) {
 	if isImageEcosystem(pv.Ecosystem) && m.Images != nil {
 		m.mirrorImage(ctx, pv, tracker)
+		return
+	}
+	if pv.Ecosystem == "brew" {
+		m.mirrorBrew(ctx, pv, tracker)
 		return
 	}
 	if m.RefusePackages != "" {
