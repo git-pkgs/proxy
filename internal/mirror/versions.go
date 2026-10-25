@@ -42,9 +42,15 @@ func (r RegistryVersions) ListVersions(ctx context.Context, ecosystem, name stri
 	if err != nil {
 		return nil, err
 	}
-	result := make([]string, len(versions))
-	for i, v := range versions {
-		result[i] = v.Number
+	// The CRAN client lists each archived version twice, from the link
+	// and its text in the directory listing.
+	result := make([]string, 0, len(versions))
+	seen := make(map[string]bool, len(versions))
+	for _, v := range versions {
+		if !seen[v.Number] {
+			seen[v.Number] = true
+			result = append(result, v.Number)
+		}
 	}
 	return result, nil
 }
