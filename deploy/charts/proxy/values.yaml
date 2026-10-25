@@ -103,6 +103,10 @@ containerSecurityContext:
     drop:
       - ALL
 
+# /tmp is an emptyDir, since the root filesystem is read-only.
+tmpDir:
+  sizeLimit: ""
+
 resources: {}
 #  requests:
 #    cpu: 100m

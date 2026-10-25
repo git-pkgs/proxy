@@ -1683,6 +1683,8 @@ docker build -t proxy .
 docker run -p 8080:8080 -v proxy-data:/data proxy
 ```
 
+With `--read-only`, also pass `--tmpfs /tmp`: the proxy writes some uploads to a temporary file before reading them.
+
 With Postgres and S3:
 
 ```bash
