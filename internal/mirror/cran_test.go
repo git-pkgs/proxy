@@ -59,3 +59,25 @@ NeedsCompilation: no
 		t.Errorf("parseCRANPackages = %v, %v, want %v", got, err, want)
 	}
 }
+
+// FuzzReadRDSStringMatrix feeds the decoder arbitrary bytes, seeded with a
+// real PACKAGES.rds: it reads files from the network, so it must reject
+// anything malformed with an error rather than panic or allocate without
+// bound.
+func FuzzReadRDSStringMatrix(f *testing.F) {
+	data, err := os.ReadFile("testdata/cran-archive-PACKAGES.rds")
+	if err != nil {
+		f.Fatal(err)
+	}
+	if data, err = gunzipLimited(data); err != nil {
+		f.Fatal(err)
+	}
+	f.Add(data)
+	f.Add(data[:len(data)/2])
+	f.Fuzz(func(t *testing.T, b []byte) {
+		values, nrow, columns, err := readRDSStringMatrix(b)
+		if err == nil && nrow > 0 && len(values) != nrow*len(columns) {
+			t.Errorf("%d values for %d rows and %d columns", len(values), nrow, len(columns))
+		}
+	})
+}
