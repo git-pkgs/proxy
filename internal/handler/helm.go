@@ -119,6 +119,10 @@ func (h *HelmHandler) handleChart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.withholdChart(w, r, repository, upstreamURL, digest) {
+		return
+	}
+
 	cached, err := h.proxy.GetCachedArtifact(r.Context(), helmMetadataEcosystem, repository, digest, filename)
 	if err != nil {
 		h.proxy.Logger.Error("failed to check Helm chart cache", "error", err)
@@ -350,6 +354,72 @@ func (h *HelmHandler) buildChartLookup(upstreamURL string, body []byte) (*helmCh
 		}
 	}
 	return lookup, nil
+}
+
+// withholdChart checks a chart against the cooldown before it is served.
+// findChartDownload already leaves out charts in cooldown, but a cached chart
+// may have been fetched under an earlier policy. Charts are cached under the
+// repository and digest rather than the chart name the policy is keyed by, so
+// the name and publish time come from the index, indexed once per document
+// (see publishIndex).
+func (h *HelmHandler) withholdChart(w http.ResponseWriter, r *http.Request, repository, upstreamURL, digest string) bool {
+	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
+		return false
+	}
+	res := h.fetchIndex(r, repository, upstreamURL)
+	if res.err != nil {
+		h.proxy.Logger.Warn("cooldown: could not fetch Helm index for download check",
+			"repository", repository, "digest", digest, "error", res.err)
+		return false
+	}
+	index, err := publishIndex(h.proxy, "helm\x00"+h.indexCacheKey(repository, upstreamURL), res,
+		func(body []byte, _ string) (map[string]helmChartTime, error) {
+			return h.indexChartTimes(upstreamURL, body)
+		})
+	if err != nil {
+		h.proxy.Logger.Warn("cooldown: could not read Helm index for download check",
+			"repository", repository, "digest", digest, "error", err)
+		return false
+	}
+	chart, ok := index[digest]
+	if !ok {
+		return false
+	}
+	return h.proxy.withholdInCooldown(w, downloadVersion{
+		ecosystem: helmMetadataEcosystem, policyName: chart.name, version: digest,
+		lookup: func() (time.Time, bool, error) { return chart.created, !chart.created.IsZero(), nil },
+	})
+}
+
+// helmChartTime is the chart a release digest belongs to and when it was
+// created.
+type helmChartTime struct {
+	name    string
+	created time.Time
+}
+
+// indexChartTimes maps each release digest in an index to its chart.
+func (h *HelmHandler) indexChartTimes(upstreamURL string, body []byte) (map[string]helmChartTime, error) {
+	_, entries, err := parseHelmIndex(body)
+	if err != nil {
+		return nil, err
+	}
+	index := make(map[string]helmChartTime)
+	for i := 0; i < len(entries.Content); i += 2 {
+		chartName := entries.Content[i].Value
+		releases := entries.Content[i+1]
+		if releases.Kind != yaml.SequenceNode {
+			continue
+		}
+		for _, release := range releases.Content {
+			chart, err := h.parseChartRelease(chartName, upstreamURL, release)
+			if err != nil {
+				continue
+			}
+			index[chart.digest] = helmChartTime{name: chartName, created: chart.created}
+		}
+	}
+	return index, nil
 }
 
 func (h *HelmHandler) chartOnCooldown(chartName string, created time.Time) bool {
