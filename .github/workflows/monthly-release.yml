@@ -1,8 +1,10 @@
-name: Monthly patch release
+name: Monthly release
 
-# Cuts a patch release on the 1st of each month when main is green and
-# something has merged since the last release. Scheduled runs only report
-# what they would do until the repository variable MONTHLY_RELEASE is "true".
+# Cuts a release on the 1st of each month when main is green and something
+# has merged since the last release: a patch release, or a new minor version
+# if a pull request labelled "breaking" was merged (a new major version from
+# 1.0 on). Scheduled runs only report what they would do until the
+# repository variable MONTHLY_RELEASE is "true".
 
 on:
   schedule:
@@ -76,15 +78,20 @@ jobs:
           fi
 
           since=$(git log -1 --format=%cI "$last")
-          breaking=$(gh pr list -R "$REPO" --state merged --base main \
+          breaking=$(gh pr list -R "$REPO" --state merged --base main --limit 1000 \
             --search "merged:>$since label:breaking" --json number --jq '.[].number')
-          if [ -n "$breaking" ]; then
-            echo "::warning::breaking changes merged since $last (#$(echo "$breaking" | paste -sd, - | sed 's/,/, #/g')), release a new minor version by hand"
-            exit 0
-          fi
 
           IFS=. read -r major minor patch <<<"${last#v}"
-          tag="v$major.$minor.$((patch + 1))"
+          if [ -z "$breaking" ]; then
+            tag="v$major.$minor.$((patch + 1))"
+          else
+            echo "Breaking changes merged since $last: #$(echo "$breaking" | sort -n | paste -sd, - | sed 's/,/, #/g')"
+            if [ "$major" -eq 0 ]; then
+              tag="v0.$((minor + 1)).0"
+            else
+              tag="v$((major + 1)).0.0"
+            fi
+          fi
           echo "$merged commits since $last, next release $tag at $sha"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
