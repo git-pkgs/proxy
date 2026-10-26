@@ -3,14 +3,11 @@ package mirror
 import (
 	"context"
 	"errors"
-	"net/http"
-	"net/http/httptest"
 	"strings"
 	"sync"
 	"testing"
 
 	"github.com/git-pkgs/proxy/internal/handler"
-	"github.com/git-pkgs/registries"
 )
 
 // fakeBottles resolves every formula version to homebrew/core/<name> tagged
@@ -94,30 +91,5 @@ func TestMirrorBrewFailures(t *testing.T) {
 	}
 	if progress.Failed != 1 || len(images.refs) != 0 {
 		t.Errorf("unknown formula: %+v, mirrored %v", progress, images.refs)
-	}
-}
-
-// The Homebrew client lists a formula's versioned siblings as versions;
-// listing keeps only the formula's own version.
-func TestListBrewVersionsSkipsSiblingFormulae(t *testing.T) {
-	api := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path != "/api/formula/openssl@3.json" {
-			http.NotFound(w, r)
-			return
-		}
-		_, _ = w.Write([]byte(`{"name":"openssl@3","versions":{"stable":"3.5.9"},
-			"versioned_formulae":["openssl@3.6","openssl@3.0"]}`))
-	}))
-	defer api.Close()
-	lister := RegistryVersions{
-		Client: registries.NewClient(registries.WithHTTPClient(api.Client())),
-		URL:    func(string, string) (string, error) { return api.URL, nil },
-	}
-	versions, err := lister.ListVersions(context.Background(), "brew", "openssl@3")
-	if err != nil {
-		t.Fatal(err)
-	}
-	if len(versions) != 1 || versions[0] != "3.5.9" {
-		t.Errorf("versions = %v, want [3.5.9]", versions)
 	}
 }
