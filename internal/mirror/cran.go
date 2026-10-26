@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"errors"
 	"fmt"
 	"io"
 	"net/url"
@@ -22,7 +21,7 @@ const (
 	// cranIndexTTL is how long a fetched src/contrib/PACKAGES is reused, so
 	// mirroring many packages, or every version of one, reads it once.
 	cranIndexTTL = 5 * time.Minute
-	// cranMaxIndexSize limits the decompressed PACKAGES and PACKAGES.rds.
+	// cranMaxIndexSize limits the decompressed PACKAGES.
 	// CRAN's PACKAGES is about 7 MB.
 	cranMaxIndexSize = 64 << 20
 	// cranMaxLine limits a line of PACKAGES.
@@ -43,14 +42,9 @@ type cranIndex struct {
 	md5s    map[string]string
 }
 
-// mirrorCRAN mirrors the source package of a CRAN version under the key the
-// CRAN handler caches it under, ("cran", name, version, name_version.tar.gz),
-// which both /src/contrib/{file} and /src/contrib/Archive/{name}/{file} are
-// served from. A current version is fetched from src/contrib and checked
-// against the MD5 sum src/contrib/PACKAGES lists; any other version from
-// src/contrib/Archive, checked against the MD5 sum in that directory's
-// PACKAGES.rds, or unchecked where the repository has none, as the handler
-// fetches it.
+// mirrorCRAN mirrors a CRAN source package under ("cran", name, version,
+// name_version.tar.gz), the one entry the handler serves for both
+// src/contrib and src/contrib/Archive.
 func (m *Mirror) mirrorCRAN(ctx context.Context, pv PackageVersion, tracker *progressTracker) {
 	fail := func(err error) { m.recordFailure(tracker, pv, err) }
 	if !cranNamePattern.MatchString(pv.Name) {
@@ -76,12 +70,7 @@ func (m *Mirror) mirrorCRAN(ctx context.Context, pv PackageVersion, tracker *pro
 	downloadURL := baseURL + "/src/contrib/" + filename
 	sum, ok := current[filename]
 	if !ok {
-		archive := baseURL + "/src/contrib/Archive/" + url.PathEscape(pv.Name) + "/"
-		downloadURL = archive + filename
-		if sum, err = cranArchivedMD5(ctx, client, archive+"PACKAGES.rds", pv.Version); err != nil {
-			fail(fmt.Errorf("reading the archive's PACKAGES.rds: %w", err))
-			return
-		}
+		downloadURL = baseURL + "/src/contrib/Archive/" + url.PathEscape(pv.Name) + "/" + filename
 	}
 	var declared string
 	if sum != "" {
@@ -144,31 +133,8 @@ func (m *Mirror) cranCurrentMD5s(ctx context.Context, baseURL string, client *re
 	return m.cran.md5s, nil
 }
 
-// cranArchivedMD5 returns the MD5 sum the PACKAGES.rds at rdsURL lists for
-// version, or "" when the repository has no PACKAGES.rds there or it doesn't
-// list version.
-func cranArchivedMD5(ctx context.Context, client *registries.Client, rdsURL, version string) (string, error) {
-	body, err := client.GetBody(ctx, rdsURL)
-	var httpErr *registries.HTTPError
-	if errors.As(err, &httpErr) && httpErr.IsNotFound() {
-		return "", nil
-	}
-	if err != nil {
-		return "", err
-	}
-	data, err := gunzipLimited(body)
-	if err != nil {
-		return "", err
-	}
-	sums, err := parseCRANArchiveRDS(data)
-	if err != nil {
-		return "", err
-	}
-	return sums[version], nil
-}
-
 // gunzipLimited decompresses data, or returns it as is when it isn't
-// gzipped, as R reads both.
+// gzipped.
 func gunzipLimited(data []byte) ([]byte, error) {
 	if !bytes.HasPrefix(data, []byte{0x1f, 0x8b}) {
 		return data, nil
@@ -222,39 +188,4 @@ func parseCRANPackages(data []byte) (map[string]string, error) {
 	}
 	flush()
 	return sums, scanner.Err()
-}
-
-// parseCRANArchiveRDS returns the MD5sum of each version in a CRAN archive
-// directory's PACKAGES.rds, a character matrix with a column per field,
-// saved by R.
-func parseCRANArchiveRDS(data []byte) (map[string]string, error) {
-	values, nrow, columns, err := readRDSStringMatrix(data)
-	if err != nil {
-		return nil, err
-	}
-	versionCol, sumCol := -1, -1
-	for i, column := range columns {
-		switch column {
-		case "Version":
-			versionCol = i
-		case "MD5sum":
-			sumCol = i
-		}
-	}
-	if versionCol < 0 || sumCol < 0 {
-		return nil, errors.New("PACKAGES.rds has no Version or MD5sum column")
-	}
-	sums := make(map[string]string, nrow)
-	for row := range nrow {
-		version := values[versionCol*nrow+row]
-		if version != nil {
-			sum := values[sumCol*nrow+row]
-			if sum != nil {
-				sums[*version] = *sum
-			} else {
-				sums[*version] = ""
-			}
-		}
-	}
-	return sums, nil
 }

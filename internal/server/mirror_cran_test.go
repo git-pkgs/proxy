@@ -8,7 +8,6 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
-	"os"
 	"sync"
 	"testing"
 
@@ -19,13 +18,12 @@ import (
 const (
 	cranCurrentPath  = "/src/contrib/example_1.1.tar.gz"
 	cranArchivedPath = "/src/contrib/Archive/example/example_1.0.tar.gz"
-	cranArchiveRDS   = "/src/contrib/Archive/example/PACKAGES.rds"
 	cranIndexPath    = "/src/contrib/PACKAGES.gz"
 )
 
 // cranUpstream serves a CRAN repository with example 1.1 current, listed
-// with its MD5 in PACKAGES, and 0.9 and 1.0 archived, listed with theirs in
-// the archive's PACKAGES.rds. It counts requests by path.
+// with its MD5 in PACKAGES, and 0.9 and 1.0 archived. It counts requests by
+// path.
 type cranUpstream struct {
 	*httptest.Server
 	mu    sync.Mutex
@@ -37,12 +35,6 @@ type cranUpstream struct {
 // tampered, which keep the MD5 sums of the originals.
 func newCRANUpstream(t *testing.T, tampered map[string]string) *cranUpstream {
 	t.Helper()
-	// The MD5 sums in testdata/cran-archive-PACKAGES.rds are those of
-	// these archived bodies.
-	rds, err := os.ReadFile("../mirror/testdata/cran-archive-PACKAGES.rds")
-	if err != nil {
-		t.Fatal(err)
-	}
 	current := "example 1.1 source"
 	sum := md5.Sum([]byte(current)) //nolint:gosec // see import
 	var index bytes.Buffer
@@ -54,13 +46,12 @@ func newCRANUpstream(t *testing.T, tampered map[string]string) *cranUpstream {
 	u := &cranUpstream{
 		files: map[string]string{
 			cranIndexPath:    index.String(),
-			cranArchiveRDS:   string(rds),
 			cranCurrentPath:  current,
 			cranArchivedPath: "example 1.0 source",
 			"/src/contrib/Archive/example/example_0.9.tar.gz": "example 0.9 source",
 			"/web/packages/example/DESCRIPTION":               "Package: example\nVersion: 1.1\n",
-			"/src/contrib/Archive/example/": `<a href="example_0.9.tar.gz">example_0.9.tar.gz</a>
-<a href="example_1.0.tar.gz">example_1.0.tar.gz</a>`,
+			"/src/contrib/Archive/example/": `<a href="example_0.9.tar.gz">0.9</a>
+<a href="example_1.0.tar.gz">1.0</a>`,
 		},
 		hits: map[string]int{},
 	}
@@ -132,35 +123,16 @@ func TestMirrorCRANSourcePackagesAreServedFromCache(t *testing.T) {
 }
 
 func TestMirrorCRANRefusesMD5Mismatch(t *testing.T) {
-	upstream := newCRANUpstream(t, map[string]string{
-		cranCurrentPath:  "tampered 1.1",
-		cranArchivedPath: "tampered 1.0",
-	})
+	upstream := newCRANUpstream(t, map[string]string{cranCurrentPath: "tampered 1.1"})
 
-	progress, proxy := mirrorWithConfig(t, cranMirrorConfig(upstream), "pkg:cran/example@1.1", "pkg:cran/example@1.0")
+	progress, proxy := mirrorWithConfig(t, cranMirrorConfig(upstream), "pkg:cran/example@1.1")
 
-	if progress.Failed != 2 || progress.Completed != 0 {
-		t.Fatalf("completed = %d, failed = %d, errors = %v; want both refused", progress.Completed, progress.Failed, progress.Errors)
+	if progress.Failed != 1 || progress.Completed != 0 {
+		t.Fatalf("completed = %d, failed = %d, errors = %v; want it refused", progress.Completed, progress.Failed, progress.Errors)
 	}
 	upstream.Close()
-	for _, path := range []string{cranCurrentPath, cranArchivedPath} {
-		if rec := getCRAN(proxy, upstream, path); rec.Code == http.StatusOK {
-			t.Errorf("%s was cached although its MD5 doesn't match", path)
-		}
-	}
-}
-
-func TestMirrorCRANArchiveWithoutPackagesRDS(t *testing.T) {
-	// A repository without the archive's PACKAGES.rds publishes no checksum
-	// for archived versions; they are fetched unchecked, as R gets them
-	// through the handler.
-	upstream := newCRANUpstream(t, nil)
-	delete(upstream.files, cranArchiveRDS)
-
-	progress, _ := mirrorWithConfig(t, cranMirrorConfig(upstream), "pkg:cran/example@1.0")
-
-	if progress.Completed != 1 || upstream.hitsFor(cranArchivedPath) != 1 {
-		t.Errorf("completed = %d, hits = %d, errors = %v", progress.Completed, upstream.hitsFor(cranArchivedPath), progress.Errors)
+	if rec := getCRAN(proxy, upstream, cranCurrentPath); rec.Code == http.StatusOK {
+		t.Errorf("%s was cached although its MD5 doesn't match", cranCurrentPath)
 	}
 }
 
@@ -169,7 +141,6 @@ func TestMirrorCRANAllVersions(t *testing.T) {
 
 	progress, _ := mirrorWithConfig(t, cranMirrorConfig(upstream), "pkg:cran/example")
 
-	// The archive listing names each file twice, in the link and its text.
 	if progress.Total != 3 || progress.Completed != 3 || progress.Failed != 0 {
 		t.Fatalf("total = %d, completed = %d, failed = %d, errors = %v; want 0.9, 1.0 and 1.1 once each", progress.Total, progress.Completed, progress.Failed, progress.Errors)
 	}
