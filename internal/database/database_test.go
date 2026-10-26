@@ -1185,7 +1185,9 @@ func TestVersionPublishedAtIsUTC(t *testing.T) {
 			if err != nil || got == nil || !got.PublishedAt.Valid {
 				t.Fatalf("GetVersionByPURL(%s) = %+v, %v", purl, got, err)
 			}
-			if !got.PublishedAt.Time.Equal(want) || got.PublishedAt.Time.Location() != time.UTC {
+			// Postgres reads TIMESTAMP back as a fixed +0000 zone rather
+			// than time.UTC, so compare the offset.
+			if _, offset := got.PublishedAt.Time.Zone(); !got.PublishedAt.Time.Equal(want) || offset != 0 {
 				t.Errorf("%s PublishedAt read back as %v, want %v", purl, got.PublishedAt.Time, want)
 			}
 		}
