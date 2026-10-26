@@ -417,3 +417,51 @@ func TestPublishIndexBuildsOncePerDocument(t *testing.T) {
 		}
 	}
 }
+
+// TestCondaDownloadCooldownPastMetadataLimit checks that a cached package is
+// withheld when its repodata is over metadata_max_size, as the repodata
+// endpoint hides it: once only decompressed, and once already compressed.
+func TestCondaDownloadCooldownPastMetadataLimit(t *testing.T) {
+	plain := largeRepodata(500)
+	compressed := gzipPayload(t, plain)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set(headerContentEncoding, "gzip")
+		_, _ = w.Write(compressed)
+	}))
+	t.Cleanup(upstream.Close)
+
+	for _, tt := range []struct {
+		name  string
+		limit int64
+	}{
+		{"decompressed over the limit", int64(len(compressed)) + 1},
+		{"compressed over the limit", int64(len(compressed)) - 1},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			proxy, db, store, fetcher := setupTestProxy(t)
+			proxy.HTTPClient = upstream.Client()
+			proxy.CacheMetadata = true
+			proxy.MetadataTTL = time.Hour
+			proxy.MetadataMaxSize = tt.limit
+			fetcher.fetchErr = errors.New("artifact must be served from the cache")
+			for _, file := range []string{"pkg-0-old.conda", "pkg-1-new.conda"} {
+				seedPackage(t, db, store, "conda", "conda-forge/pkg", strings.Split(file, "-")[1], "linux-64/"+file, "artifact "+file)
+			}
+			proxy.Cooldown = &cooldown.Config{Default: "3d"}
+			h := NewCondaHandlerWithUpstream(proxy, "http://proxy", upstream.URL).Routes()
+
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/conda-forge/linux-64/repodata.json", nil))
+			if w.Code != http.StatusOK || strings.Contains(w.Body.String(), "pkg-1-new.conda") {
+				t.Fatalf("repodata status = %d, want 200 without pkg-1-new.conda", w.Code)
+			}
+			for file, want := range map[string]int{"pkg-0-old.conda": http.StatusOK, "pkg-1-new.conda": http.StatusNotFound} {
+				w := httptest.NewRecorder()
+				h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/conda-forge/linux-64/"+file, nil))
+				if w.Code != want {
+					t.Errorf("%s status = %d, want %d (body %q)", file, w.Code, want, w.Body.String())
+				}
+			}
+		})
+	}
+}
