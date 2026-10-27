@@ -7,6 +7,7 @@ import (
 	"errors"
 	"fmt"
 	"strings"
+	"unicode"
 
 	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/purl"
@@ -66,8 +67,13 @@ var distroTypes = map[string]bool{"alpm": true, "apk": true, "bsd": true, "deb":
 // doesn't serve.
 var ErrUnsupportedPURL = errors.New("package type is not served by the proxy")
 
-// FromPURL maps a package URL to a component. Qualifiers and subpath are
-// dropped; the version is kept as given.
+// ErrNoCondaChannel is returned for a conda package URL without a channel
+// qualifier: the proxy records conda packages per channel.
+var ErrNoCondaChannel = errors.New("conda package URL has no channel qualifier")
+
+// FromPURL maps a package URL to a component, with the package named the way
+// the handler for its type records it. Qualifiers and subpath are dropped;
+// the version is kept as given.
 func FromPURL(s string) (Component, error) {
 	p, err := purl.Parse(s)
 	if err != nil {
@@ -77,18 +83,62 @@ func FromPURL(s string) (Component, error) {
 	if !ok {
 		return Component{}, fmt.Errorf("%w: %s", ErrUnsupportedPURL, p.Type)
 	}
-	name := p.FullName()
-	switch {
-	case distroTypes[p.Type]:
-		name = p.Name
-	case p.Type == "conda" && p.Namespace == "" && p.Qualifier("channel") != "":
-		name = p.Qualifier("channel") + "/" + p.Name
+	name, err := handlerName(p)
+	if err != nil {
+		return Component{}, err
 	}
 	packagePURL, _ := packageurl.MakeCacheStrings(ecosystem, name, "")
 	if packagePURL == "" {
 		return Component{}, fmt.Errorf("package URL %q has no valid package name", s)
 	}
 	return Component{Ecosystem: ecosystem, Name: name, Version: p.Version, PackagePURL: packagePURL}, nil
+}
+
+// handlerName returns the package name the handler for p's type stores.
+func handlerName(p *purl.PURL) (string, error) {
+	switch {
+	case distroTypes[p.Type]:
+		// The namespace is the distribution; the handlers store the bare
+		// package name.
+		return p.Name, nil
+	case p.Type == "conda" && p.Namespace == "":
+		// The conda handler stores "channel/name".
+		channel := p.Qualifier("channel")
+		if channel == "" {
+			return "", ErrNoCondaChannel
+		}
+		return channel + "/" + p.Name, nil
+	case p.Type == "nuget":
+		// The NuGet handler lowercases package IDs.
+		return strings.ToLower(p.FullName()), nil
+	case p.Type == "pypi":
+		return normalizePyPIName(p.FullName()), nil
+	}
+	return p.FullName(), nil
+}
+
+// normalizePyPIName normalizes a PyPI project name as PEP 503 does: runs of
+// "-", "_" and "." become one "-", and letters are lowercased. The PyPI
+// handler stores the name from the file name, which wheels and current sdists
+// spell with "_" for any of these, so "zope.interface" is cached as
+// "zope-interface". (An old sdist named "zope.interface-5.0.tar.gz" is
+// stored with the dot and doesn't match.)
+func normalizePyPIName(name string) string {
+	var b strings.Builder
+	b.Grow(len(name))
+	separator := false
+	for _, r := range name {
+		if r == '-' || r == '_' || r == '.' {
+			separator = true
+			continue
+		}
+		if separator && b.Len() > 0 {
+			b.WriteByte('-')
+		}
+		separator = false
+		b.WriteRune(unicode.ToLower(r))
+	}
+	return b.String()
 }
 
 // syftMainModule is the property syft sets on modules found in a Go binary,
@@ -104,7 +154,8 @@ const unknownVersion = "UNKNOWN"
 
 // Parse reads a CycloneDX (JSON or XML) or SPDX SBOM and returns the package
 // versions it lists, without duplicates. Packages without a package URL, of a
-// type the proxy doesn't serve, or without a version are counted in skipped.
+// type the proxy doesn't serve, without a version, or conda packages without
+// a channel are counted in skipped.
 // So are the project's own packages: Go modules its binaries were built from,
 // and the root of a lock file.
 func Parse(data []byte) (components []Component, skipped int, err error) {
@@ -117,7 +168,7 @@ func Parse(data []byte) (components []Component, skipped int, err error) {
 	seen := make(map[[2]string]bool, len(doc.Packages))
 	for _, pkg := range doc.Packages {
 		c, ok := componentOf(pkg)
-		if !ok || lockRoots[pkg.ID] || (c.Ecosystem == "golang" && ownModules[c.Name]) {
+		if !ok || lockRoots[pkg.ID] || (c.Ecosystem == "golang" && ownModules[strings.ToLower(c.Name)]) {
 			skipped++
 			continue
 		}
@@ -179,13 +230,14 @@ func lockFileRoots(doc *sbom.SBOM) map[string]bool {
 }
 
 // mainModules returns the Go modules the SBOM's binaries were built from,
-// which are the project's own.
+// which are the project's own, lowercased: syft keeps the module path's case
+// while FromPURL lowercases golang names.
 func mainModules(pkgs []sbom.Package) map[string]bool {
 	own := map[string]bool{}
 	for _, pkg := range pkgs {
 		for _, prop := range pkg.Properties {
 			if prop.Name == syftMainModule && prop.Value != "" {
-				own[prop.Value] = true
+				own[strings.ToLower(prop.Value)] = true
 			}
 		}
 	}

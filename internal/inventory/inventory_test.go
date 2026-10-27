@@ -6,6 +6,8 @@ import (
 	"slices"
 	"strings"
 	"testing"
+
+	"github.com/git-pkgs/proxy/internal/packageurl"
 )
 
 func TestParseSyftCycloneDX(t *testing.T) {
@@ -81,6 +83,96 @@ func TestFromPURLUnsupported(t *testing.T) {
 	}
 }
 
+// TestFromPURLMatchesHandlerNames checks, for every PURL type the inventory
+// maps, that an SBOM's package URL ends up as the package URL the handler
+// records when it caches that package. handlerName is the name the handler
+// passes to GetOrFetchArtifactFromURL, taken from the handler's code.
+func TestFromPURLMatchesHandlerNames(t *testing.T) {
+	tests := []struct {
+		purlType    string
+		sbomPURL    string
+		handlerName string
+	}{
+		{"alpm", "pkg:alpm/arch/glibc@2.39-1?arch=x86_64", "glibc"},
+		{"apk", "pkg:apk/alpine/busybox@1.36.1-r15?arch=x86_64", "busybox"},
+		{"bsd", "pkg:bsd/freebsd/curl@8.7.1", "curl"},
+		{"cargo", "pkg:cargo/serde@1.0.200", "serde"},
+		{"chef", "pkg:chef/nginx@12.0.0", "nginx"},
+		{"composer", "pkg:composer/symfony/console@v6.4.1", "symfony/console"},
+		{"conan", "pkg:conan/zlib@1.3.1", "zlib"},
+		{"conda", "pkg:conda/numpy@1.26.4?channel=conda-forge&subdir=linux-64", "conda-forge/numpy"},
+		{"cran", "pkg:cran/ggplot2@3.5.1", "ggplot2"},
+		{"deb", "pkg:deb/debian/libc6@2.36-9?arch=amd64&distro=debian-12", "libc6"},
+		{"gem", "pkg:gem/rails@7.1.3", "rails"},
+		// The go handler stores the module path with its case; PURLs of
+		// golang modules are lowercased on both sides.
+		{"golang", "pkg:golang/github.com/Azure/azure-sdk-for-go@v68.0.0", "github.com/Azure/azure-sdk-for-go"},
+		{"hex", "pkg:hex/phoenix@1.7.12", "phoenix"},
+		{"julia", "pkg:julia/Example@0.5.3?uuid=7876af07-990d-54b4-ab0e-23690620f79a", "Example"},
+		{"maven", "pkg:maven/org.slf4j/slf4j-api@2.0.13?type=jar", "org.slf4j:slf4j-api"},
+		{"npm", "pkg:npm/%40babel/core@7.23.0", "@babel/core"},
+		// The NuGet handler lowercases the package ID.
+		{"nuget", "pkg:nuget/Newtonsoft.Json@13.0.3", "newtonsoft.json"},
+		{"pub", "pkg:pub/http@1.2.1", "http"},
+		// The PyPI handler takes the name from the wheel or sdist file name,
+		// which spells "." and "-" as "_".
+		{"pypi", "pkg:pypi/zope.interface@6.4", "zope_interface"},
+		{"rpm", "pkg:rpm/fedora/curl@8.6.0-7.fc40?arch=x86_64", "curl"},
+		{"swift", "pkg:swift/github.com/apple/swift-argument-parser@1.3.1", "github.com/apple/swift-argument-parser"},
+	}
+	covered := map[string]bool{}
+	for _, tt := range tests {
+		t.Run(tt.purlType, func(t *testing.T) {
+			covered[tt.purlType] = true
+			c, err := FromPURL(tt.sbomPURL)
+			if err != nil {
+				t.Fatalf("FromPURL(%q): %v", tt.sbomPURL, err)
+			}
+			want, _ := packageurl.MakeCacheStrings(ecosystems[tt.purlType], tt.handlerName, "")
+			if want == "" {
+				t.Fatalf("handler name %q has no package URL", tt.handlerName)
+			}
+			if c.PackagePURL != want {
+				t.Errorf("PackagePURL = %q, want %q as the handler records it", c.PackagePURL, want)
+			}
+		})
+	}
+	for purlType := range ecosystems {
+		if !covered[purlType] {
+			t.Errorf("no case for PURL type %q", purlType)
+		}
+	}
+}
+
+func TestFromPURLNormalizesPyPINames(t *testing.T) {
+	for _, s := range []string{"pkg:pypi/zope.interface", "pkg:pypi/Zope_Interface", "pkg:pypi/zope--interface", "pkg:pypi/zope._-interface"} {
+		c, err := FromPURL(s)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if c.Name != "zope-interface" || c.PackagePURL != "pkg:pypi/zope-interface" {
+			t.Errorf("FromPURL(%q) = %+v, want zope-interface", s, c)
+		}
+	}
+}
+
+func TestFromPURLCondaNeedsChannel(t *testing.T) {
+	if _, err := FromPURL("pkg:conda/numpy@1.26.4"); !errors.Is(err, ErrNoCondaChannel) {
+		t.Errorf("err = %v, want ErrNoCondaChannel", err)
+	}
+	doc := `{"bomFormat":"CycloneDX","specVersion":"1.5","components":[
+		{"type":"library","name":"numpy","version":"1.26.4","purl":"pkg:conda/numpy@1.26.4"},
+		{"type":"library","name":"numpy","version":"1.26.4","purl":"pkg:conda/numpy@1.26.4?channel=conda-forge"}
+	]}`
+	components, skipped, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 1 || components[0].Name != "conda-forge/numpy" || skipped != 1 {
+		t.Errorf("components = %+v, skipped = %d; want conda-forge/numpy and 1 skipped", components, skipped)
+	}
+}
+
 func TestValidateProjectName(t *testing.T) {
 	valid := []string{"repo", "group/repo", "group/sub/my_repo-2.0", strings.Repeat("a", MaxProjectNameLength)}
 	for _, name := range valid {
@@ -151,5 +243,23 @@ func TestParseSkipsTheProjectsOwnPackages(t *testing.T) {
 	}
 	if skipped != 4 {
 		t.Errorf("skipped = %d, want 4", skipped)
+	}
+}
+
+func TestParseSkipsMainModuleRegardlessOfCase(t *testing.T) {
+	// syft keeps the module path's case in mainModule; package URLs of Go
+	// modules are lowercased.
+	doc := `{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+		{"bom-ref":"bin","type":"library","name":"github.com/Azure/foo","version":"v1.2.0","purl":"pkg:golang/github.com/Azure/foo@v1.2.0",
+		 "properties":[{"name":"syft:metadata:mainModule","value":"github.com/Azure/foo"}]},
+		{"bom-ref":"cobra","type":"library","name":"github.com/spf13/cobra","version":"v1.8.0","purl":"pkg:golang/github.com/spf13/cobra@v1.8.0",
+		 "properties":[{"name":"syft:metadata:mainModule","value":"github.com/Azure/foo"}]}
+	]}`
+	components, skipped, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 1 || components[0].Name != "github.com/spf13/cobra" || skipped != 1 {
+		t.Errorf("components = %+v, skipped = %d; want only cobra, 1 skipped", components, skipped)
 	}
 }

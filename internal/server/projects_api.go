@@ -43,8 +43,9 @@ type ProjectUploadResponse struct {
 	Project string `json:"project"`
 	// Components is the number of package versions recorded.
 	Components int `json:"components"`
-	// Skipped is the number of SBOM entries without a package URL or of a
-	// package type the proxy doesn't serve.
+	// Skipped is the number of SBOM entries not recorded: without a package
+	// URL or a version, of a package type the proxy doesn't serve, conda
+	// entries without a channel, and the project's own packages.
 	Skipped int `json:"skipped"`
 }
 

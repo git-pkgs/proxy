@@ -1547,7 +1547,7 @@ The response counts the recorded package versions and the skipped entries:
 {"project":"acme/shop/web","components":9,"skipped":6}
 ```
 
-Entries are recorded by their package URL. Entries without one (files, the operating system), package types the proxy doesn't serve (such as `pkg:github`) and entries without a version are skipped. So is the project's own package: the root of a lock file such as `package-lock.json`, and with syft, the Go module its binaries were built from. Duplicates are recorded once.
+Entries are recorded by their package URL, with the package named the way the proxy caches it: NuGet IDs lowercased, PyPI names normalized as in PEP 503 (`zope.interface` becomes `zope-interface`), the distribution dropped from `deb`, `rpm` and `apk` package URLs. Entries without a package URL (files, the operating system), package types the proxy doesn't serve (such as `pkg:github`), entries without a version, and conda entries without a `channel` qualifier (the proxy records conda packages as `channel/name`) are skipped. So is the project's own package: the root of a lock file such as `package-lock.json`, and with syft, the Go module its binaries were built from. Duplicates are recorded once.
 
 A GitLab CI job on the default branch could look like this:
 
