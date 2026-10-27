@@ -13,7 +13,18 @@
         {{if .Outdated}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300">{{.Outdated}} outdated</span>{{end}}
     </div>
     {{end}}
+    <div id="project-delete" class="mt-4" data-project="{{.Project.Name}}">
+        <button type="button" id="project-delete-start" class="text-sm px-3 py-1.5 rounded-lg border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950">Delete project</button>
+        <form id="project-delete-form" class="hidden flex-wrap items-center gap-2">
+            <label for="project-delete-token" class="text-sm text-gray-600 dark:text-gray-400">Upload token</label>
+            <input type="password" id="project-delete-token" autocomplete="off" required class="text-sm px-2 py-1.5 rounded-lg border border-gray-300 bg-white dark:border-gray-700 dark:bg-gray-900">
+            <button type="submit" class="text-sm px-3 py-1.5 rounded-lg bg-red-600 text-white hover:bg-red-700">Delete {{.Project.Name}}</button>
+            <button type="button" id="project-delete-cancel" class="text-sm px-3 py-1.5 rounded-lg border border-gray-300 hover:bg-gray-50 dark:border-gray-700 dark:hover:bg-gray-800">Cancel</button>
+        </form>
+        <p id="project-delete-error" class="hidden mt-2 text-sm text-red-700 dark:text-red-400"></p>
+    </div>
 </div>
+<script src="/ui/static/project-delete.js" defer></script>
 
 {{if .Components}}
 <div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">

@@ -1578,7 +1578,7 @@ curl -X DELETE -H "Authorization: Bearer $PROXY_PROJECTS_TOKEN" \
   https://proxy.example.com/api/projects/acme/shop/web
 ```
 
-Reading needs no token, like the rest of `/api`.
+Reading needs no token, like the rest of `/api`. A project's page in the UI also has a delete button; it asks for the token and sends it to `DELETE /api/projects/{project}`, keeping it for the browser session.
 
 ### What it shows
 

@@ -67,6 +67,8 @@ func TestProjectPageShowsComponents(t *testing.T) {
 		"1 vulnerable",
 		"symfony/console", // not cached: listed without a link
 		"not cached",
+		`data-project="acme/web"`, // delete control, asks for the token
+		`/ui/static/project-delete.js`,
 	)
 	if strings.Contains(page, `href="/ui/package/composer/symfony/console"`) {
 		t.Error("links to the package page of a package the proxy has no record of")
