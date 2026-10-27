@@ -15,6 +15,9 @@ type DashboardData struct {
 	EnrichmentStats EnrichmentStatsView
 	RecentPackages  []PackageInfo
 	PopularPackages []PackageInfo
+	// VulnerableInUse lists vulnerable package versions projects use, when
+	// the project inventory is enabled.
+	VulnerableInUse []VulnerableVersion
 }
 
 // DashboardStats contains cache statistics for the dashboard.
@@ -68,6 +71,9 @@ type PackageShowData struct {
 	Versions        []database.Version
 	Vulnerabilities []database.Vulnerability
 	LicenseCategory string
+	// UsedBy lists the projects using each version, when the project
+	// inventory is enabled.
+	UsedBy []VersionUsage
 }
 
 // VersionShowData contains data for rendering the version show page.

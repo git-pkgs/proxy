@@ -1,0 +1,53 @@
+{{define "title"}}{{.Project.Name}} - git-pkgs proxy{{end}}
+
+{{define "content"}}
+<div class="mb-8">
+    <a href="/ui/projects" class="text-sm text-blue-600 dark:text-blue-400 hover:underline">← Projects</a>
+    <h1 class="text-3xl font-bold mt-2 mb-2 break-all">{{.Project.Name}}</h1>
+    <p class="text-gray-600 dark:text-gray-400">
+        {{.Project.Components}} packages, uploaded {{.Project.UploadedAt}}{{if .Project.Branch}} from <span class="font-mono">{{.Project.Branch}}</span>{{end}}{{if .Project.Ref}} at <span class="font-mono">{{.Project.Ref}}</span>{{end}}
+    </p>
+    {{if or .Vulnerable .Outdated}}
+    <div class="flex gap-2 mt-3">
+        {{if .Vulnerable}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">{{.Vulnerable}} vulnerable</span>{{end}}
+        {{if .Outdated}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300">{{.Outdated}} outdated</span>{{end}}
+    </div>
+    {{end}}
+</div>
+
+{{if .Components}}
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
+    <div class="divide-y divide-gray-200 dark:divide-gray-800">
+        {{range .Components}}
+        <div class="px-6 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div class="min-w-0 flex items-center gap-2">
+                {{template "ecosystem_badge" .Ecosystem}}
+                {{if .Cached}}
+                <a href="/ui/package/{{.CachedEcosystem}}/{{.CachedName}}" class="font-medium truncate hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
+                {{else}}
+                <span class="font-medium truncate">{{.Name}}</span>
+                {{end}}
+                <span class="shrink-0 font-mono text-sm text-gray-500 dark:text-gray-400">{{.Version}}</span>
+            </div>
+            <div class="flex items-center gap-2 shrink-0">
+                {{if .VulnCount}}
+                {{template "severity_badge" .Severity}}
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">{{.VulnCount}} vulns</span>
+                {{end}}
+                {{if .Outdated}}
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300" title="latest is {{.LatestVersion}}">outdated, latest {{.LatestVersion}}</span>
+                {{end}}
+                {{if not .Cached}}
+                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-gray-100 text-gray-600 dark:bg-gray-800 dark:text-gray-400">not cached</span>
+                {{end}}
+            </div>
+        </div>
+        {{end}}
+    </div>
+</div>
+{{else}}
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-12 text-center">
+    <p class="text-gray-500 dark:text-gray-400">The latest SBOM lists no packages the proxy serves</p>
+</div>
+{{end}}
+{{end}}

@@ -39,6 +39,7 @@
 //   - /ui/packages        - List all cached packages
 //   - /ui/search          - Search packages
 //   - /ui/package/...     - Package and version detail pages
+//   - /ui/projects/...    - Project inventory (when projects.enabled)
 //   - /ui/api/browse/...  - Archive browsing (used by the UI)
 //   - /ui/api/compare/... - Archive diffing (used by the UI)
 //
@@ -50,6 +51,12 @@
 //   - POST /api/outdated                            - Check outdated packages
 //   - POST /api/bulk                                - Bulk package lookup
 //   - GET  /api/packages                            - List cached packages (JSON)
+//
+// Project inventory endpoints (when projects.enabled):
+//   - PUT    /api/projects/{project}/sbom - Upload a project's SBOM (token)
+//   - DELETE /api/projects/{project}      - Delete a project (token)
+//   - GET    /api/projects                - List projects, or those using ?purl=
+//   - GET    /api/projects/{project}      - A project's package versions
 package server
 
 import (
@@ -357,6 +364,7 @@ func (s *Server) serve(listener net.Listener) error {
 		if s.cfg.CacheDelete {
 			ui.Delete("/api/cache/{ecosystem}/*", s.handleCacheDelete)
 		}
+		s.mountProjectUI(ui)
 	})
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
@@ -403,6 +411,10 @@ func (s *Server) serve(listener net.Listener) error {
 		hostedAPI := NewHostedAPIHandler(proxy, s.cfg.Hosted.MaxUploadBytes(), s.logger)
 		registerHostedRoutes(r, hostedAPI, s.cfg.Hosted.TokenExpanded())
 	}
+
+	// Project inventory endpoints (opt-in via projects.enabled or PROXY_PROJECTS_ENABLED)
+	s.mountProjectAPI(r)
+	s.startProjectPruning(bgCtx)
 
 	s.http = &http.Server{
 		Addr:         s.cfg.Listen,
@@ -833,6 +845,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		},
 		EnrichmentStats: enrichmentStatsView(enrichStats),
 	}
+	data.VulnerableInUse = s.vulnerableVersionsInUse(dashboardTopN)
 
 	for _, p := range popular {
 		pkgInfo := PackageInfo{
@@ -1170,6 +1183,7 @@ func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, 
 		Vulnerabilities: vulns,
 		LicenseCategory: categorizeLicense(pkg.License),
 	}
+	data.UsedBy = s.packageUsedBy(pkg, versions)
 
 	if err := s.templates.Render(w, "package_show", data); err != nil {
 		s.logger.Error("failed to render package show", "error", err)

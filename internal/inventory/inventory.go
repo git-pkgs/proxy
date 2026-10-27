@@ -1,0 +1,185 @@
+// Package inventory turns SBOMs uploaded for a project into the package
+// versions the proxy records for it, named the way the proxy's handlers name
+// the packages they cache, so the two can be joined.
+package inventory
+
+import (
+	"errors"
+	"fmt"
+	"strings"
+
+	"github.com/git-pkgs/proxy/internal/packageurl"
+	"github.com/git-pkgs/purl"
+	"github.com/git-pkgs/sbom"
+	"github.com/git-pkgs/vers"
+)
+
+// MaxProjectNameLength bounds a project name, such as a GitLab project path.
+const MaxProjectNameLength = 255
+
+// Component is one package version a project uses.
+type Component struct {
+	// Ecosystem is the name the proxy's handlers store the package under,
+	// e.g. "npm", "composer", "golang" or "alpine".
+	Ecosystem string
+	// Name is the ecosystem-native package name, e.g. "@babel/core",
+	// "symfony/console" or "org.slf4j:slf4j-api".
+	Name string
+	// Version is the version as the SBOM gives it; it may be empty.
+	Version string
+	// PackagePURL is the unversioned package URL the proxy records the
+	// package under, so it matches packages.purl.
+	PackagePURL string
+}
+
+// ecosystems maps the PURL types the proxy serves to the ecosystem name its
+// handlers store packages under.
+var ecosystems = map[string]string{
+	"alpm":     "arch",
+	"apk":      "alpine",
+	"bsd":      "freebsd",
+	"cargo":    "cargo",
+	"chef":     "chef",
+	"composer": "composer",
+	"conan":    "conan",
+	"conda":    "conda",
+	"cran":     "cran",
+	"deb":      "deb",
+	"gem":      "gem",
+	"golang":   "golang",
+	"hex":      "hex",
+	"julia":    "julia",
+	"maven":    "maven",
+	"npm":      "npm",
+	"nuget":    "nuget",
+	"pub":      "pub",
+	"pypi":     "pypi",
+	"rpm":      "rpm",
+	"swift":    "swift",
+}
+
+// distroTypes are PURL types whose namespace names the distribution
+// ("debian", "alpine"), not part of the package name the proxy stores.
+var distroTypes = map[string]bool{"alpm": true, "apk": true, "bsd": true, "deb": true, "rpm": true}
+
+// ErrUnsupportedPURL is returned for a package URL whose type the proxy
+// doesn't serve.
+var ErrUnsupportedPURL = errors.New("package type is not served by the proxy")
+
+// FromPURL maps a package URL to a component. Qualifiers and subpath are
+// dropped; the version is kept as given.
+func FromPURL(s string) (Component, error) {
+	p, err := purl.Parse(s)
+	if err != nil {
+		return Component{}, err
+	}
+	ecosystem, ok := ecosystems[p.Type]
+	if !ok {
+		return Component{}, fmt.Errorf("%w: %s", ErrUnsupportedPURL, p.Type)
+	}
+	name := p.FullName()
+	switch {
+	case distroTypes[p.Type]:
+		name = p.Name
+	case p.Type == "conda" && p.Namespace == "" && p.Qualifier("channel") != "":
+		name = p.Qualifier("channel") + "/" + p.Name
+	}
+	packagePURL, _ := packageurl.MakeCacheStrings(ecosystem, name, "")
+	if packagePURL == "" {
+		return Component{}, fmt.Errorf("package URL %q has no valid package name", s)
+	}
+	return Component{Ecosystem: ecosystem, Name: name, Version: p.Version, PackagePURL: packagePURL}, nil
+}
+
+// Parse reads a CycloneDX (JSON or XML) or SPDX SBOM and returns the package
+// versions it lists, without duplicates. Packages without a package URL, or
+// of a type the proxy doesn't serve, are counted in skipped.
+func Parse(data []byte) (components []Component, skipped int, err error) {
+	doc, err := sbom.Parse(data)
+	if err != nil {
+		return nil, 0, err
+	}
+	seen := make(map[[2]string]bool, len(doc.Packages))
+	for _, pkg := range doc.Packages {
+		c, ok := componentOf(pkg)
+		if !ok {
+			skipped++
+			continue
+		}
+		key := [2]string{c.PackagePURL, c.Version}
+		if seen[key] {
+			continue
+		}
+		seen[key] = true
+		components = append(components, c)
+	}
+	return components, skipped, nil
+}
+
+func componentOf(pkg sbom.Package) (Component, bool) {
+	locator := pkg.PURL()
+	if locator == "" {
+		return Component{}, false
+	}
+	c, err := FromPURL(locator)
+	if err != nil {
+		return Component{}, false
+	}
+	if c.Version == "" {
+		c.Version = pkg.Version
+	}
+	return c, true
+}
+
+// ValidateProjectName checks a project name such as "group/sub/repo": one or
+// more segments of letters, digits, ".", "_" and "-", none of them "." or
+// "..".
+func ValidateProjectName(name string) error {
+	if name == "" {
+		return errors.New("project name is empty")
+	}
+	if len(name) > MaxProjectNameLength {
+		return fmt.Errorf("project name is longer than %d characters", MaxProjectNameLength)
+	}
+	for segment := range strings.SplitSeq(name, "/") {
+		if segment == "" || segment == "." || segment == ".." {
+			return fmt.Errorf("project name %q has an empty, \".\" or \"..\" segment", name)
+		}
+		for _, r := range segment {
+			if !validNameRune(r) {
+				return fmt.Errorf("project name %q may only contain letters, digits, '.', '_', '-' and '/'", name)
+			}
+		}
+	}
+	return nil
+}
+
+func validNameRune(r rune) bool {
+	return r >= 'a' && r <= 'z' || r >= 'A' && r <= 'Z' || r >= '0' && r <= '9' || r == '.' || r == '_' || r == '-'
+}
+
+// CompareVersions compares two versions of a package in ecosystem with the
+// ecosystem's version rules, returning -1, 0 or 1.
+func CompareVersions(ecosystem, a, b string) int {
+	return vers.CompareWithScheme(a, b, purl.EcosystemToPURLType(ecosystem))
+}
+
+// Outdated reports whether version is lower than latest.
+func Outdated(ecosystem, version, latest string) bool {
+	if version == "" || latest == "" || version == latest {
+		return false
+	}
+	return CompareVersions(ecosystem, version, latest) < 0
+}
+
+// Affected reports whether a vulnerability fixed in fixedVersion affects
+// version. A vulnerability without a fixed version affects every version.
+func Affected(ecosystem, version, fixedVersion string) bool {
+	if fixedVersion == "" {
+		return true
+	}
+	if version == "" {
+		return false
+	}
+	return CompareVersions(ecosystem, version, fixedVersion) < 0
+}

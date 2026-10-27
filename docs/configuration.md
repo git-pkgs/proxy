@@ -1504,6 +1504,88 @@ Generic files never come from an upstream: anything not pushed answers 404. Whil
 
 Pushed archives are stored like cached ones but marked as local. The cache size limit and storage retention never remove them; only a delete does. Scanning, when enabled, checks pushed archives like fetched ones.
 
+## Project inventory
+
+The project inventory answers "which repository uses which version of a package?". Each repository uploads an SBOM of its default branch, and the proxy records the package versions it lists. The UI then shows:
+
+- `/ui/projects`: every project, and per project its package versions, marked when the proxy knows a newer version or vulnerabilities for that version.
+- On a package page: which projects use each version, including versions the proxy hasn't cached.
+- On the dashboard: vulnerable versions in use and the projects using them.
+
+It is disabled by default. Uploads and deletes require a token:
+
+```yaml
+projects:
+  enabled: true
+  token: "${PROXY_PROJECTS_TOKEN}"
+  max_age: "90d"
+```
+
+| Config | Environment | Description |
+|--------|-------------|-------------|
+| `projects.enabled` | `PROXY_PROJECTS_ENABLED` | Register the `/api/projects` endpoints and the UI pages (default `false`) |
+| `projects.token` | `PROXY_PROJECTS_TOKEN` | Bearer token required to upload and delete; required when enabled, supports `${VAR}` |
+| `projects.max_age` | `PROXY_PROJECTS_MAX_AGE` | Remove projects that haven't uploaded for this long, e.g. `90d` or `720h`; empty or `0` keeps them (default) |
+
+Removing old projects runs hourly. With several instances on one database, one of them does it.
+
+### Uploading an SBOM
+
+`PUT /api/projects/{project}/sbom` takes a CycloneDX (JSON or XML) or SPDX (JSON or tag-value) document of up to 32 MiB and replaces everything recorded for the project with what it lists. The optional `ref` and `branch` query parameters are stored and shown with the project.
+
+The project name is a path such as `group/sub/repo`: segments of letters, digits, `.`, `_` and `-`, at most 255 characters. It can be sent as path segments (`/api/projects/group/sub/repo/sbom`) or URL-encoded as one segment (`/api/projects/group%2Fsub%2Frepo/sbom`).
+
+```bash
+syft dir:. -o cyclonedx-json > sbom.json
+curl -X PUT --data-binary @sbom.json \
+  -H "Authorization: Bearer $PROXY_PROJECTS_TOKEN" \
+  "https://proxy.example.com/api/projects/acme/shop/web/sbom?ref=$(git rev-parse HEAD)&branch=main"
+```
+
+The response counts the recorded package versions and the skipped entries:
+
+```json
+{"project":"acme/shop/web","components":10,"skipped":5}
+```
+
+Entries are recorded by their package URL. Entries without one (files, the operating system) and package types the proxy doesn't serve (such as `pkg:github`) are skipped. Duplicates are recorded once.
+
+A GitLab CI job on the default branch could look like this:
+
+```yaml
+sbom:
+  image: alpine:3.20
+  rules:
+    - if: $CI_COMMIT_BRANCH == $CI_DEFAULT_BRANCH
+  script:
+    - apk add --no-cache curl
+    - curl -sSfL https://raw.githubusercontent.com/anchore/syft/main/install.sh | sh -s -- -b /usr/local/bin
+    - syft dir:. -o cyclonedx-json > sbom.json
+    - >
+      curl -sSf -X PUT --data-binary @sbom.json
+      -H "Authorization: Bearer $PROXY_PROJECTS_TOKEN"
+      "https://proxy.example.com/api/projects/$CI_PROJECT_PATH/sbom?ref=$CI_COMMIT_SHA&branch=$CI_COMMIT_BRANCH"
+```
+
+### Querying
+
+```bash
+curl https://proxy.example.com/api/projects                                  # all projects
+curl https://proxy.example.com/api/projects/acme/shop/web                    # one project's package versions
+curl 'https://proxy.example.com/api/projects?purl=pkg:npm/lodash'             # projects using lodash
+curl 'https://proxy.example.com/api/projects?purl=pkg:npm/lodash@4.17.20'     # projects using lodash 4.17.20
+curl -X DELETE -H "Authorization: Bearer $PROXY_PROJECTS_TOKEN" \
+  https://proxy.example.com/api/projects/acme/shop/web
+```
+
+Reading needs no token, like the rest of `/api`.
+
+### What it shows
+
+The inventory reflects what the projects' SBOMs list, not what was downloaded through the proxy: a project that installs from another registry still shows up, and the proxy may not have cached any of its packages. Outdated and vulnerability markers use what the proxy knows about a package: its recorded latest version and the vulnerabilities recorded for it, matched against the version a project uses by the vulnerability's fixed version. A package the proxy has no record of has neither.
+
+Project names and the packages they use are shown on `/ui` and `/api/projects` without authentication. If that is sensitive, restrict both at your ingress or reverse proxy.
+
 ## Mirror API
 
 The `/api/mirror` endpoints are disabled by default. Enable them to allow starting mirror jobs via HTTP:

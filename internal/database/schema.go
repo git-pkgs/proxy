@@ -154,6 +154,26 @@ CREATE TABLE IF NOT EXISTS upstream_holds (
 	until_ms INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS projects (
+	id INTEGER PRIMARY KEY,
+	name TEXT NOT NULL,
+	ref TEXT,
+	branch TEXT,
+	uploaded_at DATETIME NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
+CREATE INDEX IF NOT EXISTS idx_projects_uploaded_at ON projects(uploaded_at);
+
+CREATE TABLE IF NOT EXISTS project_components (
+	project_id INTEGER NOT NULL,
+	package_purl TEXT NOT NULL,
+	ecosystem TEXT NOT NULL,
+	name TEXT NOT NULL,
+	version TEXT NOT NULL,
+	PRIMARY KEY (project_id, package_purl, version)
+);
+CREATE INDEX IF NOT EXISTS idx_project_components_package ON project_components(package_purl, version);
+
 CREATE TABLE IF NOT EXISTS migrations (
 	name TEXT NOT NULL PRIMARY KEY,
 	applied_at DATETIME NOT NULL
@@ -296,6 +316,26 @@ CREATE TABLE IF NOT EXISTS upstream_holds (
 	host TEXT NOT NULL PRIMARY KEY,
 	until_ms BIGINT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS projects (
+	id SERIAL PRIMARY KEY,
+	name TEXT NOT NULL,
+	ref TEXT,
+	branch TEXT,
+	uploaded_at TIMESTAMP NOT NULL
+);
+CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name ON projects(name);
+CREATE INDEX IF NOT EXISTS idx_projects_uploaded_at ON projects(uploaded_at);
+
+CREATE TABLE IF NOT EXISTS project_components (
+	project_id INTEGER NOT NULL,
+	package_purl TEXT NOT NULL,
+	ecosystem TEXT NOT NULL,
+	name TEXT NOT NULL,
+	version TEXT NOT NULL,
+	PRIMARY KEY (project_id, package_purl, version)
+);
+CREATE INDEX IF NOT EXISTS idx_project_components_package ON project_components(package_purl, version);
 
 CREATE TABLE IF NOT EXISTS migrations (
 	name TEXT NOT NULL PRIMARY KEY,
@@ -468,6 +508,7 @@ var migrations = []migration{
 	{"017_add_artifact_content_hash_index", migrateAddArtifactContentHashIndex},
 	{"018_add_upstream_holds", migrateAddUpstreamHolds},
 	{"019_add_artifact_filename_index", migrateAddArtifactFilenameIndex},
+	{"020_add_projects", migrateAddProjects},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -816,6 +857,41 @@ func migrateAddUpstreamHolds(db *DB) error {
 	)`, millis)
 	if _, err := db.Exec(query); err != nil {
 		return fmt.Errorf("creating upstream_holds table: %w", err)
+	}
+	return nil
+}
+
+// migrateAddProjects creates the tables of the project inventory: the
+// projects that uploaded an SBOM and the package versions each one uses.
+func migrateAddProjects(db *DB) error {
+	id, ts := "INTEGER PRIMARY KEY", sqliteDatetime
+	if db.dialect == DialectPostgres {
+		id, ts = "SERIAL PRIMARY KEY", postgresTimestamp
+	}
+	statements := []string{
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS projects (
+			id %s,
+			name TEXT NOT NULL,
+			ref TEXT,
+			branch TEXT,
+			uploaded_at %s NOT NULL
+		)`, id, ts),
+		`CREATE UNIQUE INDEX IF NOT EXISTS idx_projects_name ON projects(name)`,
+		`CREATE INDEX IF NOT EXISTS idx_projects_uploaded_at ON projects(uploaded_at)`,
+		`CREATE TABLE IF NOT EXISTS project_components (
+			project_id INTEGER NOT NULL,
+			package_purl TEXT NOT NULL,
+			ecosystem TEXT NOT NULL,
+			name TEXT NOT NULL,
+			version TEXT NOT NULL,
+			PRIMARY KEY (project_id, package_purl, version)
+		)`,
+		`CREATE INDEX IF NOT EXISTS idx_project_components_package ON project_components(package_purl, version)`,
+	}
+	for _, stmt := range statements {
+		if _, err := db.Exec(stmt); err != nil {
+			return fmt.Errorf("creating project tables: %w", err)
+		}
 	}
 	return nil
 }

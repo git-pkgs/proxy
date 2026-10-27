@@ -1300,6 +1300,17 @@ Registered when `hosted.enabled` is set. Pushing and deleting require `Authoriza
 | `GET /api/hosted/{ecosystem}/{name}` | List the archives pushed for a package |
 | `DELETE /api/hosted/{ecosystem}/{name}/{version}` | Delete a pushed version |
 
+### Projects API
+
+Registered when `projects.enabled` is set. Uploading and deleting require `Authorization: Bearer <projects.token>`. See [Project inventory](docs/configuration.md#project-inventory).
+
+| Endpoint | Description |
+|----------|-------------|
+| `PUT /api/projects/{project}/sbom` | Replace a project's recorded package versions with the ones the SBOM in the body lists |
+| `GET /api/projects` | List projects, or with `?purl=pkg:npm/lodash@4.17.20` the projects using a package or version |
+| `GET /api/projects/{project}` | A project's recorded package versions |
+| `DELETE /api/projects/{project}` | Delete a project |
+
 ### Cache API
 
 Registered when `cache_delete` is set. It has no authentication of its own.
@@ -1503,6 +1514,7 @@ The proxy serves a web UI under `/ui`. No separate frontend build is needed -- t
 - **Version detail** (`/ui/package/{ecosystem}/{name}/{version}`) -- per-version metadata, integrity hash, artifact cache status, and hit counts.
 - **Source browser** (`/ui/package/{ecosystem}/{name}/{version}/browse`) -- browse files inside cached archives with syntax highlighting for text files and image previews.
 - **Version diff** (`/ui/package/{ecosystem}/{name}/compare/{v1}...{v2}`) -- side-by-side diff of two cached versions showing added, removed, and changed files.
+- **Projects** (`/ui/projects`) -- with the [project inventory](docs/configuration.md#project-inventory) enabled, the package versions each repository's uploaded SBOM lists, marked when outdated or vulnerable. Package pages then show which projects use each version, and the dashboard lists vulnerable versions in use.
 
 ## Monitoring
 
