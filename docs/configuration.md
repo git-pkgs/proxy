@@ -1577,11 +1577,13 @@ curl -X DELETE -H "Authorization: Bearer $PROXY_PROJECTS_TOKEN" \
   https://proxy.example.com/api/projects/acme/shop/web
 ```
 
-Reading needs no token, like the rest of `/api`. A project's page in the UI also has a delete button; it asks for the token and sends it to `DELETE /api/projects/{project}`, keeping it for the browser session.
+Reading needs no token, like the rest of `/api`. With `?purl=`, each project carries the `version` it uses and no `component_count`. A delete names the project itself: `DELETE /api/projects/acme/shop/web/sbom` is answered with 400 unless a project `acme/shop/web/sbom` exists.
+
+A project's page in the UI also has a delete button. It asks for the token and sends it to `DELETE /ui/api/projects/{project}`, which works like the API endpoint and also requires the token; the token is kept for the browser session. Like `/ui/api/cache`, it sits under `/ui`, so rules for the UI at an ingress cover it.
 
 ### What it shows
 
-The inventory reflects what the projects' SBOMs list, not what was downloaded through the proxy: a project that installs from another registry still shows up, and the proxy may not have cached any of its packages. The outdated marker compares the version a project uses with the latest version the proxy has recorded for the package; a package the proxy has no record of has none.
+The inventory reflects what the projects' SBOMs list, not what was downloaded through the proxy: a project that installs from another registry still shows up, and the proxy may not have cached any of its packages. The outdated marker compares the version a project uses with the latest version the proxy has recorded for the package; a package the proxy has no record of has none. Versions are compared as the SBOM gives them: a version spelled differently from how the proxy caches it, such as Composer's `v6.4.1` for `6.4.1` or a Debian version with or without its epoch, shows as "not cached" on the package page.
 
 Project names and the packages they use are shown on `/ui` and `/api/projects` without authentication. If that is sensitive, restrict both at your ingress or reverse proxy.
 

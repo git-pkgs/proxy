@@ -104,7 +104,15 @@ func TestPackagePageShowsUsedBy(t *testing.T) {
 	}
 }
 
-func TestNavLinksToProjects(t *testing.T) {
+func TestProjectPageFailsWhenComponentsCannotBeRead(t *testing.T) {
 	ts := newProjectsTestServer(t)
-	assertContains(t, ts.page(t, "/ui/"), `href="/ui/projects"`)
+	ts.upload(t, "/api/projects/acme/web/sbom", syftSBOM(t))
+	// The components query joins packages; without the table it fails while
+	// the project itself can still be read.
+	if _, err := ts.db.Exec("ALTER TABLE packages RENAME TO packages_gone"); err != nil {
+		t.Fatal(err)
+	}
+	if rec := ts.do(t, http.MethodGet, "/ui/projects/acme/web", "", nil); rec.Code != http.StatusInternalServerError {
+		t.Errorf("status = %d, want 500 rather than an empty project", rec.Code)
+	}
 }

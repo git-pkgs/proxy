@@ -100,6 +100,14 @@ func decodeJSON(t *testing.T, rec *httptest.ResponseRecorder, v any) {
 	}
 }
 
+// componentCount returns a project's component_count, or -1 if not set.
+func componentCount(p ProjectSummary) int64 {
+	if p.ComponentCount == nil {
+		return -1
+	}
+	return *p.ComponentCount
+}
+
 func TestProjectUploadAndGet(t *testing.T) {
 	ts := newProjectsTestServer(t)
 
@@ -111,7 +119,7 @@ func TestProjectUploadAndGet(t *testing.T) {
 	// The same project, URL-encoded as one segment.
 	var project ProjectResponse
 	decodeJSON(t, ts.do(t, http.MethodGet, "/api/projects/acme%2Fshop%2Fweb", "", nil), &project)
-	if project.Name != "acme/shop/web" || project.Ref != "0123abcd" || project.Branch != "main" || project.ComponentCount != 9 {
+	if project.Name != "acme/shop/web" || project.Ref != "0123abcd" || project.Branch != "main" || componentCount(project.ProjectSummary) != 9 {
 		t.Errorf("project = %+v", project.ProjectSummary)
 	}
 	var purls []string
@@ -126,7 +134,7 @@ func TestProjectUploadAndGet(t *testing.T) {
 
 	var list ProjectListResponse
 	decodeJSON(t, ts.do(t, http.MethodGet, "/api/projects", "", nil), &list)
-	if len(list.Projects) != 1 || list.Projects[0].Name != "acme/shop/web" || list.Projects[0].ComponentCount != 9 {
+	if len(list.Projects) != 1 || list.Projects[0].Name != "acme/shop/web" || componentCount(list.Projects[0]) != 9 {
 		t.Errorf("list = %+v", list)
 	}
 }
@@ -169,6 +177,9 @@ func TestProjectLookupByPURL(t *testing.T) {
 			var got []string
 			for _, p := range list.Projects {
 				got = append(got, p.Name+"@"+p.Version)
+				if p.ComponentCount != nil {
+					t.Errorf("%s has component_count set when listing by purl", p.Name)
+				}
 			}
 			if strings.Join(got, ",") != strings.Join(tt.want, ",") {
 				t.Errorf("projects = %v, want %v", got, tt.want)
@@ -209,6 +220,40 @@ func TestProjectDelete(t *testing.T) {
 	}
 	if rec := ts.do(t, http.MethodGet, "/api/projects/acme/web", "", nil); rec.Code != http.StatusNotFound {
 		t.Errorf("get after delete status = %d, want 404", rec.Code)
+	}
+}
+
+func TestProjectDeleteOfUploadPath(t *testing.T) {
+	ts := newProjectsTestServer(t)
+	ts.upload(t, "/api/projects/acme/web/sbom", syftSBOM(t))
+	rec := ts.do(t, http.MethodDelete, "/api/projects/acme/web/sbom", testProjectsToken, nil)
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "without /sbom") {
+		t.Errorf("DELETE of the upload path = %d: %s, want 400 with a hint", rec.Code, rec.Body)
+	}
+	if rec := ts.do(t, http.MethodGet, "/api/projects/acme/web", "", nil); rec.Code != http.StatusOK {
+		t.Errorf("project is gone after DELETE of the upload path: %d", rec.Code)
+	}
+
+	// A project whose last segment is "sbom" is deleted as usual.
+	ts.upload(t, "/api/projects/acme/sbom/sbom", syftSBOM(t))
+	if rec := ts.do(t, http.MethodDelete, "/api/projects/acme/sbom", testProjectsToken, nil); rec.Code != http.StatusNoContent {
+		t.Errorf("DELETE of project acme/sbom = %d: %s", rec.Code, rec.Body)
+	}
+}
+
+func TestProjectDeleteFromUI(t *testing.T) {
+	ts := newProjectsTestServer(t)
+	ts.upload(t, "/api/projects/acme/web/sbom", syftSBOM(t))
+	for _, token := range []string{"", "wrong-token"} {
+		if rec := ts.do(t, http.MethodDelete, "/ui/api/projects/acme%2Fweb", token, nil); rec.Code != http.StatusUnauthorized {
+			t.Errorf("UI delete with token %q status = %d, want 401", token, rec.Code)
+		}
+	}
+	if rec := ts.do(t, http.MethodDelete, "/ui/api/projects/acme%2Fweb", testProjectsToken, nil); rec.Code != http.StatusNoContent {
+		t.Fatalf("UI delete status = %d: %s", rec.Code, rec.Body)
+	}
+	if rec := ts.do(t, http.MethodGet, "/api/projects/acme/web", "", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("get after UI delete status = %d, want 404", rec.Code)
 	}
 }
 
@@ -331,6 +376,9 @@ func TestProjectRoutesFollowConfig(t *testing.T) {
 	if status, _ := request(t, http.MethodPut, disabled+"/api/projects/acme/web/sbom", testProjectsToken, syftSBOM(t)); status != http.StatusNotFound {
 		t.Errorf("upload with projects disabled = %d, want 404", status)
 	}
+	if status, _ := request(t, http.MethodDelete, disabled+"/ui/api/projects/acme%2Fweb", testProjectsToken, nil); status != http.StatusNotFound {
+		t.Errorf("UI delete with projects disabled = %d, want 404", status)
+	}
 	if _, body := request(t, http.MethodGet, disabled+"/ui/", "", nil); strings.Contains(body, `href="/ui/projects"`) {
 		t.Error("navigation links to projects while they are disabled")
 	}
@@ -350,5 +398,15 @@ func TestProjectRoutesFollowConfig(t *testing.T) {
 	}
 	if _, body := request(t, http.MethodGet, enabled+"/ui/", "", nil); !strings.Contains(body, `href="/ui/projects"`) {
 		t.Error("navigation does not link to projects")
+	}
+	if status, _ := request(t, http.MethodDelete, enabled+"/ui/api/projects/acme%2Fweb", "", nil); status != http.StatusUnauthorized {
+		t.Errorf("UI delete without token = %d, want 401", status)
+	}
+	if status, body := request(t, http.MethodDelete, enabled+"/ui/api/projects/acme%2Fweb", testProjectsToken, nil); status != http.StatusNoContent {
+		t.Errorf("UI delete = %d: %s", status, body)
+	}
+	// The delete button sends its request there, too.
+	if _, body := request(t, http.MethodGet, enabled+"/ui/static/project-delete.js", "", nil); !strings.Contains(body, "'/ui/api/projects/'") {
+		t.Error("project-delete.js does not send to /ui/api/projects")
 	}
 }

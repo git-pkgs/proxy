@@ -42,6 +42,7 @@
 //   - /ui/projects/...    - Project inventory (when projects.enabled)
 //   - /ui/api/browse/...  - Archive browsing (used by the UI)
 //   - /ui/api/compare/... - Archive diffing (used by the UI)
+//   - /ui/api/projects/... - Project deletion (used by the UI, needs the token)
 //
 // API endpoints for enrichment data:
 //   - GET  /api/package/{ecosystem}/{name}          - Package metadata

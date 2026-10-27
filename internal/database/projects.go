@@ -38,8 +38,11 @@ type ProjectComponentInfo struct {
 
 // ProjectUsage is a project using a version of a package.
 type ProjectUsage struct {
-	Project
-	Version string `db:"version"`
+	Name       string         `db:"name"`
+	Ref        sql.NullString `db:"ref"`
+	Branch     sql.NullString `db:"branch"`
+	UploadedAt time.Time      `db:"uploaded_at"`
+	Version    string         `db:"version"`
 }
 
 const projectColumns = `
@@ -197,7 +200,8 @@ func (db *DB) GetProjectComponents(projectID int64) ([]ProjectComponentInfo, err
 // GetProjectsUsingPackage returns the projects using a package, or only
 // those using version when it is not empty, ordered by project and version.
 func (db *DB) GetProjectsUsingPackage(packagePURL, version string) ([]ProjectUsage, error) {
-	query := projectColumns + `, c.version
+	query := `
+		SELECT pr.name, pr.ref, pr.branch, pr.uploaded_at, c.version
 		FROM project_components c
 		JOIN projects pr ON pr.id = c.project_id
 		WHERE c.package_purl = ?`

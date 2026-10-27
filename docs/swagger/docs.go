@@ -540,7 +540,7 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Removes the project and the package versions recorded for it.",
+                "description": "Removes the project and the package versions recorded for it. The path names the project itself, without the /sbom of the upload path: a path ending in /sbom that names no project is answered with 400.",
                 "tags": [
                     "projects"
                 ],
@@ -586,9 +586,11 @@ const docTemplate = `{
                         "BearerAuth": []
                     }
                 ],
-                "description": "Replaces the package versions recorded for the project with the ones the SBOM lists. CycloneDX (JSON or XML) and SPDX (JSON or tag-value) are accepted, e.g. the output of ` + "`" + `syft dir:. -o cyclonedx-json` + "`" + `. Entries without a package URL, or of a package type the proxy doesn't serve, are skipped. The project may be given as path segments or URL-encoded as one segment.",
+                "description": "Replaces the package versions recorded for the project with the ones the SBOM lists. CycloneDX (JSON or XML) and SPDX (JSON or tag-value) are accepted, e.g. the output of ` + "`" + `syft dir:. -o cyclonedx-json` + "`" + `. Entries without a package URL or version, of a package type the proxy doesn't serve, and the project's own packages are skipped and counted. The project may be given as path segments or URL-encoded as one segment.",
                 "consumes": [
-                    "application/json"
+                    "application/json",
+                    "application/xml",
+                    "text/plain"
                 ],
                 "produces": [
                     "application/json"
@@ -1341,7 +1343,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "component_count": {
-                    "description": "ComponentCount is the number of package versions recorded.",
+                    "description": "ComponentCount is the number of package versions recorded. It is not\nset when listing the projects using a package.",
                     "type": "integer"
                 },
                 "components": {
@@ -1372,7 +1374,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "component_count": {
-                    "description": "ComponentCount is the number of package versions recorded.",
+                    "description": "ComponentCount is the number of package versions recorded. It is not\nset when listing the projects using a package.",
                     "type": "integer"
                 },
                 "name": {
@@ -1401,7 +1403,7 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "skipped": {
-                    "description": "Skipped is the number of SBOM entries without a package URL or of a\npackage type the proxy doesn't serve.",
+                    "description": "Skipped is the number of SBOM entries not recorded: without a package\nURL or a version, of a package type the proxy doesn't serve, conda\nentries without a channel, and the project's own packages.",
                     "type": "integer"
                 }
             }

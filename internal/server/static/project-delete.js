@@ -1,6 +1,6 @@
 // Deleting a project needs the upload token: /ui has no authentication of its
-// own, so the page sends the token the user enters to the API, the same as an
-// upload. The token is kept for the browser session only.
+// own, so the page sends the token the user enters with the request, the same
+// as an upload. The token is kept for the browser session only.
 (() => {
     const root = document.getElementById('project-delete');
     if (!root) {
@@ -34,7 +34,7 @@
 
     form.addEventListener('submit', async (event) => {
         event.preventDefault();
-        const url = '/api/projects/' + encodeURIComponent(root.dataset.project);
+        const url = '/ui/api/projects/' + encodeURIComponent(root.dataset.project);
         submit.disabled = true;
         errorBox.classList.add('hidden');
         try {

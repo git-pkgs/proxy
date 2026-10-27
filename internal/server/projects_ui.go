@@ -58,13 +58,18 @@ type VersionUsage struct {
 }
 
 // mountProjectUI registers the project inventory pages when
-// projects.enabled is set.
+// projects.enabled is set, and DELETE /ui/api/projects/{project} for the
+// delete button on a project's page. Like DELETE /api/projects/{project} it
+// requires the bearer token; it sits under /ui so that an ingress can treat
+// the UI's requests together.
 func (s *Server) mountProjectUI(ui chi.Router) {
 	if !s.cfg.Projects.Enabled {
 		return
 	}
 	ui.Get("/projects", s.handleProjectsList)
 	ui.Get("/projects/*", s.handleProjectShow)
+	api := NewProjectsAPIHandler(s.db, s.logger)
+	ui.With(requireBearerToken(s.cfg.Projects.TokenExpanded())).Delete("/api/projects/*", api.HandleDelete)
 }
 
 func (s *Server) handleProjectsList(w http.ResponseWriter, r *http.Request) {
@@ -105,7 +110,8 @@ func (s *Server) handleProjectShow(w http.ResponseWriter, r *http.Request) {
 	components, err := s.db.GetProjectComponents(project.ID)
 	if err != nil {
 		s.logger.Error("failed to get project components", "project", name, "error", err)
-		components = nil
+		http.Error(w, "failed to get project components", http.StatusInternalServerError)
+		return
 	}
 
 	data := ProjectShowData{Layout: s.layoutFor(r), Project: projectRow(*project)}

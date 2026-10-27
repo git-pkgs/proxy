@@ -55,8 +55,9 @@ type ProjectSummary struct {
 	Ref        string    `json:"ref,omitempty"`
 	Branch     string    `json:"branch,omitempty"`
 	UploadedAt time.Time `json:"uploaded_at"`
-	// ComponentCount is the number of package versions recorded.
-	ComponentCount int64 `json:"component_count"`
+	// ComponentCount is the number of package versions recorded. It is not
+	// set when listing the projects using a package.
+	ComponentCount *int64 `json:"component_count,omitempty"`
 	// Version is set when listing the projects using a package: the version
 	// of it this project uses.
 	Version string `json:"version,omitempty"`
@@ -107,9 +108,9 @@ func registerProjectRoutes(r chi.Router, h *ProjectsAPIHandler, token string) {
 
 // HandleUpload handles PUT /api/projects/{project}/sbom.
 // @Summary Upload a project's SBOM
-// @Description Replaces the package versions recorded for the project with the ones the SBOM lists. CycloneDX (JSON or XML) and SPDX (JSON or tag-value) are accepted, e.g. the output of `syft dir:. -o cyclonedx-json`. Entries without a package URL, or of a package type the proxy doesn't serve, are skipped. The project may be given as path segments or URL-encoded as one segment.
+// @Description Replaces the package versions recorded for the project with the ones the SBOM lists. CycloneDX (JSON or XML) and SPDX (JSON or tag-value) are accepted, e.g. the output of `syft dir:. -o cyclonedx-json`. Entries without a package URL or version, of a package type the proxy doesn't serve, and the project's own packages are skipped and counted. The project may be given as path segments or URL-encoded as one segment.
 // @Tags projects
-// @Accept json
+// @Accept json,application/xml,plain
 // @Produce json
 // @Security BearerAuth
 // @Param project path string true "Project path, e.g. group/sub/repo"
@@ -176,9 +177,10 @@ func (h *ProjectsAPIHandler) HandleUpload(w http.ResponseWriter, r *http.Request
 	writeJSON(w, ProjectUploadResponse{Project: name, Components: len(records), Skipped: skipped})
 }
 
-// HandleDelete handles DELETE /api/projects/{project}.
+// HandleDelete handles DELETE /api/projects/{project}, and the same under
+// /ui/api/projects for the delete button on a project's page.
 // @Summary Delete a project
-// @Description Removes the project and the package versions recorded for it.
+// @Description Removes the project and the package versions recorded for it. The path names the project itself, without the /sbom of the upload path: a path ending in /sbom that names no project is answered with 400.
 // @Tags projects
 // @Security BearerAuth
 // @Param project path string true "Project path, e.g. group/sub/repo"
@@ -197,6 +199,10 @@ func (h *ProjectsAPIHandler) HandleDelete(w http.ResponseWriter, r *http.Request
 	case err != nil:
 		h.logger.Error("failed to delete project", "project", name, "error", err)
 		internalError(w, "failed to delete project")
+	case !deleted && (name == "sbom" || strings.HasSuffix(name, sbomPathSuffix)):
+		// Most likely the upload path; a project whose last segment is
+		// "sbom" is deleted above when it exists.
+		badRequest(w, "project not found; to delete a project, send DELETE /api/projects/{project} without /sbom")
 	case !deleted:
 		notFound(w, "project not found")
 	default:
@@ -246,8 +252,13 @@ func (h *ProjectsAPIHandler) listUsages(w http.ResponseWriter, query string) {
 	}
 	resp := ProjectListResponse{Projects: make([]ProjectSummary, len(usages))}
 	for i, u := range usages {
-		resp.Projects[i] = projectSummary(u.Project)
-		resp.Projects[i].Version = u.Version
+		resp.Projects[i] = ProjectSummary{
+			Name:       u.Name,
+			Ref:        u.Ref.String,
+			Branch:     u.Branch.String,
+			UploadedAt: u.UploadedAt,
+			Version:    u.Version,
+		}
 	}
 	writeJSON(w, resp)
 }
@@ -301,7 +312,7 @@ func projectSummary(p database.Project) ProjectSummary {
 		Ref:            p.Ref.String,
 		Branch:         p.Branch.String,
 		UploadedAt:     p.UploadedAt,
-		ComponentCount: p.Components,
+		ComponentCount: &p.Components,
 	}
 }
 
