@@ -425,6 +425,7 @@ func (s *Server) serve(listener net.Listener) error {
 	s.background.Go(func() { backfillMetadataAccess(bgCtx, s.db, s.logger, metadataBackfillBatch) })
 	s.background.Go(func() { s.startEvictionLoop(bgCtx) })
 	s.background.Go(func() { s.startRetentionLoop(bgCtx) })
+	s.background.Go(func() { s.startAPKSnapshotPruning(bgCtx) })
 	s.background.Go(func() { s.startReclaimLoop(bgCtx) })
 
 	if listener != nil {
@@ -489,7 +490,8 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	containerHandler := s.newContainerHandler(proxy)
 	helmHandler := handler.NewHelmHandlerWithOCIRegistries(
 		proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm, s.cfg.Upstream.OCIDefault, s.cfg.Upstream.OCI)
-	apkHandler := handler.NewAPKHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.APK)
+	apkHandler := handler.NewAPKHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.APK).
+		WithSnapshots(s.cfg.ParseAPKSnapshots())
 	archHandler := handler.NewArchHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Arch)
 	freebsdHandler := handler.NewFreeBSDHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.FreeBSD)
 	debianHandler := handler.NewDebianHandler(

@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
@@ -51,6 +53,9 @@ type APKHandler struct {
 	proxy        *Proxy
 	proxyURL     string
 	repositories map[string]string
+	// snapshots is how long replaced index versions are kept; 0 disables
+	// snapshots. See WithSnapshots.
+	snapshots time.Duration
 }
 
 // NewAPKHandler creates an Alpine APK repository protocol handler.
@@ -87,14 +92,18 @@ func (h *APKHandler) Routes() http.Handler {
 			return
 		}
 
-		repository, rest, ok := strings.Cut(path, "/")
-		upstreamURL, found := h.repositories[repository]
+		segment, rest, ok := strings.Cut(path, "/")
+		repository, upstreamURL, day, snapshot, found := h.resolveRepository(segment)
 		if !ok || rest == "" || !found {
 			http.NotFound(w, r)
 			return
 		}
 
 		switch {
+		case snapshot && (isAPKIndex(rest) || isAPKSignature(rest)):
+			// A dated snapshot serves the kept version of the index; packages
+			// and other files below are the same as under the plain path.
+			h.serveSnapshot(w, r, repository, upstreamURL, rest, day)
 		case isAPKIndex(rest) || isAPKSignature(rest):
 			// Indexes and detached signatures are signed upstream metadata.
 			// Cache them with the metadata TTL and serve the stored bytes
@@ -160,8 +169,11 @@ func (h *APKHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 // metadata cache. Stored bytes are re-served verbatim, which keeps embedded
 // and detached signatures valid.
 func (h *APKHandler) handleMetadata(w http.ResponseWriter, r *http.Request, repository, upstreamURL, path string) {
-	h.proxy.ProxyCached(w, r, upstreamURL+"/"+path, apkEcosystem,
-		h.metadataCacheKey(repository, upstreamURL, path), "*/*")
+	cacheKey := h.metadataCacheKey(repository, upstreamURL, path)
+	h.proxy.ProxyCached(w, r, upstreamURL+"/"+path, apkEcosystem, cacheKey, "*/*")
+	if h.snapshotsEnabled() {
+		h.recordSnapshot(context.WithoutCancel(r.Context()), cacheKey)
+	}
 }
 
 // metadataCacheKey derives the metadata cache key from the repository name,

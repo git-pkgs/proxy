@@ -645,6 +645,7 @@ func (db *DB) GetDuePendingDeletes(cutoff time.Time, limit int) ([]string, error
 		WHERE queued_at < ?
 		  AND NOT EXISTS (SELECT 1 FROM artifacts WHERE artifacts.storage_path = pending_deletes.path)
 		  AND NOT EXISTS (SELECT 1 FROM metadata_cache WHERE metadata_cache.storage_path = pending_deletes.path)
+		  AND NOT EXISTS (SELECT 1 FROM metadata_snapshots WHERE metadata_snapshots.storage_path = pending_deletes.path)
 		ORDER BY queued_at
 		LIMIT ?
 	`)

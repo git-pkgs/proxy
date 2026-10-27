@@ -722,6 +722,11 @@ signature verification keeps working. Indexes use the metadata cache
 (`metadata_ttl`, stale fallback); `.apk` packages are stored in the shared
 artifact cache and remain available when the upstream is unreachable.
 
+Set `upstream.apk_snapshots` (e.g. `"90d"`) to keep replaced indexes and serve
+them by date at `/apk/alpine@2026-10-01/v3.22/main`, so pinned package versions
+stay installable after the mirror moves on. See
+[Alpine APK snapshots](docs/configuration.md#alpine-apk-snapshots).
+
 To proxy other mirrors or private repositories, configure named upstreams
 under `upstream.apk` (this replaces the built-in default; re-add `alpine` if
 you still want it):
