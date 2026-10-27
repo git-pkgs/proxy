@@ -397,6 +397,7 @@ func (s *Server) serve(listener net.Listener) error {
 		})
 	}
 	s.startMirrorSchedules(bgCtx, proxy)
+	s.startChangeFeeds(bgCtx, proxy.HTTPClient, proxy.MetadataTTL)
 
 	// Hosted package endpoints (opt-in via hosted.enabled or PROXY_HOSTED_ENABLED)
 	if s.cfg.Hosted.Enabled {

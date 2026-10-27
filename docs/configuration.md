@@ -287,6 +287,7 @@ Each upstream used by a built-in package route can be set in YAML or JSON under 
 | `upstream.allow_loopback` | `PROXY_UPSTREAM_ALLOW_LOOPBACK` | `false` |
 | `upstream.npm` | `PROXY_UPSTREAM_NPM` | `https://registry.npmjs.org` |
 | `upstream.npm_full_metadata` | `PROXY_UPSTREAM_NPM_FULL_METADATA` | `false` |
+| `upstream.npm_change_feed` | `PROXY_UPSTREAM_NPM_CHANGE_FEED` | `false` (see [change feeds](#change-feeds)) |
 | `upstream.cargo` | `PROXY_UPSTREAM_CARGO` | `https://index.crates.io` |
 | `upstream.cargo_download` | `PROXY_UPSTREAM_CARGO_DOWNLOAD` | `https://static.crates.io/crates` |
 | `upstream.gem` | `PROXY_UPSTREAM_GEM` | `https://rubygems.org` |
@@ -303,6 +304,7 @@ Each upstream used by a built-in package route can be set in YAML or JSON under 
 | `upstream.nuget_search` | `PROXY_UPSTREAM_NUGET_SEARCH` | `https://azuresearch-usnc.nuget.org` |
 | `upstream.composer` | `PROXY_UPSTREAM_COMPOSER` | `https://packagist.org` |
 | `upstream.composer_repository` | `PROXY_UPSTREAM_COMPOSER_REPOSITORY` | `https://repo.packagist.org` |
+| `upstream.composer_change_feed` | `PROXY_UPSTREAM_COMPOSER_CHANGE_FEED` | `false` (see [change feeds](#change-feeds)) |
 | `upstream.conan` | `PROXY_UPSTREAM_CONAN` | `https://center.conan.io` |
 | `upstream.chef` | `PROXY_UPSTREAM_CHEF` | `https://supermarket.chef.io` |
 | `upstream.conda` | `PROXY_UPSTREAM_CONDA` | `https://conda.anaconda.org` |
@@ -1345,6 +1347,26 @@ Or via environment variable: `PROXY_METADATA_TTL=10m`.
 Set to `"0"` to always revalidate with upstream (ETag-based conditional requests still avoid re-downloading unchanged content).
 
 When upstream is unreachable and the cached entry is past its TTL, the proxy serves the stale cached copy with a `Warning: 110 - "Response is Stale"` header so clients can tell the data may be outdated.
+
+### Change feeds
+
+Within `metadata_ttl` a new release isn't seen. For npm and Composer the proxy can instead follow the registry's change feed, which lists the packages that changed, and revalidate just those:
+
+```yaml
+cache_metadata: true
+upstream:
+  npm_change_feed: true
+  composer_change_feed: true
+```
+
+Or via environment variables: `PROXY_UPSTREAM_NPM_CHANGE_FEED=true`, `PROXY_UPSTREAM_COMPOSER_CHANGE_FEED=true`. Both require `cache_metadata`, and do nothing with a `metadata_ttl` of `"0"`.
+
+Every minute the proxy reads what changed since its last read. Cached metadata of a listed package that was fetched before the read is marked as needing revalidation, and the next request for it asks the upstream with its `ETag` (a `304` when nothing changed). Artifacts are not touched. Listed packages the proxy hasn't cached cost nothing beyond the read. The feed is read in full, so the upstream doesn't learn which packages the proxy has cached. Packages in `upstream.npm_routes` or `upstream.composer_routes` are cached under other keys and never matched.
+
+- Composer reads `{upstream.composer}/metadata/changes.json`, which packagist.org advertises as `metadata-changes-url`. Both `vendor/package` and its `vendor/package~dev` file are covered. Packagist keeps 24 hours of changes; if the proxy's position is older than that, Packagist asks for a resync and all cached Composer metadata is revalidated. repo.packagist.org sends `Cache-Control: max-age=900`, but Packagist purges its CDN when a package changes, so revalidation gets the new file within seconds; the proxy doesn't apply that header either way.
+- npm reads `https://replicate.npmjs.com/registry/_changes`, the public registry's feed, whatever `upstream.npm` is. It is only useful when `upstream.npm` is registry.npmjs.org or serves the same packages. Packuments (`/npm/{name}`) are covered; version and dist-tag documents (`/npm/{name}/latest`) still wait out `metadata_ttl`. A busy minute on npm lists a few thousand packages; the proxy reads up to 100,000 per pass and continues where it stopped on the next.
+
+A new release therefore shows up about a minute after the registry lists it rather than up to `metadata_ttl` later. The feed position is kept in memory: after a restart the proxy starts from the feed's current position, and changes made while it was down are covered by `metadata_ttl` as before. While a feed can't be read the proxy logs a warning and retries with a growing delay, up to 15 minutes, and `metadata_ttl` applies meanwhile. A request whose upstream fetch overlaps the change and the feed read can still store the old document for one TTL. Each instance sharing a database reads the feeds itself. `proxy_metadata_expired_by_change_feed_total` counts the cached documents marked, by ecosystem, and debug logging names each one.
 
 ### Metadata size limit
 

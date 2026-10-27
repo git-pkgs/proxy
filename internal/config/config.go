@@ -590,6 +590,12 @@ type UpstreamConfig struct {
 	// wins.
 	NPMRoutes map[string]string `json:"npm_routes" yaml:"npm_routes"`
 
+	// NPMChangeFeed follows the public npm registry's change feed and
+	// revalidates cached packuments of packages listed in it on their next
+	// request, rather than serving them until metadata_ttl runs out.
+	// Requires cache_metadata. Default: false.
+	NPMChangeFeed bool `json:"npm_change_feed" yaml:"npm_change_feed"`
+
 	// Cargo is the upstream cargo index URL.
 	// Default: https://index.crates.io
 	Cargo string `json:"cargo" yaml:"cargo"`
@@ -681,6 +687,12 @@ type UpstreamConfig struct {
 	// for it. Patterns use path.Match syntax, e.g. "example/*"; the longest
 	// matching pattern wins.
 	ComposerRoutes map[string]string `json:"composer_routes" yaml:"composer_routes"`
+
+	// ComposerChangeFeed follows the metadata change feed of
+	// upstream.composer and revalidates cached metadata of packages listed
+	// in it on their next request, rather than serving it until
+	// metadata_ttl runs out. Requires cache_metadata. Default: false.
+	ComposerChangeFeed bool `json:"composer_change_feed" yaml:"composer_change_feed"`
 
 	// Conan is the upstream Conan registry URL.
 	// Default: https://center.conan.io
@@ -968,6 +980,12 @@ func (c *Config) validateUpstream() error {
 	}
 	if c.Upstream.GoSumDBsOffline && !c.CacheMetadata {
 		return fmt.Errorf("upstream.go_sumdbs_offline requires cache_metadata")
+	}
+	if c.Upstream.NPMChangeFeed && !c.CacheMetadata {
+		return fmt.Errorf("upstream.npm_change_feed requires cache_metadata")
+	}
+	if c.Upstream.ComposerChangeFeed && !c.CacheMetadata {
+		return fmt.Errorf("upstream.composer_change_feed requires cache_metadata")
 	}
 	return nil
 }
@@ -1407,6 +1425,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvBool(&c.Upstream.AllowLoopback, "PROXY_UPSTREAM_ALLOW_LOOPBACK")
 	setEnvString(&c.Upstream.NPM, "PROXY_UPSTREAM_NPM")
 	setEnvBool(&c.Upstream.NPMFullMetadata, "PROXY_UPSTREAM_NPM_FULL_METADATA")
+	setEnvBool(&c.Upstream.NPMChangeFeed, "PROXY_UPSTREAM_NPM_CHANGE_FEED")
 	setEnvBool(&c.Upstream.GoSumDBsOffline, "PROXY_UPSTREAM_GO_SUMDBS_OFFLINE")
 	setEnvString(&c.Upstream.Cargo, "PROXY_UPSTREAM_CARGO")
 	setEnvString(&c.Upstream.CargoDownload, "PROXY_UPSTREAM_CARGO_DOWNLOAD")
@@ -1423,6 +1442,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Upstream.NuGetSearch, "PROXY_UPSTREAM_NUGET_SEARCH")
 	setEnvString(&c.Upstream.Composer, "PROXY_UPSTREAM_COMPOSER")
 	setEnvString(&c.Upstream.ComposerRepository, "PROXY_UPSTREAM_COMPOSER_REPOSITORY")
+	setEnvBool(&c.Upstream.ComposerChangeFeed, "PROXY_UPSTREAM_COMPOSER_CHANGE_FEED")
 	setEnvString(&c.Upstream.Conan, "PROXY_UPSTREAM_CONAN")
 	setEnvString(&c.Upstream.Chef, "PROXY_UPSTREAM_CHEF")
 	setEnvString(&c.Upstream.Conda, "PROXY_UPSTREAM_CONDA")
