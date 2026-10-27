@@ -1,7 +1,6 @@
 package server
 
 import (
-	"cmp"
 	"net/http"
 	"net/url"
 	"slices"
@@ -31,7 +30,6 @@ type ProjectShowData struct {
 	Layout
 	Project    ProjectRow
 	Components []ProjectComponentRow
-	Vulnerable int
 	Outdated   int
 }
 
@@ -48,8 +46,6 @@ type ProjectComponentRow struct {
 	CachedName      string
 	LatestVersion   string
 	Outdated        bool
-	VulnCount       int
-	Severity        string
 }
 
 // VersionUsage lists the projects using one version of a package.
@@ -59,17 +55,6 @@ type VersionUsage struct {
 	// Cached is set when the proxy has a record of the version.
 	Cached   bool
 	Projects []string
-}
-
-// VulnerableVersion is a package version with known vulnerabilities that
-// projects use.
-type VulnerableVersion struct {
-	Ecosystem string
-	Name      string
-	Version   string
-	Severity  string
-	VulnCount int
-	Projects  []string
 }
 
 // mountProjectUI registers the project inventory pages when
@@ -122,11 +107,6 @@ func (s *Server) handleProjectShow(w http.ResponseWriter, r *http.Request) {
 		s.logger.Error("failed to get project components", "project", name, "error", err)
 		components = nil
 	}
-	vulns, err := s.db.GetComponentVulnerabilities(name)
-	if err != nil {
-		s.logger.Error("failed to get project vulnerabilities", "project", name, "error", err)
-	}
-	affecting := affectingVulnerabilities(vulns)
 
 	data := ProjectShowData{Layout: s.layoutFor(r), Project: projectRow(*project)}
 	for _, c := range components {
@@ -139,10 +119,6 @@ func (s *Server) handleProjectShow(w http.ResponseWriter, r *http.Request) {
 			CachedName:      c.CachedName.String,
 			LatestVersion:   c.LatestVersion.String,
 			Outdated:        inventory.Outdated(c.Ecosystem, c.Version, c.LatestVersion.String),
-		}
-		if v, ok := affecting[componentKey{c.PackagePURL, c.Version}]; ok {
-			row.VulnCount, row.Severity = len(v.ids), v.severity
-			data.Vulnerable++
 		}
 		if row.Outdated {
 			data.Outdated++
@@ -200,88 +176,4 @@ func (s *Server) packageUsedBy(pkg *database.Package, versions []database.Versio
 		out[i] = *vu
 	}
 	return out
-}
-
-// vulnerableVersionsInUse returns the package versions projects use that
-// have vulnerabilities, most severe and most used first, at most limit. It
-// returns nothing when the project inventory is disabled.
-func (s *Server) vulnerableVersionsInUse(limit int) []VulnerableVersion {
-	if !s.cfg.Projects.Enabled {
-		return nil
-	}
-	vulns, err := s.db.GetComponentVulnerabilities("")
-	if err != nil {
-		s.logger.Error("failed to get vulnerable versions in use", "error", err)
-		return nil
-	}
-	affecting := affectingVulnerabilities(vulns)
-	result := make([]VulnerableVersion, 0, len(affecting))
-	for _, v := range affecting {
-		projects := make([]string, 0, len(v.projects))
-		for p := range v.projects {
-			projects = append(projects, p)
-		}
-		slices.Sort(projects)
-		result = append(result, VulnerableVersion{
-			Ecosystem: v.ecosystem, Name: v.name, Version: v.version,
-			Severity: v.severity, VulnCount: len(v.ids), Projects: projects,
-		})
-	}
-	slices.SortFunc(result, func(a, b VulnerableVersion) int {
-		return cmp.Or(
-			cmp.Compare(severityRank(b.Severity), severityRank(a.Severity)),
-			cmp.Compare(len(b.Projects), len(a.Projects)),
-			cmp.Compare(a.Name, b.Name),
-			cmp.Compare(a.Version, b.Version),
-		)
-	})
-	if len(result) > limit {
-		result = result[:limit]
-	}
-	return result
-}
-
-type componentKey struct{ packagePURL, version string }
-
-// affectingVersion collects the vulnerabilities affecting one package
-// version, and the projects using it.
-type affectingVersion struct {
-	ecosystem, name, version string
-	severity                 string
-	ids                      map[string]bool
-	projects                 map[string]bool
-}
-
-// affectingVulnerabilities keeps the vulnerabilities that affect the version
-// each component uses, grouped by package version.
-func affectingVulnerabilities(vulns []database.ComponentVulnerability) map[componentKey]*affectingVersion {
-	out := map[componentKey]*affectingVersion{}
-	for _, v := range vulns {
-		if !inventory.Affected(v.Ecosystem, v.Version, v.FixedVersion.String) {
-			continue
-		}
-		key := componentKey{v.PackagePURL, v.Version}
-		a, ok := out[key]
-		if !ok {
-			a = &affectingVersion{
-				ecosystem: v.CachedEcosystem, name: v.CachedName, version: v.Version,
-				ids: map[string]bool{}, projects: map[string]bool{},
-			}
-			out[key] = a
-		}
-		a.ids[v.VulnID] = true
-		a.projects[v.Project] = true
-		if severityRank(v.Severity.String) > severityRank(a.severity) {
-			a.severity = v.Severity.String
-		}
-	}
-	return out
-}
-
-// severityOrder lists severities from least to most severe.
-var severityOrder = []string{"low", "medium", "high", "critical"}
-
-// severityRank orders severities; unknown ones rank below "low".
-func severityRank(severity string) int {
-	return slices.Index(severityOrder, severity) + 1
 }

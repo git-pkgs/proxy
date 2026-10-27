@@ -845,7 +845,6 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		},
 		EnrichmentStats: enrichmentStatsView(enrichStats),
 	}
-	data.VulnerableInUse = s.vulnerableVersionsInUse(dashboardTopN)
 
 	for _, p := range popular {
 		pkgInfo := PackageInfo{

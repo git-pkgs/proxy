@@ -10,9 +10,8 @@ import (
 )
 
 // seedLodash records lodash with 4.17.21 as its latest and only cached
-// version, and a vulnerability fixed in 4.17.21. The syft fixture uses
-// 4.17.20.
-func seedLodash(t *testing.T, db *database.DB, withVuln bool) {
+// version. The syft fixture uses 4.17.20.
+func seedLodash(t *testing.T, db *database.DB) {
 	t.Helper()
 	if err := db.UpsertPackage(&database.Package{
 		PURL: "pkg:npm/lodash", Ecosystem: "npm", Name: "lodash",
@@ -21,16 +20,6 @@ func seedLodash(t *testing.T, db *database.DB, withVuln bool) {
 		t.Fatal(err)
 	}
 	if err := db.UpsertVersion(&database.Version{PURL: "pkg:npm/lodash@4.17.21", PackagePURL: "pkg:npm/lodash"}); err != nil {
-		t.Fatal(err)
-	}
-	if !withVuln {
-		return
-	}
-	if err := db.UpsertVulnerability(&database.Vulnerability{
-		VulnID: "GHSA-35jh-r3h4-6jhm", Ecosystem: "npm", PackageName: "lodash",
-		Severity:     sql.NullString{String: "high", Valid: true},
-		FixedVersion: sql.NullString{String: "4.17.21", Valid: true},
-	}); err != nil {
 		t.Fatal(err)
 	}
 }
@@ -55,7 +44,7 @@ func assertContains(t *testing.T, page string, want ...string) {
 
 func TestProjectPageShowsComponents(t *testing.T) {
 	ts := newProjectsTestServer(t)
-	seedLodash(t, ts.db, true)
+	seedLodash(t, ts.db)
 	ts.upload(t, "/api/projects/acme/web/sbom?branch=main", syftSBOM(t))
 
 	page := ts.page(t, "/ui/projects/acme/web")
@@ -63,8 +52,7 @@ func TestProjectPageShowsComponents(t *testing.T) {
 		"acme/web",
 		`href="/ui/package/npm/lodash"`, // cached, so linked
 		"outdated, latest 4.17.21",
-		"1 vulns",
-		"1 vulnerable",
+		"1 outdated",
 		"symfony/console", // not cached: listed without a link
 		"not cached",
 		`data-project="acme/web"`, // delete control, asks for the token
@@ -90,7 +78,7 @@ func TestProjectPageShowsComponents(t *testing.T) {
 
 func TestPackagePageShowsUsedBy(t *testing.T) {
 	ts := newProjectsTestServer(t)
-	seedLodash(t, ts.db, false)
+	seedLodash(t, ts.db)
 	ts.upload(t, "/api/projects/acme/web/sbom", syftSBOM(t))
 	ts.upload(t, "/api/projects/acme/api/sbom", []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[
 		{"type":"library","name":"lodash","version":"4.17.21","purl":"pkg:npm/lodash@4.17.21"}]}`))
@@ -116,24 +104,7 @@ func TestPackagePageShowsUsedBy(t *testing.T) {
 	}
 }
 
-func TestDashboardShowsVulnerableVersionsInUse(t *testing.T) {
+func TestNavLinksToProjects(t *testing.T) {
 	ts := newProjectsTestServer(t)
-	seedLodash(t, ts.db, false)
-	ts.upload(t, "/api/projects/acme/web/sbom", syftSBOM(t))
-
-	if page := ts.page(t, "/ui/"); strings.Contains(page, "Vulnerable versions in use") {
-		t.Error("dashboard shows the vulnerable versions card without vulnerabilities")
-	}
 	assertContains(t, ts.page(t, "/ui/"), `href="/ui/projects"`)
-
-	seedLodash(t, ts.db, true)
-	page := ts.page(t, "/ui/")
-	assertContains(t, page, "Vulnerable versions in use", "@4.17.20", `href="/ui/projects/acme/web"`, ">high<")
-
-	// A project on the fixed version doesn't count.
-	ts.upload(t, "/api/projects/acme/web/sbom", []byte(`{"bomFormat":"CycloneDX","specVersion":"1.5","components":[
-		{"type":"library","name":"lodash","version":"4.17.21","purl":"pkg:npm/lodash@4.17.21"}]}`))
-	if page := ts.page(t, "/ui/"); strings.Contains(page, "Vulnerable versions in use") {
-		t.Error("dashboard lists a version the vulnerability is fixed in")
-	}
 }

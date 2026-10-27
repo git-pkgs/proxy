@@ -7,10 +7,9 @@
     <p class="text-gray-600 dark:text-gray-400">
         {{.Project.Components}} packages, uploaded {{.Project.UploadedAt}}{{if .Project.Branch}} from <span class="font-mono">{{.Project.Branch}}</span>{{end}}{{if .Project.Ref}} at <span class="font-mono">{{.Project.Ref}}</span>{{end}}
     </p>
-    {{if or .Vulnerable .Outdated}}
+    {{if .Outdated}}
     <div class="flex gap-2 mt-3">
-        {{if .Vulnerable}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">{{.Vulnerable}} vulnerable</span>{{end}}
-        {{if .Outdated}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300">{{.Outdated}} outdated</span>{{end}}
+        <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300">{{.Outdated}} outdated</span>
     </div>
     {{end}}
     <div id="project-delete" class="mt-4" data-project="{{.Project.Name}}">
@@ -41,10 +40,6 @@
                 <span class="shrink-0 font-mono text-sm text-gray-500 dark:text-gray-400">{{.Version}}</span>
             </div>
             <div class="flex items-center gap-2 shrink-0">
-                {{if .VulnCount}}
-                {{template "severity_badge" .Severity}}
-                <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-red-100 text-red-700 dark:bg-red-900 dark:text-red-300">{{.VulnCount}} vulns</span>
-                {{end}}
                 {{if .Outdated}}
                 <span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300" title="latest is {{.LatestVersion}}">outdated, latest {{.LatestVersion}}</span>
                 {{end}}

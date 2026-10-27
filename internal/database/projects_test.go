@@ -159,13 +159,6 @@ func TestProjectComponentsJoinPackages(t *testing.T) {
 		}); err != nil {
 			t.Fatal(err)
 		}
-		if err := db.UpsertVulnerability(&Vulnerability{
-			VulnID: "GHSA-35jh-r3h4-6jhm", Ecosystem: "npm", PackageName: "lodash",
-			Severity:     sql.NullString{String: "high", Valid: true},
-			FixedVersion: sql.NullString{String: "4.17.21", Valid: true},
-		}); err != nil {
-			t.Fatal(err)
-		}
 		saveProject(t, db, "acme/web", time.Now(), lodash20, console)
 		saveProject(t, db, "acme/api", time.Now(), lodash21)
 
@@ -188,20 +181,6 @@ func TestProjectComponentsJoinPackages(t *testing.T) {
 			t.Errorf("cached component = %+v", components[1])
 		}
 
-		vulns, err := db.GetComponentVulnerabilities("acme/web")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(vulns) != 1 || vulns[0].Version != "4.17.20" || vulns[0].VulnID != "GHSA-35jh-r3h4-6jhm" {
-			t.Errorf("acme/web vulnerabilities = %+v", vulns)
-		}
-		all, err := db.GetComponentVulnerabilities("")
-		if err != nil {
-			t.Fatal(err)
-		}
-		if len(all) != 2 {
-			t.Errorf("all vulnerabilities = %+v, want one row per project", all)
-		}
 	})
 }
 

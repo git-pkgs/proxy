@@ -42,20 +42,6 @@ type ProjectUsage struct {
 	Version string `db:"version"`
 }
 
-// ComponentVulnerability is a vulnerability recorded for the package of a
-// component a project uses. It is not yet filtered by version: whether it
-// affects Version depends on FixedVersion.
-type ComponentVulnerability struct {
-	Project string `db:"project"`
-	ProjectComponent
-	CachedEcosystem string          `db:"cached_ecosystem"`
-	CachedName      string          `db:"cached_name"`
-	VulnID          string          `db:"vuln_id"`
-	Severity        sql.NullString  `db:"severity"`
-	FixedVersion    sql.NullString  `db:"fixed_version"`
-	CVSSScore       sql.NullFloat64 `db:"cvss_score"`
-}
-
 const projectColumns = `
 	SELECT pr.id, pr.name, pr.ref, pr.branch, pr.uploaded_at,
 	       (SELECT COUNT(*) FROM project_components pc WHERE pc.project_id = pr.id) AS components`
@@ -225,31 +211,6 @@ func (db *DB) GetProjectsUsingPackage(packagePURL, version string) ([]ProjectUsa
 		return nil, err
 	}
 	return usages, nil
-}
-
-// GetComponentVulnerabilities returns the vulnerabilities the proxy holds for
-// packages that projects use, for one project or, with an empty name, for all
-// of them. Vulnerabilities are recorded per package, so only packages the
-// proxy has a record of are matched.
-func (db *DB) GetComponentVulnerabilities(project string) ([]ComponentVulnerability, error) {
-	query := `
-		SELECT pr.name AS project, c.package_purl, c.ecosystem, c.name, c.version,
-		       p.ecosystem AS cached_ecosystem, p.name AS cached_name,
-		       v.vuln_id, v.severity, v.fixed_version, v.cvss_score
-		FROM project_components c
-		JOIN projects pr ON pr.id = c.project_id
-		JOIN packages p ON p.purl = c.package_purl
-		JOIN vulnerabilities v ON v.ecosystem = p.ecosystem AND v.package_name = p.name`
-	var args []any
-	if project != "" {
-		query += ` WHERE pr.name = ?`
-		args = append(args, project)
-	}
-	vulns := []ComponentVulnerability{}
-	if err := db.Select(&vulns, db.Rebind(query+` ORDER BY c.package_purl, c.version, pr.name, v.vuln_id`), args...); err != nil {
-		return nil, err
-	}
-	return vulns, nil
 }
 
 func nullString(s string) sql.NullString {

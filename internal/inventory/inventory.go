@@ -232,15 +232,3 @@ func Outdated(ecosystem, version, latest string) bool {
 	}
 	return CompareVersions(ecosystem, version, latest) < 0
 }
-
-// Affected reports whether a vulnerability fixed in fixedVersion affects
-// version. A vulnerability without a fixed version affects every version.
-func Affected(ecosystem, version, fixedVersion string) bool {
-	if fixedVersion == "" {
-		return true
-	}
-	if version == "" {
-		return false
-	}
-	return CompareVersions(ecosystem, version, fixedVersion) < 0
-}

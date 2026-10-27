@@ -1514,7 +1514,7 @@ The proxy serves a web UI under `/ui`. No separate frontend build is needed -- t
 - **Version detail** (`/ui/package/{ecosystem}/{name}/{version}`) -- per-version metadata, integrity hash, artifact cache status, and hit counts.
 - **Source browser** (`/ui/package/{ecosystem}/{name}/{version}/browse`) -- browse files inside cached archives with syntax highlighting for text files and image previews.
 - **Version diff** (`/ui/package/{ecosystem}/{name}/compare/{v1}...{v2}`) -- side-by-side diff of two cached versions showing added, removed, and changed files.
-- **Projects** (`/ui/projects`) -- with the [project inventory](docs/configuration.md#project-inventory) enabled, the package versions each repository's uploaded SBOM lists, marked when outdated or vulnerable. Package pages then show which projects use each version, and the dashboard lists vulnerable versions in use.
+- **Projects** (`/ui/projects`) -- with the [project inventory](docs/configuration.md#project-inventory) enabled, the package versions each repository's uploaded SBOM lists, marked when outdated. Package pages then show which projects use each version.
 
 ## Monitoring
 

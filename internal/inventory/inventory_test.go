@@ -100,35 +100,28 @@ func TestValidateProjectName(t *testing.T) {
 	}
 }
 
-func TestOutdatedAndAffected(t *testing.T) {
+func TestOutdated(t *testing.T) {
 	tests := []struct {
 		name      string
 		ecosystem string
 		version   string
 		other     string
 		outdated  bool
-		affected  bool
 	}{
-		{"npm older", "npm", "4.17.20", "4.17.21", true, true},
-		{"npm same", "npm", "4.17.21", "4.17.21", false, false},
-		{"npm newer", "npm", "4.18.0", "4.17.21", false, false},
-		{"composer v prefix", "composer", "v6.4.1", "v6.4.2", true, true},
-		{"golang", "golang", "v1.8.0", "v1.10.0", true, true},
-		{"alpine revisions", "alpine", "1.36.1-r15", "1.36.1-r2", false, false},
-		{"empty version", "npm", "", "1.0.0", false, false},
+		{"npm older", "npm", "4.17.20", "4.17.21", true},
+		{"npm same", "npm", "4.17.21", "4.17.21", false},
+		{"npm newer", "npm", "4.18.0", "4.17.21", false},
+		{"composer v prefix", "composer", "v6.4.1", "v6.4.2", true},
+		{"golang", "golang", "v1.8.0", "v1.10.0", true},
+		{"alpine revisions", "alpine", "1.36.1-r15", "1.36.1-r2", false},
+		{"empty version", "npm", "", "1.0.0", false},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			if got := Outdated(tt.ecosystem, tt.version, tt.other); got != tt.outdated {
 				t.Errorf("Outdated = %v, want %v", got, tt.outdated)
 			}
-			if got := Affected(tt.ecosystem, tt.version, tt.other); got != tt.affected {
-				t.Errorf("Affected = %v, want %v", got, tt.affected)
-			}
 		})
-	}
-	if !Affected("npm", "1.0.0", "") {
-		t.Error("a vulnerability without a fix should affect every version")
 	}
 }
 

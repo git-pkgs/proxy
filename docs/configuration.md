@@ -1508,9 +1508,8 @@ Pushed archives are stored like cached ones but marked as local. The cache size 
 
 The project inventory answers "which repository uses which version of a package?". Each repository uploads an SBOM of its default branch, and the proxy records the package versions it lists. The UI then shows:
 
-- `/ui/projects`: every project, and per project its package versions, marked when the proxy knows a newer version or vulnerabilities for that version.
+- `/ui/projects`: every project, and per project its package versions, marked when the proxy knows a newer version.
 - On a package page: which projects use each version, including versions the proxy hasn't cached.
-- On the dashboard: vulnerable versions in use and the projects using them.
 
 It is disabled by default. Uploads and deletes require a token:
 
@@ -1582,7 +1581,7 @@ Reading needs no token, like the rest of `/api`. A project's page in the UI also
 
 ### What it shows
 
-The inventory reflects what the projects' SBOMs list, not what was downloaded through the proxy: a project that installs from another registry still shows up, and the proxy may not have cached any of its packages. Outdated and vulnerability markers use what the proxy knows about a package: its recorded latest version and the vulnerabilities recorded for it, matched against the version a project uses by the vulnerability's fixed version. A package the proxy has no record of has neither.
+The inventory reflects what the projects' SBOMs list, not what was downloaded through the proxy: a project that installs from another registry still shows up, and the proxy may not have cached any of its packages. The outdated marker compares the version a project uses with the latest version the proxy has recorded for the package; a package the proxy has no record of has none.
 
 Project names and the packages they use are shown on `/ui` and `/api/projects` without authentication. If that is sensitive, restrict both at your ingress or reverse proxy.
 
