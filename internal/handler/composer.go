@@ -100,18 +100,28 @@ func (h *ComposerHandler) Routes() http.Handler {
 	mux.HandleFunc("GET /search.json", h.proxyUpstream)
 	mux.HandleFunc("GET /packages/list.json", h.proxyUpstream)
 
+	// Security advisories and filter lists, as the default repository offers them
+	mux.HandleFunc("GET "+composerAdvisoriesPath, h.handleSecurityAdvisories)
+	mux.HandleFunc("POST "+composerAdvisoriesPath, h.handleSecurityAdvisories)
+	mux.HandleFunc("GET "+composerFilterSummaryPath, h.handleFilterSummary)
+
 	return mux
 }
 
-// handleServiceIndex returns the Composer repository service index.
+// handleServiceIndex returns the Composer repository service index. It
+// carries the security advisories and filter list entries of the default
+// repository's own index when that has them; if the repository cannot be
+// reached and nothing is cached, the index goes out without them.
 func (h *ComposerHandler) handleServiceIndex(w http.ResponseWriter, r *http.Request) {
-	// Return a minimal service index pointing to our proxy
 	index := map[string]any{
 		"packages":           map[string]any{},
 		"metadata-url":       h.proxyURL + "/composer/p2/%package%.json",
 		"notify-batch":       h.upstreamURL + "/downloads/",
 		"search":             h.proxyURL + "/composer/search.json?q=%query%&type=%type%",
 		"providers-lazy-url": h.proxyURL + "/composer/p2/%package%.json",
+	}
+	if upstream, ok := h.upstreamIndex(r.Context()); ok {
+		upstream.advertise(index, h.proxyURL)
 	}
 
 	w.Header().Set(headerContentType, "application/json")

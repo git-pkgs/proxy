@@ -387,6 +387,15 @@ Or set globally:
 composer config -g repositories.proxy composer http://localhost:8080/composer
 ```
 
+`composer audit`, `audit.block-insecure` and Packagist's malware filter list
+work through the proxy when `upstream.composer_repository` offers them in its
+`packages.json`, as repo.packagist.org does. The proxy advertises them in its
+own `packages.json` and passes the advisories and filter list requests through
+to the upstream uncached. Names of packages in `upstream.composer_routes` or
+`hosted.composer_vendors` are removed from advisories requests before they are
+sent. Versions withheld by [cooldown](#version-cooldown) are not excluded from
+the report.
+
 To serve private packages through the same URL, see [Private package routes](docs/configuration.md#private-package-routes).
 
 ### Conan (C/C++)
@@ -1263,6 +1272,8 @@ Recently cached:
 | `GET /maven/*` | Maven repository protocol |
 | `GET /nuget/*` | NuGet V3 API |
 | `GET /composer/*` | Composer/Packagist protocol |
+| `GET`, `POST /composer/api/security-advisories/` | Composer security advisories, passed through to upstream without private package names |
+| `GET /composer/lists/summary.json` | Composer filter list summary, passed through to upstream uncached |
 | `GET /conan/*` | Conan C/C++ protocol |
 | `GET /chef/*` | Chef Supermarket protocol (universe, cookbook API and downloads) |
 | `GET /conda/*` | Conda/Anaconda protocol |
