@@ -27,14 +27,14 @@ func TestParseSyftCycloneDX(t *testing.T) {
 		{Ecosystem: "composer", Name: "monolog/monolog", Version: "3.5.0", PackagePURL: "pkg:composer/monolog/monolog"},
 		{Ecosystem: "alpine", Name: "musl", Version: "1.2.4-r2", PackagePURL: "pkg:apk/alpine/musl"},
 		{Ecosystem: "composer", Name: "symfony/console", Version: "v6.4.1", PackagePURL: "pkg:composer/symfony/console"},
-		{Ecosystem: "npm", Name: "webapp", Version: "1.0.0", PackagePURL: "pkg:npm/webapp"},
 	}
 	if !slices.Equal(components, want) {
 		t.Errorf("components =\n%v\nwant\n%v", components, want)
 	}
-	// The operating system and the four lock files syft lists carry no PURL.
-	if skipped != 5 {
-		t.Errorf("skipped = %d, want 5", skipped)
+	// The operating system and the four lock files syft lists carry no PURL,
+	// and webapp is the root of package-lock.json, the project itself.
+	if skipped != 6 {
+		t.Errorf("skipped = %d, want 6", skipped)
 	}
 }
 
@@ -129,5 +129,34 @@ func TestOutdatedAndAffected(t *testing.T) {
 	}
 	if !Affected("npm", "1.0.0", "") {
 		t.Error("a vulnerability without a fix should affect every version")
+	}
+}
+
+func TestParseSkipsTheProjectsOwnPackages(t *testing.T) {
+	doc := `{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+		{"bom-ref":"mod","type":"library","name":"github.com/acme/app","version":"UNKNOWN","purl":"pkg:golang/github.com/acme/app"},
+		{"bom-ref":"bin","type":"library","name":"github.com/acme/app","version":"v0.0.0-20261027162038-a3e9dd9fd3f4+dirty","purl":"pkg:golang/github.com/acme/app@v0.0.0-20261027162038-a3e9dd9fd3f4%2Bdirty",
+		 "properties":[{"name":"syft:metadata:mainModule","value":"github.com/acme/app"}]},
+		{"bom-ref":"cobra","type":"library","name":"github.com/spf13/cobra","version":"v1.8.0","purl":"pkg:golang/github.com/spf13/cobra@v1.8.0",
+		 "properties":[{"name":"syft:metadata:mainModule","value":"github.com/acme/app"}]},
+		{"bom-ref":"root","type":"library","name":"app-frontend","version":"2.1.0","purl":"pkg:npm/app-frontend@2.1.0",
+		 "properties":[{"name":"syft:package:metadataType","value":"javascript-npm-package-lock-entry"}]},
+		{"bom-ref":"nover","type":"library","name":"app-tools","purl":"pkg:npm/app-tools"},
+		{"bom-ref":"jsdom","type":"library","name":"jsdom","version":"30.1.3","purl":"pkg:npm/jsdom@30.1.3",
+		 "properties":[{"name":"syft:package:metadataType","value":"javascript-npm-package-lock-entry"}]}
+	],"dependencies":[{"ref":"root","dependsOn":["jsdom"]}]}`
+	components, skipped, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := []Component{
+		{Ecosystem: "golang", Name: "github.com/spf13/cobra", Version: "v1.8.0", PackagePURL: "pkg:golang/github.com/spf13/cobra"},
+		{Ecosystem: "npm", Name: "jsdom", Version: "30.1.3", PackagePURL: "pkg:npm/jsdom"},
+	}
+	if !slices.Equal(components, want) {
+		t.Errorf("components =\n%v\nwant\n%v", components, want)
+	}
+	if skipped != 4 {
+		t.Errorf("skipped = %d, want 4", skipped)
 	}
 }

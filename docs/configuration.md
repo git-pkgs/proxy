@@ -1545,10 +1545,10 @@ curl -X PUT --data-binary @sbom.json \
 The response counts the recorded package versions and the skipped entries:
 
 ```json
-{"project":"acme/shop/web","components":10,"skipped":5}
+{"project":"acme/shop/web","components":9,"skipped":6}
 ```
 
-Entries are recorded by their package URL. Entries without one (files, the operating system) and package types the proxy doesn't serve (such as `pkg:github`) are skipped. Duplicates are recorded once.
+Entries are recorded by their package URL. Entries without one (files, the operating system), package types the proxy doesn't serve (such as `pkg:github`) and entries without a version are skipped. So is the project's own package: the root of a lock file such as `package-lock.json`, and with syft, the Go module its binaries were built from. Duplicates are recorded once.
 
 A GitLab CI job on the default branch could look like this:
 

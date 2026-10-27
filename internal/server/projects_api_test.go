@@ -104,14 +104,14 @@ func TestProjectUploadAndGet(t *testing.T) {
 	ts := newProjectsTestServer(t)
 
 	resp := ts.upload(t, "/api/projects/acme/shop/web/sbom?ref=0123abcd&branch=main", syftSBOM(t))
-	if resp != (ProjectUploadResponse{Project: "acme/shop/web", Components: 10, Skipped: 5}) {
+	if resp != (ProjectUploadResponse{Project: "acme/shop/web", Components: 9, Skipped: 6}) {
 		t.Errorf("upload response = %+v", resp)
 	}
 
 	// The same project, URL-encoded as one segment.
 	var project ProjectResponse
 	decodeJSON(t, ts.do(t, http.MethodGet, "/api/projects/acme%2Fshop%2Fweb", "", nil), &project)
-	if project.Name != "acme/shop/web" || project.Ref != "0123abcd" || project.Branch != "main" || project.ComponentCount != 10 {
+	if project.Name != "acme/shop/web" || project.Ref != "0123abcd" || project.Branch != "main" || project.ComponentCount != 9 {
 		t.Errorf("project = %+v", project.ProjectSummary)
 	}
 	var purls []string
@@ -126,7 +126,7 @@ func TestProjectUploadAndGet(t *testing.T) {
 
 	var list ProjectListResponse
 	decodeJSON(t, ts.do(t, http.MethodGet, "/api/projects", "", nil), &list)
-	if len(list.Projects) != 1 || list.Projects[0].Name != "acme/shop/web" || list.Projects[0].ComponentCount != 10 {
+	if len(list.Projects) != 1 || list.Projects[0].Name != "acme/shop/web" || list.Projects[0].ComponentCount != 9 {
 		t.Errorf("list = %+v", list)
 	}
 }

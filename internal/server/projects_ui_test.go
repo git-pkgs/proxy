@@ -83,7 +83,7 @@ func TestProjectPageShowsComponents(t *testing.T) {
 	}
 
 	list := ts.page(t, "/ui/projects")
-	assertContains(t, list, `href="/ui/projects/acme/web"`, "10 packages")
+	assertContains(t, list, `href="/ui/projects/acme/web"`, "9 packages")
 }
 
 func TestPackagePageShowsUsedBy(t *testing.T) {
