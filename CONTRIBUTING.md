@@ -224,6 +224,8 @@ Open an issue before a bigger change: anything that changes behaviour users rely
 
 A release is cut on the 1st of each month by `.github/workflows/monthly-release.yml` when `main` is green and something has merged since the last tag. It is a patch release, or a new minor version if a pull request labelled `breaking` was merged since then (a new major version from 1.0 on), so label pull requests that change behaviour users rely on.
 
+A patch release is published on its own. A breaking release is created as a draft, without images or a chart: write the upgrade notes in it and publish it, which starts `publish.yml` for the images and the chart.
+
 Scheduled runs only report what they would release until the repository variable `MONTHLY_RELEASE` is set to `true`. The workflow can also be started by hand from the Actions tab, as a dry run by default.
 
 To release by hand, push a `v*` tag.

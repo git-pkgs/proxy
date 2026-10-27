@@ -3,7 +3,9 @@ name: Monthly release
 # Cuts a release on the 1st of each month when main is green and something
 # has merged since the last release: a patch release, or a new minor version
 # if a pull request labelled "breaking" was merged (a new major version from
-# 1.0 on). Scheduled runs only report what they would do until the
+# 1.0 on). A breaking release is created as a draft, and its images and chart
+# are published only when someone publishes the draft, after writing the
+# upgrade notes. Scheduled runs only report what they would do until the
 # repository variable MONTHLY_RELEASE is "true".
 
 on:
@@ -95,6 +97,7 @@ jobs:
           echo "$merged commits since $last, next release $tag at $sha"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "draft=$([ -n "$breaking" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       # A tag pushed with GITHUB_TOKEN doesn't start other workflows, so the
       # release workflows are dispatched on the new tag instead.
@@ -104,13 +107,23 @@ jobs:
           TAG: ${{ steps.plan.outputs.tag }}
           SHA: ${{ steps.plan.outputs.sha }}
           DRY_RUN: ${{ steps.plan.outputs.dry_run }}
+          DRAFT: ${{ steps.plan.outputs.draft }}
         run: |
           set -euo pipefail
+          if [ "$DRAFT" = true ]; then
+            what="start release.yml for a draft release"
+          else
+            what="start release.yml and publish.yml"
+          fi
           if [ "$DRY_RUN" = true ]; then
-            echo "Dry run: would tag $TAG at $SHA and start release.yml and publish.yml"
+            echo "Dry run: would tag $TAG at $SHA and $what"
             exit 0
           fi
           gh api "repos/$REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA" >/dev/null
-          gh workflow run release.yml -R "$REPO" --ref "$TAG"
-          gh workflow run publish.yml -R "$REPO" --ref "$TAG"
+          gh workflow run release.yml -R "$REPO" --ref "$TAG" -f draft="$DRAFT"
+          if [ "$DRAFT" = true ]; then
+            echo "::notice::$TAG is a draft release: add the upgrade notes and publish it to push the images and chart"
+          else
+            gh workflow run publish.yml -R "$REPO" --ref "$TAG"
+          fi
           echo "Tagged $TAG at $SHA"
