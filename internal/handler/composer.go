@@ -55,6 +55,7 @@ type ComposerHandler struct {
 	repoURL     string
 	proxyURL    string
 	routes      packageRoutes
+	indexCache  composerIndexCache
 }
 
 // NewComposerHandler creates a new Composer protocol handler.
@@ -110,8 +111,9 @@ func (h *ComposerHandler) Routes() http.Handler {
 
 // handleServiceIndex returns the Composer repository service index. It
 // carries the security advisories and filter list entries of the default
-// repository's own index when that has them; if the repository cannot be
-// reached and nothing is cached, the index goes out without them.
+// repository's own index when that has them, kept in memory for the metadata
+// TTL; if the repository has not been reached, the index goes out without
+// them.
 func (h *ComposerHandler) handleServiceIndex(w http.ResponseWriter, r *http.Request) {
 	index := map[string]any{
 		"packages":           map[string]any{},

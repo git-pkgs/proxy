@@ -9,7 +9,9 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // composerAdvisoryUpstream serves a packages.json advertising security
@@ -18,6 +20,7 @@ import (
 type composerAdvisoryUpstream struct {
 	*httptest.Server
 	index string
+	down  atomic.Bool // answer every request with 503
 
 	mu       sync.Mutex
 	requests []*recordedRequest
@@ -43,6 +46,10 @@ func newComposerAdvisoryUpstream(t *testing.T) *composerAdvisoryUpstream {
 		u.mu.Lock()
 		u.requests = append(u.requests, &recordedRequest{r.Method, r.URL.Path, r.URL.Query(), string(body), r.Header.Clone()})
 		u.mu.Unlock()
+		if u.down.Load() {
+			w.WriteHeader(http.StatusServiceUnavailable)
+			return
+		}
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/packages.json":
@@ -161,6 +168,84 @@ func TestComposerServiceIndexUpstreamDown(t *testing.T) {
 	}
 	if index["metadata-url"] == nil {
 		t.Error("packages.json lacks metadata-url while the upstream is down")
+	}
+}
+
+func advertisesAdvisories(index map[string]any) bool {
+	_, ok := index["security-advisories"]
+	return ok
+}
+
+func TestComposerServiceIndexUpstreamDownNotRetried(t *testing.T) {
+	upstream := newComposerAdvisoryUpstream(t)
+	upstream.down.Store(true)
+	h := newAdvisoryComposerHandler(t, upstream)
+
+	serveComposerIndex(t, h)
+	fetched := len(upstream.requestsTo("/packages.json"))
+	if fetched == 0 {
+		t.Fatal("first packages.json made no upstream request")
+	}
+	index := serveComposerIndex(t, h)
+	if got := len(upstream.requestsTo("/packages.json")); got != fetched {
+		t.Errorf("second packages.json made %d upstream requests, want none", got-fetched)
+	}
+	if advertisesAdvisories(index) {
+		t.Errorf("security-advisories advertised without an upstream index: %v", index["security-advisories"])
+	}
+}
+
+func TestComposerServiceIndexKeptInMemory(t *testing.T) {
+	upstream := newComposerAdvisoryUpstream(t)
+	h := newAdvisoryComposerHandler(t, upstream)
+	h.proxy.MetadataTTL = 0
+	now := time.Now()
+	h.indexCache.now = func() time.Time { return now }
+
+	if !advertisesAdvisories(serveComposerIndex(t, h)) {
+		t.Fatal("security-advisories not advertised")
+	}
+	if got := len(upstream.requestsTo("/packages.json")); got != 1 {
+		t.Fatalf("upstream packages.json requests = %d, want 1", got)
+	}
+
+	// Within the interval the copy in memory is served without asking.
+	upstream.down.Store(true)
+	now = now.Add(composerIndexFallbackTTL - time.Minute)
+	if !advertisesAdvisories(serveComposerIndex(t, h)) {
+		t.Error("security-advisories dropped within the interval")
+	}
+	if got := len(upstream.requestsTo("/packages.json")); got != 1 {
+		t.Errorf("upstream packages.json requests = %d within the interval, want 1", got)
+	}
+
+	// After it the index is fetched again; the failure keeps the last good
+	// copy and is not retried until the next interval.
+	now = now.Add(2 * time.Minute)
+	if !advertisesAdvisories(serveComposerIndex(t, h)) {
+		t.Error("last good copy dropped after a failed fetch")
+	}
+	fetched := len(upstream.requestsTo("/packages.json"))
+	if fetched < 2 {
+		t.Fatalf("upstream packages.json requests = %d after the interval, want a new fetch", fetched)
+	}
+	serveComposerIndex(t, h)
+	if got := len(upstream.requestsTo("/packages.json")); got != fetched {
+		t.Errorf("failed fetch retried %d times within the interval", got-fetched)
+	}
+}
+
+func TestComposerServiceIndexFetchedOnce(t *testing.T) {
+	upstream := newComposerAdvisoryUpstream(t)
+	h := newAdvisoryComposerHandler(t, upstream)
+
+	var wg sync.WaitGroup
+	for range 10 {
+		wg.Go(func() { serveComposer(h, "/packages.json") })
+	}
+	wg.Wait()
+	if got := len(upstream.requestsTo("/packages.json")); got != 1 {
+		t.Errorf("upstream packages.json requests = %d for parallel requests, want 1", got)
 	}
 }
 

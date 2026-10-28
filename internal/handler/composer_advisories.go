@@ -8,6 +8,10 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
+	"time"
+
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -32,18 +36,76 @@ type composerUpstreamIndex struct {
 	filterSummaryURL   string
 }
 
-// upstreamIndex fetches the default repository's packages.json, cached for
-// the metadata TTL. ok is false when the repository could not be reached and
-// nothing is cached; a document without the fields yields an empty index.
+// composerIndexFallbackTTL is how long the upstream index is kept when the
+// metadata TTL is 0.
+const composerIndexFallbackTTL = time.Hour
+
+// composerIndexCache keeps the default repository's parsed packages.json in
+// memory, whether or not metadata caching is on, so that serving the proxy's
+// own packages.json does not wait on the upstream. A failed fetch is
+// remembered for the same interval: the last good copy, or none, is used
+// until then instead of retrying on every request. The zero value is ready
+// to use.
+type composerIndexCache struct {
+	mu        sync.Mutex
+	index     composerUpstreamIndex
+	ok        bool
+	fetchedAt time.Time
+	group     singleflight.Group
+	now       func() time.Time // for tests; nil means time.Now
+}
+
+func (c *composerIndexCache) clock() time.Time {
+	if c.now != nil {
+		return c.now()
+	}
+	return time.Now()
+}
+
+// upstreamIndex returns the default repository's packages.json fields. ok is
+// false when the repository has not been reached since the proxy started; a
+// document without the fields yields an empty index.
 func (h *ComposerHandler) upstreamIndex(ctx context.Context) (composerUpstreamIndex, bool) {
+	c := &h.indexCache
+	ttl := h.proxy.MetadataTTL
+	if ttl <= 0 {
+		ttl = composerIndexFallbackTTL
+	}
+	c.mu.Lock()
+	if !c.fetchedAt.IsZero() && c.clock().Sub(c.fetchedAt) < ttl {
+		index, ok := c.index, c.ok
+		c.mu.Unlock()
+		return index, ok
+	}
+	c.mu.Unlock()
+
+	// One fetch serves every waiting request. It is detached from the
+	// request that started it, so a client hanging up neither fails the
+	// others nor gets remembered as an upstream failure.
+	_, _, _ = c.group.Do("index", func() (any, error) {
+		index, err := h.fetchUpstreamIndex(context.WithoutCancel(ctx))
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		if err == nil {
+			c.index, c.ok = index, true
+		}
+		c.fetchedAt = c.clock()
+		return nil, nil
+	})
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.index, c.ok
+}
+
+func (h *ComposerHandler) fetchUpstreamIndex(ctx context.Context) (composerUpstreamIndex, error) {
 	indexURL := h.repoURL + "/packages.json"
 	cacheKey := hashedCacheKey(h.repoURL, "/packages.json")
 	res := h.proxy.fetchMetadataDocument(ctx, "composer", cacheKey, indexURL, contentTypeJSON, nil)
 	if res.err != nil {
 		h.proxy.Logger.Warn("failed to fetch upstream composer packages.json", "url", indexURL, "error", res.err)
-		return composerUpstreamIndex{}, false
+		return composerUpstreamIndex{}, res.err
 	}
-	return parseComposerUpstreamIndex(indexURL, res.body), true
+	return parseComposerUpstreamIndex(indexURL, res.body), nil
 }
 
 func parseComposerUpstreamIndex(indexURL string, body []byte) composerUpstreamIndex {

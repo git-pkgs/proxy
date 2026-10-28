@@ -347,7 +347,7 @@ upstream:
   composer_repository: "https://upstream-proxy.example.com/composer"
 ```
 
-The proxy reads `packages.json` from `upstream.composer_repository`, cached for the metadata TTL, and passes on its `security-advisories` and `filter` entries (Packagist's malware list) with URLs pointing at the proxy. An upstream that offers neither is still usable; `composer audit` then reports nothing from it. A filter `api-url` is not passed on; Composer reads filter entries from package metadata instead.
+The proxy reads `packages.json` from `upstream.composer_repository` and keeps it in memory for the metadata TTL, or an hour when the TTL is 0, whether or not `cache_metadata` is on. A failed fetch is not retried within that time: the last good copy is used, or the entries are left out. It passes on its `security-advisories` and `filter` entries (Packagist's malware list) with URLs pointing at the proxy. An upstream that offers neither is still usable; `composer audit` then reports nothing from it. A filter `api-url` is not passed on; Composer reads filter entries from package metadata instead.
 
 `upstream.hex_api` is used for cooldown timestamps and must expose Hex's `/api/packages/{name}` JSON endpoint.
 
