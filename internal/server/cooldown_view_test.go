@@ -3,6 +3,7 @@ package server
 import (
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -75,6 +76,25 @@ func TestCooldownViewOnlyPattern(t *testing.T) {
 	}
 	if got := v.forPackage("cargo", "serde"); got == nil || *got != (PackageCooldown{"off", "default"}) {
 		t.Errorf("forPackage outside the pattern = %+v, want off by default", got)
+	}
+}
+
+// TestCooldownViewUnsupportedEcosystem checks that ecosystems the proxy
+// applies no cooldown to get no cooldown on their package pages, and that
+// an override for one is marked on the dashboard.
+func TestCooldownViewUnsupportedEcosystem(t *testing.T) {
+	v := testCooldownView(t, config.CooldownConfig{
+		Default:    "3d",
+		Ecosystems: map[string]string{"deb": "0", "npm": "7d"},
+	})
+	for _, eco := range []string{"deb", "alpine", "oci", "generic"} {
+		if got := v.forPackage(eco, "pkg"); got != nil {
+			t.Errorf("forPackage(%s) = %+v, want nil", eco, got)
+		}
+	}
+	want := []CooldownOverride{{"deb", "off", true}, {"npm", "7d", false}}
+	if got := v.summary().Ecosystems; !slices.Equal(got, want) {
+		t.Errorf("summary ecosystems = %+v, want %+v", got, want)
 	}
 }
 
