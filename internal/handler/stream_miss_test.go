@@ -530,17 +530,55 @@ func TestCacheMissSlowClientFailsWithoutStoredCopy(t *testing.T) {
 	lowerFeedLimit(t, 64<<10)
 	proxy, _, store, _ := setupTestProxy(t)
 	store.storeErr = errors.New("no space left on device")
-	proxy.Fetcher = &countingFetcher{content: streamMissContent}
+	fetcher := &closeSignalFetcher{countingFetcher: countingFetcher{content: streamMissContent}, closed: make(chan struct{})}
+	proxy.Fetcher = fetcher
 
 	res, err := proxy.GetOrFetchArtifactFromURL(StreamCacheMiss(context.Background()), "npm", "big", "1.0.0", "big-1.0.0.tgz", "https://example.com/big.tgz")
 	if err != nil {
 		t.Fatal(err)
+	}
+	// Read nothing until the upstream copy is over, so the client is behind
+	// rather than keeping up, which it can on a slow runner.
+	select {
+	case <-fetcher.closed:
+	case <-time.After(10 * time.Second):
+		t.Fatal("upstream body never closed")
 	}
 	body, err := io.ReadAll(res.Reader)
 	_ = res.Reader.Close()
 	if err == nil {
 		t.Fatalf("read %d bytes without error; want the response to fail", len(body))
 	}
+}
+
+// closeSignalFetcher closes closed when the proxy closes the upstream body.
+type closeSignalFetcher struct {
+	countingFetcher
+	closed chan struct{}
+	once   sync.Once
+}
+
+func (f *closeSignalFetcher) Fetch(ctx context.Context, url string) (*fetch.Artifact, error) {
+	return f.FetchWithHeaders(ctx, url, nil)
+}
+
+func (f *closeSignalFetcher) FetchWithHeaders(ctx context.Context, url string, h http.Header) (*fetch.Artifact, error) {
+	a, err := f.countingFetcher.FetchWithHeaders(ctx, url, h)
+	if err != nil {
+		return nil, err
+	}
+	a.Body = &signalCloser{Reader: a.Body, close: func() { f.once.Do(func() { close(f.closed) }) }}
+	return a, nil
+}
+
+type signalCloser struct {
+	io.Reader
+	close func()
+}
+
+func (s *signalCloser) Close() error {
+	s.close()
+	return nil
 }
 
 func TestMissFeedCloseWhileWaiting(t *testing.T) {
