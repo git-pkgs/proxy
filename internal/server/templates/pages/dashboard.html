@@ -25,6 +25,21 @@
 {{template "security_overview" .EnrichmentStats}}
 {{end}}
 
+{{with .Cooldown}}{{if .Enabled}}
+<div class="bg-white dark:bg-gray-900 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-800 mb-8">
+    <h2 class="text-lg font-semibold mb-1">Cooldown</h2>
+    <p class="text-sm text-gray-500 dark:text-gray-400 mb-4">Versions published more recently than this are left out of package metadata.</p>
+    <dl class="flex flex-wrap gap-x-8 gap-y-2 text-sm">
+        <div><dt class="inline text-gray-500 dark:text-gray-400">Default:</dt> <dd class="inline font-mono">{{.Default}}</dd></div>
+        {{range .Ecosystems}}
+        <div><dt class="inline text-gray-500 dark:text-gray-400">{{.Ecosystem}}:</dt> <dd class="inline font-mono">{{.Duration}}</dd></div>
+        {{end}}
+        {{if .PackageOverrides}}<div><dt class="inline text-gray-500 dark:text-gray-400">Package overrides:</dt> <dd class="inline">{{.PackageOverrides}}</dd></div>{{end}}
+        {{if .PackagePatterns}}<div><dt class="inline text-gray-500 dark:text-gray-400">Package patterns:</dt> <dd class="inline">{{.PackagePatterns}}</dd></div>{{end}}
+    </dl>
+</div>
+{{end}}{{end}}
+
 <!-- Two Column Layout -->
 <div class="grid md:grid-cols-2 gap-8 mb-8 items-start">
     <!-- Popular Packages -->

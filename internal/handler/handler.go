@@ -653,7 +653,7 @@ func (p *Proxy) fetchAndCache(ctx context.Context, ecosystem, name, version, fil
 	}
 	metrics.RecordUpstreamFetch(ecosystem, fetchDuration)
 
-	return p.storeArtifact(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, info.URL, "", "", artifact)
+	return p.storeFetched(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, info.URL, "", "", artifact)
 }
 
 // storeArtifact writes a fetched artifact to storage, verifies it against
@@ -917,6 +917,9 @@ func (p *Proxy) coalesceFetch(ctx context.Context, key string, recheck func() (a
 	p.fetchMu.Unlock()
 
 	if !joined {
+		if streamsCacheMiss(ctx) {
+			return p.runSharedFetchStreaming(ctx, key, f, recheck, commit)
+		}
 		return p.runSharedFetch(ctx, key, f, recheck, commit)
 	}
 
@@ -1041,11 +1044,22 @@ func (p *Proxy) runSharedFetch(ctx context.Context, key string, f *inflightFetch
 	if err != nil {
 		return nil, err
 	}
+	// A caller handed the stream already has the bytes; opening the stored
+	// copy would cost a read it never uses, a GET on S3 or GCS.
+	h := handoffFrom(ctx)
+	handedOver := h != nil && h.handedOver()
 	if unrecorded {
 		f.unrecorded = &unrecordedObject{delete: func() { p.deleteUnrecorded(path) }}
-		f.unrecorded.refs.Add(1) // this caller
 		f.unrecorded.refs.Add(1) // until the waiters are counted
+		if handedOver {
+			h.holdUnrecorded(f.unrecorded)
+			return nil, nil
+		}
+		f.unrecorded.refs.Add(1) // this caller
 		return p.serveUnrecorded(ctx, f.unrecorded, stored, path)
+	}
+	if handedOver {
+		return nil, nil
 	}
 	return p.openStoredArtifact(ctx, stored, path)
 }
@@ -2480,7 +2494,7 @@ func (p *Proxy) fetchAndCacheFromURL(ctx context.Context, ecosystem, name, versi
 		return artifacts.Artifact{}, "", fmt.Errorf("fetching from upstream: %w", err)
 	}
 
-	return p.storeArtifact(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, upstreamHash, declared, artifact)
+	return p.storeFetched(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, upstreamHash, declared, artifact)
 }
 
 type upstreamLastModifiedKey struct{}

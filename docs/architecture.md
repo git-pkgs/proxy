@@ -58,11 +58,14 @@ Metadata is not cached - always fetched fresh. This ensures clients see new vers
    **Cache Miss:**
    - Resolve download URL using Resolver
    - Fetch artifact from upstream using Fetcher
+   - Copy the body to Storage and, for a client GET without a `Range`
+     header, to the client at once (`storeWhileServing`); the client's copy
+     is checked against the upstream's digest as it is read, and a mismatch
+     aborts it. A block-mode scanner, `HEAD` and range requests, and
+     requests joining a fetch already running wait for the stored file.
    - Store artifact in Storage (returns size, hash)
    - Create/update database records (package, version, artifact)
-   - Open stored file
-   - Return reader to handler
-   - Handler streams file to client
+   - Requests that waited open the stored file and stream it to their client
 
 Artifact handlers honor single byte ranges when the storage reader supports
 efficient seeking (currently the local filesystem reader). They advertise
@@ -304,6 +307,7 @@ HTTP protocol handlers for each registry type.
 **SwiftHandler:**
 - Proxies the Swift Package Registry v1 read endpoints
 - Rewrites release URLs and caches source archives
+- With `cache_metadata`, caches release metadata, release lists and manifests (with their `Link` header) and serves them when the upstream fails
 
 **GitHandler:**
 - Serves `/git/{name}/{repo}` from `internal/gitcache`, read-only over smart HTTP

@@ -44,8 +44,11 @@ func GetRequestID(ctx context.Context) string {
 func markRequestContext(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ctx := handler.DetachUpstreamFetch(r.Context())
-		if r.Method == http.MethodHead {
+		switch {
+		case r.Method == http.MethodHead:
 			ctx = handler.ServingHead(ctx)
+		case r.Method == http.MethodGet && r.Header.Get("Range") == "":
+			ctx = handler.StreamCacheMiss(ctx)
 		}
 		next.ServeHTTP(w, r.WithContext(ctx))
 	})

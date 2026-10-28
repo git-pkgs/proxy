@@ -1262,6 +1262,7 @@ Recently cached:
 | `GET /npm/*` | npm registry protocol |
 | `POST /npm/-/npm/v1/security/*` | npm/pnpm/Yarn audit endpoints, passed through to upstream |
 | `GET /npm/-/npm/v1/keys` | npm registry signing keys, passed through to upstream |
+| `GET /npm/-/package/{name}/dist-tags` | `npm dist-tag ls`, answered from the packument the proxy serves (cooldown and pushed versions applied); changing tags is not supported |
 | `GET /npm/-/v1/search`, `GET /npm/-/ping` | `npm search` and `npm ping`, passed through to upstream uncached |
 | `GET /cargo/*` | Cargo sparse index protocol |
 | `GET /gem/*` | RubyGems protocol |

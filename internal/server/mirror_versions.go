@@ -103,6 +103,8 @@ func mirrorVersionsURL(u config.UpstreamConfig, purlType, name string) (string, 
 			return "", fmt.Errorf("unknown Helm repository %q: it isn't in upstream.helm", repository)
 		}
 		return strings.TrimSuffix(repositoryURL, "/"), nil
+	case "swift":
+		return upstreamOr(u.Swift, d.Swift), nil
 	default:
 		return "", fmt.Errorf("listing %s versions isn't supported; give a version", purlType)
 	}

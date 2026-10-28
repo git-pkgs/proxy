@@ -107,6 +107,11 @@ func (h *NPMHandler) Routes() http.Handler {
 			return
 		}
 
+		if strings.HasPrefix(r.URL.Path, npmPackagePrefix) && strings.HasSuffix(r.URL.Path, npmDistTagsSuffix) {
+			h.handleDistTags(w, r)
+			return
+		}
+
 		path := strings.TrimPrefix(r.URL.Path, "/")
 
 		// Check if this is a tarball download (contains /-/)

@@ -251,6 +251,10 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 		m.mirrorJulia(ctx, pv, tracker)
 		return
 	}
+	if pv.Ecosystem == "swift" {
+		m.mirrorSwift(ctx, pv, tracker)
+		return
+	}
 	result, err := m.proxy.GetOrFetchArtifact(ctx, pv.Ecosystem, pv.Name, pv.Version, "")
 	if err != nil {
 		m.recordFailure(tracker, pv, err)

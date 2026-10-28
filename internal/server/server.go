@@ -126,6 +126,7 @@ type Server struct {
 	sources     sourceTracker
 	scheduler   *mirror.Scheduler
 	git         *gitcache.Cache
+	cooldown    *cooldownView
 
 	// browseLimits overrides defaultBrowseLimits when set; tests use it.
 	browseLimits archives.StreamOptions
@@ -254,6 +255,9 @@ func (s *Server) serve(listener net.Listener) error {
 		return fmt.Errorf("configuring cooldown policy: %w", err)
 	}
 	proxy.Cooldown = cooldownPolicy
+	if s.cooldown, err = newCooldownView(s.cfg.Cooldown, cooldownPolicy); err != nil {
+		return err
+	}
 	policy, err := denylist.New(s.cfg.Denylist.Packages)
 	if err != nil {
 		return fmt.Errorf("configuring denylist: %w", err)
@@ -832,6 +836,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 			TotalVersions:   stats.TotalVersions,
 		},
 		EnrichmentStats: enrichmentStatsView(enrichStats),
+		Cooldown:        s.cooldown.summary(),
 	}
 
 	for _, p := range popular {
@@ -1169,6 +1174,7 @@ func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, 
 		Versions:        versions,
 		Vulnerabilities: vulns,
 		LicenseCategory: categorizeLicense(pkg.License),
+		Cooldown:        s.cooldown.forPackage(pkg.Ecosystem, pkg.Name),
 	}
 
 	if err := s.templates.Render(w, "package_show", data); err != nil {
