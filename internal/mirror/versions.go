@@ -1,6 +1,7 @@
 package mirror
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
@@ -14,6 +15,7 @@ import (
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries"
 	_ "github.com/git-pkgs/registries/all"
+	"github.com/git-pkgs/vers"
 )
 
 // VersionLister lists the versions of a package, for PURLs without one.
@@ -34,6 +36,48 @@ type RegistryVersions struct {
 // publishes, for ecosystems the mirror fetches from the version's metadata.
 type VersionFinder interface {
 	FindVersion(ctx context.Context, ecosystem, name, version string) (registries.Version, error)
+}
+
+// LatestFinder picks the newest version of a package, for unversioned PURLs
+// when only the newest is mirrored. Listers without it fall back to the
+// newest of ListVersions.
+type LatestFinder interface {
+	LatestVersion(ctx context.Context, ecosystem, name string) (string, error)
+}
+
+// LatestVersion implements LatestFinder. Yanked and retracted versions are
+// skipped.
+func (r RegistryVersions) LatestVersion(ctx context.Context, ecosystem, name string) (string, error) {
+	versions, err := r.fetchVersions(ctx, ecosystem, name)
+	if err != nil {
+		return "", err
+	}
+	numbers := make([]string, 0, len(versions))
+	for _, v := range versions {
+		if v.Status == registries.StatusYanked || v.Status == registries.StatusRetracted {
+			continue
+		}
+		numbers = append(numbers, v.Number)
+	}
+	return newestVersion(ecosystem, numbers), nil
+}
+
+// newestVersion returns the highest of versions by the ecosystem's ordering,
+// leaving out pre-releases unless there is nothing else. It returns "" for
+// an empty list.
+func newestVersion(ecosystem string, versions []string) string {
+	scheme := purl.EcosystemToPURLType(ecosystem)
+	var release, prerelease string
+	for _, v := range versions {
+		best := &release
+		if vers.IsPrereleaseWithScheme(v, scheme) {
+			best = &prerelease
+		}
+		if *best == "" || vers.CompareWithScheme(v, *best, scheme) > 0 {
+			*best = v
+		}
+	}
+	return cmp.Or(release, prerelease)
 }
 
 // ListVersions implements VersionLister.

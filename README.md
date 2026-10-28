@@ -1152,6 +1152,9 @@ proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
 # Mirror all versions of a package
 proxy mirror pkg:npm/lodash
 
+# Mirror only the newest version of a package
+proxy mirror --latest pkg:npm/lodash
+
 # Mirror from a CycloneDX or SPDX SBOM
 proxy mirror --sbom sbom.cdx.json
 
