@@ -60,6 +60,14 @@ jobs:
 
           sha=$(git rev-parse HEAD)
           last=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*')
+          # A breaking release waits as a draft for its upgrade notes. Building
+          # on its tag would publish those changes without them. Older tags
+          # were released by hand and may have no release at all.
+          draft=$(gh release view "$last" -R "$REPO" --json isDraft --jq .isDraft 2>/dev/null || echo false)
+          if [ "$draft" = true ]; then
+            echo "::warning::$last is still a draft, publish it first"
+            exit 0
+          fi
           merged=$(git rev-list --count "$last..$sha")
           if [ "$merged" -eq 0 ]; then
             echo "Nothing merged since $last"
