@@ -467,7 +467,7 @@ func (h *NPMHandler) rewriteMetadataWithLocal(packageName string, body []byte, l
 func (h *NPMHandler) npmRewriteOptions(packageName string, local []npmLocalEntry) npm.Options {
 	return npm.Options{
 		ProxyURL:       h.proxyURL,
-		Cooldown:       h.proxy.Cooldown,
+		Cooldown:       h.proxy.cooldown(),
 		DeniedVersions: h.proxy.Denylist.Versions(canonicalPackagePURL("npm", packageName)),
 		EvaluatedAt:    time.Now(),
 		LocalVersions:  local,
@@ -685,7 +685,7 @@ func (h *NPMHandler) versionInCooldown(packageName, version string, metadata fun
 	versionPURL := canonicalVersionPURL("npm", packageName, version)
 	if !routed {
 		if ver, err := h.proxy.DB.GetVersionByPURL(versionPURL); err == nil && ver != nil && ver.PublishedAt.Valid {
-			return !h.proxy.Cooldown.IsAllowed("npm", canonicalPackagePURL("npm", packageName), ver.PublishedAt.Time), nil
+			return !h.proxy.cooldown().IsAllowed("npm", canonicalPackagePURL("npm", packageName), ver.PublishedAt.Time), nil
 		}
 	}
 
@@ -717,7 +717,7 @@ func (h *NPMHandler) versionInCooldown(packageName, version string, metadata fun
 		}
 	}
 
-	return !h.proxy.Cooldown.IsAllowed("npm", canonicalPackagePURL("npm", packageName), publishedAt), nil
+	return !h.proxy.cooldown().IsAllowed("npm", canonicalPackagePURL("npm", packageName), publishedAt), nil
 }
 
 // npmMetadataPath returns the package name and the encoded registry path.

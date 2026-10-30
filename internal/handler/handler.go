@@ -284,6 +284,10 @@ type Proxy struct {
 	// the process started; see metadataDate.
 	now     func() time.Time
 	started time.Time
+
+	// cooldownWatch holds the rewrites recording which versions cooldown
+	// holds back; see cooldown_expiry.go.
+	cooldownWatch cooldownWatch
 }
 
 // CooldownPolicy supplies version-age filtering and package-specific durations.

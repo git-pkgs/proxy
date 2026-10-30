@@ -143,7 +143,7 @@ func TestStoredRewrite_MarksAccess(t *testing.T) {
 	body := []byte(`{}`)
 	proxy.cacheMetadataBlob(t.Context(), "npm", "demo", metadataStoragePath("npm", "demo"), &upstreamMetadata{body: body})
 	key := rewriteCacheKey("npm", "http://proxy", "demo", body)
-	if _, err := proxy.rewrites.rewrite(t.Context(), key, body, 0, func(b []byte) ([]byte, error) { return b, nil }); err != nil {
+	if _, err := proxy.rewrites.rewrite(t.Context(), key, body, nil, func(b []byte) ([]byte, error) { return b, nil }); err != nil {
 		t.Fatal(err)
 	}
 	old := ageMetadataAccess(t, db, "npm", "demo")
