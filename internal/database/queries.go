@@ -223,6 +223,60 @@ func (db *DB) SetVersionPublishedAt(versionPURL, packagePURL string, publishedAt
 	return nil
 }
 
+// FillVersionPublishedAt records a version's publish time like
+// SetVersionPublishedAt, but keeps a time already stored. The cooldown
+// filters call it for each version they hold back, on every uncached
+// metadata request, so it writes without reading first.
+func (db *DB) FillVersionPublishedAt(versionPURL, packagePURL string, publishedAt time.Time) error {
+	now := time.Now()
+	var query string
+
+	if db.dialect == DialectPostgres {
+		query = `
+			INSERT INTO versions (purl, package_purl, published_at, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5)
+			ON CONFLICT(purl) DO UPDATE SET
+				published_at = EXCLUDED.published_at,
+				updated_at = EXCLUDED.updated_at
+			WHERE versions.published_at IS NULL
+		`
+	} else {
+		query = `
+			INSERT INTO versions (purl, package_purl, published_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?)
+			ON CONFLICT(purl) DO UPDATE SET
+				published_at = excluded.published_at,
+				updated_at = excluded.updated_at
+			WHERE versions.published_at IS NULL
+		`
+	}
+
+	_, err := db.Exec(query, versionPURL, packagePURL, publishedAt, now, now)
+	if err != nil {
+		return fmt.Errorf("filling version publish time: %w", err)
+	}
+	return nil
+}
+
+// GetFetchedVersionPURLs returns the versions of a package that have an
+// artifact row, cached now or evicted since. Versions without one were only
+// seen in metadata.
+func (db *DB) GetFetchedVersionPURLs(packagePURL string) (map[string]bool, error) {
+	var purls []string
+	query := db.Rebind(`
+		SELECT DISTINCT version_purl FROM artifacts
+		WHERE version_purl IN (SELECT purl FROM versions WHERE package_purl = ?)
+	`)
+	if err := db.Select(&purls, query, packagePURL); err != nil {
+		return nil, fmt.Errorf("listing fetched versions: %w", err)
+	}
+	fetched := make(map[string]bool, len(purls))
+	for _, p := range purls {
+		fetched[p] = true
+	}
+	return fetched, nil
+}
+
 // Artifact queries
 
 func (db *DB) GetArtifact(versionPURL, filename string) (*Artifact, error) {
