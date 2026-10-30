@@ -18,6 +18,15 @@ func MakeString(ecosystem, name, version string) string {
 	return purl.MakePURLString(ecosystem, name, version)
 }
 
+// PolicyPackageKey maps a canonical versionless PURL to its policy key.
+// Go policies match module names case-insensitively for compatibility.
+func PolicyPackageKey(packagePURL string) string {
+	if strings.HasPrefix(packagePURL, "pkg:golang/") {
+		return strings.ToLower(packagePURL)
+	}
+	return packagePURL
+}
+
 // WithVersionString returns a package PURL with its version replaced. It
 // returns an empty string when packagePURL is invalid.
 func WithVersionString(packagePURL, version string) string {

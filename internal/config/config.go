@@ -77,6 +77,7 @@ import (
 
 	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/denylist"
+	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
 	"gopkg.in/yaml.v3"
@@ -261,7 +262,7 @@ func (c *CooldownConfig) NormalizedPackages() map[string]string {
 	for _, key := range keys {
 		canonical := key
 		if parsed, err := purl.Parse(key); err == nil {
-			canonical = parsed.String()
+			canonical = packageurl.PolicyPackageKey(parsed.String())
 		}
 		if _, exists := normalized[canonical]; exists && key != canonical {
 			continue
