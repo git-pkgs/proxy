@@ -31,5 +31,9 @@ WORKDIR /data
 
 EXPOSE 8080
 
+# /health checks the database and storage and can take up to ten seconds.
+HEALTHCHECK --interval=30s --timeout=11s --start-period=10s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:8080/health || exit 1
+
 ENTRYPOINT ["proxy"]
 CMD ["serve"]
