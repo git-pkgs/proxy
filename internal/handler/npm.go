@@ -255,6 +255,10 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if !versionLookup && h.serveStreamedPackument(w, r, packageName, upstreamURL, accept, metadataCacheKey) {
+		return
+	}
+
 	var validate func([]byte) error
 	if !versionLookup {
 		validate = h.packumentValidator()
@@ -306,6 +310,82 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 	}
 
 	serveRewrittenMetadata(w, r, rewritten)
+}
+
+// serveStreamedPackument serves a packument rewritten from storage: the
+// document is streamed from upstream into storage, then read twice, once to
+// collect the time map and version names cooldown and the denylist decide
+// on, and once to copy each kept version. registry.npmjs.org writes
+// dist-tags before versions and time after them, so one pass can't do it.
+// Neither the packument nor its rewrite is held in memory uncompressed, and
+// packuments larger than metadata_max_size can be served.
+//
+// It reports false when it leaves the request to the in-memory rewrite:
+// without metadata or rewrite caching, for a document it can't stream, such
+// as an abbreviated packument where the full one is required, and when the
+// rewrite fails. The document is stored by then, so the in-memory path reads
+// it from storage.
+func (h *NPMHandler) serveStreamedPackument(w http.ResponseWriter, r *http.Request, packageName, upstreamURL, accept, metadataCacheKey string) bool {
+	if h.proxy.rewrites == nil {
+		return false
+	}
+	entry, err := h.proxy.storedMetadataDocument(r.Context(), "npm", metadataCacheKey, upstreamURL, accept)
+	switch {
+	case err == nil:
+	case errors.Is(err, errMetadataNotStored):
+		return false
+	case errors.Is(err, ErrUpstreamNotFound):
+		JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
+		return true
+	case writeUpstreamHeld(w, err):
+		return true
+	default:
+		h.proxy.Logger.Error("failed to fetch npm metadata", "error", err)
+		JSONError(w, http.StatusBadGateway, "failed to fetch from upstream")
+		return true
+	}
+
+	fullRequired := h.packumentValidator() != nil
+	options := h.npmRewriteOptions(packageName, nil)
+	rewritten, err := h.proxy.streamedRewrite(r.Context(), "npm", h.proxyURL, metadataCacheKey, entry, func(open func() (io.ReadCloser, error), out io.Writer) error {
+		var scan *npm.Scan
+		err := readStored(open, func(in io.Reader) (err error) {
+			scan, err = npm.ScanPackument(in)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if fullRequired && scan.Abbreviated() {
+			return npm.ErrNotStreamable
+		}
+		return readStored(open, func(in io.Reader) error {
+			_, err := npm.RewriteStream(packageName, scan, in, out, options)
+			return err
+		})
+	})
+	if err != nil {
+		if r.Context().Err() != nil {
+			return true // the client left while waiting on a shared rewrite
+		}
+		if !errors.Is(err, npm.ErrNotStreamable) {
+			h.proxy.Logger.Warn("failed to rewrite stored npm metadata, rewriting in memory",
+				"package", packageName, "error", err)
+		}
+		return false
+	}
+	serveRewrittenMetadata(w, r, rewritten)
+	return true
+}
+
+// readStored opens a stored document and reads it with read.
+func readStored(open func() (io.ReadCloser, error), read func(io.Reader) error) error {
+	in, err := open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	return read(in)
 }
 
 // packumentAccept returns the Accept header packuments are requested with.
