@@ -2,10 +2,12 @@ package enrichment
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"os"
 	"testing"
 
+	shared "github.com/git-pkgs/enrichment"
 	"github.com/git-pkgs/registries"
 )
 
@@ -26,7 +28,7 @@ func TestNew(t *testing.T) {
 	}
 }
 
-func TestSwiftRegistryIdentitySkipsPURLDependentLookups(t *testing.T) {
+func TestSwiftRegistryIdentityLookups(t *testing.T) {
 	svc := New(slog.New(slog.NewTextHandler(os.Stdout, nil)))
 	ctx := context.Background()
 
@@ -41,8 +43,11 @@ func TestSwiftRegistryIdentitySkipsPURLDependentLookups(t *testing.T) {
 	}
 
 	vulnerabilities, err := svc.CheckVulnerabilities(ctx, "swift", "apple/example", "1.2.3")
-	if err != nil || vulnerabilities != nil {
-		t.Errorf("CheckVulnerabilities() = %#v, %v; want nil, nil", vulnerabilities, err)
+	if !errors.Is(err, shared.ErrUnsupportedVulnerabilityIdentity) || vulnerabilities != nil {
+		t.Errorf("CheckVulnerabilities() = %#v, %v; want unsupported identity", vulnerabilities, err)
+	}
+	if _, err := svc.EnrichFull(ctx, "swift", "apple/example", "1.2.3"); !errors.Is(err, shared.ErrUnsupportedVulnerabilityIdentity) {
+		t.Errorf("EnrichFull error = %v, want unsupported identity", err)
 	}
 
 	latest, err := svc.GetLatestVersion(ctx, "swift", "apple/example")

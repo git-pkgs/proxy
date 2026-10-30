@@ -188,8 +188,8 @@ func TestGolangRetentionPackageRules(t *testing.T) {
 	if err := db.Get(&stored, db.Rebind(`SELECT package_purl FROM versions WHERE purl = ?`), zip.VersionPURL); err != nil {
 		t.Fatalf("reading stored package PURL: %v", err)
 	}
-	if stored != "pkg:golang/github.com/burntsushi/toml" {
-		t.Errorf("stored package PURL = %q, want pkg:golang/github.com/burntsushi/toml", stored)
+	if stored != "pkg:golang/github.com/BurntSushi/toml" {
+		t.Errorf("stored package PURL = %q, want pkg:golang/github.com/BurntSushi/toml", stored)
 	}
 
 	for _, keys := range []map[string]string{
