@@ -53,10 +53,9 @@ type Options struct {
 type transformer struct{ Options }
 
 // Rewrite filters upstream versions and points their tarball and attestation
-// URLs at the proxy, preserving
-// untouched JSON values verbatim. Hosted entries override upstream versions.
-// The returned version set is unordered. The document, denylist and hosted
-// entries are not modified.
+// URLs at the proxy, preserving untouched JSON values verbatim. Hosted entries
+// override upstream versions. The returned version set is unordered. The
+// document, denylist and hosted entries are not modified.
 func Rewrite(packageName string, body []byte, options Options) ([]byte, []string, error) {
 	return (&transformer{options}).rewriteMetadataWithLocal(packageName, body, options.LocalVersions)
 }

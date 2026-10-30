@@ -17,16 +17,6 @@ var errNoAttestations = errors.New("attestations not found")
 // handleAttestations serves /-/npm/v1/attestations/{name}@{version}, which
 // `npm audit signatures` reads to verify provenance. Packuments point
 // dist.attestations.url here (see npm.AttestationsURL).
-//
-// The document is fetched from the package's registry, the route's for a
-// routed package, at the URL its packument lists for the version when that is
-// on the same registry, and otherwise at the registry's standard path. A
-// version's attestations never change once published, so they are cached
-// like other immutable metadata and served without revalidation.
-//
-// Versions the denylist blocks get 403 and versions cooldown holds back 404,
-// as their tarballs do. Pushed versions carry no upstream attestations, so
-// they and packages in hosted-only scopes get 404.
 func (h *NPMHandler) handleAttestations(w http.ResponseWriter, r *http.Request) {
 	packageName, version, ok := parseNPMAttestationsPath(strings.TrimPrefix(r.URL.Path, npmAttestationsPrefix))
 	if !ok {
