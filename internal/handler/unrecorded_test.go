@@ -340,3 +340,76 @@ func TestRecordedAt(t *testing.T) {
 		t.Error("failed lookup taken as recorded")
 	}
 }
+
+// TestUnrecordedStreamedMiss streams an unrecorded refetch to the caller
+// that started it, and the waiters still get the stored object. A caller fed
+// from upstream holds no reader on it, so it is deleted once the waiters are
+// done; one that fell behind reads it, so it is deleted once that caller is
+// done too.
+func TestUnrecordedStreamedMiss(t *testing.T) {
+	for _, behind := range []bool{false, true} {
+		t.Run(map[bool]string{false: "fed", true: "behind"}[behind], func(t *testing.T) {
+			testUnrecordedStreamedMiss(t, behind)
+		})
+	}
+}
+
+func testUnrecordedStreamedMiss(t *testing.T, behind bool) {
+	t.Helper()
+	if behind {
+		old := clientFeedLimit
+		clientFeedLimit = 4
+		t.Cleanup(func() { clientFeedLimit = old })
+	}
+	proxy, store := setupUnrecorded(t)
+	fetcher := newGatedFetcher(unrecordedContent)
+	proxy.Fetcher = fetcher
+
+	leader := make(chan *CacheResult, 1)
+	go func() {
+		res, err := fetchGone(StreamCacheMiss(context.Background()), proxy)
+		if err != nil {
+			t.Errorf("leader: %v", err)
+		}
+		leader <- res
+	}()
+	<-fetcher.entered
+	waiter := make(chan *CacheResult, 1)
+	go func() {
+		res, err := fetchGone(context.Background(), proxy)
+		if err != nil {
+			t.Errorf("waiter: %v", err)
+		}
+		waiter <- res
+	}()
+	waitForWaiters(t, proxy, 1)
+	close(fetcher.release)
+
+	lead := <-leader
+	if lead == nil || lead.Artifact.Size != -1 {
+		t.Fatalf("leader = %+v, want a stream", lead)
+	}
+	w := <-waiter
+	if w == nil {
+		t.FailNow()
+	}
+	readAndClose(t, w)
+	if behind {
+		// The leader reads the stored copy, so it must outlive the
+		// waiter.
+		if len(storedFiles(store)) == 0 {
+			t.Fatal("stored copy deleted while the leader still reads it")
+		}
+		readAndClose(t, lead)
+	}
+	deadline := time.Now().Add(5 * time.Second)
+	for len(storedFiles(store)) != 0 && time.Now().Before(deadline) {
+		time.Sleep(time.Millisecond)
+	}
+	if got := storedFiles(store); len(got) != 0 {
+		t.Errorf("stored files after every reader closed = %v, want none", got)
+	}
+	if !behind {
+		readAndClose(t, lead)
+	}
+}

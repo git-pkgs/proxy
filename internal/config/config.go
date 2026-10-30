@@ -75,6 +75,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/denylist"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
@@ -271,6 +272,28 @@ func (c *CooldownConfig) NormalizedPackages() map[string]string {
 		normalized[canonical] = c.Packages[key]
 	}
 	return normalized
+}
+
+// Shortest returns the shortest cooldown configured anywhere, by default,
+// ecosystem, package or package pattern, or 0 when none is. Unparsable
+// durations are left out; Validate reports them.
+func (c *CooldownConfig) Shortest() time.Duration {
+	if c == nil {
+		return 0
+	}
+	var shortest time.Duration
+	consider := func(s string) {
+		if d, err := cooldown.ParseDuration(s); err == nil && d > 0 && (shortest == 0 || d < shortest) {
+			shortest = d
+		}
+	}
+	consider(c.Default)
+	for _, m := range []map[string]string{c.Ecosystems, c.Packages, c.PackagePatterns} {
+		for _, v := range m {
+			consider(v)
+		}
+	}
+	return shortest
 }
 
 // ScanningConfig configures pre-cache artifact scanning (e.g. trivy,
@@ -623,6 +646,11 @@ type UpstreamConfig struct {
 	// metadata_ttl, and the go command contacts the database directly.
 	// Requires cache_metadata. Default: false.
 	GoSumDBsOffline bool `json:"go_sumdbs_offline" yaml:"go_sumdbs_offline"`
+
+	// GoVulnDB is the Go vulnerability database served at /go/vulndb, for
+	// govulncheck -db pointing at the proxy.
+	// Default: https://vuln.go.dev
+	GoVulnDB string `json:"go_vulndb" yaml:"go_vulndb"`
 
 	// Hex is the upstream Hex repository URL.
 	// Default: https://repo.hex.pm
@@ -1249,6 +1277,7 @@ func Default() *Config {
 			CargoDownload:      "https://static.crates.io/crates",
 			Gem:                "https://rubygems.org",
 			Go:                 "https://proxy.golang.org",
+			GoVulnDB:           "https://vuln.go.dev",
 			Hex:                "https://repo.hex.pm",
 			HexAPI:             "https://hex.pm",
 			Pub:                "https://pub.dev",
@@ -1415,6 +1444,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Upstream.CargoDownload, "PROXY_UPSTREAM_CARGO_DOWNLOAD")
 	setEnvString(&c.Upstream.Gem, "PROXY_UPSTREAM_GEM")
 	setEnvString(&c.Upstream.Go, "PROXY_UPSTREAM_GO")
+	setEnvString(&c.Upstream.GoVulnDB, "PROXY_UPSTREAM_GO_VULNDB")
 	setEnvString(&c.Upstream.Hex, "PROXY_UPSTREAM_HEX")
 	setEnvString(&c.Upstream.HexAPI, "PROXY_UPSTREAM_HEX_API")
 	setEnvString(&c.Upstream.Pub, "PROXY_UPSTREAM_PUB")

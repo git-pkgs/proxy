@@ -183,7 +183,7 @@ func serveHexPackage(w http.ResponseWriter, r *http.Request, m rewrittenMetadata
 	w.Header().Set(headerContentType, "application/octet-stream")
 	w.Header().Set(headerContentEncoding, "gzip")
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(m.body)
+	_, _ = w.Write(m.content())
 }
 
 // timedPackage describes a package's registry file and the Hex API entry

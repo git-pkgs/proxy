@@ -2,9 +2,15 @@ package mirror
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
 	"fmt"
+	"net/http"
+	"net/url"
 	"strings"
 
+	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries"
 	_ "github.com/git-pkgs/registries/all"
@@ -28,6 +34,29 @@ type RegistryVersions struct {
 // publishes, for ecosystems the mirror fetches from the version's metadata.
 type VersionFinder interface {
 	FindVersion(ctx context.Context, ecosystem, name, version string) (registries.Version, error)
+}
+
+// LatestFinder picks the latest version of a package, for unversioned PURLs
+// when only the latest is mirrored. Listers without it fall back to
+// registries.SelectLatestVersion over ListVersions.
+type LatestFinder interface {
+	LatestVersion(ctx context.Context, ecosystem, name string) (string, error)
+}
+
+// LatestVersion implements LatestFinder with registries.FetchLatestVersion:
+// the version the registry advertises as latest where it has one, such as
+// npm's dist-tags.latest, and otherwise the newest version by publish time
+// that isn't yanked, retracted or deprecated.
+func (r RegistryVersions) LatestVersion(ctx context.Context, ecosystem, name string) (string, error) {
+	reg, name, err := r.registryFor(ctx, ecosystem, name)
+	if err != nil {
+		return "", err
+	}
+	v, err := registries.FetchLatestVersion(ctx, reg, name)
+	if err != nil || v == nil {
+		return "", err
+	}
+	return v.Number, nil
 }
 
 // ListVersions implements VersionLister.
@@ -58,31 +87,88 @@ func (r RegistryVersions) FindVersion(ctx context.Context, ecosystem, name, vers
 }
 
 func (r RegistryVersions) fetchVersions(ctx context.Context, ecosystem, name string) ([]registries.Version, error) {
-	reg, err := r.registry(ecosystem, name)
+	reg, name, err := r.registryFor(ctx, ecosystem, name)
 	if err != nil {
 		return nil, err
 	}
-	if purl.EcosystemToPURLType(ecosystem) == "helm" {
+	return reg.FetchVersions(ctx, name)
+}
+
+// registryFor returns the client for the registry name is listed in, and
+// the name the registry knows the package by.
+func (r RegistryVersions) registryFor(ctx context.Context, ecosystem, name string) (registries.Registry, string, error) { //nolint:ireturn // registries.New returns the interface
+	reg, err := r.registry(ecosystem, name)
+	if err != nil {
+		return nil, "", err
+	}
+	switch purl.EcosystemToPURLType(ecosystem) {
+	case "helm":
 		// The namespace names the repository, which URL resolves to the
 		// index the chart is listed in.
 		_, name, _ = strings.Cut(name, "/")
+	case "swift":
+		var baseURL string
+		if baseURL, err = r.baseURL("swift", name); err != nil {
+			return nil, "", err
+		}
+		if name, err = swiftIdentity(ctx, r.client(), baseURL, name); err != nil {
+			return nil, "", err
+		}
 	}
-	return reg.FetchVersions(ctx, name)
+	return reg, name, nil
 }
 
 // registry returns the client for the registry name is listed in.
 func (r RegistryVersions) registry(ecosystem, name string) (registries.Registry, error) { //nolint:ireturn // registries.New returns the interface
 	purlType := purl.EcosystemToPURLType(ecosystem)
-	var baseURL string
-	if r.URL != nil {
-		var err error
-		if baseURL, err = r.URL(purlType, name); err != nil {
-			return nil, err
+	baseURL, err := r.baseURL(purlType, name)
+	if err != nil {
+		return nil, err
+	}
+	return registries.New(purlType, baseURL, r.client())
+}
+
+func (r RegistryVersions) baseURL(purlType, name string) (string, error) {
+	if r.URL == nil {
+		return "", nil
+	}
+	return r.URL(purlType, name)
+}
+
+func (r RegistryVersions) client() *registries.Client {
+	if r.Client == nil {
+		return registries.DefaultClient()
+	}
+	return r.Client
+}
+
+// swiftIdentity returns the registry identity, scope.name, of the name of a
+// pkg:swift PURL, looking a source repository up on the registry at baseURL.
+func swiftIdentity(ctx context.Context, client *registries.Client, baseURL, name string) (string, error) {
+	source := swiftSourceURL(name)
+	if source == "" {
+		scope, pkg, err := swiftScopeAndName(name)
+		if err != nil {
+			return "", err
 		}
+		return scope + "." + pkg, nil
 	}
-	client := r.Client
-	if client == nil {
-		client = registries.DefaultClient()
+	if baseURL == "" {
+		baseURL = config.DefaultSwiftUpstream
 	}
-	return registries.New(purlType, baseURL, client)
+	var body json.RawMessage
+	_, err := client.GetJSONWithHeaders(ctx,
+		strings.TrimSuffix(baseURL, "/")+"/identifiers?"+url.Values{"url": {source}}.Encode(),
+		http.Header{"Accept": {"application/vnd.swift.registry.v1+json"}}, &body)
+	if httpErr := (*registries.HTTPError)(nil); errors.As(err, &httpErr) && httpErr.IsNotFound() {
+		return "", fmt.Errorf("the Swift registry has no package for %s", source)
+	}
+	if err != nil {
+		return "", err
+	}
+	scope, pkg, err := handler.SwiftIdentityOf(body, source)
+	if err != nil {
+		return "", err
+	}
+	return scope + "." + pkg, nil
 }

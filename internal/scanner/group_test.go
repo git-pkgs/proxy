@@ -270,3 +270,27 @@ func TestGroup_Scan_ErrorFailOpen(t *testing.T) {
 		t.Error("Allowed = false, want true — FailOpen must treat scanner errors as allowed")
 	}
 }
+
+func TestGroupBlocks(t *testing.T) {
+	g, err := NewGroup(config.ScanningConfig{
+		Enabled:    true,
+		SigningKey: "key",
+		Scanners: []config.ScannerConfig{
+			{Name: "watch", URL: "http://watch.invalid", Mode: "monitor"},
+			{Name: "gate", URL: "http://gate.invalid", Mode: "block", Ecosystems: []string{"npm"}},
+		},
+	}, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !g.Blocks("npm") {
+		t.Error("Blocks(npm) = false with a block-mode scanner for npm")
+	}
+	if g.Blocks("pypi") {
+		t.Error("Blocks(pypi) = true with only a monitor-mode scanner for it")
+	}
+	var none *Group
+	if none.Blocks("npm") {
+		t.Error("nil group blocks")
+	}
+}

@@ -13,6 +13,7 @@ type DashboardData struct {
 	Layout
 	Stats           DashboardStats
 	EnrichmentStats EnrichmentStatsView
+	Cooldown        CooldownSummary
 	RecentPackages  []PackageInfo
 	PopularPackages []PackageInfo
 }
@@ -71,6 +72,8 @@ type PackageShowData struct {
 	// UsedBy lists the projects using each version, when the project
 	// inventory is enabled.
 	UsedBy []VersionUsage
+	// Cooldown is nil with cooldown off.
+	Cooldown *PackageCooldown
 }
 
 // VersionShowData contains data for rendering the version show page.

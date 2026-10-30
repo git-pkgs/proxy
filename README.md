@@ -138,7 +138,8 @@ go build -o proxy ./cmd/proxy
 ./proxy -listen :3000 -base-url https://proxy.example.com
 ```
 
-The proxy is now running. Configure your package managers to use it.
+The proxy is now running. Configure your package managers to use it. For image
+builds, see [Using proxy in Docker builds](docs/docker-builds.md).
 
 ## OpenAPI (Swagger)
 
@@ -186,7 +187,10 @@ through the proxy: the audit and signing-key endpoints are passed through to the
 configured upstream registry, with upstream authentication applied. Advisories
 therefore come from upstream's database, not from the proxy's own vulnerability
 data, and versions withheld by [cooldown](#version-cooldown) are not excluded
-from the report.
+from the report. Packuments point each version's attestations (provenance) at
+the proxy, which fetches them from the package's registry and caches them;
+attestations of versions held back by cooldown or blocked by the denylist are
+not served.
 
 To serve private packages through the same registry URL, see [Private package routes](docs/configuration.md#private-package-routes).
 
@@ -239,6 +243,14 @@ the `go` command contacts the database directly as before. Set
 checksum databases are listed under `upstream.go_sumdbs`, see
 [Go checksum database](docs/configuration.md#go-checksum-database).
 
+govulncheck can use the proxy for the Go vulnerability database:
+
+```bash
+govulncheck -db http://localhost:8080/go/vulndb ./...
+```
+
+See [Go vulnerability database](docs/configuration.md#go-vulnerability-database).
+
 ### Homebrew
 
 Point Homebrew's JSON API and artifact domain at the proxy:
@@ -250,7 +262,7 @@ export HOMEBREW_ARTIFACT_DOMAIN=http://localhost:8080
 
 The artifact domain proxies manifests and bottle blobs under `/v2/homebrew/core/`. GHCR routing is limited to that repository. Source archives, cask application downloads, custom tap artifacts, and legacy flat-file bottle mirrors use Homebrew's normal fallback URLs. Keep fallback enabled by leaving `HOMEBREW_ARTIFACT_DOMAIN_NO_FALLBACK` unset.
 
-Enable `cache_metadata` or set `PROXY_CACHE_METADATA=true` to retain Homebrew JSON API responses for offline fallback. Bottle blobs and their OCI manifests are cached without this setting.
+Enable `cache_metadata` or set `PROXY_CACHE_METADATA=true` to retain Homebrew JSON API responses for offline fallback. Bottle blobs and their OCI manifests are cached without this setting. `proxy mirror pkg:brew/<formula>` pre-fetches a formula's bottles (see [Homebrew bottles](docs/configuration.md#homebrew-bottles)).
 
 The upstreams default to `https://formulae.brew.sh/api` for the JSON API and `https://ghcr.io` for artifacts. To chain this proxy to another proxy, configure its Homebrew endpoints as the upstreams:
 
@@ -1144,6 +1156,9 @@ proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
 # Mirror all versions of a package
 proxy mirror pkg:npm/lodash
 
+# Mirror only the newest version of a package
+proxy mirror --latest pkg:npm/lodash
+
 # Mirror from a CycloneDX or SPDX SBOM
 proxy mirror --sbom sbom.cdx.json
 
@@ -1253,6 +1268,8 @@ Recently cached:
 | `GET /npm/*` | npm registry protocol |
 | `POST /npm/-/npm/v1/security/*` | npm/pnpm/Yarn audit endpoints, passed through to upstream |
 | `GET /npm/-/npm/v1/keys` | npm registry signing keys, passed through to upstream |
+| `GET /npm/-/package/{name}/dist-tags` | `npm dist-tag ls`, answered from the packument the proxy serves (cooldown and pushed versions applied); changing tags is not supported |
+| `GET /npm/-/npm/v1/attestations/{name}@{version}` | npm provenance attestations of a version, fetched from the package's registry and cached |
 | `GET /npm/-/v1/search`, `GET /npm/-/ping` | `npm search` and `npm ping`, passed through to upstream uncached |
 | `GET /cargo/*` | Cargo sparse index protocol |
 | `GET /gem/*` | RubyGems protocol |

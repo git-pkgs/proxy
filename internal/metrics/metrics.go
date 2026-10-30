@@ -163,6 +163,14 @@ var (
 		},
 	)
 
+	ArtifactsServedUncached = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_artifacts_served_uncached_total",
+			Help: "Artifacts sent to the client on a cache miss that could not be cached, such as when storage is full",
+		},
+		[]string{"ecosystem"},
+	)
+
 	IntegrityFailures = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "proxy_integrity_failures_total",
@@ -319,6 +327,7 @@ func init() {
 		UpstreamRateLimitHolds,
 		StorageOperationDuration,
 		StorageErrors,
+		ArtifactsServedUncached,
 		ActiveRequests,
 		IntegrityFailures,
 		HealthProbeFailures,
@@ -463,6 +472,14 @@ func RecordHealthProbeFailure(step string, detail FailureDetail) {
 func RecordStorageError(operation string, detail FailureDetail) {
 	StorageErrors.WithLabelValues(operation).Inc()
 	recordFailure("proxy_storage_errors_total", map[string]string{"operation": operation}, detail)
+}
+
+// RecordArtifactServedUncached counts an artifact a client got on a cache
+// miss although storing it failed, and keeps the detail for /ui/analytics.
+func RecordArtifactServedUncached(ecosystem string, detail FailureDetail) {
+	ecosystem = purl.NormalizeEcosystem(ecosystem)
+	ArtifactsServedUncached.WithLabelValues(ecosystem).Inc()
+	recordFailure("proxy_artifacts_served_uncached_total", map[string]string{"ecosystem": ecosystem}, detail)
 }
 
 // RecordScanResult tracks a completed pre-cache scan call.

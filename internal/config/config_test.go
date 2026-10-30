@@ -21,6 +21,7 @@ func upstreamConfigValues(upstream UpstreamConfig) map[string]string {
 		"cargo_download":       upstream.CargoDownload,
 		"gem":                  upstream.Gem,
 		"go":                   upstream.Go,
+		"go_vulndb":            upstream.GoVulnDB,
 		"hex":                  upstream.Hex,
 		"hex_api":              upstream.HexAPI,
 		"pub":                  upstream.Pub,
@@ -53,6 +54,7 @@ func defaultUpstreamValues() map[string]string {
 		"cargo_download":       "https://static.crates.io/crates",
 		"gem":                  "https://rubygems.org",
 		"go":                   "https://proxy.golang.org",
+		"go_vulndb":            "https://vuln.go.dev",
 		"hex":                  "https://repo.hex.pm",
 		"hex_api":              "https://hex.pm",
 		"pub":                  "https://pub.dev",
@@ -85,6 +87,7 @@ func upstreamEnvironmentVariables() map[string]string {
 		"cargo_download":       "PROXY_UPSTREAM_CARGO_DOWNLOAD",
 		"gem":                  "PROXY_UPSTREAM_GEM",
 		"go":                   "PROXY_UPSTREAM_GO",
+		"go_vulndb":            "PROXY_UPSTREAM_GO_VULNDB",
 		"hex":                  "PROXY_UPSTREAM_HEX",
 		"hex_api":              "PROXY_UPSTREAM_HEX_API",
 		"pub":                  "PROXY_UPSTREAM_PUB",
@@ -379,6 +382,7 @@ upstream:
   cargo_download: "https://upstream.example.com/cargo_download"
   gem: "https://upstream.example.com/gem"
   go: "https://upstream.example.com/go"
+  go_vulndb: "https://upstream.example.com/go_vulndb"
   hex: "https://upstream.example.com/hex"
   hex_api: "https://upstream.example.com/hex_api"
   pub: "https://upstream.example.com/pub"
@@ -2050,5 +2054,25 @@ upstream:
 	}
 	if got := cfg.Upstream.GenericPaths["github-api"]; len(got) != 1 || got[0] != "repos/*/*/releases/**" {
 		t.Errorf("generic_paths = %v", cfg.Upstream.GenericPaths)
+	}
+}
+
+func TestCooldownShortest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  *CooldownConfig
+		want time.Duration
+	}{
+		{"nil", nil, 0},
+		{"none", &CooldownConfig{Default: "0"}, 0},
+		{"default", &CooldownConfig{Default: "3d"}, 72 * time.Hour},
+		{"ecosystem", &CooldownConfig{Default: "3d", Ecosystems: map[string]string{"npm": "2d", "deb": "0"}}, 48 * time.Hour},
+		{"package", &CooldownConfig{Default: "3d", Packages: map[string]string{"pkg:npm/lodash": "6h"}}, 6 * time.Hour},
+		{"pattern", &CooldownConfig{Default: "0", PackagePatterns: map[string]string{"pkg:npm/@acme/*": "90m"}}, 90 * time.Minute},
+		{"invalid ignored", &CooldownConfig{Default: "3d", Ecosystems: map[string]string{"npm": "soon"}}, 72 * time.Hour},
+	} {
+		if got := tc.cfg.Shortest(); got != tc.want {
+			t.Errorf("%s: Shortest() = %v, want %v", tc.name, got, tc.want)
+		}
 	}
 }

@@ -104,23 +104,23 @@ func (h *SwiftHandler) handlePackageReleases(w http.ResponseWriter, r *http.Requ
 	scope, name = canonicalSwiftPackage(scope, name)
 
 	upstreamURL := h.buildUpstreamURL(scope, name, "", "", r.URL.RawQuery)
-	body, contentType, responseHeaders, err := h.fetchMetadataWithHeaders(
-		r.Context(), upstreamURL, requestAccept(r, swiftAcceptJSON),
+	doc, err := h.fetchDocument(
+		r.Context(), swiftReleasesCacheKey(scope, name, r.URL.RawQuery), upstreamURL, requestAccept(r, swiftAcceptJSON),
 	)
 	if err != nil {
 		h.writeMetadataError(w, err)
 		return
 	}
 
-	rewritten, err := h.rewriteReleaseURLs(scope, name, body)
+	rewritten, err := h.rewriteReleaseURLs(scope, name, doc.body)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to rewrite Swift release URLs", "error", err)
-		rewritten = body
+		rewritten = doc.body
 	}
-	for _, link := range responseHeaders.Values("Link") {
-		w.Header().Add("Link", h.rewriteLinkHeader(link, upstreamURL))
+	if doc.link != "" {
+		w.Header().Set("Link", h.rewriteLinkHeader(doc.link, upstreamURL))
 	}
-	writeSwiftMetadata(w, r, rewritten, contentType)
+	writeSwiftMetadata(w, r, rewritten, doc.contentType)
 }
 
 func (h *SwiftHandler) handleRelease(w http.ResponseWriter, r *http.Request) {
@@ -161,7 +161,17 @@ func (h *SwiftHandler) handleManifest(w http.ResponseWriter, r *http.Request) {
 	scope, name = canonicalSwiftPackage(scope, name)
 
 	upstreamURL := h.buildUpstreamURL(scope, name, version, "Package.swift", r.URL.RawQuery)
-	h.proxySwiftResource(w, r, upstreamURL, swiftAcceptManifest)
+	doc, err := h.fetchDocument(
+		r.Context(), swiftManifestCacheKey(scope, name, version, r.URL.RawQuery), upstreamURL, requestAccept(r, swiftAcceptManifest),
+	)
+	if err != nil {
+		h.writeMetadataError(w, err)
+		return
+	}
+	if doc.link != "" {
+		w.Header().Set("Link", h.rewriteLinkHeader(doc.link, upstreamURL))
+	}
+	writeSwiftMetadata(w, r, doc.body, doc.contentType)
 }
 
 func (h *SwiftHandler) handleIdentifiers(w http.ResponseWriter, r *http.Request) {
@@ -194,14 +204,13 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 	}
 	scope, name = canonicalSwiftPackage(scope, name)
 
-	packageName := scope + "/" + name
-	filename := fmt.Sprintf("%s-%s.zip", name, version)
-	upstreamURL := h.buildUpstreamURL(scope, name, version+".zip", "", r.URL.RawQuery)
-	packagePURL, versionPURL := packageurl.MakeCacheStrings("swift", packageName, version)
-	if packagePURL == "" || versionPURL == "" {
-		h.writeArtifactError(w, fmt.Errorf("%w: swift %q", errUnsupportedPackageIdentity, packageName))
+	key, err := swiftSourceArchiveKey(scope, name, version)
+	if err != nil {
+		h.writeArtifactError(w, err)
 		return
 	}
+	filename, packagePURL, versionPURL := key.filename, key.packagePURL, key.versionPURL
+	upstreamURL := h.buildUpstreamURL(scope, name, version+".zip", "", r.URL.RawQuery)
 	archiveInfo, infoErr := h.fetchArchiveInfo(r.Context(), scope, name, version)
 	if infoErr != nil {
 		h.writeArtifactError(w, fmt.Errorf("fetching release metadata: %w", infoErr))
@@ -215,10 +224,7 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 
 	headers := make(http.Header)
 	headers.Set("Accept", requestAccept(r, swiftAcceptArchive))
-	result, err := h.proxy.getOrFetchArtifactFromURLWithCachePURLs(
-		r.Context(), "swift", packageName, version, filename, packagePURL, versionPURL,
-		upstreamURL, headers, archiveInfo.checksum, "",
-	)
+	result, err := h.fetchSourceArchive(r.Context(), key, version, upstreamURL, headers, archiveInfo)
 	if err != nil {
 		h.writeArtifactError(w, err)
 		return
@@ -227,6 +233,32 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 	result.Artifact.MediaType = "application/zip"
 	setSwiftArchiveHeaders(w.Header(), name, version, result.Artifact.Digest.Encoded(), archiveInfo)
 	ServeArtifactRequest(w, r, result)
+}
+
+// swiftArchiveKey is the cache key a release's source archive is stored
+// under.
+type swiftArchiveKey struct {
+	packageName, filename, packagePURL, versionPURL string
+}
+
+// swiftSourceArchiveKey returns the cache key of the source archive of the
+// canonical (lowercased) scope and name at version.
+func swiftSourceArchiveKey(scope, name, version string) (swiftArchiveKey, error) {
+	key := swiftArchiveKey{packageName: scope + "/" + name, filename: fmt.Sprintf("%s-%s.zip", name, version)}
+	key.packagePURL, key.versionPURL = packageurl.MakeCacheStrings("swift", key.packageName, version)
+	if key.packagePURL == "" || key.versionPURL == "" {
+		return swiftArchiveKey{}, fmt.Errorf("%w: swift %q", errUnsupportedPackageIdentity, key.packageName)
+	}
+	return key, nil
+}
+
+// fetchSourceArchive returns the source archive under key from the cache, or
+// fetches it from upstreamURL, verified against the checksum in info.
+func (h *SwiftHandler) fetchSourceArchive(ctx context.Context, key swiftArchiveKey, version, upstreamURL string, headers http.Header, info swiftArchiveInfo) (*CacheResult, error) {
+	return h.proxy.getOrFetchArtifactFromURLWithCachePURLs(
+		ctx, "swift", key.packageName, version, key.filename, key.packagePURL, key.versionPURL,
+		upstreamURL, headers, info.checksum, "",
+	)
 }
 
 func (h *SwiftHandler) handleSourceArchiveHead(
@@ -422,56 +454,6 @@ func swiftDigestHeader(checksum string) string {
 		return ""
 	}
 	return "sha-256=" + base64.StdEncoding.EncodeToString(digest)
-}
-
-func (h *SwiftHandler) proxySwiftResource(w http.ResponseWriter, r *http.Request, upstreamURL, defaultAccept string) {
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
-	if err != nil {
-		writeSwiftProblem(w, http.StatusInternalServerError, "failed to create upstream request")
-		return
-	}
-	req.Header.Set("Accept", requestAccept(r, defaultAccept))
-	for _, name := range []string{"If-Modified-Since", "If-None-Match"} {
-		if value := r.Header.Get(name); value != "" {
-			req.Header.Set(name, value)
-		}
-	}
-
-	resp, err := h.proxy.HTTPClient.Do(req)
-	if err != nil {
-		if writeUpstreamHeld(w, err) {
-			return
-		}
-		writeSwiftProblem(w, http.StatusBadGateway, "upstream request failed")
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-
-	h.proxy.relayResponse(w, r, resp, func(dst, src http.Header) {
-		copySwiftResponseHeaders(dst, src)
-		if location := src.Get("Location"); location != "" {
-			dst.Set("Location", h.rewriteRegistryURL(location, upstreamURL))
-		}
-		for _, link := range src.Values("Link") {
-			dst.Add("Link", h.rewriteLinkHeader(link, upstreamURL))
-		}
-		if dst.Get("Content-Version") == "" {
-			dst.Set("Content-Version", swiftContentVersion)
-		}
-	})
-}
-
-func copySwiftResponseHeaders(dst, src http.Header) {
-	for _, name := range []string{
-		"Cache-Control", "Content-Disposition", "Content-Language", headerContentLength,
-		headerContentType, "Content-Version", "Digest", headerETag, headerLastModified,
-		"Retry-After", "Vary", "Warning", "X-Swift-Package-Signature",
-		"X-Swift-Package-Signature-Format",
-	} {
-		for _, value := range src.Values(name) {
-			dst.Add(name, value)
-		}
-	}
 }
 
 func (h *SwiftHandler) rewriteLinkHeader(value, upstreamRequestURL string) string {

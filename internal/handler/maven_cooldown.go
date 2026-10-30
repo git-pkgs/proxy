@@ -222,7 +222,7 @@ func (h *MavenHandler) checkCooldown(w http.ResponseWriter, r *http.Request, sou
 		http.Error(w, "failed to check cooldown", http.StatusBadGateway)
 		return true
 	}
-	if !h.proxy.Cooldown.IsAllowed("maven", mavenPackagePURL(group, artifact), published) {
+	if !h.proxy.cooldown().IsAllowed("maven", mavenPackagePURL(group, artifact), published) {
 		h.proxy.Logger.Info("cooldown: withholding maven version",
 			"group", group, "artifact", artifact, "version", version)
 		http.Error(w, errMavenCooldown+": "+canonicalVersionPURL("maven", group+":"+artifact, version), http.StatusForbidden)
@@ -277,10 +277,10 @@ func (h *MavenHandler) serveCooldownMetadata(w http.ResponseWriter, r *http.Requ
 		serveRewrittenMetadataAs(w, r, m, contentType)
 	case mavenChecksums[suffix] != nil:
 		sum := mavenChecksums[suffix]()
-		_, _ = sum.Write(m.body)
+		_, _ = sum.Write(m.content())
 		w.Header().Set(headerContentType, "text/plain")
 		_, _ = io.WriteString(w, hex.EncodeToString(sum.Sum(nil)))
-	case bytes.Equal(m.body, body):
+	case bytes.Equal(m.content(), body):
 		return false
 	default:
 		// A signature of the upstream metadata doesn't match what is served.
@@ -307,7 +307,7 @@ func (h *MavenHandler) filterMetadata(ctx context.Context, source mavenSource, a
 	packagePURL := mavenPackagePURL(group, artifact)
 	// No version can be newer than the metadata listing it.
 	if lastUpdated, err := time.Parse(mavenLastUpdatedLayout, doc.lastUpdated); err == nil &&
-		h.proxy.Cooldown.IsAllowed("maven", packagePURL, lastUpdated) {
+		h.proxy.cooldown().IsAllowed("maven", packagePURL, lastUpdated) {
 		return body, nil
 	}
 
@@ -324,7 +324,7 @@ func (h *MavenHandler) filterMetadata(ctx context.Context, source mavenSource, a
 		if published.IsZero() {
 			continue
 		}
-		if h.proxy.Cooldown.IsAllowed("maven", packagePURL, published) {
+		if h.proxy.cooldown().IsAllowed("maven", packagePURL, published) {
 			break
 		}
 		h.proxy.Logger.Info("cooldown: filtering maven version", "group", group, "artifact", artifact, "version", v)
