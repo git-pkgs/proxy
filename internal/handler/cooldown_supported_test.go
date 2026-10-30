@@ -8,16 +8,13 @@ import (
 	"testing"
 )
 
-// TestCooldownSupportedCoversHandlers checks that every ecosystem a handler
-// checks cooldown for is listed in cooldownEcosystems, so the UI shows its
-// cooldown.
 func TestCooldownSupportedCoversHandlers(t *testing.T) {
-	calls := regexp.MustCompile(`(?:IsAllowed|Evaluate)\("([a-z]+)"|withheld\(h\.proxy, "([a-z]+)"`)
+	calls := regexp.MustCompile(`(?:IsAllowed|Evaluate)\("([a-z]+)"|withheld\(h\.proxy, "([a-z]+)"|IsAllowed\((helmMetadataEcosystem)`)
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
-	found := map[string]bool{helmMetadataEcosystem: true}
+	found := map[string]bool{}
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {
 			continue
@@ -27,6 +24,10 @@ func TestCooldownSupportedCoversHandlers(t *testing.T) {
 			t.Fatal(err)
 		}
 		for _, m := range calls.FindAllStringSubmatch(string(src), -1) {
+			if m[3] != "" {
+				found[helmMetadataEcosystem] = true
+				continue
+			}
 			found[m[1]+m[2]] = true
 		}
 	}

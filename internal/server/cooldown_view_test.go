@@ -79,9 +79,6 @@ func TestCooldownViewOnlyPattern(t *testing.T) {
 	}
 }
 
-// TestCooldownViewUnsupportedEcosystem checks that ecosystems the proxy
-// applies no cooldown to get no cooldown on their package pages, and that
-// an override for one is marked on the dashboard.
 func TestCooldownViewUnsupportedEcosystem(t *testing.T) {
 	v := testCooldownView(t, config.CooldownConfig{
 		Default:    "3d",
