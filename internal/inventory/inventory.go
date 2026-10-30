@@ -7,7 +7,6 @@ import (
 	"errors"
 	"fmt"
 	"strings"
-	"unicode"
 
 	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/purl"
@@ -33,35 +32,15 @@ type Component struct {
 	PackagePURL string
 }
 
-// ecosystems maps the PURL types the proxy serves to the ecosystem name its
-// handlers store packages under.
-var ecosystems = map[string]string{
-	"alpm":     "arch",
-	"apk":      "alpine",
-	"bsd":      "freebsd",
-	"cargo":    "cargo",
-	"chef":     "chef",
-	"composer": "composer",
-	"conan":    "conan",
-	"conda":    "conda",
-	"cran":     "cran",
-	"deb":      "deb",
-	"gem":      "gem",
-	"golang":   "golang",
-	"hex":      "hex",
-	"julia":    "julia",
-	"maven":    "maven",
-	"npm":      "npm",
-	"nuget":    "nuget",
-	"pub":      "pub",
-	"pypi":     "pypi",
-	"rpm":      "rpm",
-	"swift":    "swift",
+// servedTypes are the PURL types the proxy serves packages of and the
+// inventory records.
+var servedTypes = map[string]bool{
+	"alpm": true, "apk": true, "bsd": true, "cargo": true, "chef": true,
+	"composer": true, "conan": true, "conda": true, "cran": true, "deb": true,
+	"gem": true, "golang": true, "hex": true, "julia": true, "maven": true,
+	"npm": true, "nuget": true, "pub": true, "pypi": true, "rpm": true,
+	"swift": true,
 }
-
-// distroTypes are PURL types whose namespace names the distribution
-// ("debian", "alpine"), not part of the package name the proxy stores.
-var distroTypes = map[string]bool{"alpm": true, "apk": true, "bsd": true, "deb": true, "rpm": true}
 
 // ErrUnsupportedPURL is returned for a package URL whose type the proxy
 // doesn't serve.
@@ -79,66 +58,18 @@ func FromPURL(s string) (Component, error) {
 	if err != nil {
 		return Component{}, err
 	}
-	ecosystem, ok := ecosystems[p.Type]
-	if !ok {
+	if !servedTypes[p.Type] {
 		return Component{}, fmt.Errorf("%w: %s", ErrUnsupportedPURL, p.Type)
 	}
-	name, err := handlerName(p)
-	if err != nil {
-		return Component{}, err
+	ecosystem, name := packageurl.HandlerPackage(p)
+	if ecosystem == "conda" && !strings.Contains(name, "/") {
+		return Component{}, ErrNoCondaChannel
 	}
 	packagePURL, _ := packageurl.MakeCacheStrings(ecosystem, name, "")
 	if packagePURL == "" {
 		return Component{}, fmt.Errorf("package URL %q has no valid package name", s)
 	}
 	return Component{Ecosystem: ecosystem, Name: name, Version: p.Version, PackagePURL: packagePURL}, nil
-}
-
-// handlerName returns the package name the handler for p's type stores.
-func handlerName(p *purl.PURL) (string, error) {
-	switch {
-	case distroTypes[p.Type]:
-		// The namespace is the distribution; the handlers store the bare
-		// package name.
-		return p.Name, nil
-	case p.Type == "conda" && p.Namespace == "":
-		// The conda handler stores "channel/name".
-		channel := p.Qualifier("channel")
-		if channel == "" {
-			return "", ErrNoCondaChannel
-		}
-		return channel + "/" + p.Name, nil
-	case p.Type == "nuget":
-		// The NuGet handler lowercases package IDs.
-		return strings.ToLower(p.FullName()), nil
-	case p.Type == "pypi":
-		return normalizePyPIName(p.FullName()), nil
-	}
-	return p.FullName(), nil
-}
-
-// normalizePyPIName normalizes a PyPI project name as PEP 503 does: runs of
-// "-", "_" and "." become one "-", and letters are lowercased. The PyPI
-// handler stores the name from the file name, which wheels and current sdists
-// spell with "_" for any of these, so "zope.interface" is cached as
-// "zope-interface". (An old sdist named "zope.interface-5.0.tar.gz" is
-// stored with the dot and doesn't match.)
-func normalizePyPIName(name string) string {
-	var b strings.Builder
-	b.Grow(len(name))
-	separator := false
-	for _, r := range name {
-		if r == '-' || r == '_' || r == '.' {
-			separator = true
-			continue
-		}
-		if separator && b.Len() > 0 {
-			b.WriteByte('-')
-		}
-		separator = false
-		b.WriteRune(unicode.ToLower(r))
-	}
-	return b.String()
 }
 
 // syftMainModule is the property syft sets on modules found in a Go binary,

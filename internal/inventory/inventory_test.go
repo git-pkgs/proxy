@@ -128,7 +128,7 @@ func TestFromPURLMatchesHandlerNames(t *testing.T) {
 			if err != nil {
 				t.Fatalf("FromPURL(%q): %v", tt.sbomPURL, err)
 			}
-			want, _ := packageurl.MakeCacheStrings(ecosystems[tt.purlType], tt.handlerName, "")
+			want, _ := packageurl.MakeCacheStrings(packageurl.HandlerEcosystem(tt.purlType), tt.handlerName, "")
 			if want == "" {
 				t.Fatalf("handler name %q has no package URL", tt.handlerName)
 			}
@@ -137,7 +137,7 @@ func TestFromPURLMatchesHandlerNames(t *testing.T) {
 			}
 		})
 	}
-	for purlType := range ecosystems {
+	for purlType := range servedTypes {
 		if !covered[purlType] {
 			t.Errorf("no case for PURL type %q", purlType)
 		}
