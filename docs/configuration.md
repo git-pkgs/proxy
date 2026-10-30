@@ -1589,6 +1589,14 @@ curl -X POST http://localhost:8080/api/mirror \
   -d '{"purls":["pkg:docker/library/alpine@3.20"],"platforms":["linux/amd64"]}'
 ```
 
+`latest` mirrors only the newest version of PURLs without a version, like the command's `--latest` flag:
+
+```bash
+curl -X POST http://localhost:8080/api/mirror \
+  -H "Content-Type: application/json" \
+  -d '{"purls":["pkg:npm/lodash"],"latest":true}'
+```
+
 ## Cache Delete API
 
 Deleting cached artifacts is disabled by default. Enable it to register `DELETE /api/cache` and show Delete buttons on the version page of the web UI:
@@ -1638,6 +1646,7 @@ A CRAN version is mirrored as its source package from `upstream.cran`, for examp
 | `--concurrency` | `4` | Number of parallel downloads |
 | `--dry-run` | `false` | Show what would be mirrored without downloading |
 | `--platform` | | Comma-separated `os/arch[/variant]` list limiting which platforms of container images are mirrored |
+| `--latest` | `false` | Mirror only the newest version of PURLs without a version |
 | `--config` | | Path to configuration file |
 | `--storage-url` | | Storage URL |
 | `--database-driver` | | Database driver |
@@ -1653,6 +1662,12 @@ proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
 ### Unversioned PURLs
 
 A PURL without a version, here or in a mirror API job, mirrors every version the configured upstream lists, through the same client, so `upstream.auth` and `upstream.allow_private_hosts` apply. npm packages in `upstream.npm_routes` are listed from their route. Listing works for npm, gem, golang, hex (from `upstream.hex_api`), pub, pypi, maven, nuget, composer, cran, brew and swift. For cargo and conda the upstream doesn't serve the API used for listing, so versions come from the public registry while the upstream is the default one; with another upstream, and for Composer packages in `upstream.composer_routes` or any other ecosystem, give a version. Julia versions are always listed from the General registry.
+
+With `--latest`, or `"latest": true` in a mirror API job, only the latest version is mirrored, as git-pkgs/registries picks it: the version the registry advertises as latest where it has one, such as npm's `dist-tags.latest`, and otherwise the newest by publish time, leaving out yanked, retracted and deprecated versions. PURLs with a version, including those in an SBOM, are mirrored as given. Run it from cron to keep the newest releases of a list of packages cached:
+
+```bash
+proxy mirror --latest pkg:npm/lodash pkg:pypi/requests pkg:cargo/serde
+```
 
 ### Container images
 
