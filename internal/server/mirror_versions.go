@@ -30,6 +30,7 @@ func NewMirrorVersions(upstream config.UpstreamConfig, client *http.Client) mirr
 func (s *Server) newMirror(proxy *handler.Proxy, workers int) *mirror.Mirror {
 	m := mirror.New(proxy, s.db, s.storage, s.logger, workers)
 	m.Images = s.newContainerHandler(proxy)
+	m.Bottles = handler.NewHomebrewHandler(proxy, s.cfg.Upstream.HomebrewAPI)
 	m.Charts = handler.NewHelmHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm)
 	UseMirrorUpstreams(m, s.cfg.Upstream, proxy.HTTPClient)
 	return m

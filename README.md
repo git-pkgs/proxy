@@ -261,7 +261,7 @@ export HOMEBREW_ARTIFACT_DOMAIN=http://localhost:8080
 
 The artifact domain proxies manifests and bottle blobs under `/v2/homebrew/core/`. GHCR routing is limited to that repository. Source archives, cask application downloads, custom tap artifacts, and legacy flat-file bottle mirrors use Homebrew's normal fallback URLs. Keep fallback enabled by leaving `HOMEBREW_ARTIFACT_DOMAIN_NO_FALLBACK` unset.
 
-Enable `cache_metadata` or set `PROXY_CACHE_METADATA=true` to retain Homebrew JSON API responses for offline fallback. Bottle blobs and their OCI manifests are cached without this setting.
+Enable `cache_metadata` or set `PROXY_CACHE_METADATA=true` to retain Homebrew JSON API responses for offline fallback. Bottle blobs and their OCI manifests are cached without this setting. `proxy mirror pkg:brew/<formula>` pre-fetches a formula's bottles (see [Homebrew bottles](docs/configuration.md#homebrew-bottles)).
 
 The upstreams default to `https://formulae.brew.sh/api` for the JSON API and `https://ghcr.io` for artifacts. To chain this proxy to another proxy, configure its Homebrew endpoints as the upstreams:
 
