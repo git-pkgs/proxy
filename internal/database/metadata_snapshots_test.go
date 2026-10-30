@@ -106,3 +106,55 @@ func TestMetadataSnapshots_Prune(t *testing.T) {
 		}
 	})
 }
+
+// TestMetadataSnapshots_ConcurrentPostgres records a version while another
+// replica's transaction has recorded the same one and not committed yet, as
+// two replicas can. The second must wait and then find it, so one row
+// remains. Without the lock both inserts succeed.
+func TestMetadataSnapshots_ConcurrentPostgres(t *testing.T) {
+	db := createTestPostgresDB(t)
+	if db == nil {
+		t.Skip("PROXY_DATABASE_URL not set, skipping postgres test")
+	}
+	defer func() { _ = db.Close() }()
+	const name = "v3.22/main/x86_64/APKINDEX.tar.gz"
+
+	other, err := db.Beginx()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = other.Rollback() }()
+	if _, err := other.Exec("SELECT pg_advisory_xact_lock($1)", metadataSnapshotLockKey("alpine", name)); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := other.Exec(`INSERT INTO metadata_snapshots (ecosystem, name, storage_path, content_digest, size, valid_from_ms)
+		VALUES ('alpine', $1, 'other', 'sha256:a', 1, $2)`, name, time.Now().UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+
+	done := make(chan bool, 1)
+	go func() { done <- addSnapshot(t, db, name, "sha256:a", time.Now()) }()
+	select {
+	case added := <-done:
+		t.Fatalf("recorded without waiting for the other replica (added=%v)", added)
+	case <-time.After(200 * time.Millisecond):
+	}
+	if err := other.Commit(); err != nil {
+		t.Fatal(err)
+	}
+	if added := <-done; added {
+		t.Error("recorded a version the other replica had just recorded")
+	}
+	var n int
+	if err := db.Get(&n, `SELECT COUNT(*) FROM metadata_snapshots WHERE name = $1`, name); err != nil {
+		t.Fatal(err)
+	}
+	if n != 1 {
+		t.Errorf("%d snapshot rows, want 1", n)
+	}
+
+	// Going back to an earlier digest is still recorded.
+	if !addSnapshot(t, db, name, "sha256:b", time.Now()) || !addSnapshot(t, db, name, "sha256:a", time.Now().Add(time.Millisecond)) {
+		t.Error("a change back to an earlier digest was not recorded")
+	}
+}

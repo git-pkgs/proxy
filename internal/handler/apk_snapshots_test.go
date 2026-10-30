@@ -3,6 +3,8 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -202,4 +204,62 @@ func TestAPKSnapshots_SameVersionRecordedTwice(t *testing.T) {
 	_ = body.Close()
 	day := validFrom.UTC().Format(apkSnapshotDateLayout)
 	expectAPKResponse(t, h, "/alpine@"+day+apkSnapshotIndexPath, http.StatusOK, "index v1")
+}
+
+// TestAPKSnapshots_ConcurrentReplicas records the same index version from
+// two replicas sharing a Postgres database, many times at once. One snapshot
+// row must remain, with a readable blob, and the other copies are deleted.
+func TestAPKSnapshots_ConcurrentReplicas(t *testing.T) {
+	a, b, db := sharedInstances(t)
+	u := newAPKSnapshotUpstream(t)
+	handlers := make([]*APKHandler, 0, 2)
+	for _, p := range []*Proxy{a, b} {
+		p.CacheMetadata = true
+		p.HTTPClient = http.DefaultClient
+		handlers = append(handlers, NewAPKHandler(p, "http://proxy.example", map[string]string{"alpine": u.server.URL}).
+			WithSnapshots(30*24*time.Hour))
+	}
+	expectAPKResponse(t, handlers[0], "/alpine"+apkSnapshotIndexPath, http.StatusOK, "index v1")
+
+	key := handlers[0].metadataCacheKey("alpine", u.server.URL, apkSnapshotIndexPath[1:])
+	entry, err := db.GetMetadataCache(apkEcosystem, key)
+	if err != nil || entry == nil {
+		t.Fatalf("cached index row = %v, %v", entry, err)
+	}
+	if _, err := db.Exec(`DELETE FROM metadata_snapshots`); err != nil {
+		t.Fatal(err)
+	}
+	// The request above recorded a copy of its own, which the test leaves be.
+	store := a.Storage.(*mockStorage)
+	store.mu.Lock()
+	before := map[string]bool{}
+	for path := range store.files {
+		before[path] = true
+	}
+	store.mu.Unlock()
+
+	validFrom := time.Now()
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Go(func() { handlers[i%2].storeSnapshot(t.Context(), key, entry, validFrom) })
+	}
+	wg.Wait()
+
+	if n := snapshotCount(t, db); n != 1 {
+		t.Fatalf("%d snapshots recorded, want 1", n)
+	}
+	snap, err := db.LatestMetadataSnapshot(apkEcosystem, key)
+	if err != nil || snap == nil {
+		t.Fatalf("latest snapshot = %v, %v", snap, err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if got := string(store.files[snap.StoragePath]); got != "index v1" {
+		t.Errorf("snapshot blob = %q, want the index", got)
+	}
+	for path := range store.files {
+		if strings.HasPrefix(path, "_snapshots/") && path != snap.StoragePath && !before[path] {
+			t.Errorf("copy %s of a snapshot that wasn't recorded is left in storage", path)
+		}
+	}
 }

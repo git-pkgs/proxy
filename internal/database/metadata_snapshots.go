@@ -62,11 +62,25 @@ func (db *DB) metadataSnapshotBefore(ecosystem, name string, beforeMS int64) (*M
 
 // AddMetadataSnapshot records snap as the current version of its document,
 // unless the newest snapshot already has its digest, and reports whether it
-// did. The check and the insert are one statement, so concurrent callers
-// recording the same document add it once. The casts let Postgres type the
-// parameters of the INSERT ... SELECT.
+// did. On Postgres, replicas recording the same document take an advisory
+// lock on it first, so their check and insert don't interleave: without it,
+// two transactions can both read the previous digest and both insert. SQLite
+// runs one write at a time, so the single statement is enough there. A
+// document going back to an earlier digest is recorded again, since only the
+// newest snapshot is compared. The casts let Postgres type the parameters of
+// the INSERT ... SELECT.
 func (db *DB) AddMetadataSnapshot(snap *MetadataSnapshot) (bool, error) {
-	res, err := db.Exec(db.Rebind(`
+	tx, err := db.Beginx()
+	if err != nil {
+		return false, fmt.Errorf("recording metadata snapshot: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	if db.dialect == DialectPostgres {
+		if _, err := tx.Exec("SELECT pg_advisory_xact_lock($1)", metadataSnapshotLockKey(snap.Ecosystem, snap.Name)); err != nil {
+			return false, fmt.Errorf("locking metadata snapshots: %w", err)
+		}
+	}
+	res, err := tx.Exec(db.Rebind(`
 		INSERT INTO metadata_snapshots (ecosystem, name, storage_path, content_type, content_encoding,
 		                                content_digest, size, valid_from_ms)
 		SELECT CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT), CAST(? AS TEXT),
@@ -84,7 +98,19 @@ func (db *DB) AddMetadataSnapshot(snap *MetadataSnapshot) (bool, error) {
 		return false, fmt.Errorf("recording metadata snapshot: %w", err)
 	}
 	n, err := res.RowsAffected()
-	return n > 0, err
+	if err != nil {
+		return false, err
+	}
+	if err := tx.Commit(); err != nil {
+		return false, fmt.Errorf("recording metadata snapshot: %w", err)
+	}
+	return n > 0, nil
+}
+
+// metadataSnapshotLockKey is the advisory lock AddMetadataSnapshot takes for
+// a document.
+func metadataSnapshotLockKey(ecosystem, name string) int64 {
+	return lockKey("metadata-snapshot:" + ecosystem + "\x00" + name)
 }
 
 // PruneMetadataSnapshots deletes the snapshots of ecosystem that stopped
