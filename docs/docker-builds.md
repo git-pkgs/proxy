@@ -53,7 +53,7 @@ unchanged dependency set can reuse Docker's installation layer:
 ```dockerfile
 ARG PROXY_URL
 COPY package.json package-lock.json ./
-RUN npm ci --registry="${PROXY_URL}/npm/"
+RUN npm ci --no-audit --no-fund --registry="${PROXY_URL:?PROXY_URL build arg required}/npm/"
 COPY . .
 ```
 
@@ -68,8 +68,8 @@ docker build \
 Keep `node_modules` out of the build context so `COPY . .` does not overwrite
 the installed dependencies. Lockfiles with custom registry or download URLs
 may still direct requests to those hosts; check proxy's access log when using
-private registries or non-registry dependencies. npm audit requests are forwarded
-upstream even when the package archives are cached.
+private registries or non-registry dependencies. `--no-audit` skips the audit
+request, which proxy would otherwise forward upstream.
 
 ## Ruby / Bundler
 
@@ -80,21 +80,24 @@ native extensions before this step:
 ```dockerfile
 ARG PROXY_URL
 COPY Gemfile Gemfile.lock ./
-RUN bundle config set --local mirror.https://rubygems.org "${PROXY_URL}/gem" \
+RUN bundle config set --local mirror.https://rubygems.org "${PROXY_URL:?PROXY_URL build arg required}/gem" \
     && bundle install \
     && bundle config unset --local mirror.https://rubygems.org
 COPY . .
 ```
 
 Use the same build command as the npm example. The mirror setting is removed
-after installation so it is not retained in the image. Exclude host Bundler
+after installation so it is not retained in the image, but the URL still
+appears in `docker history` because Docker records the build args used by `RUN`
+lines. Keep credentials out of `PROXY_URL`. Exclude host Bundler
 configuration and installed gems from the build context. Copy any local path
 dependencies required by the Gemfile before `bundle install`.
 
 The RubyGems mirror covers gems fetched from that source. Git dependencies and
-other gem sources need their own configuration. Bundler can fall back to the
-original source when a mirror is unavailable; this setup does not enforce
-network isolation.
+other gem sources need their own configuration. Without
+`mirror.https://rubygems.org.fallback_timeout`, `bundle install` fails if proxy
+is unreachable. Setting it lets Bundler fall back to rubygems.org, so this setup
+does not enforce network isolation either way.
 
 ## Layer caches and package caches
 
@@ -105,7 +108,7 @@ be rebuilt. For example, the npm step can use:
 
 ```dockerfile
 RUN --mount=type=cache,target=/root/.npm \
-    npm ci --registry="${PROXY_URL}/npm/"
+    npm ci --no-audit --no-fund --registry="${PROXY_URL:?PROXY_URL build arg required}/npm/"
 ```
 
 Cache mounts are stored by the builder and are excluded from ordinary
@@ -118,7 +121,7 @@ To check the configuration, enable proxy's JSONL log with `-access-log` and
 rebuild with `docker build --no-cache`. Look for requests to `/npm/` or `/gem/`,
 then repeat and check `proxy_cache_hits_total` on `/metrics`. Cache mounts still
 retain their contents with `--no-cache`; omit them when testing proxy cache
-hits. Upstream metadata revalidation and audit requests can still occur.
+hits. Upstream metadata revalidation can still occur.
 
 ## Base-image pulls
 
