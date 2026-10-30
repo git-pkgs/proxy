@@ -48,6 +48,8 @@ type Mirror struct {
 	// RefusePackages, when set, fails every item Images does not take with
 	// this reason instead of fetching it, so nothing is cached.
 	RefusePackages string
+
+	cran cranIndex
 }
 
 // New creates a new Mirror with the given dependencies.
@@ -262,6 +264,10 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 	}
 	if pv.Ecosystem == "swift" {
 		m.mirrorSwift(ctx, pv, tracker)
+		return
+	}
+	if pv.Ecosystem == "cran" {
+		m.mirrorCRAN(ctx, pv, tracker)
 		return
 	}
 	result, err := m.proxy.GetOrFetchArtifact(ctx, pv.Ecosystem, pv.Name, pv.Version, "")
