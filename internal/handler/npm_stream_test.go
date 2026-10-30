@@ -50,24 +50,38 @@ func bigPackumentAt(base string, n int) string {
 type streamUpstream struct {
 	*httptest.Server
 	body     atomic.Value // string
+	etag     atomic.Value // string
 	fail     atomic.Bool
+	gone     atomic.Bool
 	requests atomic.Int32
+	// sent counts the responses that carried the document.
+	sent atomic.Int32
+}
+
+// replace makes upstream send body under a new ETag, so a revalidation
+// gets it in a 200.
+func (u *streamUpstream) replace(body, etag string) {
+	u.body.Store(body)
+	u.etag.Store(etag)
 }
 
 func newStreamUpstream(t *testing.T, body string) *streamUpstream {
 	t.Helper()
 	u := &streamUpstream{}
-	u.body.Store(body)
+	u.replace(body, `"v1"`)
 	u.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u.requests.Add(1)
 		switch {
 		case u.fail.Load():
 			http.Error(w, "down", http.StatusBadGateway)
-		case r.URL.Path == "/big" && r.Header.Get("If-None-Match") == `"v1"`:
+		case u.gone.Load():
+			http.NotFound(w, r)
+		case r.URL.Path == "/big" && r.Header.Get("If-None-Match") == u.etag.Load().(string):
 			w.WriteHeader(http.StatusNotModified)
 		case r.URL.Path == "/big":
+			u.sent.Add(1)
 			w.Header().Set("Content-Type", "application/json")
-			w.Header().Set("ETag", `"v1"`)
+			w.Header().Set("ETag", u.etag.Load().(string))
 			_, _ = io.WriteString(w, u.body.Load().(string))
 		default:
 			http.NotFound(w, r)
@@ -201,6 +215,53 @@ func TestNPMStreamedPackumentStale(t *testing.T) {
 	}
 }
 
+// TestNPMStreamedPackumentStaleOn404 checks that a stored copy past its TTL
+// is served when upstream answers 404, as the in-memory path does.
+func TestNPMStreamedPackumentStaleOn404(t *testing.T) {
+	u := newStreamUpstream(t, bigPackument(10))
+	proxy, _, handler := streamProxy(t, u)
+	decodeStreamed(t, serve(handler, "/big", nil))
+
+	proxy.MetadataTTL = time.Nanosecond
+	u.gone.Store(true)
+	for _, size := range []int64{64 << 20, 0} { // streamed, then in memory
+		proxy.SetMetadataRewriteCacheSize(size)
+		if doc := decodeStreamed(t, serve(handler, "/big", nil)); len(doc.Versions) != 10 {
+			t.Errorf("rewrite cache %d: stale copy has %d versions, want 10", size, len(doc.Versions))
+		}
+	}
+}
+
+// TestNPMStreamedPackumentBlobMissing checks that a 304 for a row whose
+// document is gone from storage fetches the document again, also when it is
+// larger than metadata_max_size.
+func TestNPMStreamedPackumentBlobMissing(t *testing.T) {
+	body := bigPackument(400)
+	u := newStreamUpstream(t, body)
+	proxy, store, handler := streamProxy(t, u)
+	proxy.MetadataMaxSize = int64(len(body) / 4)
+	decodeStreamed(t, serve(handler, "/big", nil))
+
+	path := metadataStoragePath("npm", "big")
+	store.mu.Lock()
+	delete(store.files, path)
+	store.mu.Unlock()
+	proxy.MetadataTTL = time.Nanosecond
+	proxy.SetMetadataRewriteCacheSize(64 << 20)
+
+	if doc := decodeStreamed(t, serve(handler, "/big", nil)); len(doc.Versions) != 400 {
+		t.Errorf("served %d versions, want 400", len(doc.Versions))
+	}
+	if n := u.sent.Load(); n != 2 {
+		t.Errorf("upstream sent the document %d times, want 2", n)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if string(store.files[path]) != body {
+		t.Error("the document was not stored again")
+	}
+}
+
 // TestNPMStreamedPackumentChangedInStorage checks that a document replaced
 // in storage between the two passes isn't rewritten from mixed bytes.
 func TestNPMStreamedPackumentChangedInStorage(t *testing.T) {
@@ -262,9 +323,12 @@ func TestNPMStreamedPackumentKeepsFullCopy(t *testing.T) {
 
 	proxy.MetadataTTL = time.Nanosecond
 	proxy.SetMetadataRewriteCacheSize(64 << 20)
-	u.body.Store(`{"name":"big","modified":"2026-01-01T00:00:00Z","dist-tags":{"latest":"1.0.0"},"versions":{"1.0.0":{}}}`)
+	u.replace(`{"name":"big","modified":"2026-01-01T00:00:00Z","dist-tags":{"latest":"1.0.0"},"versions":{"1.0.0":{}}}`, `"v2"`)
 	if doc := decodeStreamed(t, serve(handler, "/big", nil)); len(doc.Versions) != 10 {
 		t.Errorf("served %d versions, want the 10 of the full copy", len(doc.Versions))
+	}
+	if n := u.sent.Load(); n != 2 {
+		t.Fatalf("upstream sent a document %d times, want 2: the abbreviated one was not fetched", n)
 	}
 
 	store.mu.Lock()

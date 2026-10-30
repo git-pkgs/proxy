@@ -122,7 +122,9 @@ func (p *Proxy) fetchStoredMetadata(ctx context.Context, ecosystem, cacheKey, up
 	if err == nil {
 		return metadataResult{entry: stored}
 	}
-	if !usableStoredMetadata(entry) || errors.Is(err, ErrUpstreamNotFound) || errors.Is(err, errMetadataNotStored) {
+	// As in fetchMetadataFromUpstream, any upstream failure, a 404 included,
+	// falls back to the stored copy.
+	if !usableStoredMetadata(entry) || errors.Is(err, errMetadataNotStored) {
 		return metadataResult{err: err}
 	}
 	return p.staleStoredMetadata(ecosystem, cacheKey, entry, err)
@@ -142,8 +144,8 @@ func (p *Proxy) staleStoredMetadata(ecosystem, cacheKey string, entry *database.
 
 // storeUpstreamMetadata fetches a document and streams it into storage, and
 // returns its new cache row. On a 304 for entry it only moves the row's
-// fetched_at on; errStale304 means the row was replaced meanwhile and the
-// caller should fetch without validators.
+// fetched_at on; errStale304 means the stored copy is gone or the row was
+// replaced meanwhile, and the caller should fetch without validators.
 //
 // With validate, the document is staged under a path of its own and checked
 // there first, so one validate rejects never replaces the stored copy.
@@ -155,6 +157,9 @@ func (p *Proxy) storeUpstreamMetadata(ctx context.Context, ecosystem, cacheKey, 
 	defer func() { _ = resp.Body.Close() }()
 
 	if resp.StatusCode == http.StatusNotModified && entry != nil {
+		if ok, err := p.Storage.Exists(ctx, entry.StoragePath); err != nil || !ok {
+			return nil, errStale304
+		}
 		refreshed, err := p.DB.RefreshMetadataCache(ecosystem, cacheKey, entry.ContentDigest.String, time.Now())
 		if err != nil || !refreshed {
 			return nil, errStale304
