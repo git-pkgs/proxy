@@ -8,6 +8,7 @@ import (
 	"slices"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/denylist"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/retention"
@@ -102,18 +103,19 @@ func resolveRetentionSources(ctx context.Context, logger *slog.Logger, resolvers
 	}
 }
 
-// configureDenylist builds the proxy's denylist, resolving Swift source
-// repositories through the upstream first. It is called once the proxy can
-// fetch metadata.
-func (s *Server) configureDenylist(proxy *handler.Proxy) error {
-	entries := s.cfg.Denylist.Packages
+// ConfigureDenylist sets proxy's denylist from cfg, resolving Swift source
+// repositories through the upstream first. serve and proxy mirror call it
+// once proxy can fetch metadata. An entry that can't be resolved is an
+// error, so neither starts with a denylist that lets its versions through.
+func ConfigureDenylist(cfg *config.Config, proxy *handler.Proxy) error {
+	entries := cfg.Denylist.Packages
 	// Report a malformed entry before asking the upstream about any.
 	if _, err := denylist.New(entries); err != nil {
 		return fmt.Errorf("configuring denylist: %w", err)
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), sourceResolveTimeout)
 	defer cancel()
-	entries, err := resolveDenylistSources(ctx, handler.NewSwiftHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Swift), entries)
+	entries, err := resolveDenylistSources(ctx, handler.NewSwiftHandler(proxy, cfg.BaseURL, cfg.Upstream.Swift), entries)
 	if err != nil {
 		return fmt.Errorf("configuring denylist: %w", err)
 	}

@@ -1185,8 +1185,8 @@ Names and versions are compared the way each ecosystem treats them:
   `pkg:generic/swift-registry/apple.swift-nio@2.62.0`, works too, and so does
   the source repository, as SBOM tools and GHSA advisories write it:
   `pkg:swift/github.com/apple/swift-nio@2.62.0`. The proxy looks a source
-  repository up through `upstream.swift`'s `/identifiers` at startup and
-  refuses to start when it can't be resolved.
+  repository up through `upstream.swift`'s `/identifiers` when `serve` or
+  `proxy mirror` starts, and neither runs when one can't be resolved.
 - An OCI entry names the repository as it is pulled through the proxy and a
   digest or tag: `pkg:oci/library/alpine@sha256:<digest>` refuses the blob or
   manifest with that digest, including a manifest a tag resolves to, and

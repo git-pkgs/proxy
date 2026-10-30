@@ -276,7 +276,7 @@ func (s *Server) serve(listener net.Listener) error {
 	proxy.DirectServeTTL = s.cfg.ParseDirectServeTTL()
 	proxy.DirectServeBaseURL = s.cfg.Storage.DirectServeBaseURL
 	proxy.StreamArtifacts = !s.cfg.Storage.CacheArtifacts
-	if err := s.configureDenylist(proxy); err != nil {
+	if err := ConfigureDenylist(s.cfg, proxy); err != nil {
 		return err
 	}
 
