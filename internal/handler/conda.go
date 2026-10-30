@@ -493,7 +493,7 @@ func (f *repodataFilter) inCooldown(filename string, raw []byte) bool {
 		return false
 	}
 	publishedAt := time.Unix(int64(entry.Timestamp)/condaTimestampDivisor, 0)
-	decision := f.h.proxy.Cooldown.Evaluate("conda", canonicalPackagePURL("conda", entry.Name), publishedAt, f.now)
+	decision := f.h.proxy.cooldown().Evaluate("conda", canonicalPackagePURL("conda", entry.Name), publishedAt, f.now)
 	if decision.Allowed {
 		return false
 	}
@@ -517,7 +517,7 @@ func (h *CondaHandler) recordInCooldown(filename, name, version string, timestam
 		return false
 	}
 	publishedAt := time.Unix(int64(timestamp)/condaTimestampDivisor, 0)
-	if h.proxy.Cooldown.IsAllowed("conda", canonicalPackagePURL("conda", name), publishedAt) {
+	if h.proxy.cooldown().IsAllowed("conda", canonicalPackagePURL("conda", name), publishedAt) {
 		return false
 	}
 	h.proxy.Logger.Info("cooldown: filtering conda package",
