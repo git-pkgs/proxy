@@ -1674,7 +1674,6 @@ proxy mirror --platform linux/arm64 pkg:brew/hello@2.12.3 pkg:brew/openssl%403
 ```
 
 - A formula name with `@` is written with `%40`, since `@` starts the version: `pkg:brew/openssl%403` is `openssl@3`, and `pkg:brew/openssl@3` is version 3 of `openssl`.
-
 - The formula's JSON API on `upstream.homebrew_api` gives the image tag for the current version, which carries the formula's revision and the bottles' rebuild (`hello` 2.12.3 is tagged `2.12.3-1`). Only the current version is described there; another version is used as the tag as given, so give the full tag, such as `2.12.2` or `2.12.3-1`, for older bottles.
 - A PURL without a version mirrors the current version.
 - `--platform` selects bottles like image platforms: `linux/arm64`, `linux/amd64`, or `darwin/arm64` for every macOS release's arm64 bottle. Without it every bottle of the version is mirrored.

@@ -35,13 +35,9 @@ type homebrewFormula struct {
 	} `json:"bottle"`
 }
 
-// BottleImage returns the image Homebrew publishes the bottles of a
-// homebrew/core formula version under, as brew pulls them through
-// HOMEBREW_ARTIFACT_DOMAIN: openssl@3 is homebrew/core/openssl/3, and the tag
-// carries the formula's revision and the bottles' rebuild, so hello 2.12.3
-// with rebuild 1 is tagged 2.12.3-1. Only the current version is described by
-// the JSON API; any other version is used as the tag as given, which also
-// takes a tag such as 2.12.3-1 directly.
+// BottleImage returns the homebrew/core image and tag for a formula version.
+// Only the current version gets its revision and rebuild from the JSON API;
+// any other version is used as the tag as given.
 func (h *HomebrewHandler) BottleImage(ctx context.Context, formula, version string) (ImageRef, error) {
 	if !homebrewFormulaPattern.MatchString(formula) {
 		return ImageRef{}, fmt.Errorf("invalid Homebrew formula name %q", formula)
