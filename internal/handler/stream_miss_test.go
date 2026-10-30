@@ -536,10 +536,26 @@ func TestCacheMissSlowClientFailsWithoutStoredCopy(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	defer func() { _ = res.Reader.Close() }()
+
+	// Leave the stream unread until the fetch ends so the feed must overflow.
+	proxy.fetchMu.Lock()
+	var done <-chan struct{}
+	for _, f := range proxy.inFlight {
+		done = f.done
+	}
+	proxy.fetchMu.Unlock()
+	if done != nil {
+		select {
+		case <-done:
+		case <-time.After(5 * time.Second):
+			t.Fatal("fetch did not finish while the client was idle")
+		}
+	}
+
 	body, err := io.ReadAll(res.Reader)
-	_ = res.Reader.Close()
-	if err == nil {
-		t.Fatalf("read %d bytes without error; want the response to fail", len(body))
+	if !errors.Is(err, store.storeErr) {
+		t.Fatalf("read %d bytes with error %v; want %v", len(body), err, store.storeErr)
 	}
 }
 

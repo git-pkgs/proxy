@@ -173,9 +173,10 @@ func TestRewrittenMetadataGzipOnlyFromRewriteCache(t *testing.T) {
 	}
 }
 
-// TestRewriteCache_KeepsGzipCopyOnlyWhenSmaller checks that the cache keeps a
-// compressed copy of a rewrite, counted against its size, unless compressing
-// does not make the rewrite smaller.
+// TestRewriteCache_KeepsGzipCopyOnlyWhenSmaller checks that the cache keeps
+// only a compressed copy of a rewrite, counted against its size, unless
+// compressing does not make the rewrite smaller, and that the plain document
+// is still there for callers that need it.
 func TestRewriteCache_KeepsGzipCopyOnlyWhenSmaller(t *testing.T) {
 	c := newRewriteCache(1 << 20)
 	identity := func(b []byte) ([]byte, error) { return b, nil }
@@ -192,11 +193,17 @@ func TestRewriteCache_KeepsGzipCopyOnlyWhenSmaller(t *testing.T) {
 	if !ok || m.gzipped == nil {
 		t.Fatalf("large rewrite: cached %v, gzip copy %d bytes; want a gzip copy", ok, len(m.gzipped))
 	}
-	if c.size != int64(len(large)+len(m.gzipped)+3) {
-		t.Errorf("cache size = %d, want both rewrites and the gzip copy (%d)", c.size, len(large)+len(m.gzipped)+3)
+	if m.plain != nil {
+		t.Errorf("large rewrite: cached %d plain bytes besides the gzip copy, want none", len(m.plain))
 	}
-	if small, ok := c.get(rewriteCacheKey("npm", "http://proxy", "abc", []byte("abc"))); !ok || small.gzipped != nil {
-		t.Errorf("small rewrite: cached %v, gzip copy %d bytes; want none", ok, len(small.gzipped))
+	if c.size != int64(len(m.gzipped)+3) {
+		t.Errorf("cache size = %d, want the gzip copy and the small rewrite (%d)", c.size, len(m.gzipped)+3)
+	}
+	if !bytes.Equal(m.content(), large) || m.size != len(large) {
+		t.Errorf("large rewrite content = %d bytes, size %d; want the %d bytes rewritten", len(m.content()), m.size, len(large))
+	}
+	if small, ok := c.get(rewriteCacheKey("npm", "http://proxy", "abc", []byte("abc"))); !ok || small.gzipped != nil || string(small.content()) != "abc" {
+		t.Errorf("small rewrite: cached %v, gzip copy %d bytes, content %q; want abc uncompressed", ok, len(small.gzipped), small.content())
 	}
 }
 

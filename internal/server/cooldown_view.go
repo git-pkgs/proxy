@@ -7,6 +7,7 @@ import (
 
 	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/packageurl"
 )
 
@@ -21,10 +22,12 @@ type CooldownSummary struct {
 	PackagePatterns  int
 }
 
-// CooldownOverride is one ecosystem's cooldown.
+// CooldownOverride is one ecosystem's cooldown. Unsupported marks an
+// ecosystem the proxy applies no cooldown to, so the setting has no effect.
 type CooldownOverride struct {
-	Ecosystem string
-	Duration  string
+	Ecosystem   string
+	Duration    string
+	Unsupported bool
 }
 
 // PackageCooldown is the cooldown that applies to one package, and the kind
@@ -73,15 +76,20 @@ func (v *cooldownView) summary() CooldownSummary {
 		PackagePatterns:  len(v.cfg.PackagePatterns),
 	}
 	for eco, d := range v.cfg.Ecosystems {
-		s.Ecosystems = append(s.Ecosystems, CooldownOverride{Ecosystem: eco, Duration: formatConfigDuration(d)})
+		s.Ecosystems = append(s.Ecosystems, CooldownOverride{
+			Ecosystem:   eco,
+			Duration:    formatConfigDuration(d),
+			Unsupported: !handler.CooldownSupported(eco),
+		})
 	}
 	sort.Slice(s.Ecosystems, func(i, j int) bool { return s.Ecosystems[i].Ecosystem < s.Ecosystems[j].Ecosystem })
 	return s
 }
 
-// forPackage returns the cooldown for a package, or nil with cooldown off.
+// forPackage returns the cooldown for a package, or nil with cooldown off or
+// for an ecosystem the proxy applies no cooldown to.
 func (v *cooldownView) forPackage(ecosystem, name string) *PackageCooldown {
-	if !v.enabled() {
+	if !v.enabled() || !handler.CooldownSupported(ecosystem) {
 		return nil
 	}
 	purl := packageurl.MakeString(ecosystem, name, "")
