@@ -1,8 +1,12 @@
-name: Monthly patch release
+name: Monthly release
 
-# Cuts a patch release on the 1st of each month when main is green and
-# something has merged since the last release. Scheduled runs only report
-# what they would do until the repository variable MONTHLY_RELEASE is "true".
+# Cuts a release on the 1st of each month when main is green and something
+# has merged since the last release: a patch release, or a new minor version
+# if a pull request labelled "breaking" was merged (a new major version from
+# 1.0 on). A breaking release is created as a draft, and its images and chart
+# are published only when someone publishes the draft, after writing the
+# upgrade notes. Scheduled runs only report what they would do until the
+# repository variable MONTHLY_RELEASE is "true".
 
 on:
   schedule:
@@ -56,6 +60,14 @@ jobs:
 
           sha=$(git rev-parse HEAD)
           last=$(git describe --tags --abbrev=0 --match 'v[0-9]*.[0-9]*.[0-9]*' --exclude '*-*')
+          # A breaking release waits as a draft for its upgrade notes. Building
+          # on its tag would publish those changes without them. Older tags
+          # were released by hand and may have no release at all.
+          draft=$(gh release view "$last" -R "$REPO" --json isDraft --jq .isDraft 2>/dev/null || echo false)
+          if [ "$draft" = true ]; then
+            echo "::warning::$last is still a draft, publish it first"
+            exit 0
+          fi
           merged=$(git rev-list --count "$last..$sha")
           if [ "$merged" -eq 0 ]; then
             echo "Nothing merged since $last"
@@ -76,18 +88,24 @@ jobs:
           fi
 
           since=$(git log -1 --format=%cI "$last")
-          breaking=$(gh pr list -R "$REPO" --state merged --base main \
+          breaking=$(gh pr list -R "$REPO" --state merged --base main --limit 1000 \
             --search "merged:>$since label:breaking" --json number --jq '.[].number')
-          if [ -n "$breaking" ]; then
-            echo "::warning::breaking changes merged since $last (#$(echo "$breaking" | paste -sd, - | sed 's/,/, #/g')), release a new minor version by hand"
-            exit 0
-          fi
 
           IFS=. read -r major minor patch <<<"${last#v}"
-          tag="v$major.$minor.$((patch + 1))"
+          if [ -z "$breaking" ]; then
+            tag="v$major.$minor.$((patch + 1))"
+          else
+            echo "Breaking changes merged since $last: #$(echo "$breaking" | sort -n | paste -sd, - | sed 's/,/, #/g')"
+            if [ "$major" -eq 0 ]; then
+              tag="v0.$((minor + 1)).0"
+            else
+              tag="v$((major + 1)).0.0"
+            fi
+          fi
           echo "$merged commits since $last, next release $tag at $sha"
           echo "tag=$tag" >> "$GITHUB_OUTPUT"
           echo "sha=$sha" >> "$GITHUB_OUTPUT"
+          echo "draft=$([ -n "$breaking" ] && echo true || echo false)" >> "$GITHUB_OUTPUT"
 
       # A tag pushed with GITHUB_TOKEN doesn't start other workflows, so the
       # release workflows are dispatched on the new tag instead.
@@ -97,13 +115,23 @@ jobs:
           TAG: ${{ steps.plan.outputs.tag }}
           SHA: ${{ steps.plan.outputs.sha }}
           DRY_RUN: ${{ steps.plan.outputs.dry_run }}
+          DRAFT: ${{ steps.plan.outputs.draft }}
         run: |
           set -euo pipefail
+          if [ "$DRAFT" = true ]; then
+            what="start release.yml for a draft release"
+          else
+            what="start release.yml and publish.yml"
+          fi
           if [ "$DRY_RUN" = true ]; then
-            echo "Dry run: would tag $TAG at $SHA and start release.yml and publish.yml"
+            echo "Dry run: would tag $TAG at $SHA and $what"
             exit 0
           fi
           gh api "repos/$REPO/git/refs" -f ref="refs/tags/$TAG" -f sha="$SHA" >/dev/null
-          gh workflow run release.yml -R "$REPO" --ref "$TAG"
-          gh workflow run publish.yml -R "$REPO" --ref "$TAG"
+          gh workflow run release.yml -R "$REPO" --ref "$TAG" -f draft="$DRAFT"
+          if [ "$DRAFT" = true ]; then
+            echo "::notice::$TAG is a draft release: add the upgrade notes and publish it to push the images and chart"
+          else
+            gh workflow run publish.yml -R "$REPO" --ref "$TAG"
+          fi
           echo "Tagged $TAG at $SHA"

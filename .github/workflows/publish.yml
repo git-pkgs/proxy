@@ -5,6 +5,10 @@ on:
   push:
     tags:
       - "v*"
+  # A draft release made by monthly-release.yml is published by hand. Releases
+  # published with GITHUB_TOKEN don't start this.
+  release:
+    types: [published]
 
 permissions: {}
 

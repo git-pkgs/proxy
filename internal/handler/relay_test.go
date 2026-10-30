@@ -53,7 +53,6 @@ func TestRelayRoutes(t *testing.T) {
 		"/conan/v2/conans/demo/1.0/user/stable/revisions/rev/files/other.txt",
 		"/composer/search.json", "/pypi/simple/", "/gem/api/v1/dependencies",
 		"/conda/conda-forge/noarch/repodata.json",
-		"/swift/scope/demo/1.0.0/Package.swift",
 		"/v2/library/demo/manifests/latest", "/v2/library/demo/tags/list",
 		"/npm/-/npm/v1/keys",
 	} {

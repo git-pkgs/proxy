@@ -1401,3 +1401,31 @@ func TestNPMPingRelaysUpstream(t *testing.T) {
 		t.Errorf("upstream request = %q?%q, want /-/ping?write=true", gotPath, gotQuery)
 	}
 }
+
+// TestNPMHeadPackument checks that packuments answer HEAD, which pnpm 12
+// sends before fetching each one, while tarballs and registry endpoints
+// still only answer GET.
+func TestNPMHeadPackument(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/testpkg" {
+			w.WriteHeader(http.StatusNotFound)
+			return
+		}
+		w.Header().Set("Content-Type", "application/json")
+		_, _ = w.Write([]byte(`{"name":"testpkg","versions":{"1.0.0":{"name":"testpkg","version":"1.0.0","dist":{"tarball":"https://registry.npmjs.org/testpkg/-/testpkg-1.0.0.tgz"}}}}`))
+	}))
+	defer upstream.Close()
+	h := &NPMHandler{proxy: testProxy(), upstreamURL: upstream.URL, proxyURL: "http://proxy.local"}
+
+	get := serveNPM(t, h, http.MethodGet, "/testpkg", nil, nil)
+	head := serveNPM(t, h, http.MethodHead, "/testpkg", nil, nil)
+	if head.Code != http.StatusOK || head.Header().Get("ETag") == "" || head.Header().Get("ETag") != get.Header().Get("ETag") {
+		t.Errorf("HEAD /testpkg = %d, ETag %q; want 200 with GET's ETag %q", head.Code, head.Header().Get("ETag"), get.Header().Get("ETag"))
+	}
+
+	for _, path := range []string{"/testpkg/-/testpkg-1.0.0.tgz", "/-/ping", "/-/v1/search", "/-/package/testpkg/dist-tags"} {
+		if w := serveNPM(t, h, http.MethodHead, path, nil, nil); w.Code != http.StatusMethodNotAllowed {
+			t.Errorf("HEAD %s = %d, want %d", path, w.Code, http.StatusMethodNotAllowed)
+		}
+	}
+}

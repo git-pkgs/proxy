@@ -277,10 +277,10 @@ func (h *MavenHandler) serveCooldownMetadata(w http.ResponseWriter, r *http.Requ
 		serveRewrittenMetadataAs(w, r, m, contentType)
 	case mavenChecksums[suffix] != nil:
 		sum := mavenChecksums[suffix]()
-		_, _ = sum.Write(m.body)
+		_, _ = sum.Write(m.content())
 		w.Header().Set(headerContentType, "text/plain")
 		_, _ = io.WriteString(w, hex.EncodeToString(sum.Sum(nil)))
-	case bytes.Equal(m.body, body):
+	case bytes.Equal(m.content(), body):
 		return false
 	default:
 		// A signature of the upstream metadata doesn't match what is served.

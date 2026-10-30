@@ -37,6 +37,7 @@ type GoHandler struct {
 	sumDBs       map[string]string
 	sumDBOffline bool
 	sumDBProbes  goSumDBProbes
+	vulnDBURL    string
 }
 
 // NewGoHandler creates a new Go module proxy handler.
@@ -46,6 +47,7 @@ func NewGoHandler(proxy *Proxy, proxyURL string) *GoHandler {
 		upstreamURL: goUpstream,
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 		sumDBs:      map[string]string{defaultGoSumDBName: defaultGoSumDBURL},
+		vulnDBURL:   defaultGoVulnDBURL,
 	}
 }
 
@@ -60,7 +62,9 @@ func NewGoHandlerWithUpstream(proxy *Proxy, proxyURL, upstreamURL string) *GoHan
 func (h *GoHandler) Routes() http.Handler {
 	// Go module paths can contain slashes, so just use the handler directly
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Method != http.MethodGet {
+		// govulncheck sends HEAD for index/modules.json.gz to check that a
+		// -db other than vuln.go.dev is a vulnerability database.
+		if r.Method != http.MethodGet && (r.Method != http.MethodHead || !strings.HasPrefix(r.URL.Path, "/vulndb/")) {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
@@ -75,6 +79,14 @@ func (h *GoHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 	// Checksum database requests go to the database, not the module upstream
 	if rest, ok := strings.CutPrefix(path, "sumdb/"); ok {
 		h.handleSumDB(w, r, rest)
+		return
+	}
+
+	// So do vulnerability database requests, which govulncheck sends when
+	// -db points at /go/vulndb. A module path's first element holds a
+	// dot, so neither prefix can be a module.
+	if rest, ok := strings.CutPrefix(path, "vulndb/"); ok {
+		h.handleVulnDB(w, r, rest)
 		return
 	}
 
