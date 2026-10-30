@@ -192,3 +192,31 @@ func TestRulesMinPositive(t *testing.T) {
 		t.Errorf("MinPositive() = %v, want 2h", got)
 	}
 }
+
+func TestRulesResolveSources(t *testing.T) {
+	rules := Rules{
+		Packages: map[string]time.Duration{"pkg:x/kept": 0},
+		Sources: map[string]map[string]time.Duration{"swift": {
+			"pkg:swift/github.com/a/one": 0,
+			"pkg:swift/github.com/a/two": time.Hour,
+		}},
+	}
+	if got := rules.MinPositive(); got != time.Hour {
+		t.Errorf("MinPositive = %v, want the pending rule's hour", got)
+	}
+	if err := rules.Resolve("swift", "pkg:swift/github.com/a/two", "pkg:x/kept"); err == nil {
+		t.Error("a rule resolving to a package another rule sets differently was accepted")
+	}
+	if !rules.Pending("swift") {
+		t.Fatal("conflicting rule no longer pending")
+	}
+	if err := rules.Resolve("swift", "pkg:swift/github.com/a/one", "pkg:x/kept"); err != nil {
+		t.Errorf("same duration for the same package: %v", err)
+	}
+	if err := rules.Resolve("swift", "pkg:swift/github.com/a/two", "pkg:x/two"); err != nil {
+		t.Fatal(err)
+	}
+	if rules.Pending("swift") || rules.Packages["pkg:x/two"] != time.Hour {
+		t.Errorf("after resolving: sources %v, packages %v", rules.Sources, rules.Packages)
+	}
+}

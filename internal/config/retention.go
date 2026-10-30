@@ -48,6 +48,7 @@ func (c *Config) RetentionRules(reg *retention.Registry) (retention.Rules, error
 	rules := retention.Rules{
 		Ecosystems: map[string]time.Duration{},
 		Packages:   map[string]time.Duration{},
+		Sources:    map[string]map[string]time.Duration{},
 	}
 
 	var err error
@@ -84,13 +85,20 @@ func (c *Config) RetentionRules(reg *retention.Registry) (retention.Rules, error
 
 	for _, key := range sortedKeys(r.Packages) {
 		field := fmt.Sprintf("storage.retention.packages[%q]", key)
-		canonical, err := retentionPackageKey(reg, key)
+		canonical, sourceOf, err := retentionPackageKey(reg, key)
 		if err != nil {
 			return retention.Rules{}, fmt.Errorf("invalid %s: %w", field, err)
 		}
 		d, err := parseRetentionDuration(field, r.Packages[key])
 		if err != nil {
 			return retention.Rules{}, err
+		}
+		if sourceOf != "" {
+			if rules.Sources[sourceOf] == nil {
+				rules.Sources[sourceOf] = map[string]time.Duration{}
+			}
+			rules.Sources[sourceOf][key] = d
+			continue
 		}
 		if prev, ok := rules.Packages[canonical]; ok && prev != d {
 			return retention.Rules{}, fmt.Errorf("invalid %s: conflicts with another key for package %s", field, canonical)
@@ -102,38 +110,41 @@ func (c *Config) RetentionRules(reg *retention.Registry) (retention.Rules, error
 }
 
 // retentionPackageKey returns the stored package PURL a configured package
-// key stands for.
-func retentionPackageKey(reg *retention.Registry, key string) (string, error) {
+// key stands for, or, for a key that has to be resolved through the upstream
+// first, the ecosystem key it belongs to.
+func retentionPackageKey(reg *retention.Registry, key string) (canonical, sourceOf string, _ error) {
 	// A julia PURL needs a uuid qualifier to parse at all, and the julia
 	// handler stores none, so no key could ever match one of its packages.
 	if strings.HasPrefix(strings.ToLower(key), "pkg:julia/") {
-		return "", fmt.Errorf("package rules are not supported for julia")
+		return "", "", fmt.Errorf("package rules are not supported for julia")
 	}
 	p, err := purl.Parse(key)
 	if err != nil {
-		return "", fmt.Errorf("not a valid package PURL: %w", err)
+		return "", "", fmt.Errorf("not a valid package PURL: %w", err)
 	}
 	if p.Version != "" {
-		return "", fmt.Errorf("package PURL must not carry a version")
+		return "", "", fmt.Errorf("package PURL must not carry a version")
 	}
 	// A rule names a whole package; qualifiers and subpaths would be
 	// dropped on the way to the stored PURL, so refuse them rather than
 	// let "?type=pom" quietly cover every file of the package.
 	if len(p.Qualifiers) > 0 || p.Subpath != "" {
-		return "", fmt.Errorf("package PURL must not carry qualifiers or a subpath")
+		return "", "", fmt.Errorf("package PURL must not carry qualifiers or a subpath")
 	}
-	canonical, ok := reg.Canonical(p)
-	if ok {
-		return canonical, nil
+	if canonical, ok := reg.Canonical(p); ok {
+		return canonical, "", nil
+	}
+	if ecosystem, ok := reg.Source(p); ok {
+		return "", ecosystem, nil
 	}
 	ecosystem, registered := reg.KeyForDBEcosystem(purl.PURLTypeToEcosystem(p.Type))
 	if !registered {
-		return "", fmt.Errorf("retention is not supported for %s packages in this version", p.Type)
+		return "", "", fmt.Errorf("retention is not supported for %s packages in this version", p.Type)
 	}
 	if spec, _ := reg.Lookup(ecosystem); spec.CanonicalPackage == nil {
-		return "", fmt.Errorf("package rules are not supported for %s; use storage.retention.ecosystems.%s", ecosystem, ecosystem)
+		return "", "", fmt.Errorf("package rules are not supported for %s; use storage.retention.ecosystems.%s", ecosystem, ecosystem)
 	}
-	return "", fmt.Errorf("does not match how %s packages are stored; see the package rule forms in docs/configuration.md", ecosystem)
+	return "", "", fmt.Errorf("does not match how %s packages are stored; see the package rule forms in docs/configuration.md", ecosystem)
 }
 
 func sortedKeys(m map[string]string) []string {

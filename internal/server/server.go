@@ -75,7 +75,6 @@ import (
 	"github.com/git-pkgs/proxy/internal/accesslog"
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
-	"github.com/git-pkgs/proxy/internal/denylist"
 	"github.com/git-pkgs/proxy/internal/enrichment"
 	"github.com/git-pkgs/proxy/internal/gitcache"
 	"github.com/git-pkgs/proxy/internal/handler"
@@ -259,11 +258,6 @@ func (s *Server) serve(listener net.Listener) error {
 	if s.cooldown, err = newCooldownView(s.cfg.Cooldown, cooldownPolicy); err != nil {
 		return err
 	}
-	policy, err := denylist.New(s.cfg.Denylist.Packages)
-	if err != nil {
-		return fmt.Errorf("configuring denylist: %w", err)
-	}
-	proxy.Denylist = policy
 	scanGroup, err := configureScanning(proxy, s.cfg.Scanning, s.cfg.BaseURL, s.logger)
 	if err != nil {
 		return fmt.Errorf("configuring scanners: %w", err)
@@ -282,6 +276,9 @@ func (s *Server) serve(listener net.Listener) error {
 	proxy.DirectServeTTL = s.cfg.ParseDirectServeTTL()
 	proxy.DirectServeBaseURL = s.cfg.Storage.DirectServeBaseURL
 	proxy.StreamArtifacts = !s.cfg.Storage.CacheArtifacts
+	if err := s.configureDenylist(proxy); err != nil {
+		return err
+	}
 
 	if len(s.cfg.Upstream.Git) > 0 {
 		upstreamDirs := make(map[string]string, len(s.cfg.Upstream.Git))
@@ -429,7 +426,8 @@ func (s *Server) serve(listener net.Listener) error {
 	s.background.Go(func() { s.updateCacheStatsMetrics(bgCtx) })
 	s.background.Go(func() { backfillMetadataAccess(bgCtx, s.db, s.logger, metadataBackfillBatch) })
 	s.background.Go(func() { s.startEvictionLoop(bgCtx) })
-	s.background.Go(func() { s.startRetentionLoop(bgCtx) })
+	retentionResolvers := s.retentionResolvers(proxy)
+	s.background.Go(func() { s.startRetentionLoop(bgCtx, retentionResolvers) })
 	s.background.Go(func() { s.startReclaimLoop(bgCtx) })
 
 	if listener != nil {
