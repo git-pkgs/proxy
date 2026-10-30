@@ -6,6 +6,11 @@ on:
       - "v*"
   # Started by monthly-release.yml on the tag it creates.
   workflow_dispatch:
+    inputs:
+      draft:
+        description: Create the release as a draft
+        type: boolean
+        default: false
 
 permissions:
   contents: write
@@ -33,6 +38,6 @@ jobs:
       - uses: goreleaser/goreleaser-action@a4f02ab5355a589de60d917a659ce617ed19b3de # v7.3.0
         with:
           version: "~> v2"
-          args: release --clean
+          args: release --clean${{ inputs.draft && ' --draft' || '' }}
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

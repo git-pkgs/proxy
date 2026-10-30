@@ -30,6 +30,7 @@ func NewMirrorVersions(upstream config.UpstreamConfig, client *http.Client) mirr
 func (s *Server) newMirror(proxy *handler.Proxy, workers int) *mirror.Mirror {
 	m := mirror.New(proxy, s.db, s.storage, s.logger, workers)
 	m.Images = s.newContainerHandler(proxy)
+	m.Bottles = handler.NewHomebrewHandler(proxy, s.cfg.Upstream.HomebrewAPI)
 	m.Charts = handler.NewHelmHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm)
 	UseMirrorUpstreams(m, s.cfg.Upstream, proxy.HTTPClient)
 	return m
@@ -103,6 +104,8 @@ func mirrorVersionsURL(u config.UpstreamConfig, purlType, name string) (string, 
 			return "", fmt.Errorf("unknown Helm repository %q: it isn't in upstream.helm", repository)
 		}
 		return strings.TrimSuffix(repositoryURL, "/"), nil
+	case "swift":
+		return upstreamOr(u.Swift, d.Swift), nil
 	default:
 		return "", fmt.Errorf("listing %s versions isn't supported; give a version", purlType)
 	}

@@ -45,8 +45,8 @@ func TestRewriteCache_RepeatServesCachedRewrite(t *testing.T) {
 
 	for range 3 {
 		m, err := c.rewrite(context.Background(), key, []byte("doc"), 0, r.fn)
-		if err != nil || string(m.body) != "DOC" {
-			t.Fatalf("rewrite = %q, %v", m.body, err)
+		if err != nil || string(m.content()) != "DOC" {
+			t.Fatalf("rewrite = %q, %v", m.content(), err)
 		}
 	}
 	if got := r.calls.Load(); got != 1 {
@@ -61,8 +61,8 @@ func TestRewriteCache_NewUpstreamBytesRewriteAgain(t *testing.T) {
 	for _, doc := range []string{"v1", "v2"} {
 		key := rewriteCacheKey("npm", "http://proxy", "left-pad", []byte(doc))
 		m, err := c.rewrite(context.Background(), key, []byte(doc), 0, r.fn)
-		if err != nil || string(m.body) != strings.ToUpper(doc) {
-			t.Fatalf("rewrite(%s) = %q, %v", doc, m.body, err)
+		if err != nil || string(m.content()) != strings.ToUpper(doc) {
+			t.Fatalf("rewrite(%s) = %q, %v", doc, m.content(), err)
 		}
 	}
 	if got := r.calls.Load(); got != 2 {
@@ -86,7 +86,7 @@ func TestRewriteCache_ConcurrentRequestsShareRewrite(t *testing.T) {
 		if err != nil {
 			t.Error(err)
 		}
-		outs <- string(m.body)
+		outs <- string(m.content())
 	}
 	go run()
 	<-r.entered
@@ -128,8 +128,8 @@ func TestRewriteCache_WaiterLeavingKeepsRewrite(t *testing.T) {
 	if err := <-first; err != nil {
 		t.Fatal(err)
 	}
-	if m, err := c.rewrite(context.Background(), key, []byte("doc"), 0, r.fn); err != nil || string(m.body) != "DOC" {
-		t.Errorf("cached rewrite = %q, %v", m.body, err)
+	if m, err := c.rewrite(context.Background(), key, []byte("doc"), 0, r.fn); err != nil || string(m.content()) != "DOC" {
+		t.Errorf("cached rewrite = %q, %v", m.content(), err)
 	}
 	if got := r.calls.Load(); got != 1 {
 		t.Errorf("rewrites = %d, want 1", got)
@@ -200,7 +200,7 @@ func TestCachedRewrite_DisabledRewritesEveryTime(t *testing.T) {
 }
 
 // TestCachedRewrite_CooldownExpires asserts that with cooldown on a rewrite
-// is cached for cooldownRewriteTTL only: cooldown filtering depends on the
+// is cached for maxCooldownRewriteTTL only: cooldown filtering depends on the
 // current time, so a cached rewrite would otherwise keep hiding a version
 // after its cooldown ends.
 func TestCachedRewrite_CooldownExpires(t *testing.T) {
@@ -218,7 +218,7 @@ func TestCachedRewrite_CooldownExpires(t *testing.T) {
 		t.Errorf("rewrites within the TTL = %d, want 1", got)
 	}
 
-	clock.advance(cooldownRewriteTTL)
+	clock.advance(maxCooldownRewriteTTL)
 	_, _ = proxy.cachedRewrite(context.Background(), "npm", "http://proxy", "left-pad", []byte("doc"), "", r.keeping)
 	if got := r.calls.Load(); got != 2 {
 		t.Errorf("rewrites after the TTL = %d, want 2", got)
@@ -300,4 +300,23 @@ func (c *rewriteCache) len() int {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	return len(c.entries)
+}
+
+// TestCooldownRewriteTTL checks that a rewrite filtered by cooldown is cached
+// for a 24th of the shortest cooldown, between a minute and an hour.
+func TestCooldownRewriteTTL(t *testing.T) {
+	for _, tc := range []struct {
+		shortest, want time.Duration
+	}{
+		{0, time.Hour},
+		{72 * time.Hour, time.Hour},
+		{24 * time.Hour, time.Hour},
+		{2 * time.Hour, 5 * time.Minute},
+		{10 * time.Minute, time.Minute},
+	} {
+		p := &Proxy{ShortestCooldown: tc.shortest}
+		if got := p.cooldownRewriteTTL(); got != tc.want {
+			t.Errorf("shortest cooldown %v: TTL = %v, want %v", tc.shortest, got, tc.want)
+		}
+	}
 }

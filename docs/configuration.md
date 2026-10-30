@@ -72,6 +72,14 @@ storage:
 
 `storage.max_size` counts cached artifacts and cached metadata documents (`cache_metadata`). When the total goes over the limit, the least recently served entries of either kind are evicted first; an evicted metadata document is fetched from upstream again on the next request for it. Pushed artifacts are not counted or evicted. An artifact replaced by a refetch stays in storage for at least an hour, or `storage.direct_serve_ttl` if longer, so requests already reading it can finish, and storage use can exceed the limit by what was replaced in that time.
 
+### Cache misses
+
+On a cache miss the proxy sends the artifact to the client while it stores it, so the client gets its first bytes as soon as the upstream sends them, rather than after the whole artifact is stored. Clients that give up after a while without data, such as git-lfs (30 seconds) or pacman (10 seconds), no longer time out on large artifacts. The response goes out chunked, without `Content-Length`, as with `cache_artifacts: false`; once stored, the artifact is served with its size.
+
+The bytes are checked against the digest the upstream declares, where it declares one, as they are sent. On a mismatch the connection is aborted before the response completes, so the client never receives a tampered artifact as a good one, and nothing is cached. The upstream is read at its own speed whatever the client's: a client more than 8 MB behind continues from the stored copy once it is stored, so a slow client doesn't hold back the download, other requests waiting for it, or `artifact_timeout`. If the client goes away, the artifact is still stored. If storing it fails, for example because the disk is full, the client still gets the whole artifact; the failure is logged at error level and counted in `proxy_artifacts_served_uncached_total`, so a cache that has stopped filling doesn't go unnoticed while every request succeeds.
+
+Requests for the same artifact that arrive while it is being stored wait for the stored copy, as do `HEAD` requests and requests with a `Range` header, which are answered from it with its size. With a `block`-mode scanner configured for the ecosystem, a miss is stored and scanned before anything is sent, as before (see [Artifact Scanning](#artifact-scanning)).
+
 ### Serving artifacts without storing them
 
 With `storage.cache_artifacts: false` the proxy streams every artifact download from upstream to the client and stores no artifacts. Metadata is still filtered and cached, so cooldown and the denylist apply as usual, and the database still holds the publish times cooldown needs. Use it when another caching layer, such as an Artifactory remote repository, sits in front of the proxy and caching artifacts twice only costs storage.
@@ -292,6 +300,7 @@ Each upstream used by a built-in package route can be set in YAML or JSON under 
 | `upstream.gem` | `PROXY_UPSTREAM_GEM` | `https://rubygems.org` |
 | `upstream.go` | `PROXY_UPSTREAM_GO` | `https://proxy.golang.org` |
 | `upstream.go_sumdbs_offline` | `PROXY_UPSTREAM_GO_SUMDBS_OFFLINE` | `false` |
+| `upstream.go_vulndb` | `PROXY_UPSTREAM_GO_VULNDB` | `https://vuln.go.dev` |
 | `upstream.hex` | `PROXY_UPSTREAM_HEX` | `https://repo.hex.pm` |
 | `upstream.hex_api` | `PROXY_UPSTREAM_HEX_API` | `https://hex.pm` |
 | `upstream.pub` | `PROXY_UPSTREAM_PUB` | `https://pub.dev` |
@@ -380,6 +389,7 @@ upstream:
 - Composer metadata of routed packages carries an empty `notification-url`, so Composer does not report their installs to the default upstream's `notify-batch` endpoint.
 - Use `upstream.auth` for the registry's credentials. The proxy has no authentication of its own, so every client that can reach it can download routed packages.
 - Search (`/composer/search.json`) and the package list (`/composer/packages/list.json`) still come from the default upstream only.
+- Attestations of a routed npm version (`/npm/-/npm/v1/attestations/...`) come from the route, like its tarballs.
 - npm audit, signing-key, search and ping requests still go to `upstream.npm`. An audit request lists every package in the dependency tree, routed ones included.
 - Routes can only be set in the configuration file, not with environment variables.
 
@@ -716,6 +726,48 @@ If `upstream.go` points at a module proxy that serves the checksum database
 itself, such as Athens, point the entry there instead, for example
 `sum.golang.org: "https://athens.example/sumdb/sum.golang.org"`.
 
+### Go vulnerability database
+
+```yaml
+upstream:
+
+  # The Go vulnerability database, served at /go/vulndb.
+  go_vulndb: "https://vuln.go.dev"
+```
+
+Point govulncheck at the proxy with its `-db` flag:
+
+```bash
+govulncheck -db https://proxy.example.com/go/vulndb ./...
+```
+
+The proxy passes on the files the
+[database API](https://go.dev/security/vuln/database#api) defines:
+`index/db.json`, `index/modules.json`, `index/vulns.json` and `ID/{id}.json`,
+each also as `.json.gz`, which is what govulncheck fetches. Other paths get
+404 without reaching the database. The files are stored and served
+byte-for-byte: a `.json.gz` file is gzip data, not a response with
+`Content-Encoding: gzip`.
+
+With `cache_metadata` enabled, every file follows `metadata_ttl`, entries
+included, since the database updates an entry when its `modified` date
+changes. A response that is not JSON (after decompressing a `.json.gz` file)
+is refused and not stored. When the database cannot be reached, cached files
+are served however old, with a `Warning` header. Without `cache_metadata`
+the requests are forwarded and nothing is stored.
+
+On a network where clients cannot reach `vuln.go.dev`, only files someone
+fetched through the proxy before an outage are available during it. To have
+every entry cached, fetch the indexes and all entries through the proxy while
+it is online, for example:
+
+```bash
+base=https://proxy.example.com/go/vulndb
+for f in db modules vulns; do curl -sfo /dev/null "$base/index/$f.json.gz"; done
+curl -sf "$base/index/vulns.json" | jq -r '.[].id' |
+  xargs -I{} curl -sfo /dev/null "$base/ID/{}.json.gz"
+```
+
 ### Debian archives
 
 ```yaml
@@ -900,13 +952,10 @@ repository, such as a fork, it is copied from there instead of downloaded,
 once the upstream has confirmed this repository has it; the copy takes its
 own space.
 
-Large LFS objects may need longer timeouts. The proxy downloads an object it
-doesn't have before sending any of it, within `artifact_timeout`, and the
-whole response, download included, must fit within `write_timeout`; both
-default to 5 minutes. git-lfs gives up on a response after 30 seconds without
-data (`lfs.activitytimeout`) and retries. A retry waits for the download still
-running, so the object is served once it is cached, but a download that
-outlasts git-lfs's retries fails that clone or pull until it finishes.
+Large LFS objects may need longer timeouts. An object the proxy doesn't
+have is sent to git-lfs as it is downloaded (see [Cache misses](#cache-misses)),
+but the download must finish within `artifact_timeout` and the whole response
+within `write_timeout`; both default to 5 minutes.
 Download URLs are often signed; only the URL without its query is logged
 and recorded with the object. An object is only cached once its content
 matches its sha256 object ID. Objects are cached per repository, so one
@@ -1122,7 +1171,9 @@ Exact `packages` entries take precedence over patterns. When several patterns ma
 
 Resolution order: exact package override, then package pattern, then ecosystem override, then global default. This lets you set a conservative default while exempting trusted package families.
 
-Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyGems, Hex, Go and Maven. Most of these ecosystems include publish timestamps in their metadata; Go and Maven are described below.
+The web UI's dashboard shows the default and the ecosystem overrides, and how many package overrides and patterns there are; their names aren't shown, since the UI has no authentication. A package's page shows the cooldown that applies to it and which kind of rule it comes from; it shows none for ecosystems without cooldown support, and the dashboard marks an ecosystem override for one as not supported.
+
+Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyGems, Hex, Go, Maven and Helm. Most of these ecosystems include publish timestamps in their metadata; Go and Maven are described below.
 
 Go has no publish time. The module proxy's `.info` gives the commit time of the revision a version points at, so a version tagged on an old commit counts as old. The proxy reads each listed version's `.info` once, stores the time, and leaves versions in cooldown out of `@v/list` and `@latest`. When upstream's `@latest` is in cooldown, it serves the newest release out of cooldown instead. Requests for a version in cooldown, including its `.info`, `.mod` and `.zip`, and a branch or commit query that resolves to one, get 403 rather than 404, because the go command moves on to the next `GOPROXY` entry, such as `direct`, after a 404. If a version's `.info` can't be fetched, the list or download fails with 502 instead of letting the version through.
 
@@ -1135,11 +1186,13 @@ Maven caveats:
 - Maven Central lists versions in version order, not in the order they were published. A patch to an older release line published after a newer release that is out of cooldown stays listed while it is in cooldown, but its files are still refused.
 - SNAPSHOT versions are not held back.
 
+Helm uses each release's `created` time from the repository's `index.yaml`. Releases in cooldown are left out of the index the proxy serves, and their archives aren't served; a release without `created` is let through. Charts pulled over OCI have no publish time and aren't held back.
+
 RubyGems, Hex and PyPI keep their publish times outside the metadata clients read: the RubyGems versions API, the Hex HTTP API (`upstream.hex_api`) and the PyPI JSON API. The proxy fetches them alongside each compact index, package or simple page it filters, and for PyPI downloads. Cooldown fails closed: when it applies to a package and those times can't be fetched or parsed, or the metadata can't be rewritten, the request fails with 502, or with 503 and `Retry-After` while the upstream is rate limiting the proxy, instead of serving the metadata unfiltered. The same goes for npm, Composer and pub.dev metadata that can't be rewritten, and for npm tarball downloads whose publish time can't be read. A PyPI file or npm tarball that is already cached is still served when its publish time can't be read; only a download that would have to be fetched fails. A PyPI release's time is the upload time of its newest file. The proxy stores it when a download looks it up, and serves files of that release that are already cached against the stored time without reading the JSON API again. A file that isn't cached yet is always looked up, since it may have been added to the release since, and the newer time is stored. Packages exempted with a duration of `0` are served as before and don't need the times. A PyPI package the JSON API returns 404 for has no times to go by and is served unfiltered.
 
-For RubyGems and Hex, both documents go through the metadata cache. With [`cache_metadata`](#metadata-caching) they are served from it within `metadata_ttl` without asking the upstream, revalidated with their ETags after it, and filtered from the last cached copies, marked stale, while the upstream is down; without it they are still fetched once for concurrent requests. Each document has its own TTL, so the compact index or Hex package can be newer than the cached times and list a version they don't have. The times are then fetched again before filtering, and if that fails, such versions are left out until the times can be read. The filtered index or package carries an ETag of its own, so Bundler and Mix revalidate it with `304 Not Modified`. Publish times are compared with the current time on each request, but the filtered result is kept for up to a minute (see [rewritten metadata cache](#rewritten-metadata-cache)), so a version leaving cooldown can show up a minute late; a newly published version shows up within `metadata_ttl`, as with other cached metadata. Upstream errors are answered as for other cached metadata (404, or 502) rather than relayed.
+For RubyGems and Hex, both documents go through the metadata cache. With [`cache_metadata`](#metadata-caching) they are served from it within `metadata_ttl` without asking the upstream, revalidated with their ETags after it, and filtered from the last cached copies, marked stale, while the upstream is down; without it they are still fetched once for concurrent requests. Each document has its own TTL, so the compact index or Hex package can be newer than the cached times and list a version they don't have. The times are then fetched again before filtering, and if that fails, such versions are left out until the times can be read. The filtered index or package carries an ETag of its own, so Bundler and Mix revalidate it with `304 Not Modified`. Publish times are compared with the current time on each request, but the filtered result is kept for up to an hour (see [rewritten metadata cache](#rewritten-metadata-cache)), so a version leaving cooldown can show up that much later; a newly published version shows up within `metadata_ttl`, as with other cached metadata. Upstream errors are answered as for other cached metadata (404, or 502) rather than relayed.
 
-With cooldown on, the proxy asks npm for full packuments, since the abbreviated ones it uses otherwise carry no publish times. Abbreviated packuments cached before cooldown was turned on are fetched again in full rather than served, including as a stale copy when the upstream is down.
+With cooldown on, the proxy asks npm for full packuments, since the abbreviated ones it uses otherwise carry no publish times. Abbreviated packuments cached before cooldown was turned on are fetched again in full rather than served, including as a stale copy when the upstream is down. When `latest` is in cooldown, the packument tags the newest version out of cooldown instead, and `npm dist-tag ls` shows the same tags.
 
 Conda cooldown covers `repodata.json`, `current_repodata.json`, `repodata_from_packages.json` and sharded repodata (CEP 16). Other forms of the repodata, such as `repodata.json.zst`, `repodata.json.bz2` and `repodata.jlap` patches, would list versions still in cooldown, so with cooldown on they are answered 404 and conda and mamba fall back to `repodata.json`. With `cache_metadata`, `repodata.json` is read through the metadata cache as it is without cooldown: within `metadata_ttl` the stored copy is filtered as it is read from storage, after it the upstream is asked with its ETag, and while the upstream is down the stale copy is filtered. Once a document has been filtered, the proxy remembers the ETag of the result until the first entry it left out leaves cooldown, so a client revalidating with `If-None-Match` gets `304 Not Modified` without the document being filtered or sent again. The first response for each document has no ETag, as it is sent while it is filtered. Without `cache_metadata`, `repodata.json` is fetched and filtered on every request. Clients cache shards by the hash in the shard index, so with cooldown on the proxy serves a rewritten index whose shard hashes change every hour and filters each shard as it is fetched. Versions leaving cooldown show up within the hour, and clients fetch the shards they need again once an hour. If a channel's shard index points packages or shards somewhere the proxy doesn't route, the proxy answers 404 for it and clients fall back to `repodata.json`.
 
@@ -1296,7 +1349,7 @@ scanning:
 
 ### How caching defers to a scan verdict
 
-The proxy never uploads artifact bytes to a scanner. When an artifact is fetched from upstream, it's stored to the configured storage backend first, exactly as without scanning. If scanning is enabled for the artifact's ecosystem, the proxy then notifies each applicable scanner with package metadata and a short-lived, HMAC-signed URL pointing at the internal `/_internal/scan-fetch` route; each scanner GETs that URL itself to pull the exact bytes staged in storage and runs its own scan against them.
+The proxy never uploads artifact bytes to a scanner. When an artifact is fetched from upstream, it's stored to the configured storage backend first, exactly as without scanning. If scanning is enabled for the artifact's ecosystem, the proxy then notifies each applicable scanner with package metadata and a short-lived, HMAC-signed URL pointing at the internal `/_internal/scan-fetch` route; each scanner GETs that URL itself to pull the exact bytes staged in storage and runs its own scan against them. With a `block`-mode scanner for the ecosystem, the client gets nothing before the verdict; with only `monitor`-mode scanners, a cache miss is sent to the client while it is stored, and the scan runs after (see [Cache misses](#cache-misses)).
 
 Scanners configured for the same ecosystem all run concurrently, never sequentially. The moment any `block`-mode scanner reports a not-allowed verdict (or errors, unless `fail_open` is set), the proxy cancels the in-flight calls to the other scanners and deletes the staged artifact — it's never committed to the cache database, so it was never visible to a client. If nothing blocks, the proxy waits for every `block`-mode scanner to finish before caching the artifact and serving it. A `monitor`-mode scanner's findings are logged and never gate the wait or the caching decision, even when it reports not-allowed.
 
@@ -1376,6 +1429,8 @@ Some metadata never changes once published, and is cached like an artifact, with
 
 Composer archive downloads look up their upstream URL in the same cached metadata, so an archive is resolved without asking Packagist again and stays installable while it is down. Only a version or file the cached metadata does not list yet is looked up upstream. With or without `cache_metadata`, a cached archive of a tagged release from the default repository is served without any metadata lookup; with cooldown enabled it is checked against the publish time recorded when the archive was first resolved. Branch (dev) versions, routed packages and archives picked by a query string such as `?sha=` are always resolved from the metadata.
 
+Swift release lists and manifests are cached with the upstream's `Link` header, which carries the release list's pages and the version-specific manifests a client chooses from.
+
 The `proxy mirror` command always enables metadata caching regardless of this setting.
 
 ### Metadata TTL
@@ -1414,9 +1469,11 @@ Or via environment variable: `PROXY_ARTIFACT_MAX_SIZE=2GB`.
 
 ### Rewritten metadata cache
 
-The npm, Composer, PyPI and Helm handlers rewrite every metadata document they serve, so that download URLs point at the proxy. That means decoding the whole document and encoding it again, and Composer's minified documents are also expanded, which together cost milliseconds per typical package and far more for very large ones; a large Helm `index.yaml` takes over a hundred milliseconds. The proxy keeps rewritten documents in memory, so each distinct upstream document is rewritten once and requests arriving while it is being rewritten wait for that rewrite. New bytes from upstream are rewritten again. A PyPI simple page is cached per representation (HTML or JSON) and per set of versions filtered out of it. With version cooldown enabled, a cached rewrite is kept for one minute only, because cooldown filtering depends on the current time: a version leaving cooldown shows up at most a minute late. Cached documents carry an `ETag` of their own, and are dated like any other, so clients that revalidate with `If-None-Match` or `If-Modified-Since`, such as Composer, get `304 Not Modified`. The RubyGems compact index and Hex packages filtered by cooldown are kept the same way; they are never served gzip-compressed.
+The npm, Composer, PyPI and Helm handlers rewrite every metadata document they serve, so that download URLs point at the proxy. That means decoding the whole document and encoding it again, and Composer's minified documents are also expanded, which together cost milliseconds per typical package and far more for very large ones; a large Helm `index.yaml` takes over a hundred milliseconds. The proxy keeps rewritten documents in memory, so each distinct upstream document is rewritten once and requests arriving while it is being rewritten wait for that rewrite. New bytes from upstream are rewritten again. A PyPI simple page is cached per representation (HTML or JSON) and per set of versions filtered out of it. With version cooldown enabled, a cached rewrite expires, because cooldown filtering depends on the current time: it is kept for a 24th of the shortest cooldown configured, at least a minute and at most an hour, so a version shows up at most that long after its cooldown ends. With a cooldown of a day or more that is an hour; with `"2h"` somewhere, five minutes. Cached documents carry an `ETag` of their own, and are dated like any other, so clients that revalidate with `If-None-Match` or `If-Modified-Since`, such as Composer, get `304 Not Modified`. The RubyGems compact index and Hex packages filtered by cooldown are kept the same way; they are never served gzip-compressed.
 
-Each cached document is also kept gzip-compressed, when that makes it smaller, and served with `Content-Encoding: gzip` to clients that accept it. A large packument is compressed once rather than on every request, by the proxy or by a reverse proxy in front of it. The compressed copy counts against the cache size and typically adds about an eighth to each entry. Documents rewritten outside the cache are served uncompressed.
+Each cached document is kept gzip-compressed, when that makes it smaller, and served with `Content-Encoding: gzip` to clients that accept it, as npm, pnpm, Yarn and Composer do. A large packument is compressed once rather than on every request, by the proxy or by a reverse proxy in front of it. Only the compressed copy is kept, typically an eighth of the document, and it is decompressed for the clients that don't accept gzip. Documents rewritten outside the cache are served uncompressed.
+
+Size the cache for the metadata of the packages one install asks for. pnpm 12 checks every lockfile entry against the registry on each install unless `trustLockfile` is set, so each install reads the packument of every package in the lockfile; when they don't all fit, each install evicts what the next one needs and rewrites them all again. A lockfile of about 550 npm packages takes about 50 MB.
 
 ```yaml
 metadata_rewrite_cache_size: "256MB"   # default; "0" rewrites on every request
@@ -1508,7 +1565,7 @@ npm and Composer archives must contain the package manifest: `package.json` in t
 Pushed versions are listed in the package metadata clients resolve against, with the dependencies from their manifest:
 
 - A pushed version takes the place of an upstream version with the same number.
-- Pushed versions are added next to the upstream ones and are never held back by cooldown. npm `dist-tags` stay as the upstream has them.
+- Pushed versions are added next to the upstream ones and are never held back by cooldown. npm `dist-tags` stay as the upstream has them, also in `npm dist-tag ls`.
 - A package the upstream doesn't know is served from its pushed versions alone. Its npm `latest` tag is the highest pushed version.
 - Pushed Composer dev versions (`dev-*`, `*-dev`) are listed in the `~dev` metadata file.
 - npm entries carry the archive's sha512 as `dist.integrity`. Composer entries carry its sha256 as `dist.reference` and leave `shasum` empty.
@@ -1617,6 +1674,10 @@ A Helm chart is mirrored from a repository in `upstream.helm`, named as the name
 
 A Julia package is mirrored with the source tarball `upstream.julia` serves at `/package/{uuid}/{tree-hash}`, cached under the package's name and tree hash as `/julia/package/...` serves it. The PURL needs the `uuid` qualifier, for example `pkg:julia/Example@0.5.5?uuid=7876af07-990d-54b4-ab0e-23690620f79a`. Only packages of the General registry can be mirrored: the uuid and tree hash are read from General on GitHub, also with another `upstream.julia`, since they are the same on every Pkg server serving General. The tarball isn't checked by the proxy, as when serving; Pkg checks the tree hash of what it unpacks, except on Windows. Dependencies, the artifacts in a package's `Artifacts.toml` and the registry aren't mirrored. An offline `Pkg.add` also needs the registry: one installed on the client, or the one the proxy cached when a client last fetched it, which it serves offline with `cache_metadata` on.
 
+A Swift release is mirrored from `upstream.swift` with its source archive, checked against the SHA-256 checksum in the release metadata and cached under the key `/swift/{scope}/{name}/{version}.zip` serves. Give the registry scope as the namespace, for example `pkg:swift/apple/swift-argument-parser@1.5.0` for `apple.swift-argument-parser`, or the source repository, as SBOM tools write it: `pkg:swift/github.com/apple/swift-argument-parser@1.5.0` is looked up through the upstream's `/identifiers`, and the first identity it lists is mirrored. The release metadata, the package's release list and the release's `Package.swift` with its version-specific manifests are stored in the metadata cache too, so `swift package resolve` works with the upstream unreachable. Serving them, and the archive, offline needs `cache_metadata` on the server, since the archive is served with the checksum from the release metadata.
+
+A CRAN version is mirrored as its source package from `upstream.cran`, for example `pkg:cran/glue@1.8.1`, and cached under the file name, so it is served for both `/cran/src/contrib/{file}` and `/cran/src/contrib/Archive/{name}/{file}`, where CRAN moves it once a newer version is published. The current version is fetched from `src/contrib` and checked against the MD5 sum in `src/contrib/PACKAGES.gz`; older versions are fetched unchecked from `src/contrib/Archive/{name}/`, as the CRAN handler fetches them. Binary packages aren't mirrored, and neither are the `PACKAGES` indexes, so `install.packages` needs the upstream or an index the proxy already cached; installing the tarball by URL works without either.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--sbom` | | Path to CycloneDX or SPDX SBOM file |
@@ -1637,7 +1698,7 @@ proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
 
 ### Unversioned PURLs
 
-A PURL without a version, here or in a mirror API job, mirrors every version the configured upstream lists, through the same client, so `upstream.auth` and `upstream.allow_private_hosts` apply. npm packages in `upstream.npm_routes` are listed from their route. Listing works for npm, gem, golang, hex (from `upstream.hex_api`), pub, pypi, maven, nuget, composer, cran and brew. For cargo and conda the upstream doesn't serve the API used for listing, so versions come from the public registry while the upstream is the default one; with another upstream, and for Composer packages in `upstream.composer_routes` or any other ecosystem, give a version. Julia versions are always listed from the General registry.
+A PURL without a version, here or in a mirror API job, mirrors every version the configured upstream lists, through the same client, so `upstream.auth` and `upstream.allow_private_hosts` apply. npm packages in `upstream.npm_routes` are listed from their route. Listing works for npm, gem, golang, hex (from `upstream.hex_api`), pub, pypi, maven, nuget, composer, cran, brew and swift. For cargo and conda the upstream doesn't serve the API used for listing, so versions come from the public registry while the upstream is the default one; with another upstream, and for Composer packages in `upstream.composer_routes` or any other ecosystem, give a version. Julia versions are always listed from the General registry.
 
 ### Container images
 
@@ -1656,6 +1717,21 @@ proxy mirror 'pkg:oci/debian@sha256:...?repository_url=docker.io/library/debian&
 - Without `--platform` every platform of an index is mirrored, including Windows images, which can be large. Attestation manifests of the selected platforms are mirrored too, because Docker fetches them on every pull.
 - Non-distributable (foreign) layers are skipped.
 - While `scanning.enabled` is set, the command refuses images, because scanners fetch staged layers from the running server. Use the mirror API instead.
+
+### Homebrew bottles
+
+`pkg:brew` PURLs mirror a homebrew/core formula's bottles, which Homebrew publishes as an image on `upstream.homebrew_artifact`. They are mirrored like that image, under the keys brew reads through `HOMEBREW_ARTIFACT_DOMAIN`, so `brew install` is served from cache, also when the upstream is unreachable:
+
+```bash
+proxy mirror --platform linux/arm64 pkg:brew/hello@2.12.3 pkg:brew/openssl%403
+```
+
+- A formula name with `@` is written with `%40`, since `@` starts the version: `pkg:brew/openssl%403` is `openssl@3`, and `pkg:brew/openssl@3` is version 3 of `openssl`.
+- The formula's JSON API on `upstream.homebrew_api` gives the image tag for the current version, which carries the formula's revision and the bottles' rebuild (`hello` 2.12.3 is tagged `2.12.3-1`). Only the current version is described there; another version is used as the tag as given, so give the full tag, such as `2.12.2` or `2.12.3-1`, for older bottles.
+- A PURL without a version mirrors the current version.
+- `--platform` selects bottles like image platforms: `linux/arm64`, `linux/amd64`, or `darwin/arm64` for every macOS release's arm64 bottle. Without it every bottle of the version is mirrored.
+- Dependencies aren't mirrored with a formula; list them too. brew also needs the JSON API, which the proxy keeps with `cache_metadata`.
+- Casks, source archives and taps other than homebrew/core aren't mirrored.
 
 ### Scheduled refresh
 

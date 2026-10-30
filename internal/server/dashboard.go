@@ -13,6 +13,7 @@ type DashboardData struct {
 	Layout
 	Stats           DashboardStats
 	EnrichmentStats EnrichmentStatsView
+	Cooldown        CooldownSummary
 	RecentPackages  []PackageInfo
 	PopularPackages []PackageInfo
 }
@@ -68,6 +69,8 @@ type PackageShowData struct {
 	Versions        []database.Version
 	Vulnerabilities []database.Vulnerability
 	LicenseCategory string
+	// Cooldown is nil with cooldown off.
+	Cooldown *PackageCooldown
 }
 
 // VersionShowData contains data for rendering the version show page.

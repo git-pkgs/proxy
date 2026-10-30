@@ -91,6 +91,20 @@ func (g *Group) Covers(ecosystem string) bool {
 	return g.Enabled() && len(g.applicable(ecosystem)) > 0
 }
 
+// Blocks reports whether a block-mode scanner applies to ecosystem, so an
+// artifact must be scanned whole before any of it is served.
+func (g *Group) Blocks(ecosystem string) bool {
+	if !g.Enabled() {
+		return false
+	}
+	for _, e := range g.applicable(ecosystem) {
+		if e.mode == modeBlock {
+			return true
+		}
+	}
+	return false
+}
+
 // Timeout returns the per-scan-call timeout used to bound the signed fetch
 // URL's validity.
 func (g *Group) Timeout() time.Duration {

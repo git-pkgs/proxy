@@ -27,6 +27,18 @@ func isImageEcosystem(ecosystem string) bool {
 	return ecosystem == "docker" || ecosystem == "oci"
 }
 
+// BottleResolver resolves a Homebrew formula version to the image its
+// bottles are published under.
+type BottleResolver interface {
+	BottleImage(ctx context.Context, formula, version string) (handler.ImageRef, error)
+}
+
+// takesPlatforms reports whether --platform applies to an ecosystem: images,
+// and Homebrew bottles, which are published as images.
+func takesPlatforms(ecosystem string) bool {
+	return isImageEcosystem(ecosystem) || ecosystem == "brew"
+}
+
 // ParsePlatforms parses os/architecture[/variant] values.
 func ParsePlatforms(values []string) ([]handler.Platform, error) {
 	var platforms []handler.Platform
@@ -98,6 +110,29 @@ func imageRef(pv PackageVersion) (handler.ImageRef, []handler.Platform, error) {
 }
 
 func (m *Mirror) mirrorImage(ctx context.Context, pv PackageVersion, tracker *progressTracker) {
+	ref, platforms, err := imageRef(pv)
+	m.mirrorImageRef(ctx, pv, ref, platforms, err, tracker)
+}
+
+// mirrorBrew mirrors the bottles of a Homebrew formula version, which brew
+// pulls as an image from homebrew/core on its artifact domain.
+func (m *Mirror) mirrorBrew(ctx context.Context, pv PackageVersion, tracker *progressTracker) {
+	if m.Images == nil || m.Bottles == nil {
+		m.recordFailure(tracker, pv, errors.New("mirroring Homebrew bottles isn't available here"))
+		return
+	}
+	platforms, err := ParsePlatforms(pv.Platforms)
+	if err != nil {
+		m.recordFailure(tracker, pv, err)
+		return
+	}
+	ref, err := m.Bottles.BottleImage(ctx, pv.Name, pv.Version)
+	m.mirrorImageRef(ctx, pv, ref, platforms, err, tracker)
+}
+
+// mirrorImageRef mirrors the image ref for pv, or records refErr, the error
+// resolving it.
+func (m *Mirror) mirrorImageRef(ctx context.Context, pv PackageVersion, ref handler.ImageRef, platforms []handler.Platform, refErr error, tracker *progressTracker) {
 	fail := func(err error) {
 		tracker.failed.Add(1)
 		tracker.addError(pv.Ecosystem, pv.Name, pv.Version, err.Error())
@@ -107,9 +142,8 @@ func (m *Mirror) mirrorImage(ctx context.Context, pv PackageVersion, tracker *pr
 		fail(fmt.Errorf("%w: %s", handler.ErrVersionDenied, pv))
 		return
 	}
-	ref, platforms, err := imageRef(pv)
-	if err != nil {
-		fail(err)
+	if refErr != nil {
+		fail(refErr)
 		return
 	}
 	result, err := m.Images.MirrorImage(ctx, ref, platforms)

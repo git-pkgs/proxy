@@ -240,6 +240,7 @@ func runServe() {
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_CARGO_DOWNLOAD       Cargo download upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_GEM                  RubyGems upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_GO                   Go module proxy upstream URL\n")
+		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_GO_VULNDB            Go vulnerability database URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_HEX                  Hex repository upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_HEX_API              Hex API upstream URL\n")
 		fmt.Fprintf(os.Stderr, "  PROXY_UPSTREAM_PUB                  pub registry upstream URL\n")
@@ -618,6 +619,7 @@ func newCommandMirror(cfg *config.Config, proxy *handler.Proxy, images *handler.
 	db *database.DB, store storage.Storage, logger *slog.Logger, workers int) *mirror.Mirror {
 	m := mirror.New(proxy, db, store, logger, workers)
 	m.Images = images
+	m.Bottles = handler.NewHomebrewHandler(proxy, cfg.Upstream.HomebrewAPI)
 	m.Charts = handler.NewHelmHandler(proxy, cfg.BaseURL, cfg.Upstream.Helm)
 	server.UseMirrorUpstreams(m, cfg.Upstream, proxy.HTTPClient)
 	if cfg.Scanning.Enabled {

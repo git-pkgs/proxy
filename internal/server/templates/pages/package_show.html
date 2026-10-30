@@ -18,6 +18,9 @@
             {{if .Package.LatestVersion.Valid}}
             <div><dt class="inline text-gray-500 dark:text-gray-400">Latest Version:</dt> <dd class="inline font-mono">{{.Package.LatestVersion.String}}</dd></div>
             {{end}}
+            {{with .Cooldown}}
+            <div><dt class="inline text-gray-500 dark:text-gray-400">Cooldown:</dt> <dd class="inline"><span class="font-mono">{{.Duration}}</span> <span class="text-sm text-gray-500 dark:text-gray-400">({{.Rule}})</span></dd></div>
+            {{end}}
             {{if .Package.License.Valid}}
             <div><dt class="inline text-gray-500 dark:text-gray-400">License:</dt> <dd class="inline"><span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-100 text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-700 dark:bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-900 dark:text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-300">{{.Package.License.String}}</span></dd></div>
             {{end}}
