@@ -242,6 +242,17 @@ func (s *Server) Start(listeners ...net.Listener) error {
 	return s.serve(listener)
 }
 
+// mountEnrichmentAPI registers the API endpoints for enrichment data.
+func (s *Server) mountEnrichmentAPI(r chi.Router) {
+	apiHandler := NewAPIHandler(enrichment.New(s.logger), s.db)
+	r.Get("/api/package/{ecosystem}/*", apiHandler.HandlePackagePath)
+	r.Get("/api/vulns/{ecosystem}/*", apiHandler.HandleVulnsPath)
+	r.Post("/api/outdated", apiHandler.HandleOutdated)
+	r.Post("/api/bulk", apiHandler.HandleBulkLookup)
+	r.Get("/api/search", apiHandler.HandleSearch)
+	r.Get("/api/packages", apiHandler.HandlePackagesList)
+}
+
 func (s *Server) serve(listener net.Listener) error {
 	metadataClient, artifactClient := s.newUpstreamClients(s.cfg.ParseArtifactTimeout())
 
@@ -379,16 +390,7 @@ func (s *Server) serve(listener net.Listener) error {
 		r.Delete("/api/cache/{ecosystem}/*", s.handleCacheDelete)
 	}
 
-	// API endpoints for enrichment data
-	enrichSvc := enrichment.New(s.logger)
-	apiHandler := NewAPIHandler(enrichSvc, s.db)
-
-	r.Get("/api/package/{ecosystem}/*", apiHandler.HandlePackagePath)
-	r.Get("/api/vulns/{ecosystem}/*", apiHandler.HandleVulnsPath)
-	r.Post("/api/outdated", apiHandler.HandleOutdated)
-	r.Post("/api/bulk", apiHandler.HandleBulkLookup)
-	r.Get("/api/search", apiHandler.HandleSearch)
-	r.Get("/api/packages", apiHandler.HandlePackagesList)
+	s.mountEnrichmentAPI(r)
 
 	// Start background context (used by mirror jobs and cleanup)
 	bgCtx, bgCancel := context.WithCancel(context.Background())
@@ -419,8 +421,7 @@ func (s *Server) serve(listener net.Listener) error {
 	}
 
 	// Project inventory endpoints (opt-in via projects.enabled or PROXY_PROJECTS_ENABLED)
-	s.mountProjectAPI(r)
-	s.startProjectPruning(bgCtx)
+	s.mountProjectAPI(bgCtx, r)
 
 	s.http = &http.Server{
 		Addr:         s.cfg.Listen,

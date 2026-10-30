@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"errors"
 	"io"
 	"log/slog"
@@ -82,11 +83,13 @@ type ProjectResponse struct {
 	Components []ProjectComponent `json:"components"`
 }
 
-// mountProjectAPI registers /api/projects when projects.enabled is set.
-func (s *Server) mountProjectAPI(r chi.Router) {
+// mountProjectAPI registers /api/projects when projects.enabled is set, and
+// starts pruning projects that sent no SBOM within projects.max_age.
+func (s *Server) mountProjectAPI(ctx context.Context, r chi.Router) {
 	if s.cfg.Projects.Enabled {
 		registerProjectRoutes(r, NewProjectsAPIHandler(s.db, s.logger), s.cfg.Projects.TokenExpanded())
 	}
+	s.startProjectPruning(ctx)
 }
 
 // registerProjectRoutes mounts /api/projects. Reading is open like the rest
