@@ -42,7 +42,7 @@ func (h *GoHandler) allowedAt(module string, published time.Time) bool {
 	if published.IsZero() {
 		return true
 	}
-	return h.proxy.Cooldown.IsAllowed("golang", canonicalPackagePURL("golang", module), published)
+	return h.proxy.cooldown().IsAllowed("golang", canonicalPackagePURL("golang", module), published)
 }
 
 // writeGoMetadataError answers a failed upstream metadata fetch.
