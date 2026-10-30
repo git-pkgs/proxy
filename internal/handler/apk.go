@@ -1,7 +1,6 @@
 package handler
 
 import (
-	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
@@ -169,10 +168,11 @@ func (h *APKHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 // and detached signatures valid.
 func (h *APKHandler) handleMetadata(w http.ResponseWriter, r *http.Request, repository, upstreamURL, path string) {
 	cacheKey := h.metadataCacheKey(repository, upstreamURL, path)
-	h.proxy.ProxyCached(w, r, upstreamURL+"/"+path, apkEcosystem, cacheKey, "*/*")
 	if h.snapshotsEnabled() {
-		h.recordSnapshot(context.WithoutCancel(r.Context()), cacheKey)
+		h.serveMetadataWithSnapshot(w, r, upstreamURL+"/"+path, cacheKey)
+		return
 	}
+	h.proxy.ProxyCached(w, r, upstreamURL+"/"+path, apkEcosystem, cacheKey, "*/*")
 }
 
 // metadataCacheKey derives the metadata cache key from the repository name,

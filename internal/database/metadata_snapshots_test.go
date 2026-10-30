@@ -70,6 +70,36 @@ func TestMetadataSnapshots_AddAndLookup(t *testing.T) {
 	})
 }
 
+// TestMetadataSnapshots_RecordedLate adds a version after a newer one was
+// recorded, as a request that fetched it first but recorded it last does. It
+// is compared with the version current at its own time, so it keeps its place
+// in the history.
+func TestMetadataSnapshots_RecordedLate(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		day := time.Date(2026, 3, 1, 0, 0, 0, 0, time.UTC)
+		addSnapshot(t, db, "idx", "sha256:a", day)
+		addSnapshot(t, db, "idx", "sha256:c", day.Add(2*time.Hour))
+		if !addSnapshot(t, db, "idx", "sha256:b", day.Add(time.Hour)) {
+			t.Fatal("version recorded after a newer one not added")
+		}
+		if addSnapshot(t, db, "idx", "sha256:b", day.Add(90*time.Minute)) {
+			t.Error("version already current at that time added again")
+		}
+		for _, tc := range []struct {
+			at   time.Time
+			want string
+		}{
+			{day.Add(30 * time.Minute), "sha256:a"},
+			{day.Add(100 * time.Minute), "sha256:b"},
+			{day.Add(3 * time.Hour), "sha256:c"},
+		} {
+			if got := snapshotDigestAt(t, db, "idx", tc.at); got != tc.want {
+				t.Errorf("snapshot at %s = %q, want %q", tc.at, got, tc.want)
+			}
+		}
+	})
+}
+
 func TestMetadataSnapshots_Prune(t *testing.T) {
 	runWithBothDatabases(t, func(t *testing.T, db *DB) {
 		now := time.Date(2026, 6, 1, 0, 0, 0, 0, time.UTC)

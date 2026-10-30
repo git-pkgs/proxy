@@ -60,15 +60,18 @@ func (db *DB) metadataSnapshotBefore(ecosystem, name string, beforeMS int64) (*M
 	return &snap, nil
 }
 
-// AddMetadataSnapshot records snap as the current version of its document,
-// unless the newest snapshot already has its digest, and reports whether it
-// did. On Postgres, replicas recording the same document take an advisory
-// lock on it first, so their check and insert don't interleave: without it,
-// two transactions can both read the previous digest and both insert. SQLite
+// AddMetadataSnapshot records snap as the version of its document current
+// from snap.ValidFromMS, unless the snapshot current at that time already
+// has its digest, and reports whether it did. Comparing with the version
+// current at that time rather than the newest one keeps a version a request
+// recorded late, after a newer one, in its place in the history. On
+// Postgres, replicas recording the same document take an advisory lock on it
+// first, so their check and insert don't interleave: without it, two
+// transactions can both read the previous digest and both insert. SQLite
 // runs one write at a time, so the single statement is enough there. A
 // document going back to an earlier digest is recorded again, since only the
-// newest snapshot is compared. The casts let Postgres type the parameters of
-// the INSERT ... SELECT.
+// snapshot current at that time is compared. The casts let Postgres type the
+// parameters of the INSERT ... SELECT.
 func (db *DB) AddMetadataSnapshot(snap *MetadataSnapshot) (bool, error) {
 	tx, err := db.Beginx()
 	if err != nil {
@@ -87,13 +90,13 @@ func (db *DB) AddMetadataSnapshot(snap *MetadataSnapshot) (bool, error) {
 		       CAST(? AS TEXT), CAST(? AS BIGINT), CAST(? AS BIGINT)
 		WHERE COALESCE((
 			SELECT content_digest FROM metadata_snapshots
-			WHERE ecosystem = ? AND name = ?
+			WHERE ecosystem = ? AND name = ? AND valid_from_ms <= CAST(? AS BIGINT)
 			ORDER BY valid_from_ms DESC, id DESC
 			LIMIT 1
 		), '') <> CAST(? AS TEXT)
 	`), snap.Ecosystem, snap.Name, snap.StoragePath, snap.ContentType, snap.ContentEncoding,
 		snap.ContentDigest, snap.Size, snap.ValidFromMS,
-		snap.Ecosystem, snap.Name, snap.ContentDigest)
+		snap.Ecosystem, snap.Name, snap.ValidFromMS, snap.ContentDigest)
 	if err != nil {
 		return false, fmt.Errorf("recording metadata snapshot: %w", err)
 	}

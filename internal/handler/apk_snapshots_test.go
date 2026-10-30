@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -204,6 +205,81 @@ func TestAPKSnapshots_SameVersionRecordedTwice(t *testing.T) {
 	_ = body.Close()
 	day := validFrom.UTC().Format(apkSnapshotDateLayout)
 	expectAPKResponse(t, h, "/alpine@"+day+apkSnapshotIndexPath, http.StatusOK, "index v1")
+}
+
+// pausingWriter blocks the first Write until release is closed, after
+// signalling on writing.
+type pausingWriter struct {
+	*httptest.ResponseRecorder
+	once    sync.Once
+	writing chan struct{}
+	release chan struct{}
+}
+
+func (w *pausingWriter) Write(b []byte) (int, error) {
+	w.once.Do(func() {
+		close(w.writing)
+		<-w.release
+	})
+	return w.ResponseRecorder.Write(b)
+}
+
+// TestAPKSnapshots_OverlappingRequests pauses a request while it writes
+// index v1, lets a second request fetch and serve v2, and then lets the first
+// one finish. Both versions must be kept, in the order they were fetched,
+// with readable blobs.
+func TestAPKSnapshots_OverlappingRequests(t *testing.T) {
+	u := newAPKSnapshotUpstream(t)
+	h, db := newSnapshotAPKHandler(t, u.server.URL)
+	target := "/alpine" + apkSnapshotIndexPath
+
+	first := &pausingWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		writing:          make(chan struct{}),
+		release:          make(chan struct{}),
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.Routes().ServeHTTP(first, httptest.NewRequest(http.MethodGet, target, nil))
+	}()
+	select {
+	case <-first.writing:
+	case <-done:
+		t.Fatal("first request finished without writing a body")
+	}
+
+	u.index.Store("index v2")
+	expectAPKResponse(t, h, target, http.StatusOK, "index v2")
+	close(first.release)
+	<-done
+	if first.Code != http.StatusOK || first.Body.String() != "index v1" {
+		t.Fatalf("first request = %d %q, want 200 with index v1", first.Code, first.Body.String())
+	}
+
+	var snaps []database.MetadataSnapshot
+	if err := db.Select(&snaps, `SELECT `+
+		`id, ecosystem, name, storage_path, content_type, content_encoding, content_digest, size, valid_from_ms `+
+		`FROM metadata_snapshots ORDER BY valid_from_ms, id`); err != nil {
+		t.Fatal(err)
+	}
+	if len(snaps) != 2 {
+		t.Fatalf("%d snapshots recorded, want 2", len(snaps))
+	}
+	for i, want := range []string{"index v1", "index v2"} {
+		body, err := h.proxy.Storage.Open(t.Context(), snaps[i].StoragePath)
+		if err != nil {
+			t.Fatalf("snapshot %d blob unreadable: %v", i, err)
+		}
+		got, _ := io.ReadAll(body)
+		_ = body.Close()
+		if string(got) != want {
+			t.Errorf("snapshot %d = %q, want %q", i, got, want)
+		}
+		if snaps[i].Size != int64(len(want)) {
+			t.Errorf("snapshot %d size = %d, want %d", i, snaps[i].Size, len(want))
+		}
+	}
 }
 
 // TestAPKSnapshots_ConcurrentReplicas records the same index version from

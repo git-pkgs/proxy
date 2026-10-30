@@ -1,8 +1,12 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
+	"crypto/sha256"
+	"database/sql"
+	"encoding/hex"
 	"io"
 	"net/http"
 	"strconv"
@@ -101,22 +105,80 @@ func (h *APKHandler) serveSnapshot(w http.ResponseWriter, r *http.Request, repos
 	}
 }
 
-// recordSnapshot keeps the document now cached under cacheKey as a snapshot
-// when it differs from the newest one kept. It runs after the document was
-// served, so a failure only means this version is recorded on a later
-// request instead.
-func (h *APKHandler) recordSnapshot(ctx context.Context, cacheKey string) {
-	entry, err := h.proxy.DB.GetMetadataCache(apkEcosystem, cacheKey)
-	if err != nil || entry == nil || !entry.ContentDigest.Valid {
-		return
-	}
-	digest := entry.ContentDigest.String
-	latest, err := h.proxy.DB.LatestMetadataSnapshot(apkEcosystem, cacheKey)
-	if err != nil || (latest != nil && latest.ContentDigest == digest) {
-		return
+// serveMetadataWithSnapshot is ProxyCached for an index or signature that
+// keeps each version it serves as a snapshot. A version is recorded from the
+// document the request serves, not by reading the cache again afterwards: a
+// concurrent refresh can replace the cached copy at any time, and the version
+// it replaced would then never be recorded.
+func (h *APKHandler) serveMetadataWithSnapshot(w http.ResponseWriter, r *http.Request, upstream, cacheKey string) {
+	p := h.proxy
+	ctx := context.WithoutCancel(r.Context())
+
+	// A cached copy within its TTL was recorded by the request that fetched
+	// it; this only catches one stored before snapshots were enabled, or
+	// whose recording failed.
+	if entry := p.freshMetadataEntry(apkEcosystem, cacheKey); entry != nil {
+		seen := time.Now()
+		if p.serveCachedMetadata(w, r, apkEcosystem, cacheKey) {
+			h.recordStoredSnapshot(ctx, cacheKey, entry, seen)
+			return
+		}
 	}
 
-	h.storeSnapshot(ctx, cacheKey, entry, time.Now())
+	body, contentType, contentEncoding, err := p.fetchOrCacheMetadata(r.Context(), apkEcosystem, cacheKey, upstream, "identity", nil, "*/*")
+	if err != nil {
+		p.writeMetadataFetchError(w, err)
+		return
+	}
+	// Record before responding, so the version is kept by the time a
+	// client has it.
+	h.recordServedSnapshot(ctx, cacheKey, body, contentType, contentEncoding, time.Now())
+	p.writeMetadataCachedResponseWithEncoding(w, r, apkEcosystem, cacheKey, body, contentType, contentEncoding)
+}
+
+// recordServedSnapshot keeps body, the document a request is serving, as the
+// version current from observed, unless the version current then already has
+// its bytes.
+func (h *APKHandler) recordServedSnapshot(ctx context.Context, cacheKey string, body []byte, contentType, contentEncoding string, observed time.Time) {
+	sum := sha256.Sum256(body)
+	digest := "sha256:" + hex.EncodeToString(sum[:])
+	if !h.snapshotNeeded(cacheKey, digest, observed) {
+		return
+	}
+	storagePath := apkSnapshotStoragePath(cacheKey, digest, observed)
+	if _, _, err := h.proxy.Storage.Store(ctx, storagePath, bytes.NewReader(body)); err != nil {
+		h.proxy.Logger.Warn("failed to store apk snapshot", "path", storagePath, "error", err)
+		h.discardSnapshotBlob(ctx, storagePath)
+		return
+	}
+	h.addSnapshot(ctx, &database.MetadataSnapshot{
+		Ecosystem:       apkEcosystem,
+		Name:            cacheKey,
+		StoragePath:     storagePath,
+		ContentType:     sql.NullString{String: contentType, Valid: contentType != ""},
+		ContentEncoding: sql.NullString{String: contentEncoding, Valid: contentEncoding != ""},
+		ContentDigest:   digest,
+		Size:            int64(len(body)),
+		ValidFromMS:     observed.UnixMilli(),
+	})
+}
+
+// recordStoredSnapshot keeps the cached document entry describes as the
+// version current from observed, unless the version current then already
+// has its digest.
+func (h *APKHandler) recordStoredSnapshot(ctx context.Context, cacheKey string, entry *database.MetadataCacheEntry, observed time.Time) {
+	if !entry.ContentDigest.Valid || !h.snapshotNeeded(cacheKey, entry.ContentDigest.String, observed) {
+		return
+	}
+	h.storeSnapshot(ctx, cacheKey, entry, observed)
+}
+
+// snapshotNeeded reports whether a version with digest seen at observed
+// differs from the version current then. It is only a shortcut that saves
+// copying the document: AddMetadataSnapshot makes the same check.
+func (h *APKHandler) snapshotNeeded(cacheKey, digest string, observed time.Time) bool {
+	current, err := h.proxy.DB.MetadataSnapshotAt(apkEcosystem, cacheKey, observed.Add(time.Millisecond))
+	return err == nil && (current == nil || current.ContentDigest != digest)
 }
 
 // storeSnapshot records the cached document entry as the version current
@@ -130,7 +192,7 @@ func (h *APKHandler) storeSnapshot(ctx context.Context, cacheKey string, entry *
 	if !ok {
 		return
 	}
-	added, err := h.proxy.DB.AddMetadataSnapshot(&database.MetadataSnapshot{
+	h.addSnapshot(ctx, &database.MetadataSnapshot{
 		Ecosystem:       apkEcosystem,
 		Name:            cacheKey,
 		StoragePath:     storagePath,
@@ -140,12 +202,18 @@ func (h *APKHandler) storeSnapshot(ctx context.Context, cacheKey string, entry *
 		Size:            size,
 		ValidFromMS:     validFrom.UnixMilli(),
 	})
+}
+
+// addSnapshot adds the row for a snapshot whose blob is stored, and deletes
+// the blob when the row isn't added, as when another request recorded the
+// same version first.
+func (h *APKHandler) addSnapshot(ctx context.Context, snap *database.MetadataSnapshot) {
+	added, err := h.proxy.DB.AddMetadataSnapshot(snap)
 	if err != nil {
-		h.proxy.Logger.Warn("failed to record apk snapshot", "key", cacheKey, "error", err)
+		h.proxy.Logger.Warn("failed to record apk snapshot", "key", snap.Name, "error", err)
 	}
 	if err != nil || !added {
-		// Another request recorded this version first.
-		h.discardSnapshotBlob(ctx, storagePath)
+		h.discardSnapshotBlob(ctx, snap.StoragePath)
 	}
 }
 
