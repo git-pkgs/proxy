@@ -9,35 +9,14 @@ import (
 	"testing"
 )
 
-func TestNewestVersion(t *testing.T) {
-	tests := []struct {
-		ecosystem string
-		versions  []string
-		want      string
-	}{
-		{"npm", []string{"1.9.0", "1.10.0", "2.0.0-rc.1", "1.2.3"}, "1.10.0"},
-		{"npm", []string{"2.0.0-beta.1", "2.0.0-beta.2"}, "2.0.0-beta.2"},
-		{"pypi", []string{"1.9", "1.10", "2.0rc1", "2.0.dev3"}, "1.10"},
-		{"gem", []string{"7.1.0", "7.2.0.beta1", "7.0.8"}, "7.1.0"},
-		{"golang", []string{"v1.2.0", "v1.10.0", "v2.0.0-beta.1"}, "v1.10.0"},
-		{"maven", []string{"1.0", "1.10", "1.9", "2.0-alpha-1"}, "1.10"},
-		{"npm", nil, ""},
-	}
-	for _, tt := range tests {
-		if got := newestVersion(tt.ecosystem, tt.versions); got != tt.want {
-			t.Errorf("newestVersion(%s, %v) = %q, want %q", tt.ecosystem, tt.versions, got, tt.want)
-		}
-	}
-}
-
 func TestPURLSourceLatestMirrorsNewestVersion(t *testing.T) {
-	versions := &fakeVersions{versions: []string{"1.0.0", "1.2.0", "1.1.0", "2.0.0-rc.1"}}
+	versions := &fakeVersions{versions: []string{"1.0.0", "1.10.0", "1.2.0"}}
 	source := &PURLSource{PURLs: []string{"pkg:npm/left-pad", "pkg:npm/is-odd@3.0.0"}, Versions: versions, Latest: true}
 
 	items := enumerate(t, source)
 
 	want := []PackageVersion{
-		{Ecosystem: "npm", Name: "left-pad", Version: "1.2.0"},
+		{Ecosystem: "npm", Name: "left-pad", Version: "1.10.0"},
 		{Ecosystem: "npm", Name: "is-odd", Version: "3.0.0"},
 	}
 	if !reflect.DeepEqual(items, want) {
@@ -67,6 +46,8 @@ func TestSBOMSourceLatest(t *testing.T) {
 	}
 }
 
+// TestRegistryVersionsLatestSkipsYanked checks that without an advertised
+// latest version the newest version by publish time that isn't yanked wins.
 func TestRegistryVersionsLatestSkipsYanked(t *testing.T) {
 	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/api/v1/crates/demo" {
@@ -76,9 +57,9 @@ func TestRegistryVersionsLatestSkipsYanked(t *testing.T) {
 		_ = json.NewEncoder(w).Encode(map[string]any{
 			"crate": map[string]any{"name": "demo"},
 			"versions": []map[string]any{
-				{"num": "1.3.0", "yanked": true},
-				{"num": "1.2.0"},
-				{"num": "1.10.0-alpha.1"},
+				{"num": "1.3.0", "yanked": true, "created_at": "2026-03-01T00:00:00Z"},
+				{"num": "1.2.0", "created_at": "2026-02-01T00:00:00Z"},
+				{"num": "1.10.0-alpha.1", "created_at": "2026-01-01T00:00:00Z"},
 			},
 		})
 	}))
@@ -91,6 +72,37 @@ func TestRegistryVersionsLatestSkipsYanked(t *testing.T) {
 	}
 	if got != "1.2.0" {
 		t.Errorf("LatestVersion() = %q, want 1.2.0", got)
+	}
+}
+
+// TestRegistryVersionsLatestPrefersAdvertised checks that the version the
+// registry advertises as latest wins over a higher one, here a 4.0.0
+// published by mistake and deprecated.
+func TestRegistryVersionsLatestPrefersAdvertised(t *testing.T) {
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/left-pad" {
+			http.NotFound(w, r)
+			return
+		}
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"name":      "left-pad",
+			"dist-tags": map[string]any{"latest": "3.4.0"},
+			"versions": map[string]any{
+				"3.4.0": map[string]any{"name": "left-pad", "version": "3.4.0"},
+				"4.0.0": map[string]any{"name": "left-pad", "version": "4.0.0", "deprecated": "published by mistake"},
+			},
+			"time": map[string]any{"3.4.0": "2026-01-01T00:00:00Z", "4.0.0": "2026-02-01T00:00:00Z"},
+		})
+	}))
+	defer registry.Close()
+	versions := RegistryVersions{URL: func(string, string) (string, error) { return registry.URL, nil }}
+
+	got, err := versions.LatestVersion(context.Background(), "npm", "left-pad")
+	if err != nil {
+		t.Fatalf("LatestVersion() error = %v", err)
+	}
+	if got != "3.4.0" {
+		t.Errorf("LatestVersion() = %q, want the advertised 3.4.0", got)
 	}
 }
 

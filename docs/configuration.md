@@ -1663,7 +1663,7 @@ proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
 
 A PURL without a version, here or in a mirror API job, mirrors every version the configured upstream lists, through the same client, so `upstream.auth` and `upstream.allow_private_hosts` apply. npm packages in `upstream.npm_routes` are listed from their route. Listing works for npm, gem, golang, hex (from `upstream.hex_api`), pub, pypi, maven, nuget, composer, cran, brew and swift. For cargo and conda the upstream doesn't serve the API used for listing, so versions come from the public registry while the upstream is the default one; with another upstream, and for Composer packages in `upstream.composer_routes` or any other ecosystem, give a version. Julia versions are always listed from the General registry.
 
-With `--latest`, or `"latest": true` in a mirror API job, only the newest version is mirrored: the highest by the ecosystem's version ordering, leaving out yanked and retracted versions and, unless there is nothing else, pre-releases. PURLs with a version, including those in an SBOM, are mirrored as given. Run it from cron to keep the newest releases of a list of packages cached:
+With `--latest`, or `"latest": true` in a mirror API job, only the latest version is mirrored, as git-pkgs/registries picks it: the version the registry advertises as latest where it has one, such as npm's `dist-tags.latest`, and otherwise the newest by publish time, leaving out yanked, retracted and deprecated versions. PURLs with a version, including those in an SBOM, are mirrored as given. Run it from cron to keep the newest releases of a list of packages cached:
 
 ```bash
 proxy mirror --latest pkg:npm/lodash pkg:pypi/requests pkg:cargo/serde

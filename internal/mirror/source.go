@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/git-pkgs/purl"
+	"github.com/git-pkgs/registries"
 	"github.com/git-pkgs/sbom"
 )
 
@@ -122,7 +123,13 @@ func (s *PURLSource) listVersions(ctx context.Context, versions VersionLister, e
 		if err != nil {
 			return nil, err
 		}
-		latest = newestVersion(ecosystem, listed)
+		all := make([]registries.Version, len(listed))
+		for i, v := range listed {
+			all[i] = registries.Version{Number: v}
+		}
+		if v := registries.SelectLatestVersion(all, purl.EcosystemToPURLType(ecosystem), ""); v != nil {
+			latest = v.Number
+		}
 	}
 	if latest == "" {
 		return nil, nil
