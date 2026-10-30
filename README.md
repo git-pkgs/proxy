@@ -138,7 +138,8 @@ go build -o proxy ./cmd/proxy
 ./proxy -listen :3000 -base-url https://proxy.example.com
 ```
 
-The proxy is now running. Configure your package managers to use it.
+The proxy is now running. Configure your package managers to use it. For image
+builds, see [Using proxy in Docker builds](docs/docker-builds.md).
 
 ## OpenAPI (Swagger)
 
@@ -1154,6 +1155,9 @@ proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
 
 # Mirror all versions of a package
 proxy mirror pkg:npm/lodash
+
+# Mirror only the newest version of a package
+proxy mirror --latest pkg:npm/lodash
 
 # Mirror from a CycloneDX or SPDX SBOM
 proxy mirror --sbom sbom.cdx.json

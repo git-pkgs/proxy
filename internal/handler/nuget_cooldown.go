@@ -204,7 +204,7 @@ func (h *NuGetHandler) nugetLeafAllowed(leaf map[string]any, id string) bool {
 	if err != nil {
 		return true
 	}
-	return h.proxy.Cooldown.IsAllowed("nuget", canonicalPackagePURL("nuget", strings.ToLower(id)), when)
+	return h.proxy.cooldown().IsAllowed("nuget", canonicalPackagePURL("nuget", strings.ToLower(id)), when)
 }
 
 func nugetCatalogEntry(leaf map[string]any) map[string]any {

@@ -1146,7 +1146,7 @@ Helm uses each release's `created` time from the repository's `index.yaml`. Rele
 
 RubyGems, Hex and PyPI keep their publish times outside the metadata clients read: the RubyGems versions API, the Hex HTTP API (`upstream.hex_api`) and the PyPI JSON API. The proxy fetches them alongside each compact index, package or simple page it filters, and for PyPI downloads. Cooldown fails closed: when it applies to a package and those times can't be fetched or parsed, or the metadata can't be rewritten, the request fails with 502, or with 503 and `Retry-After` while the upstream is rate limiting the proxy, instead of serving the metadata unfiltered. The same goes for npm, Composer and pub.dev metadata that can't be rewritten, and for npm tarball downloads whose publish time can't be read. A PyPI file or npm tarball that is already cached is still served when its publish time can't be read; only a download that would have to be fetched fails. A PyPI release's time is the upload time of its newest file. The proxy stores it when a download looks it up, and serves files of that release that are already cached against the stored time without reading the JSON API again. A file that isn't cached yet is always looked up, since it may have been added to the release since, and the newer time is stored. Packages exempted with a duration of `0` are served as before and don't need the times. A PyPI package the JSON API returns 404 for has no times to go by and is served unfiltered.
 
-For RubyGems and Hex, both documents go through the metadata cache. With [`cache_metadata`](#metadata-caching) they are served from it within `metadata_ttl` without asking the upstream, revalidated with their ETags after it, and filtered from the last cached copies, marked stale, while the upstream is down; without it they are still fetched once for concurrent requests. Each document has its own TTL, so the compact index or Hex package can be newer than the cached times and list a version they don't have. The times are then fetched again before filtering, and if that fails, such versions are left out until the times can be read. The filtered index or package carries an ETag of its own, so Bundler and Mix revalidate it with `304 Not Modified`. Publish times are compared with the current time on each request, but the filtered result is kept for up to an hour (see [rewritten metadata cache](#rewritten-metadata-cache)), so a version leaving cooldown can show up that much later; a newly published version shows up within `metadata_ttl`, as with other cached metadata. Upstream errors are answered as for other cached metadata (404, or 502) rather than relayed.
+For RubyGems and Hex, both documents go through the metadata cache. With [`cache_metadata`](#metadata-caching) they are served from it within `metadata_ttl` without asking the upstream, revalidated with their ETags after it, and filtered from the last cached copies, marked stale, while the upstream is down; without it they are still fetched once for concurrent requests. Each document has its own TTL, so the compact index or Hex package can be newer than the cached times and list a version they don't have. The times are then fetched again before filtering, and if that fails, such versions are left out until the times can be read. The filtered index or package carries an ETag of its own, so Bundler and Mix revalidate it with `304 Not Modified`. Publish times are compared with the current time on each request, and the filtered result is kept until the first version it held back leaves cooldown (see [rewritten metadata cache](#rewritten-metadata-cache)); a newly published version shows up within `metadata_ttl`, as with other cached metadata. Upstream errors are answered as for other cached metadata (404, or 502) rather than relayed.
 
 With cooldown on, the proxy asks npm for full packuments, since the abbreviated ones it uses otherwise carry no publish times. Abbreviated packuments cached before cooldown was turned on are fetched again in full rather than served, including as a stale copy when the upstream is down. When `latest` is in cooldown, the packument tags the newest version out of cooldown instead, and `npm dist-tag ls` shows the same tags.
 
@@ -1445,7 +1445,7 @@ Or via environment variable: `PROXY_ARTIFACT_MAX_SIZE=2GB`.
 
 ### Rewritten metadata cache
 
-The npm, Composer, PyPI and Helm handlers rewrite every metadata document they serve, so that download URLs point at the proxy. That means decoding the whole document and encoding it again, and Composer's minified documents are also expanded, which together cost milliseconds per typical package and far more for very large ones; a large Helm `index.yaml` takes over a hundred milliseconds. The proxy keeps rewritten documents in memory, so each distinct upstream document is rewritten once and requests arriving while it is being rewritten wait for that rewrite. New bytes from upstream are rewritten again. A PyPI simple page is cached per representation (HTML or JSON) and per set of versions filtered out of it. With version cooldown enabled, a cached rewrite expires, because cooldown filtering depends on the current time: it is kept for a 24th of the shortest cooldown configured, at least a minute and at most an hour, so a version shows up at most that long after its cooldown ends. With a cooldown of a day or more that is an hour; with `"2h"` somewhere, five minutes. Cached documents carry an `ETag` of their own, and are dated like any other, so clients that revalidate with `If-None-Match` or `If-Modified-Since`, such as Composer, get `304 Not Modified`. The RubyGems compact index and Hex packages filtered by cooldown are kept the same way; they are never served gzip-compressed.
+The npm, Composer, PyPI and Helm handlers rewrite every metadata document they serve, so that download URLs point at the proxy. That means decoding the whole document and encoding it again, and Composer's minified documents are also expanded, which together cost milliseconds per typical package and far more for very large ones; a large Helm `index.yaml` takes over a hundred milliseconds. The proxy keeps rewritten documents in memory, so each distinct upstream document is rewritten once and requests arriving while it is being rewritten wait for that rewrite. New bytes from upstream are rewritten again. A PyPI simple page is cached per representation (HTML or JSON) and per set of versions filtered out of it. With version cooldown enabled, a cached rewrite expires when the first version it held back leaves cooldown, since versions it let through stay allowed and a new upstream version changes the document. A rewrite that held nothing back is kept for the shortest cooldown configured, at least a minute and at most a day. Cached documents carry an `ETag` of their own, and are dated like any other, so clients that revalidate with `If-None-Match` or `If-Modified-Since`, such as Composer, get `304 Not Modified`. The RubyGems compact index and Hex packages filtered by cooldown are kept the same way; they are never served gzip-compressed.
 
 Each cached document is kept gzip-compressed, when that makes it smaller, and served with `Content-Encoding: gzip` to clients that accept it, as npm, pnpm, Yarn and Composer do. A large packument is compressed once rather than on every request, by the proxy or by a reverse proxy in front of it. Only the compressed copy is kept, typically an eighth of the document, and it is decompressed for the clients that don't accept gzip. Documents rewritten outside the cache are served uncompressed.
 
@@ -1611,6 +1611,14 @@ curl -X POST http://localhost:8080/api/mirror \
   -d '{"purls":["pkg:docker/library/alpine@3.20"],"platforms":["linux/amd64"]}'
 ```
 
+`latest` mirrors only the newest version of PURLs without a version, like the command's `--latest` flag:
+
+```bash
+curl -X POST http://localhost:8080/api/mirror \
+  -H "Content-Type: application/json" \
+  -d '{"purls":["pkg:npm/lodash"],"latest":true}'
+```
+
 ## Cache Delete API
 
 Deleting cached artifacts is disabled by default. Enable it to register `DELETE /api/cache` and show Delete buttons on the version page of the web UI:
@@ -1660,6 +1668,7 @@ A CRAN version is mirrored as its source package from `upstream.cran`, for examp
 | `--concurrency` | `4` | Number of parallel downloads |
 | `--dry-run` | `false` | Show what would be mirrored without downloading |
 | `--platform` | | Comma-separated `os/arch[/variant]` list limiting which platforms of container images are mirrored |
+| `--latest` | `false` | Mirror only the newest version of PURLs without a version |
 | `--config` | | Path to configuration file |
 | `--storage-url` | | Storage URL |
 | `--database-driver` | | Database driver |
@@ -1675,6 +1684,12 @@ proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
 ### Unversioned PURLs
 
 A PURL without a version, here or in a mirror API job, mirrors every version the configured upstream lists, through the same client, so `upstream.auth` and `upstream.allow_private_hosts` apply. npm packages in `upstream.npm_routes` are listed from their route. Listing works for npm, gem, golang, hex (from `upstream.hex_api`), pub, pypi, maven, nuget, composer, cran, brew and swift. For cargo and conda the upstream doesn't serve the API used for listing, so versions come from the public registry while the upstream is the default one; with another upstream, and for Composer packages in `upstream.composer_routes` or any other ecosystem, give a version. Julia versions are always listed from the General registry.
+
+With `--latest`, or `"latest": true` in a mirror API job, only the latest version is mirrored, as git-pkgs/registries picks it: the version the registry advertises as latest where it has one, such as npm's `dist-tags.latest`, and otherwise the newest by publish time, leaving out yanked, retracted and deprecated versions. PURLs with a version, including those in an SBOM, are mirrored as given. Run it from cron to keep the newest releases of a list of packages cached:
+
+```bash
+proxy mirror --latest pkg:npm/lodash pkg:pypi/requests pkg:cargo/serde
+```
 
 ### Container images
 
