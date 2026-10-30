@@ -210,9 +210,12 @@ type Proxy struct {
 	// RouteFor returns how to fetch a package that doesn't come from the
 	// ecosystem's default upstream, such as an npm package in
 	// upstream.npm_routes, or nil to use Resolver.
-	RouteFor            func(ecosystem, name string) *ArtifactRoute
-	Logger              *slog.Logger
-	Cooldown            CooldownPolicy
+	RouteFor func(ecosystem, name string) *ArtifactRoute
+	Logger   *slog.Logger
+	Cooldown CooldownPolicy
+	// ShortestCooldown is the shortest cooldown configured anywhere. It
+	// bounds how long a rewrite filtered by cooldown is cached.
+	ShortestCooldown    time.Duration
 	Denylist            *denylist.Policy
 	CacheMetadata       bool
 	MetadataTTL         time.Duration
@@ -281,6 +284,20 @@ type Proxy struct {
 	// the process started; see metadataDate.
 	now     func() time.Time
 	started time.Time
+}
+
+// cooldownEcosystems are the ecosystems whose handlers apply cooldown. Others
+// have no publish time to check, so a configured cooldown has no effect there.
+var cooldownEcosystems = map[string]bool{
+	"cargo": true, "composer": true, "conda": true, "gem": true,
+	"golang": true, "helm": true, "hex": true, "maven": true,
+	"npm": true, "nuget": true, "pub": true, "pypi": true,
+}
+
+// CooldownSupported reports whether the proxy applies cooldown to an
+// ecosystem.
+func CooldownSupported(ecosystem string) bool {
+	return cooldownEcosystems[ecosystem]
 }
 
 // CooldownPolicy supplies version-age filtering and package-specific durations.

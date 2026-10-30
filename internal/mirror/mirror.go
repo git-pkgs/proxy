@@ -32,6 +32,11 @@ type Mirror struct {
 	// Charts mirrors helm charts. Without it they fail.
 	Charts ChartMirrorer
 
+	// Bottles resolves Homebrew formula versions to the images their
+	// bottles are published under, which Images mirrors. Without it brew
+	// PURLs fail.
+	Bottles BottleResolver
+
 	// Versions lists the versions of unversioned PURLs in mirror jobs and
 	// schedules. Nil lists them from the public registries.
 	Versions VersionLister
@@ -43,6 +48,8 @@ type Mirror struct {
 	// RefusePackages, when set, fails every item Images does not take with
 	// this reason instead of fetching it, so nothing is cached.
 	RefusePackages string
+
+	cran cranIndex
 }
 
 // New creates a new Mirror with the given dependencies.
@@ -228,6 +235,10 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 		m.mirrorImage(ctx, pv, tracker)
 		return
 	}
+	if pv.Ecosystem == "brew" {
+		m.mirrorBrew(ctx, pv, tracker)
+		return
+	}
 	if m.RefusePackages != "" {
 		tracker.failed.Add(1)
 		tracker.addError(pv.Ecosystem, pv.Name, pv.Version, m.RefusePackages)
@@ -253,6 +264,10 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 	}
 	if pv.Ecosystem == "swift" {
 		m.mirrorSwift(ctx, pv, tracker)
+		return
+	}
+	if pv.Ecosystem == "cran" {
+		m.mirrorCRAN(ctx, pv, tracker)
 		return
 	}
 	result, err := m.proxy.GetOrFetchArtifact(ctx, pv.Ecosystem, pv.Name, pv.Version, "")

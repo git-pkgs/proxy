@@ -255,6 +255,7 @@ func (s *Server) serve(listener net.Listener) error {
 		return fmt.Errorf("configuring cooldown policy: %w", err)
 	}
 	proxy.Cooldown = cooldownPolicy
+	proxy.ShortestCooldown = s.cfg.Cooldown.Shortest()
 	if s.cooldown, err = newCooldownView(s.cfg.Cooldown, cooldownPolicy); err != nil {
 		return err
 	}

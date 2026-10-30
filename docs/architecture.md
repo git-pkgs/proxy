@@ -355,7 +355,7 @@ Prometheus metrics for cache performance, upstream latency, storage operations, 
 
 ### Cooldown
 
-Version age filtering for supply chain attack mitigation, provided by [github.com/git-pkgs/cooldown](https://github.com/git-pkgs/cooldown). Configurable at global, ecosystem, and per-package levels. Supported by npm, PyPI, pub.dev, and Composer handlers.
+Version age filtering for supply chain attack mitigation, provided by [github.com/git-pkgs/cooldown](https://github.com/git-pkgs/cooldown). Configurable at global, ecosystem, and per-package levels. Supported by the npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyGems, Hex, Go, Maven and Helm handlers.
 
 ### `internal/enrichment`
 

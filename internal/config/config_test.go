@@ -2056,3 +2056,23 @@ upstream:
 		t.Errorf("generic_paths = %v", cfg.Upstream.GenericPaths)
 	}
 }
+
+func TestCooldownShortest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  *CooldownConfig
+		want time.Duration
+	}{
+		{"nil", nil, 0},
+		{"none", &CooldownConfig{Default: "0"}, 0},
+		{"default", &CooldownConfig{Default: "3d"}, 72 * time.Hour},
+		{"ecosystem", &CooldownConfig{Default: "3d", Ecosystems: map[string]string{"npm": "2d", "deb": "0"}}, 48 * time.Hour},
+		{"package", &CooldownConfig{Default: "3d", Packages: map[string]string{"pkg:npm/lodash": "6h"}}, 6 * time.Hour},
+		{"pattern", &CooldownConfig{Default: "0", PackagePatterns: map[string]string{"pkg:npm/@acme/*": "90m"}}, 90 * time.Minute},
+		{"invalid ignored", &CooldownConfig{Default: "3d", Ecosystems: map[string]string{"npm": "soon"}}, 72 * time.Hour},
+	} {
+		if got := tc.cfg.Shortest(); got != tc.want {
+			t.Errorf("%s: Shortest() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}

@@ -98,7 +98,7 @@ func (h *NPMHandler) servedPackument(ctx context.Context, packageName string) (b
 		// fails and nothing has to be filtered out.
 		return upstream.body, upstream.stale, nil
 	}
-	return rewritten.body, upstream.stale, nil
+	return rewritten.content(), upstream.stale, nil
 }
 
 // validNPMPackageName reports whether name is a plain or scoped package

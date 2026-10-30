@@ -153,7 +153,7 @@ func TestNPMStoredRewriteRecordsMetadataHit(t *testing.T) {
 	if diff := artifactHits() - artifactBefore; diff != 0 {
 		t.Errorf("artifact hits delta = %.0f, want 0", diff)
 	}
-	if diff := served() - servedBefore; diff != float64(len(m.body)) {
-		t.Errorf("metadata served bytes delta = %.0f, want %d", diff, len(m.body))
+	if diff := served() - servedBefore; diff != float64(len(m.content())) {
+		t.Errorf("metadata served bytes delta = %.0f, want %d", diff, len(m.content()))
 	}
 }

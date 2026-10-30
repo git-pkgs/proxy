@@ -195,7 +195,7 @@ func (h *GemHandler) handleCompactIndex(w http.ResponseWriter, r *http.Request) 
 
 	// Served as identity, as upstream's index was: Bundler checks digest
 	// headers against the bytes it receives, and asks for ranges of it.
-	m.gzipped = nil
+	m = m.identity()
 	contentType := docs.doc.contentType
 	if contentType == "" || contentType == contentTypeJSON {
 		contentType = "text/plain; charset=utf-8"

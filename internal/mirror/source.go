@@ -70,17 +70,7 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 			return fmt.Errorf("parsing PURL %q: %w", purlStr, err)
 		}
 
-		ecosystem := handlerEcosystem(p.Type)
-		name := p.Name
-		if ecosystem == "conda" {
-			name = condaName(p.Namespace, p.Name, p.Qualifier("channel"))
-		} else if p.Namespace != "" {
-			name = p.Namespace + "/" + p.Name
-		}
-		qualifiers := fileQualifiers(ecosystem, p.Qualifiers.Map())
-		if ecosystem == "julia" {
-			qualifiers = map[string]string{"uuid": p.Qualifier("uuid")}
-		}
+		ecosystem, name, qualifiers := mirrorTarget(p)
 
 		// Images are never expanded to all tags, and conda packages without
 		// a channel aren't listed; both fail when they are mirrored.
@@ -88,6 +78,8 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: p.Version, Qualifiers: qualifiers}
 			if isImageEcosystem(ecosystem) {
 				pv.Qualifiers = p.Qualifiers.Map()
+			}
+			if takesPlatforms(ecosystem) {
 				pv.Platforms = s.Platforms
 			}
 			if err := fn(pv); err != nil {
@@ -102,7 +94,11 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 			return fmt.Errorf("fetching versions for %s/%s: %w", ecosystem, name, err)
 		}
 		for _, v := range listed {
-			if err := fn(PackageVersion{Ecosystem: ecosystem, Name: name, Version: v, Qualifiers: qualifiers}); err != nil {
+			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: v, Qualifiers: qualifiers}
+			if takesPlatforms(ecosystem) {
+				pv.Platforms = s.Platforms
+			}
+			if err := fn(pv); err != nil {
 				return err
 			}
 		}
@@ -132,6 +128,23 @@ func (s *PURLSource) listVersions(ctx context.Context, versions VersionLister, e
 		return nil, nil
 	}
 	return []string{latest}, nil
+}
+
+// mirrorTarget returns the ecosystem, name and file qualifiers a PURL is
+// mirrored under.
+func mirrorTarget(p *purl.PURL) (ecosystem, name string, qualifiers map[string]string) {
+	ecosystem = handlerEcosystem(p.Type)
+	name = p.Name
+	if ecosystem == "conda" {
+		name = condaName(p.Namespace, p.Name, p.Qualifier("channel"))
+	} else if p.Namespace != "" {
+		name = p.Namespace + "/" + p.Name
+	}
+	qualifiers = fileQualifiers(ecosystem, p.Qualifiers.Map())
+	if ecosystem == "julia" {
+		qualifiers = map[string]string{"uuid": p.Qualifier("uuid")}
+	}
+	return ecosystem, name, qualifiers
 }
 
 // SBOMSource extracts package versions from CycloneDX or SPDX SBOM data.

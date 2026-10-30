@@ -75,6 +75,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/denylist"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
@@ -268,6 +269,28 @@ func (c *CooldownConfig) NormalizedPackages() map[string]string {
 		normalized[canonical] = c.Packages[key]
 	}
 	return normalized
+}
+
+// Shortest returns the shortest cooldown configured anywhere, by default,
+// ecosystem, package or package pattern, or 0 when none is. Unparsable
+// durations are left out; Validate reports them.
+func (c *CooldownConfig) Shortest() time.Duration {
+	if c == nil {
+		return 0
+	}
+	var shortest time.Duration
+	consider := func(s string) {
+		if d, err := cooldown.ParseDuration(s); err == nil && d > 0 && (shortest == 0 || d < shortest) {
+			shortest = d
+		}
+	}
+	consider(c.Default)
+	for _, m := range []map[string]string{c.Ecosystems, c.Packages, c.PackagePatterns} {
+		for _, v := range m {
+			consider(v)
+		}
+	}
+	return shortest
 }
 
 // ScanningConfig configures pre-cache artifact scanning (e.g. trivy,
