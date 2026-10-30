@@ -36,6 +36,29 @@ type VersionFinder interface {
 	FindVersion(ctx context.Context, ecosystem, name, version string) (registries.Version, error)
 }
 
+// LatestFinder picks the latest version of a package, for unversioned PURLs
+// when only the latest is mirrored. Listers without it fall back to
+// registries.SelectLatestVersion over ListVersions.
+type LatestFinder interface {
+	LatestVersion(ctx context.Context, ecosystem, name string) (string, error)
+}
+
+// LatestVersion implements LatestFinder with registries.FetchLatestVersion:
+// the version the registry advertises as latest where it has one, such as
+// npm's dist-tags.latest, and otherwise the newest version by publish time
+// that isn't yanked, retracted or deprecated.
+func (r RegistryVersions) LatestVersion(ctx context.Context, ecosystem, name string) (string, error) {
+	reg, name, err := r.registryFor(ctx, ecosystem, name)
+	if err != nil {
+		return "", err
+	}
+	v, err := registries.FetchLatestVersion(ctx, reg, name)
+	if err != nil || v == nil {
+		return "", err
+	}
+	return v.Number, nil
+}
+
 // ListVersions implements VersionLister.
 func (r RegistryVersions) ListVersions(ctx context.Context, ecosystem, name string) ([]string, error) {
 	versions, err := r.fetchVersions(ctx, ecosystem, name)
@@ -64,9 +87,19 @@ func (r RegistryVersions) FindVersion(ctx context.Context, ecosystem, name, vers
 }
 
 func (r RegistryVersions) fetchVersions(ctx context.Context, ecosystem, name string) ([]registries.Version, error) {
-	reg, err := r.registry(ecosystem, name)
+	reg, name, err := r.registryFor(ctx, ecosystem, name)
 	if err != nil {
 		return nil, err
+	}
+	return reg.FetchVersions(ctx, name)
+}
+
+// registryFor returns the client for the registry name is listed in, and
+// the name the registry knows the package by.
+func (r RegistryVersions) registryFor(ctx context.Context, ecosystem, name string) (registries.Registry, string, error) { //nolint:ireturn // registries.New returns the interface
+	reg, err := r.registry(ecosystem, name)
+	if err != nil {
+		return nil, "", err
 	}
 	switch purl.EcosystemToPURLType(ecosystem) {
 	case "helm":
@@ -76,13 +109,13 @@ func (r RegistryVersions) fetchVersions(ctx context.Context, ecosystem, name str
 	case "swift":
 		var baseURL string
 		if baseURL, err = r.baseURL("swift", name); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 		if name, err = swiftIdentity(ctx, r.client(), baseURL, name); err != nil {
-			return nil, err
+			return nil, "", err
 		}
 	}
-	return reg.FetchVersions(ctx, name)
+	return reg, name, nil
 }
 
 // registry returns the client for the registry name is listed in.

@@ -406,7 +406,7 @@ func (h *ComposerHandler) shouldFilterVersion(packagePURL, packageName, version 
 		return false
 	}
 
-	if !h.proxy.Cooldown.IsAllowed("composer", packagePURL, publishedAt) {
+	if !h.proxy.cooldown().IsAllowed("composer", packagePURL, publishedAt) {
 		h.proxy.Logger.Info("cooldown: filtering composer version",
 			"package", packageName, "version", version)
 		return true
@@ -743,7 +743,7 @@ func (h *ComposerHandler) serveCachedRelease(w http.ResponseWriter, r *http.Requ
 		if err != nil || ver == nil || !ver.PublishedAt.Valid {
 			return false
 		}
-		if !h.proxy.Cooldown.IsAllowed("composer", canonicalPackagePURL("composer", packageName), ver.PublishedAt.Time) {
+		if !h.proxy.cooldown().IsAllowed("composer", canonicalPackagePURL("composer", packageName), ver.PublishedAt.Time) {
 			h.proxy.Logger.Info("cooldown: withholding composer archive",
 				"package", packageName, "version", version)
 			http.Error(w, "version not found", http.StatusNotFound)

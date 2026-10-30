@@ -171,7 +171,7 @@ func (h *CargoHandler) applyCooldownFiltering(downstreamResponse http.ResponseWr
 
 		cratePURL := canonicalPackagePURL("cargo", crate.Name)
 
-		if !h.proxy.Cooldown.IsAllowed("cargo", cratePURL, publishedAt) {
+		if !h.proxy.cooldown().IsAllowed("cargo", cratePURL, publishedAt) {
 			h.proxy.Logger.Info("cooldown: filtering cargo version",
 				"crate", crate.Name, "version", crate.Version,
 				"published", crate.PublishTime)
