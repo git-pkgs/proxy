@@ -138,7 +138,8 @@ go build -o proxy ./cmd/proxy
 ./proxy -listen :3000 -base-url https://proxy.example.com
 ```
 
-The proxy is now running. Configure your package managers to use it.
+The proxy is now running. Configure your package managers to use it. For image
+builds, see [Using proxy in Docker builds](docs/docker-builds.md).
 
 ## OpenAPI (Swagger)
 
