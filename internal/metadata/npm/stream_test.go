@@ -24,11 +24,10 @@ func rewriteStream(packageName string, body []byte, options Options) ([]byte, []
 	return out.Bytes(), kept, err
 }
 
-// TestRewriteStreamMatchesRewrite checks that the streamed rewrite writes the
-// same bytes and keeps the same versions as Rewrite, over documents with the
-// filtered members in either order, duplicates, and values Rewrite copies
-// verbatim.
-func TestRewriteStreamMatchesRewrite(t *testing.T) {
+// streamCases returns packuments with the filtered members in either
+// order, duplicates and values Rewrite copies verbatim, and the options to
+// rewrite them with.
+func streamCases() (map[string]string, map[string]Options) {
 	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
 	ts := func(age time.Duration) string { return now.Add(-age).Format(time.RFC3339) }
 	version := func(v string) string {
@@ -60,6 +59,15 @@ func TestRewriteStreamMatchesRewrite(t *testing.T) {
 		"both": {ProxyURL: "http://proxy", Cooldown: &cooldown.Config{Default: "3d"}, EvaluatedAt: now,
 			DeniedVersions: map[string]bool{"1.0.0": true}},
 	}
+	return docs, options
+}
+
+// TestRewriteStreamMatchesRewrite checks that the streamed rewrite writes the
+// same bytes and keeps the same versions as Rewrite, over documents with the
+// filtered members in either order, duplicates, and values Rewrite copies
+// verbatim.
+func TestRewriteStreamMatchesRewrite(t *testing.T) {
+	docs, options := streamCases()
 	for docName, doc := range docs {
 		for optName, opts := range options {
 			t.Run(docName+"/"+optName, func(t *testing.T) {
@@ -158,5 +166,60 @@ func TestScanPackument(t *testing.T) {
 		if scan.Abbreviated() != want || Abbreviated([]byte(body)) != want {
 			t.Errorf("Abbreviated(%s) = %v, want %v", body, scan.Abbreviated(), want)
 		}
+	}
+}
+
+// TestVersionStreamMatchesVersion checks that a single version resolved from
+// the stream is the one Version serves, with the same errors.
+func TestVersionStreamMatchesVersion(t *testing.T) {
+	docs, options := streamCases()
+	specifiers := []string{"latest", "beta", "next", "old", "1.0.0", "2.0.0", "3.0.0", "9.0.0", "missing"}
+	for docName, doc := range docs {
+		scan, err := ScanPackument(strings.NewReader(doc))
+		if err != nil {
+			t.Fatalf("%s: %v", docName, err)
+		}
+		for optName, opts := range options {
+			for _, spec := range specifiers {
+				want, wantErr := Version("demo", spec, []byte(doc), opts)
+				got, gotErr := VersionStream("demo", spec, scan, strings.NewReader(doc), opts)
+				name := docName + "/" + optName + "/" + spec
+				switch {
+				case wantErr != nil || gotErr != nil:
+					if !errors.Is(gotErr, ErrVersionDenied) == errors.Is(wantErr, ErrVersionDenied) ||
+						!errors.Is(gotErr, ErrVersionNotFound) == errors.Is(wantErr, ErrVersionNotFound) ||
+						(gotErr == nil) != (wantErr == nil) {
+						t.Errorf("%s: error %v, Version gave %v", name, gotErr, wantErr)
+					}
+				case !bytes.Equal(got, want):
+					t.Errorf("%s:\n%s\nVersion:\n%s", name, got, want)
+				}
+			}
+		}
+	}
+}
+
+func TestLookupVersion(t *testing.T) {
+	doc := `{"modified":"x","versions":{"1.0.0":{"a":1}},"time":{"1.0.0":"2020-01-01T00:00:00Z","2.0.0":7},` +
+		`"versions":{"1.0.0":{"a":2},"2.0.0":{"b":1}}}`
+	for version, want := range map[string]VersionEntry{
+		"1.0.0": {Entry: json.RawMessage(`{"a":2}`), Published: "2020-01-01T00:00:00Z"},
+		"2.0.0": {Entry: json.RawMessage(`{"b":1}`)},
+		"3.0.0": {},
+	} {
+		got, err := LookupVersion(strings.NewReader(doc), version)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if string(got.Entry) != string(want.Entry) || got.Published != want.Published || got.Abbreviated {
+			t.Errorf("LookupVersion(%s) = %+v, want %+v", version, got, want)
+		}
+	}
+	got, err := LookupVersion(strings.NewReader(`{"modified":"x","versions":{}}`), "1.0.0")
+	if err != nil || !got.Abbreviated {
+		t.Errorf("abbreviated packument: %+v, %v", got, err)
+	}
+	if _, err := LookupVersion(strings.NewReader(`{"versions":{}`), "1.0.0"); err == nil {
+		t.Error("expected an error for truncated JSON")
 	}
 }

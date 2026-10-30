@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/rand"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -36,8 +37,14 @@ var errStoredMetadataChanged = errors.New("stored metadata changed while it was 
 // Concurrent calls for one document share a fetch, and instances sharing the
 // database take turns as for other metadata.
 //
-// It returns errMetadataNotStored when the proxy doesn't cache metadata.
-func (p *Proxy) storedMetadataDocument(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept string) (*database.MetadataCacheEntry, error) {
+// validate, when not nil, checks a fetched document before it replaces the
+// stored one; a document it rejects is not stored, and the stored copy is
+// served as when upstream fails. It does not check a stored copy within its
+// TTL.
+//
+// It returns errMetadataNotStored when the proxy doesn't cache metadata or
+// storing the document failed, and the caller reads it into memory instead.
+func (p *Proxy) storedMetadataDocument(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept string, validate func(io.Reader) error) (*database.MetadataCacheEntry, error) {
 	if !p.CacheMetadata || p.DB == nil || p.Storage == nil || p.MetadataTTL <= 0 {
 		return nil, errMetadataNotStored
 	}
@@ -78,7 +85,7 @@ func (p *Proxy) storedMetadataDocument(ctx context.Context, ecosystem, cacheKey,
 		}
 		res := metadataResult{err: errSharedFetchAbandoned}
 		defer func() { release(res.err != nil || res.stale) }()
-		res = p.fetchStoredMetadata(fetchCtx, ecosystem, cacheKey, upstreamURL, accept, entry)
+		res = p.fetchStoredMetadata(fetchCtx, ecosystem, cacheKey, upstreamURL, accept, validate, entry)
 		return res
 	})
 	return res.entry, res.err
@@ -101,20 +108,21 @@ func usableStoredMetadata(entry *database.MetadataCacheEntry) bool {
 
 // fetchStoredMetadata fetches a document from upstream into storage,
 // revalidating entry when there is one, and falls back to entry when
-// upstream fails.
-func (p *Proxy) fetchStoredMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept string, entry *database.MetadataCacheEntry) metadataResult {
+// upstream fails or validate rejects what it sent. A failure to store is
+// returned as it is, for the caller to read the document into memory.
+func (p *Proxy) fetchStoredMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept string, validate func(io.Reader) error, entry *database.MetadataCacheEntry) metadataResult {
 	revalidate := entry
 	if !usableStoredMetadata(entry) {
 		revalidate = nil
 	}
-	stored, err := p.storeUpstreamMetadata(ctx, ecosystem, cacheKey, upstreamURL, accept, revalidate)
+	stored, err := p.storeUpstreamMetadata(ctx, ecosystem, cacheKey, upstreamURL, accept, validate, revalidate)
 	if errors.Is(err, errStale304) {
-		stored, err = p.storeUpstreamMetadata(ctx, ecosystem, cacheKey, upstreamURL, accept, nil)
+		stored, err = p.storeUpstreamMetadata(ctx, ecosystem, cacheKey, upstreamURL, accept, validate, nil)
 	}
 	if err == nil {
 		return metadataResult{entry: stored}
 	}
-	if !usableStoredMetadata(entry) || errors.Is(err, ErrUpstreamNotFound) {
+	if !usableStoredMetadata(entry) || errors.Is(err, ErrUpstreamNotFound) || errors.Is(err, errMetadataNotStored) {
 		return metadataResult{err: err}
 	}
 	return p.staleStoredMetadata(ecosystem, cacheKey, entry, err)
@@ -136,7 +144,10 @@ func (p *Proxy) staleStoredMetadata(ecosystem, cacheKey string, entry *database.
 // returns its new cache row. On a 304 for entry it only moves the row's
 // fetched_at on; errStale304 means the row was replaced meanwhile and the
 // caller should fetch without validators.
-func (p *Proxy) storeUpstreamMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept string, entry *database.MetadataCacheEntry) (*database.MetadataCacheEntry, error) {
+//
+// With validate, the document is staged under a path of its own and checked
+// there first, so one validate rejects never replaces the stored copy.
+func (p *Proxy) storeUpstreamMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept string, validate func(io.Reader) error, entry *database.MetadataCacheEntry) (*database.MetadataCacheEntry, error) {
 	resp, err := p.requestUpstreamMetadata(ctx, upstreamURL, entry, accept, "")
 	if err != nil {
 		return nil, err
@@ -166,14 +177,62 @@ func (p *Proxy) storeUpstreamMetadata(ctx context.Context, ecosystem, cacheKey, 
 	}
 	// Go decompresses the body, since no Accept-Encoding was set, so it is
 	// stored uncompressed.
-	if _, err := p.storeMetadataBlob(ctx, ecosystem, cacheKey, metadataStoragePath(ecosystem, cacheKey), resp.Body, meta); err != nil {
-		return nil, err
+	var body io.Reader = resp.Body
+	if validate != nil {
+		staged, err := p.stageMetadata(ctx, ecosystem, cacheKey, resp.Body, validate)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = staged.Close() }()
+		body = staged
+	}
+	if _, err := p.storeMetadataBlob(ctx, ecosystem, cacheKey, metadataStoragePath(ecosystem, cacheKey), body, meta); err != nil {
+		return nil, fmt.Errorf("%w: %w", errMetadataNotStored, err)
 	}
 	stored, err := p.DB.GetMetadataCache(ecosystem, cacheKey)
 	if err != nil || !usableStoredMetadata(stored) {
 		return nil, fmt.Errorf("reading the stored metadata row: %w", errors.Join(err, errMetadataNotStored))
 	}
 	return stored, nil
+}
+
+// stageMetadata stores body under a staging path of its own, checks it with
+// validate, and returns it opened for reading, to be stored in place of the
+// cached copy. The staged copy is deleted when the reader is closed. A
+// failure to store it is returned as errMetadataNotStored.
+func (p *Proxy) stageMetadata(ctx context.Context, ecosystem, cacheKey string, body io.Reader, validate func(io.Reader) error) (io.ReadCloser, error) {
+	path := metadataStoragePath(ecosystem, cacheKey) + ".staged-" + rand.Text()
+	discard := func() {
+		if err := p.Storage.Delete(context.WithoutCancel(ctx), path); err != nil {
+			p.Logger.Warn("failed to delete staged metadata", "ecosystem", ecosystem, "key", cacheKey, "error", err)
+		}
+	}
+	if _, _, err := p.Storage.Store(ctx, path, body); err != nil {
+		discard()
+		return nil, fmt.Errorf("%w: staging: %w", errMetadataNotStored, err)
+	}
+	if err := readStored(func() (io.ReadCloser, error) { return p.Storage.Open(ctx, path) }, validate); err != nil {
+		discard()
+		return nil, err
+	}
+	staged, err := p.Storage.Open(ctx, path)
+	if err != nil {
+		discard()
+		return nil, fmt.Errorf("%w: reading staged copy: %w", errMetadataNotStored, err)
+	}
+	return &stagedReader{ReadCloser: staged, discard: discard}, nil
+}
+
+// stagedReader deletes the staged copy it reads when closed.
+type stagedReader struct {
+	io.ReadCloser
+	discard func()
+}
+
+func (s *stagedReader) Close() error {
+	err := s.ReadCloser.Close()
+	s.discard()
+	return err
 }
 
 // openStoredMetadata opens the document entry describes. Reading it to the

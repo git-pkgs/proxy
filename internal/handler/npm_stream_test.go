@@ -16,12 +16,18 @@ import (
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/registries/fetch"
 )
 
 // bigPackument returns a packument laid out as registry.npmjs.org writes
 // them, dist-tags before versions and time after, with n old versions padded
 // so the document is large, and a latest published an hour ago.
 func bigPackument(n int) string {
+	return bigPackumentAt("https://registry.npmjs.org", n)
+}
+
+// bigPackumentAt is bigPackument with tarballs under base.
+func bigPackumentAt(base string, n int) string {
 	var b strings.Builder
 	b.WriteString(`{"_id":"big","name":"big","dist-tags":{"latest":"9.0.0","old":"1.0.0"},"versions":{`)
 	times := []string{`"created":"2015-01-01T00:00:00Z"`}
@@ -30,12 +36,12 @@ func bigPackument(n int) string {
 		if i == 0 {
 			v = "1.0.0"
 		}
-		fmt.Fprintf(&b, `%q:{"name":"big","version":%q,"readme":%q,"dist":{"tarball":"https://registry.npmjs.org/big/-/big-%s.tgz"}},`,
-			v, v, strings.Repeat("x", 512), v)
+		fmt.Fprintf(&b, `%q:{"name":"big","version":%q,"readme":%q,"dist":{"tarball":"%s/big/-/big-%s.tgz"}},`,
+			v, v, strings.Repeat("x", 512), base, v)
 		times = append(times, fmt.Sprintf(`%q:"2016-01-01T00:%02d:%02dZ"`, v, i/60%60, i%60))
 	}
 	recent := time.Now().Add(-time.Hour).UTC().Format(time.RFC3339)
-	b.WriteString(`"9.0.0":{"name":"big","version":"9.0.0","dist":{"tarball":"https://registry.npmjs.org/big/-/big-9.0.0.tgz"}}},`)
+	b.WriteString(`"9.0.0":{"name":"big","version":"9.0.0","dist":{"tarball":"` + base + `/big/-/big-9.0.0.tgz"}}},`)
 	times = append(times, `"9.0.0":"`+recent+`"`)
 	b.WriteString(`"time":{` + strings.Join(times, ",") + `},"readme":"<b>big</b>"}`)
 	return b.String()
@@ -200,7 +206,7 @@ func TestNPMStreamedPackumentStale(t *testing.T) {
 func TestNPMStreamedPackumentChangedInStorage(t *testing.T) {
 	u := newStreamUpstream(t, bigPackument(10))
 	proxy, store, _ := streamProxy(t, u)
-	entry, err := proxy.storedMetadataDocument(context.Background(), "npm", "big", u.URL+"/big", contentTypeJSON)
+	entry, err := proxy.storedMetadataDocument(context.Background(), "npm", "big", u.URL+"/big", contentTypeJSON, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -225,6 +231,9 @@ func TestNPMStreamedPackumentRevalidates(t *testing.T) {
 	proxy, store, handler := streamProxy(t, u)
 	first := serve(handler, "/big", nil)
 	decodeStreamed(t, first)
+	store.mu.Lock()
+	stores := store.stores
+	store.mu.Unlock()
 
 	proxy.MetadataTTL = time.Nanosecond
 	second := serve(handler, "/big", nil)
@@ -237,7 +246,105 @@ func TestNPMStreamedPackumentRevalidates(t *testing.T) {
 	}
 	store.mu.Lock()
 	defer store.mu.Unlock()
-	if store.stores != 1 {
-		t.Errorf("document stored %d times, want once", store.stores)
+	if store.stores != stores {
+		t.Errorf("the 304 stored the document again (%d stores, %d before)", store.stores, stores)
+	}
+}
+
+// TestNPMStreamedPackumentKeepsFullCopy checks that an abbreviated packument
+// from upstream, where cooldown needs the full one, doesn't replace the full
+// copy in storage, which is served instead as when upstream fails.
+func TestNPMStreamedPackumentKeepsFullCopy(t *testing.T) {
+	full := bigPackument(10)
+	u := newStreamUpstream(t, full)
+	proxy, store, handler := streamProxy(t, u)
+	decodeStreamed(t, serve(handler, "/big", nil))
+
+	proxy.MetadataTTL = time.Nanosecond
+	proxy.SetMetadataRewriteCacheSize(64 << 20)
+	u.body.Store(`{"name":"big","modified":"2026-01-01T00:00:00Z","dist-tags":{"latest":"1.0.0"},"versions":{"1.0.0":{}}}`)
+	if doc := decodeStreamed(t, serve(handler, "/big", nil)); len(doc.Versions) != 10 {
+		t.Errorf("served %d versions, want the 10 of the full copy", len(doc.Versions))
+	}
+
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if got := string(store.files[metadataStoragePath("npm", "big")]); got != full {
+		t.Errorf("stored packument was replaced: %.80s", got)
+	}
+	for path := range store.files {
+		if strings.Contains(path, ".staged-") {
+			t.Errorf("staged copy %s left in storage", path)
+		}
+	}
+}
+
+// TestNPMStreamedPackumentStorageFails checks that a packument is still
+// served, read into memory, when storing it fails.
+func TestNPMStreamedPackumentStorageFails(t *testing.T) {
+	u := newStreamUpstream(t, bigPackument(10))
+	_, store, handler := streamProxy(t, u)
+	store.storeErr = errors.New("no space left on device")
+	doc := decodeStreamed(t, serve(handler, "/big", nil))
+	if len(doc.Versions) != 10 || doc.DistTags["latest"] != "1.0.9" {
+		t.Errorf("served %d versions, latest %q; want 10 and 1.0.9", len(doc.Versions), doc.DistTags["latest"])
+	}
+}
+
+// TestNPMStreamedVersionMetadata resolves versions and dist-tags of a
+// packument larger than metadata_max_size.
+func TestNPMStreamedVersionMetadata(t *testing.T) {
+	body := bigPackument(100)
+	u := newStreamUpstream(t, body)
+	proxy, _, handler := streamProxy(t, u)
+	proxy.MetadataMaxSize = int64(len(body) / 4)
+
+	for path, want := range map[string]string{
+		"/big/1.0.5":  "1.0.5",
+		"/big/latest": "1.0.99", // 9.0.0 is inside cooldown
+		"/big/old":    "1.0.0",
+	} {
+		rec := serve(handler, path, nil)
+		var v struct {
+			Version string `json:"version"`
+			Dist    struct {
+				Tarball string `json:"tarball"`
+			} `json:"dist"`
+		}
+		if rec.Code != http.StatusOK || json.Unmarshal(rec.Body.Bytes(), &v) != nil {
+			t.Errorf("%s: status %d: %.200s", path, rec.Code, rec.Body.String())
+			continue
+		}
+		if v.Version != want || v.Dist.Tarball != "http://proxy.example/npm/big/-/big-"+want+".tgz" {
+			t.Errorf("%s = %s with tarball %s, want %s", path, v.Version, v.Dist.Tarball, want)
+		}
+	}
+	if rec := serve(handler, "/big/9.0.0", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("version inside cooldown: status %d, want 404", rec.Code)
+	}
+	if n := u.requests.Load(); n != 1 {
+		t.Errorf("upstream asked %d times, want once", n)
+	}
+}
+
+// TestNPMStreamedTarballCooldown checks the tarball download against a
+// packument larger than metadata_max_size: the version's publish time and
+// tarball URL are read from storage.
+func TestNPMStreamedTarballCooldown(t *testing.T) {
+	u := newStreamUpstream(t, "")
+	u.body.Store(bigPackumentAt(u.URL, 100))
+	proxy, _, handler := streamProxy(t, u)
+	proxy.MetadataMaxSize = 1024
+	fetcher := proxy.Fetcher.(*mockFetcher)
+	fetcher.artifact = &fetch.Artifact{Body: io.NopCloser(strings.NewReader("package"))}
+
+	if rec := serve(handler, "/big/-/big-9.0.0.tgz", nil); rec.Code != http.StatusNotFound {
+		t.Errorf("tarball inside cooldown: status %d, want 404", rec.Code)
+	}
+	if rec := serve(handler, "/big/-/big-1.0.5.tgz", nil); rec.Code != http.StatusOK || rec.Body.String() != "package" {
+		t.Errorf("tarball: status %d, body %q", rec.Code, rec.Body.String())
+	}
+	if want := u.URL + "/big/-/big-1.0.5.tgz"; fetcher.fetchedURL != want {
+		t.Errorf("fetched %s, want %s from the packument", fetcher.fetchedURL, want)
 	}
 }

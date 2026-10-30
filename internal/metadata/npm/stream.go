@@ -99,50 +99,63 @@ func RewriteStream(packageName string, scan *Scan, r io.Reader, w io.Writer, opt
 		return nil, ErrNotStreamable
 	}
 	h := &transformer{options}
-
-	versions := make(map[string]any, len(scan.versions))
-	for _, v := range scan.versions {
-		versions[v] = nil
-	}
-	metadata := map[string]any{}
-	timeMap := scan.objectValue(metadata, "time", scan.time)
-	distTags := scan.objectValue(metadata, "dist-tags", scan.distTags)
-	timeEntries := len(timeMap)
-	originalTags := maps.Clone(distTags)
-
-	h.applyCooldownFiltering(metadata, versions, packageName)
-	h.applyDenylistFiltering(metadata, versions)
-
+	f := scan.filter(h, packageName)
 	sw := &streamWriter{
 		transformer: h,
 		packageName: packageName,
 		scan:        scan,
-		versions:    versions,
-		timeMap:     timeMap,
-		distTags:    distTags,
-		timeChanged: timeMap != nil && len(timeMap) != timeEntries,
-		tagsChanged: distTags != nil && !reflect.DeepEqual(distTags, originalTags),
+		filtered:    f,
 		seen:        map[string]int{},
 	}
 	if err := jsonstream.CopyObject(json.NewDecoder(r), w, sw.member); err != nil {
 		return nil, err
 	}
 	h.tarballsRewritten(sw.rewritten)
-	return slices.Collect(maps.Keys(versions)), nil
+	return slices.Collect(maps.Keys(f.versions)), nil
+}
+
+// filtered is what cooldown and the denylist leave of a scanned packument.
+type filtered struct {
+	versions                 map[string]any
+	timeMap, distTags        map[string]any
+	timeChanged, tagsChanged bool
+}
+
+// filter runs the filters Rewrite runs over what scan collected. The scan is
+// left as it is, so it can be filtered again.
+func (s *Scan) filter(h *transformer, packageName string) filtered {
+	versions := make(map[string]any, len(s.versions))
+	for _, v := range s.versions {
+		versions[v] = nil
+	}
+	metadata := map[string]any{}
+	timeMap := s.objectValue(metadata, "time", s.time)
+	distTags := s.objectValue(metadata, "dist-tags", s.distTags)
+	timeEntries := len(timeMap)
+	originalTags := maps.Clone(distTags)
+
+	h.applyCooldownFiltering(metadata, versions, packageName)
+	h.applyDenylistFiltering(metadata, versions)
+
+	return filtered{
+		versions:    versions,
+		timeMap:     timeMap,
+		distTags:    distTags,
+		timeChanged: timeMap != nil && len(timeMap) != timeEntries,
+		tagsChanged: distTags != nil && !reflect.DeepEqual(distTags, originalTags),
+	}
 }
 
 // streamWriter writes the second pass of RewriteStream from the filtered
 // state the first pass left.
 type streamWriter struct {
 	*transformer
-	packageName              string
-	scan                     *Scan
-	versions                 map[string]any
-	timeMap, distTags        map[string]any
-	timeChanged, tagsChanged bool
-	seen                     map[string]int
-	entry                    bytes.Buffer
-	rewritten                int
+	filtered
+	packageName string
+	scan        *Scan
+	seen        map[string]int
+	entry       bytes.Buffer
+	rewritten   int
 }
 
 // member writes one top-level member. Members the filters don't touch are
@@ -201,13 +214,19 @@ func (s *streamWriter) time(t *jsonstream.Member) error {
 }
 
 // objectValue records value under name in metadata, as Rewrite's
-// decodeObject does, and returns it when it is an object.
+// decodeObject does, and returns it when it is an object. An object is
+// copied, since the filters edit it.
 func (s *Scan) objectValue(metadata map[string]any, name string, value any) map[string]any {
 	if s.occurrences[name] == 0 {
 		return nil
 	}
-	metadata[name] = value
-	object, _ := value.(map[string]any)
+	object, ok := value.(map[string]any)
+	if !ok {
+		metadata[name] = value
+		return nil
+	}
+	object = maps.Clone(object)
+	metadata[name] = object
 	return object
 }
 
@@ -267,4 +286,127 @@ func objectKeys(dec *json.Decoder) ([]string, bool, error) {
 func skipValue(dec *json.Decoder) error {
 	var raw json.RawMessage
 	return dec.Decode(&raw)
+}
+
+// VersionStream is Version for a packument too large to hold in memory. scan
+// is the result of ScanPackument over the bytes r reads again; the second
+// pass only looks for the one version entry it serves. For a document
+// without a versions object it returns ErrNotStreamable.
+func VersionStream(packageName, specifier string, scan *Scan, r io.Reader, options Options) ([]byte, error) {
+	if !scan.versionsObject || len(options.LocalVersions) > 0 {
+		return nil, ErrNotStreamable
+	}
+	h := &transformer{options}
+	f := scan.filter(h, packageName)
+
+	target := specifier
+	if tag, ok := f.distTags[specifier].(string); ok {
+		target = tag
+	}
+	if options.DeniedVersions[target] {
+		return nil, ErrVersionDenied
+	}
+	if _, kept := f.versions[target]; !kept {
+		return nil, ErrVersionNotFound
+	}
+	entry, err := LookupVersion(r, target)
+	if err != nil {
+		return nil, err
+	}
+	if entry.Entry == nil {
+		return nil, ErrVersionNotFound
+	}
+	var out bytes.Buffer
+	h.writeNPMVersion(&out, packageName, target, entry.Entry)
+	return out.Bytes(), nil
+}
+
+// VersionEntry is what a packument holds for one version.
+type VersionEntry struct {
+	// Entry is versions[version], or nil when there is none.
+	Entry json.RawMessage
+	// Published is time[version], or "" when it is missing or not a string.
+	Published string
+	// Abbreviated is set for an abbreviated packument (see Abbreviated).
+	Abbreviated bool
+}
+
+// LookupVersion reads a packument once and returns what it holds for
+// version, keeping no other version's entry. Of repeated keys the last one
+// counts, as with JSON.parse.
+func LookupVersion(r io.Reader, version string) (VersionEntry, error) {
+	var e VersionEntry
+	var hasTime, hasModified bool
+	dec := json.NewDecoder(r)
+	if err := expectDelim(dec, '{'); err != nil {
+		return e, err
+	}
+	for dec.More() {
+		key, err := objectKey(dec)
+		if err != nil {
+			return e, err
+		}
+		switch key {
+		case "versions":
+			e.Entry, err = objectMember(dec, version)
+		case "time":
+			hasTime = true
+			var raw json.RawMessage
+			raw, err = objectMember(dec, version)
+			e.Published = ""
+			if err == nil && raw != nil {
+				_ = json.Unmarshal(raw, &e.Published)
+			}
+		default:
+			hasModified = hasModified || key == "modified"
+			err = skipValue(dec)
+		}
+		if err != nil {
+			return e, err
+		}
+	}
+	if err := expectDelim(dec, '}'); err != nil {
+		return e, err
+	}
+	if _, err := dec.Token(); err != io.EOF {
+		if err == nil {
+			err = errors.New("unexpected data after the top-level object")
+		}
+		return e, err
+	}
+	e.Abbreviated = hasModified && !hasTime
+	return e, nil
+}
+
+// objectMember reads a value and returns its member key when it is an object
+// that has one, the last if repeated, or nil.
+func objectMember(dec *json.Decoder, key string) (json.RawMessage, error) {
+	tok, err := dec.Token()
+	if err != nil {
+		return nil, err
+	}
+	delim, ok := tok.(json.Delim)
+	if !ok {
+		return nil, nil
+	}
+	var found json.RawMessage
+	for dec.More() {
+		var k string
+		if delim == '{' {
+			if k, err = objectKey(dec); err != nil {
+				return nil, err
+			}
+		}
+		var raw json.RawMessage
+		if err := dec.Decode(&raw); err != nil {
+			return nil, err
+		}
+		if delim == '{' && k == key {
+			found = raw
+		}
+	}
+	if _, err := dec.Token(); err != nil {
+		return nil, err
+	}
+	return found, nil
 }
