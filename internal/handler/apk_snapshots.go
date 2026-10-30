@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/rand"
 	"io"
 	"net/http"
 	"strconv"
@@ -11,23 +12,13 @@ import (
 	"github.com/git-pkgs/proxy/internal/database"
 )
 
-// Dated snapshots of APK indexes.
-//
-// Alpine mirrors keep only the current build of each package, so once a
-// package is upgraded the index no longer lists the old build and
-// `apk add name=old-version` fails. With snapshots enabled, every version of an
-// index (and of a detached signature) the proxy stores is kept, and
-// /apk/{name}@{YYYY-MM-DD}/... serves the version that was current at the end
-// of that day (UTC). The kept bytes are the signed upstream bytes, so apk
-// verifies them as usual. Packages under a snapshot path are the same
-// requests as under the plain path.
-
 // apkSnapshotDateLayout is the date format of a snapshot path segment.
 const apkSnapshotDateLayout = "2006-01-02"
 
 // WithSnapshots keeps earlier versions of the indexes this handler serves and
-// makes them available under /apk/{name}@{YYYY-MM-DD}/. keep is how long a
-// version is kept after it was replaced; 0 disables snapshots.
+// makes them available under /apk/{name}@{YYYY-MM-DD}/, as signed upstream
+// bytes that apk verifies as usual. keep is how long a version is kept after
+// it was replaced; 0 disables snapshots.
 func (h *APKHandler) WithSnapshots(keep time.Duration) *APKHandler {
 	h.snapshots = keep
 	return h
@@ -125,7 +116,15 @@ func (h *APKHandler) recordSnapshot(ctx context.Context, cacheKey string) {
 		return
 	}
 
-	validFrom := time.Now()
+	h.storeSnapshot(ctx, cacheKey, entry, time.Now())
+}
+
+// storeSnapshot records the cached document entry as the version current
+// from validFrom. Concurrent requests can both get here for the same
+// version; each copies to a path of its own, so the one whose row is not
+// added only deletes its own copy.
+func (h *APKHandler) storeSnapshot(ctx context.Context, cacheKey string, entry *database.MetadataCacheEntry, validFrom time.Time) {
+	digest := entry.ContentDigest.String
 	storagePath := apkSnapshotStoragePath(cacheKey, digest, validFrom)
 	size, ok := h.copySnapshotBlob(ctx, entry.StoragePath, storagePath, digest)
 	if !ok {
@@ -178,10 +177,13 @@ func (h *APKHandler) discardSnapshotBlob(ctx context.Context, path string) {
 	}
 }
 
-// apkSnapshotStoragePath is where one kept version of the document cached
-// under cacheKey is stored. The time it became current keeps a version that
-// returns after an upgrade was rolled back apart from its earlier copy.
+// apkSnapshotStoragePath returns a new path to store one kept version of the
+// document cached under cacheKey at. The time it became current keeps a
+// version that returns after an upgrade was rolled back apart from its
+// earlier copy, and a random suffix keeps two requests recording the same
+// version in the same millisecond apart.
 func apkSnapshotStoragePath(cacheKey, digest string, validFrom time.Time) string {
 	return "_snapshots/" + apkEcosystem + "/" + cacheKey + "/" +
-		strconv.FormatInt(validFrom.UnixMilli(), 10) + "-" + strings.TrimPrefix(digest, "sha256:")
+		strconv.FormatInt(validFrom.UnixMilli(), 10) + "-" + strings.TrimPrefix(digest, "sha256:") +
+		"-" + rand.Text()
 }

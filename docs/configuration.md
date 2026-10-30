@@ -662,6 +662,10 @@ Durations take a `d` suffix; empty or `"0"` disables snapshots. Snapshots need
 `cache_metadata`. Their files live under `_snapshots/` in storage and do not
 count towards `storage.max_size`.
 
+Turning snapshots off, or `cache_metadata` off, leaves the kept versions in
+place. To remove them, first set a short duration such as `"1h"` and let the
+hourly prune delete everything but the newest version of each index.
+
 Snapshots keep indexes, not packages. A package listed by an old snapshot can
 still be evicted by `storage.max_size` or [retention](#retention), and is then
 only available while upstream still has it. Retention counts from a package's

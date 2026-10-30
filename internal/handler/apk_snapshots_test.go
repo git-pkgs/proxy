@@ -166,3 +166,40 @@ func TestAPKSnapshots_ConfiguredNameWins(t *testing.T) {
 
 	expectAPKResponse(t, h, "/alpine@2026-01-10"+apkSnapshotIndexPath, http.StatusOK, "index v1")
 }
+
+// TestAPKSnapshots_SameVersionRecordedTwice checks that two requests
+// recording the same version in the same millisecond, as coalesced fetches
+// after an upstream update can, leave the recorded snapshot readable: the
+// request whose row is not added must not delete the other's blob.
+func TestAPKSnapshots_SameVersionRecordedTwice(t *testing.T) {
+	u := newAPKSnapshotUpstream(t)
+	h, db := newSnapshotAPKHandler(t, u.server.URL)
+	expectAPKResponse(t, h, "/alpine"+apkSnapshotIndexPath, http.StatusOK, "index v1")
+
+	key := h.metadataCacheKey("alpine", u.server.URL, apkSnapshotIndexPath[1:])
+	entry, err := db.GetMetadataCache(apkEcosystem, key)
+	if err != nil || entry == nil {
+		t.Fatalf("cached index row = %v, %v", entry, err)
+	}
+	if _, err := db.Exec(`DELETE FROM metadata_snapshots`); err != nil {
+		t.Fatal(err)
+	}
+	validFrom := time.Now()
+	h.storeSnapshot(t.Context(), key, entry, validFrom)
+	h.storeSnapshot(t.Context(), key, entry, validFrom)
+
+	if n := snapshotCount(t, db); n != 1 {
+		t.Fatalf("%d snapshots recorded, want 1", n)
+	}
+	snap, err := db.LatestMetadataSnapshot(apkEcosystem, key)
+	if err != nil || snap == nil {
+		t.Fatalf("latest snapshot = %v, %v", snap, err)
+	}
+	body, err := h.proxy.Storage.Open(t.Context(), snap.StoragePath)
+	if err != nil {
+		t.Fatalf("recorded snapshot blob unreadable: %v", err)
+	}
+	_ = body.Close()
+	day := validFrom.UTC().Format(apkSnapshotDateLayout)
+	expectAPKResponse(t, h, "/alpine@"+day+apkSnapshotIndexPath, http.StatusOK, "index v1")
+}

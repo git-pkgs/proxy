@@ -7,13 +7,10 @@ import (
 	"time"
 )
 
-// Metadata snapshots keep earlier versions of a metadata document after
-// upstream replaced it, so a request for a past date can be answered with the
-// document that was current then. Each row is one version, valid from
-// valid_from_ms (Unix milliseconds, the time the proxy first stored it) until
-// the next row for the same ecosystem and name.
-
-// MetadataSnapshot is one kept version of a metadata document.
+// MetadataSnapshot is one kept version of a metadata document, so a request
+// for a past date can be answered with the document that was current then.
+// It is valid from ValidFromMS (Unix milliseconds, the time the proxy first
+// stored it) until the next snapshot of the same ecosystem and name.
 type MetadataSnapshot struct {
 	ID              int64          `db:"id"`
 	Ecosystem       string         `db:"ecosystem"`

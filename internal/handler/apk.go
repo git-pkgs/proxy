@@ -53,8 +53,7 @@ type APKHandler struct {
 	proxy        *Proxy
 	proxyURL     string
 	repositories map[string]string
-	// snapshots is how long replaced index versions are kept; 0 disables
-	// snapshots. See WithSnapshots.
+	// snapshots: see WithSnapshots.
 	snapshots time.Duration
 }
 
