@@ -1,9 +1,11 @@
 package handler
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"io"
 	"net/http"
 	"net/url"
@@ -97,18 +99,34 @@ func (h *ComposerHandler) upstreamIndex(ctx context.Context) (composerUpstreamIn
 	return c.index, c.ok
 }
 
+// fetchUpstreamIndex fetches and parses the default repository's
+// packages.json. A document that doesn't parse is rejected before it is
+// cached, so a broken response never replaces a good copy: with metadata
+// caching the stored copy is used instead, and without it the error keeps
+// the copy in memory.
 func (h *ComposerHandler) fetchUpstreamIndex(ctx context.Context) (composerUpstreamIndex, error) {
 	indexURL := h.repoURL + "/packages.json"
 	cacheKey := hashedCacheKey(h.repoURL, "/packages.json")
-	res := h.proxy.fetchMetadataDocument(ctx, "composer", cacheKey, indexURL, contentTypeJSON, nil)
+	validate := func(body []byte) error {
+		_, err := parseComposerUpstreamIndex(indexURL, body)
+		return err
+	}
+	res := h.proxy.fetchMetadataDocument(ctx, "composer", cacheKey, indexURL, contentTypeJSON, validate)
 	if res.err != nil {
 		h.proxy.Logger.Warn("failed to fetch upstream composer packages.json", "url", indexURL, "error", res.err)
 		return composerUpstreamIndex{}, res.err
 	}
-	return parseComposerUpstreamIndex(indexURL, res.body), nil
+	return parseComposerUpstreamIndex(indexURL, res.body)
 }
 
-func parseComposerUpstreamIndex(indexURL string, body []byte) composerUpstreamIndex {
+// errComposerIndexNotObject is returned for a packages.json that is valid
+// JSON but not an object, such as null.
+var errComposerIndexNotObject = errors.New("composer packages.json is not a JSON object")
+
+// parseComposerUpstreamIndex reads the advisories and filter fields of a
+// packages.json. A document without them yields an empty index; one that is
+// not a JSON object, or has them in the wrong shape, is an error.
+func parseComposerUpstreamIndex(indexURL string, body []byte) (composerUpstreamIndex, error) {
 	var doc struct {
 		SecurityAdvisories struct {
 			Metadata bool   `json:"metadata"`
@@ -121,8 +139,11 @@ func parseComposerUpstreamIndex(indexURL string, body []byte) composerUpstreamIn
 		} `json:"filter"`
 	}
 	var index composerUpstreamIndex
+	if trimmed := bytes.TrimSpace(body); len(trimmed) == 0 || trimmed[0] != '{' {
+		return index, errComposerIndexNotObject
+	}
 	if err := json.Unmarshal(body, &doc); err != nil {
-		return index
+		return index, fmt.Errorf("parsing composer packages.json: %w", err)
 	}
 	// Composer refuses advisories configured without an api-url unless the
 	// repository lists its packages, which the proxy does not.
@@ -137,7 +158,7 @@ func parseComposerUpstreamIndex(indexURL string, body []byte) composerUpstreamIn
 		index.filterLists = doc.Filter.Lists
 		index.filterSummaryURL, _ = resolveComposerURL(indexURL, doc.Filter.SummaryURL)
 	}
-	return index
+	return index, nil
 }
 
 // resolveComposerURL resolves a URL from packages.json against the document's

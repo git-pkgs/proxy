@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -12,6 +13,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/git-pkgs/proxy/internal/database"
 )
 
 // composerAdvisoryUpstream serves a packages.json advertising security
@@ -21,6 +24,8 @@ type composerAdvisoryUpstream struct {
 	*httptest.Server
 	index string
 	down  atomic.Bool // answer every request with 503
+	// malformed answers packages.json with an HTML page and status 200.
+	malformed atomic.Bool
 
 	mu       sync.Mutex
 	requests []*recordedRequest
@@ -53,6 +58,11 @@ func newComposerAdvisoryUpstream(t *testing.T) *composerAdvisoryUpstream {
 		w.Header().Set("Content-Type", "application/json")
 		switch r.URL.Path {
 		case "/packages.json":
+			if u.malformed.Load() {
+				w.Header().Set("Content-Type", "text/html")
+				_, _ = io.WriteString(w, "<html><body>Service temporarily unavailable</body></html>")
+				return
+			}
 			_, _ = io.WriteString(w, u.index)
 		case "/api/security-advisories/":
 			_, _ = io.WriteString(w, composerAdvisoriesResponse)
@@ -232,6 +242,73 @@ func TestComposerServiceIndexKeptInMemory(t *testing.T) {
 	serveComposerIndex(t, h)
 	if got := len(upstream.requestsTo("/packages.json")); got != fetched {
 		t.Errorf("failed fetch retried %d times within the interval", got-fetched)
+	}
+}
+
+// assertComposerSecurityAdvertised checks that h advertises the upstream's
+// advisories API and malware filter, and relays both.
+func assertComposerSecurityAdvertised(t *testing.T, h *ComposerHandler, when string) {
+	t.Helper()
+	index := serveComposerIndex(t, h)
+	if !advertisesAdvisories(index) {
+		t.Errorf("%s: security-advisories not advertised: %v", when, index)
+	}
+	if _, ok := index["filter"]; !ok {
+		t.Errorf("%s: filter not advertised: %v", when, index)
+	}
+	w := serveAdvisories(h, http.MethodPost, "/api/security-advisories/", "packages%5B%5D=public%2Flibrary")
+	if w.Code != http.StatusOK || w.Body.String() != composerAdvisoriesResponse {
+		t.Errorf("%s: advisories = %d %q, want upstream's advisories", when, w.Code, w.Body)
+	}
+	if w := serveComposer(h, "/lists/summary.json"); w.Code != http.StatusOK || w.Body.String() != composerFilterSummary {
+		t.Errorf("%s: filter summary = %d %q, want upstream's summary", when, w.Code, w.Body)
+	}
+}
+
+// A packages.json that doesn't parse, sent with status 200, must not replace
+// the last good index, with metadata caching on or off: the advisories API
+// and the malware filter stay advertised and relayed.
+func TestComposerServiceIndexMalformedRefreshKeepsLastGood(t *testing.T) {
+	for _, cacheMetadata := range []bool{false, true} {
+		t.Run(fmt.Sprintf("cache_metadata=%v", cacheMetadata), func(t *testing.T) {
+			upstream := newComposerAdvisoryUpstream(t)
+			h := newAdvisoryComposerHandler(t, upstream)
+			h.proxy.CacheMetadata = cacheMetadata
+			h.proxy.MetadataTTL = time.Hour
+			now := time.Now()
+			h.indexCache.now = func() time.Time { return now }
+			cacheKey := hashedCacheKey(upstream.URL, "/packages.json")
+
+			assertComposerSecurityAdvertised(t, h, "before the refresh")
+			var stored *database.MetadataCacheEntry
+			if cacheMetadata {
+				var err error
+				if stored, err = h.proxy.DB.GetMetadataCache("composer", cacheKey); err != nil || stored == nil {
+					t.Fatalf("packages.json not cached: %v, %v", stored, err)
+				}
+				expireMetadata(t, h.proxy.DB, "composer", cacheKey)
+			}
+
+			upstream.malformed.Store(true)
+			now = now.Add(2 * time.Hour)
+			fetched := len(upstream.requestsTo("/packages.json"))
+			assertComposerSecurityAdvertised(t, h, "after a malformed refresh")
+			if got := len(upstream.requestsTo("/packages.json")); got == fetched {
+				t.Fatal("packages.json was not fetched again after the TTL")
+			}
+
+			if !cacheMetadata {
+				return
+			}
+			after, err := h.proxy.DB.GetMetadataCache("composer", cacheKey)
+			if err != nil || after == nil || after.ContentDigest != stored.ContentDigest {
+				t.Errorf("cached packages.json replaced by the malformed refresh: %v, %v", after, err)
+			}
+			// A fresh handler, as after a restart, has nothing in memory and
+			// reads the stored copy.
+			restarted := NewComposerHandlerWithUpstreams(h.proxy, "http://proxy.test", upstream.URL, upstream.URL)
+			assertComposerSecurityAdvertised(t, restarted, "after a restart")
+		})
 	}
 }
 
