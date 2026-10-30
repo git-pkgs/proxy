@@ -9,17 +9,19 @@ import (
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"path/filepath"
 	"strings"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
-	"github.com/git-pkgs/proxy/internal/changefeed"
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/storage"
+	"github.com/git-pkgs/registries/changes"
+	"github.com/git-pkgs/registries/client"
 	"github.com/git-pkgs/registries/fetch"
 	"github.com/go-chi/chi/v5"
 )
@@ -186,14 +188,18 @@ func TestChangeFeedRevalidatesChangedMetadata(t *testing.T) {
 	reg.set("/npm/left-pad", npmDoc("1.0.0"))
 	h, db := changeFeedRouter(t, reg)
 	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	feeds := []changefeed.Feed{
-		changefeed.NewComposerFeed(reg.Client(), changefeed.ComposerFeedURL(reg.URL)),
-		changefeed.NewNPMFeed(reg.Client(), reg.URL+"/replicate/registry/_changes"),
+	c := changes.WithClient(client.NewClient(client.WithHTTPClient(reg.Client()), client.WithMaxRetries(0)))
+	feeds := []changes.Feed{
+		changes.NewPackagist(c, changes.WithURL(changes.PackagistFeedURL(reg.URL))),
+		changes.NewNPM(c, changes.WithURL(reg.URL+"/replicate/registry/_changes")),
 	}
-	for _, feed := range feeds {
-		if err := readChangeFeed(context.Background(), db, logger, feed); err != nil {
-			t.Fatalf("starting %s feed: %v", feed.Ecosystem(), err)
+	cursors := make([]changes.Cursor, len(feeds))
+	for i, feed := range feeds {
+		cursor, err := readChangeFeed(context.Background(), db, logger, feed, "")
+		if err != nil || cursor == "" {
+			t.Fatalf("starting %s feed: cursor %q, %v", feed.Ecosystem(), cursor, err)
 		}
+		cursors[i] = cursor
 	}
 
 	getBody(t, h, "/composer/p2/acme/lib.json")
@@ -209,9 +215,10 @@ func TestChangeFeedRevalidatesChangedMetadata(t *testing.T) {
 		t.Fatal("npm packument revalidated before the feed listed it; the test proves nothing")
 	}
 
-	for _, feed := range feeds {
-		if err := readChangeFeed(context.Background(), db, logger, feed); err != nil {
-			t.Fatalf("reading %s feed: %v", feed.Ecosystem(), err)
+	for i, feed := range feeds {
+		next, err := readChangeFeed(context.Background(), db, logger, feed, cursors[i])
+		if err != nil || next == cursors[i] {
+			t.Fatalf("reading %s feed: cursor %q -> %q, %v", feed.Ecosystem(), cursors[i], next, err)
 		}
 	}
 
@@ -238,11 +245,51 @@ type countingFeed struct {
 
 func (f *countingFeed) Ecosystem() string { return "npm" }
 
-func (f *countingFeed) Changes(context.Context) (changefeed.Changes, error) {
-	if f.reads.Add(1) <= f.failures {
-		return changefeed.Changes{}, errors.New("feed down")
+func (f *countingFeed) Start(context.Context) (changes.Cursor, error) {
+	return f.read()
+}
+
+func (f *countingFeed) Changes(_ context.Context, cursor changes.Cursor) (changes.Changes, changes.Cursor, error) {
+	if _, err := f.read(); err != nil {
+		return changes.Changes{}, cursor, err
 	}
-	return changefeed.Changes{}, nil
+	return changes.Changes{}, cursor, nil
+}
+
+func (f *countingFeed) read() (changes.Cursor, error) {
+	if f.reads.Add(1) <= f.failures {
+		return "", errors.New("feed down")
+	}
+	return "1", nil
+}
+
+// fixedFeed reports the same names on every read.
+type fixedFeed struct{ names []string }
+
+func (fixedFeed) Ecosystem() string                             { return "npm" }
+func (fixedFeed) Start(context.Context) (changes.Cursor, error) { return "1", nil }
+func (f fixedFeed) Changes(context.Context, changes.Cursor) (changes.Changes, changes.Cursor, error) {
+	return changes.Changes{Names: f.names}, "2", nil
+}
+
+// TestReadChangeFeedKeepsCursorWhenExpiryFails checks that the cursor moves
+// past the changes only once they are expired, so changes whose expiry
+// failed are read again.
+func TestReadChangeFeedKeepsCursorWhenExpiryFails(t *testing.T) {
+	db, err := database.Create(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	feed := fixedFeed{names: []string{"left-pad"}}
+
+	if next, err := readChangeFeed(context.Background(), db, logger, feed, "1"); err != nil || next != "2" {
+		t.Fatalf("read = %q, %v; want cursor 2", next, err)
+	}
+	_ = db.Close()
+	if next, err := readChangeFeed(context.Background(), db, logger, feed, "1"); err == nil || next != "1" {
+		t.Errorf("read with a failing expiry = %q, %v; want an error and cursor 1", next, err)
+	}
 }
 
 // TestFollowChangeFeedStopsWithContext checks that a failing feed is retried
