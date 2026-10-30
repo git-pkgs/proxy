@@ -290,6 +290,20 @@ type Proxy struct {
 	cooldownWatch cooldownWatch
 }
 
+// cooldownEcosystems are the ecosystems whose handlers apply cooldown. Others
+// have no publish time to check, so a configured cooldown has no effect there.
+var cooldownEcosystems = map[string]bool{
+	"cargo": true, "composer": true, "conda": true, "gem": true,
+	"golang": true, "helm": true, "hex": true, "maven": true,
+	"npm": true, "nuget": true, "pub": true, "pypi": true,
+}
+
+// CooldownSupported reports whether the proxy applies cooldown to an
+// ecosystem.
+func CooldownSupported(ecosystem string) bool {
+	return cooldownEcosystems[ecosystem]
+}
+
 // CooldownPolicy supplies version-age filtering and package-specific durations.
 type CooldownPolicy interface {
 	IsAllowed(ecosystem, packagePURL string, publishedAt time.Time) bool

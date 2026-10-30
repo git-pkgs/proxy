@@ -442,6 +442,7 @@ func runMirror() {
 	concurrency := fs.Int("concurrency", 4, "Number of parallel downloads") //nolint:mnd // default concurrency
 	dryRun := fs.Bool("dry-run", false, "Show what would be mirrored without downloading")
 	platforms := fs.String("platform", "", "Comma-separated os/arch[/variant] list limiting which platforms of container images are mirrored")
+	latest := fs.Bool("latest", false, "Mirror only the newest version of PURLs without a version")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "git-pkgs proxy - Pre-populate cache\n\n")
@@ -450,6 +451,7 @@ func runMirror() {
 		fmt.Fprintf(os.Stderr, "  proxy mirror pkg:npm/lodash@4.17.21\n")
 		fmt.Fprintf(os.Stderr, "  proxy mirror --sbom sbom.cdx.json\n")
 		fmt.Fprintf(os.Stderr, "  proxy mirror pkg:npm/lodash  # all versions\n")
+		fmt.Fprintf(os.Stderr, "  proxy mirror --latest pkg:npm/lodash  # newest version\n")
 		fmt.Fprintf(os.Stderr, "  proxy mirror --platform linux/amd64 pkg:docker/library/alpine@3.20\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		fs.PrintDefaults()
@@ -475,9 +477,9 @@ func runMirror() {
 			fmt.Fprintf(os.Stderr, "error reading SBOM %s: %v\n", *sbomPath, err)
 			os.Exit(1)
 		}
-		source = &mirror.SBOMSource{Data: data, Name: *sbomPath, Platforms: platformList}
+		source = &mirror.SBOMSource{Data: data, Name: *sbomPath, Latest: *latest, Platforms: platformList}
 	case len(purls) > 0:
-		source = &mirror.PURLSource{PURLs: purls, Platforms: platformList}
+		source = &mirror.PURLSource{PURLs: purls, Latest: *latest, Platforms: platformList}
 	default:
 		fmt.Fprintf(os.Stderr, "error: provide PURLs or --sbom\n")
 		fs.Usage()
@@ -619,6 +621,7 @@ func newCommandMirror(cfg *config.Config, proxy *handler.Proxy, images *handler.
 	db *database.DB, store storage.Storage, logger *slog.Logger, workers int) *mirror.Mirror {
 	m := mirror.New(proxy, db, store, logger, workers)
 	m.Images = images
+	m.Bottles = handler.NewHomebrewHandler(proxy, cfg.Upstream.HomebrewAPI)
 	m.Charts = handler.NewHelmHandler(proxy, cfg.BaseURL, cfg.Upstream.Helm)
 	server.UseMirrorUpstreams(m, cfg.Upstream, proxy.HTTPClient)
 	if cfg.Scanning.Enabled {

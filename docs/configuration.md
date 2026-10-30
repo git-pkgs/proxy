@@ -388,6 +388,7 @@ upstream:
 - Composer metadata of routed packages carries an empty `notification-url`, so Composer does not report their installs to the default upstream's `notify-batch` endpoint.
 - Use `upstream.auth` for the registry's credentials. The proxy has no authentication of its own, so every client that can reach it can download routed packages.
 - Search (`/composer/search.json`) and the package list (`/composer/packages/list.json`) still come from the default upstream only.
+- Attestations of a routed npm version (`/npm/-/npm/v1/attestations/...`) come from the route, like its tarballs.
 - npm audit, signing-key, search and ping requests still go to `upstream.npm`. An audit request lists every package in the dependency tree, routed ones included.
 - Routes can only be set in the configuration file, not with environment variables.
 
@@ -1124,9 +1125,9 @@ Exact `packages` entries take precedence over patterns. When several patterns ma
 
 Resolution order: exact package override, then package pattern, then ecosystem override, then global default. This lets you set a conservative default while exempting trusted package families.
 
-The web UI's dashboard shows the default and the ecosystem overrides, and how many package overrides and patterns there are; their names aren't shown, since the UI has no authentication. A package's page shows the cooldown that applies to it and which kind of rule it comes from.
+The web UI's dashboard shows the default and the ecosystem overrides, and how many package overrides and patterns there are; their names aren't shown, since the UI has no authentication. A package's page shows the cooldown that applies to it and which kind of rule it comes from; it shows none for ecosystems without cooldown support, and the dashboard marks an ecosystem override for one as not supported.
 
-Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyGems, Hex, Go and Maven. Most of these ecosystems include publish timestamps in their metadata; Go and Maven are described below.
+Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyGems, Hex, Go, Maven and Helm. Most of these ecosystems include publish timestamps in their metadata; Go and Maven are described below.
 
 Go has no publish time. The module proxy's `.info` gives the commit time of the revision a version points at, so a version tagged on an old commit counts as old. The proxy reads each listed version's `.info` once, stores the time, and leaves versions in cooldown out of `@v/list` and `@latest`. When upstream's `@latest` is in cooldown, it serves the newest release out of cooldown instead. Requests for a version in cooldown, including its `.info`, `.mod` and `.zip`, and a branch or commit query that resolves to one, get 403 rather than 404, because the go command moves on to the next `GOPROXY` entry, such as `direct`, after a 404. If a version's `.info` can't be fetched, the list or download fails with 502 instead of letting the version through.
 
@@ -1138,6 +1139,8 @@ Maven caveats:
 - On Google's Maven Central mirror, `Last-Modified` is when the file reached the mirror's bucket, a few hours after it was published, so versions stay in cooldown a little longer. The upload time is in `x-goog-meta-last-modified`, which the proxy does not read. It is missing for files from the mirror's 2019 bulk import.
 - Maven Central lists versions in version order, not in the order they were published. A patch to an older release line published after a newer release that is out of cooldown stays listed while it is in cooldown, but its files are still refused.
 - SNAPSHOT versions are not held back.
+
+Helm uses each release's `created` time from the repository's `index.yaml`. Releases in cooldown are left out of the index the proxy serves, and their archives aren't served; a release without `created` is let through. Charts pulled over OCI have no publish time and aren't held back.
 
 RubyGems, Hex and PyPI keep their publish times outside the metadata clients read: the RubyGems versions API, the Hex HTTP API (`upstream.hex_api`) and the PyPI JSON API. The proxy fetches them alongside each compact index, package or simple page it filters, and for PyPI downloads. Cooldown fails closed: when it applies to a package and those times can't be fetched or parsed, or the metadata can't be rewritten, the request fails with 502, or with 503 and `Retry-After` while the upstream is rate limiting the proxy, instead of serving the metadata unfiltered. The same goes for npm, Composer and pub.dev metadata that can't be rewritten, and for npm tarball downloads whose publish time can't be read. A PyPI file or npm tarball that is already cached is still served when its publish time can't be read; only a download that would have to be fetched fails. A PyPI release's time is the upload time of its newest file. The proxy stores it when a download looks it up, and serves files of that release that are already cached against the stored time without reading the JSON API again. A file that isn't cached yet is always looked up, since it may have been added to the release since, and the newer time is stored. Packages exempted with a duration of `0` are served as before and don't need the times. A PyPI package the JSON API returns 404 for has no times to go by and is served unfiltered.
 
@@ -1586,6 +1589,14 @@ curl -X POST http://localhost:8080/api/mirror \
   -d '{"purls":["pkg:docker/library/alpine@3.20"],"platforms":["linux/amd64"]}'
 ```
 
+`latest` mirrors only the newest version of PURLs without a version, like the command's `--latest` flag:
+
+```bash
+curl -X POST http://localhost:8080/api/mirror \
+  -H "Content-Type: application/json" \
+  -d '{"purls":["pkg:npm/lodash"],"latest":true}'
+```
+
 ## Cache Delete API
 
 Deleting cached artifacts is disabled by default. Enable it to register `DELETE /api/cache` and show Delete buttons on the version page of the web UI:
@@ -1627,12 +1638,15 @@ A Julia package is mirrored with the source tarball `upstream.julia` serves at `
 
 A Swift release is mirrored from `upstream.swift` with its source archive, checked against the SHA-256 checksum in the release metadata and cached under the key `/swift/{scope}/{name}/{version}.zip` serves. Give the registry scope as the namespace, for example `pkg:swift/apple/swift-argument-parser@1.5.0` for `apple.swift-argument-parser`, or the source repository, as SBOM tools write it: `pkg:swift/github.com/apple/swift-argument-parser@1.5.0` is looked up through the upstream's `/identifiers`, and the first identity it lists is mirrored. The release metadata, the package's release list and the release's `Package.swift` with its version-specific manifests are stored in the metadata cache too, so `swift package resolve` works with the upstream unreachable. Serving them, and the archive, offline needs `cache_metadata` on the server, since the archive is served with the checksum from the release metadata.
 
+A CRAN version is mirrored as its source package from `upstream.cran`, for example `pkg:cran/glue@1.8.1`, and cached under the file name, so it is served for both `/cran/src/contrib/{file}` and `/cran/src/contrib/Archive/{name}/{file}`, where CRAN moves it once a newer version is published. The current version is fetched from `src/contrib` and checked against the MD5 sum in `src/contrib/PACKAGES.gz`; older versions are fetched unchecked from `src/contrib/Archive/{name}/`, as the CRAN handler fetches them. Binary packages aren't mirrored, and neither are the `PACKAGES` indexes, so `install.packages` needs the upstream or an index the proxy already cached; installing the tarball by URL works without either.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--sbom` | | Path to CycloneDX or SPDX SBOM file |
 | `--concurrency` | `4` | Number of parallel downloads |
 | `--dry-run` | `false` | Show what would be mirrored without downloading |
 | `--platform` | | Comma-separated `os/arch[/variant]` list limiting which platforms of container images are mirrored |
+| `--latest` | `false` | Mirror only the newest version of PURLs without a version |
 | `--config` | | Path to configuration file |
 | `--storage-url` | | Storage URL |
 | `--database-driver` | | Database driver |
@@ -1648,6 +1662,12 @@ proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
 ### Unversioned PURLs
 
 A PURL without a version, here or in a mirror API job, mirrors every version the configured upstream lists, through the same client, so `upstream.auth` and `upstream.allow_private_hosts` apply. npm packages in `upstream.npm_routes` are listed from their route. Listing works for npm, gem, golang, hex (from `upstream.hex_api`), pub, pypi, maven, nuget, composer, cran, brew and swift. For cargo and conda the upstream doesn't serve the API used for listing, so versions come from the public registry while the upstream is the default one; with another upstream, and for Composer packages in `upstream.composer_routes` or any other ecosystem, give a version. Julia versions are always listed from the General registry.
+
+With `--latest`, or `"latest": true` in a mirror API job, only the latest version is mirrored, as git-pkgs/registries picks it: the version the registry advertises as latest where it has one, such as npm's `dist-tags.latest`, and otherwise the newest by publish time, leaving out yanked, retracted and deprecated versions. PURLs with a version, including those in an SBOM, are mirrored as given. Run it from cron to keep the newest releases of a list of packages cached:
+
+```bash
+proxy mirror --latest pkg:npm/lodash pkg:pypi/requests pkg:cargo/serde
+```
 
 ### Container images
 
@@ -1666,6 +1686,21 @@ proxy mirror 'pkg:oci/debian@sha256:...?repository_url=docker.io/library/debian&
 - Without `--platform` every platform of an index is mirrored, including Windows images, which can be large. Attestation manifests of the selected platforms are mirrored too, because Docker fetches them on every pull.
 - Non-distributable (foreign) layers are skipped.
 - While `scanning.enabled` is set, the command refuses images, because scanners fetch staged layers from the running server. Use the mirror API instead.
+
+### Homebrew bottles
+
+`pkg:brew` PURLs mirror a homebrew/core formula's bottles, which Homebrew publishes as an image on `upstream.homebrew_artifact`. They are mirrored like that image, under the keys brew reads through `HOMEBREW_ARTIFACT_DOMAIN`, so `brew install` is served from cache, also when the upstream is unreachable:
+
+```bash
+proxy mirror --platform linux/arm64 pkg:brew/hello@2.12.3 pkg:brew/openssl%403
+```
+
+- A formula name with `@` is written with `%40`, since `@` starts the version: `pkg:brew/openssl%403` is `openssl@3`, and `pkg:brew/openssl@3` is version 3 of `openssl`.
+- The formula's JSON API on `upstream.homebrew_api` gives the image tag for the current version, which carries the formula's revision and the bottles' rebuild (`hello` 2.12.3 is tagged `2.12.3-1`). Only the current version is described there; another version is used as the tag as given, so give the full tag, such as `2.12.2` or `2.12.3-1`, for older bottles.
+- A PURL without a version mirrors the current version.
+- `--platform` selects bottles like image platforms: `linux/arm64`, `linux/amd64`, or `darwin/arm64` for every macOS release's arm64 bottle. Without it every bottle of the version is mirrored.
+- Dependencies aren't mirrored with a formula; list them too. brew also needs the JSON API, which the proxy keeps with `cache_metadata`.
+- Casks, source archives and taps other than homebrew/core aren't mirrored.
 
 ### Scheduled refresh
 

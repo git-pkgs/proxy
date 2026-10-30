@@ -52,10 +52,10 @@ type Options struct {
 
 type transformer struct{ Options }
 
-// Rewrite filters upstream versions and rewrites their tarball URLs, preserving
-// untouched JSON values verbatim. Hosted entries override upstream versions.
-// The returned version set is unordered. The document, denylist and hosted
-// entries are not modified.
+// Rewrite filters upstream versions and points their tarball and attestation
+// URLs at the proxy, preserving untouched JSON values verbatim. Hosted entries
+// override upstream versions. The returned version set is unordered. The
+// document, denylist and hosted entries are not modified.
 func Rewrite(packageName string, body []byte, options Options) ([]byte, []string, error) {
 	return (&transformer{options}).rewriteMetadataWithLocal(packageName, body, options.LocalVersions)
 }
@@ -316,9 +316,10 @@ func (h *transformer) writeNPMVersions(out *bytes.Buffer, packageName string, ve
 	return err
 }
 
-// writeNPMVersion writes one version entry with its dist.tarball pointing at
-// this proxy, and reports whether it rewrote the tarball. An entry without a
-// string tarball is written unchanged.
+// writeNPMVersion writes one version entry with its dist.tarball and
+// dist.attestations.url pointing at this proxy, and reports whether it
+// rewrote the tarball. Members that are missing or not strings are written
+// unchanged.
 func (h *transformer) writeNPMVersion(out *bytes.Buffer, packageName, version string, raw []byte) bool {
 	dist, ok, err := jsonscan.FindMember(raw, "dist")
 	if err != nil || !ok {
@@ -326,27 +327,68 @@ func (h *transformer) writeNPMVersion(out *bytes.Buffer, packageName, version st
 		return false
 	}
 	distRaw := dist.Value(raw)
-	tarball, ok, err := jsonscan.FindMember(distRaw, "tarball")
-	if err != nil || !ok || distRaw[tarball.ValStart] != '"' {
-		out.Write(raw)
-		return false
-	}
-	var oldTarball string
-	if err := json.Unmarshal(tarball.Value(distRaw), &oldTarball); err != nil {
-		out.Write(raw)
-		return false
-	}
 
-	newTarball := TarballURL(h.ProxyURL, packageName, version, oldTarball)
-	encoded, err := json.Marshal(newTarball)
-	if err != nil {
-		out.Write(raw)
-		return false
+	var buf [2]urlEdit
+	edits := buf[:0]
+	tarball, ok := stringMember(distRaw, "tarball")
+	if ok {
+		tarball.replacement = TarballURL(h.ProxyURL, packageName, version, tarball.old)
+		edits = append(edits, tarball.shift(dist.ValStart))
 	}
-	out.Write(raw[:dist.ValStart+tarball.ValStart])
-	out.Write(encoded)
-	out.Write(raw[dist.ValStart+tarball.ValEnd:])
-	return true
+	if attestations, found, err := jsonscan.FindMember(distRaw, "attestations"); err == nil && found {
+		if att, ok := stringMember(attestations.Value(distRaw), "url"); ok {
+			att.replacement = AttestationsURL(h.ProxyURL, packageName, version)
+			edits = append(edits, att.shift(dist.ValStart+attestations.ValStart))
+		}
+	}
+	writeEdits(out, raw, edits)
+	return tarball.replacement != ""
+}
+
+// urlEdit replaces the string value at raw[start:end], which decodes to old,
+// with replacement.
+type urlEdit struct {
+	start, end  int
+	old         string
+	replacement string
+}
+
+func (e urlEdit) shift(offset int) urlEdit {
+	e.start += offset
+	e.end += offset
+	return e
+}
+
+// stringMember finds the string member name in obj.
+func stringMember(obj []byte, name string) (urlEdit, bool) {
+	m, ok, err := jsonscan.FindMember(obj, name)
+	if err != nil || !ok || obj[m.ValStart] != '"' {
+		return urlEdit{}, false
+	}
+	var old string
+	if err := json.Unmarshal(m.Value(obj), &old); err != nil {
+		return urlEdit{}, false
+	}
+	return urlEdit{start: m.ValStart, end: m.ValEnd, old: old}, true
+}
+
+// writeEdits writes raw with the edits applied. There are at most two, which
+// may come in either order.
+func writeEdits(out *bytes.Buffer, raw []byte, edits []urlEdit) {
+	if len(edits) == 2 && edits[1].start < edits[0].start {
+		edits[0], edits[1] = edits[1], edits[0]
+	}
+	pos := 0
+	for _, e := range edits {
+		encoded, err := json.Marshal(e.replacement)
+		if err != nil {
+			continue
+		}
+		out.Write(raw[pos:e.start])
+		out.Write(encoded)
+		pos = e.end
+	}
+	out.Write(raw[pos:])
 }
 
 // tarballsRewritten reports once per document how many tarball URLs it
@@ -432,6 +474,13 @@ func TarballURL(proxyURL, packageName, version, tarball string) string {
 	}
 
 	return fmt.Sprintf("%s/npm/%s/-/%s", proxyURL, url.PathEscape(packageName), filename)
+}
+
+// AttestationsURL returns the proxy URL that serves the attestations of a
+// version, in the form the npm registry uses: the package name with its scope
+// slash encoded, "@", and the version.
+func AttestationsURL(proxyURL, packageName, version string) string {
+	return fmt.Sprintf("%s/npm/-/npm/v1/attestations/%s@%s", proxyURL, url.PathEscape(packageName), url.PathEscape(version))
 }
 
 // findNewestVersion returns the version string with the most recent timestamp
