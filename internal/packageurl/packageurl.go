@@ -29,25 +29,19 @@ func WithVersionString(packagePURL, version string) string {
 }
 
 // MakeCacheStrings returns package and version PURLs suitable for artifact
-// cache records. Swift registry identities use an explicit generic PURL until
-// their source repository has been resolved. The result is independent of the
-// configured upstream so cache entries survive an upstream.swift change,
-// matching every other ecosystem.
+// cache records. Swift registry identities keep their generic storage PURLs.
+// Cache keys are independent of the configured upstream.
 func MakeCacheStrings(ecosystem, name, version string) (packagePURL, versionPURL string) {
+	if purl.NormalizeEcosystem(ecosystem) == "swift" {
+		if identity, ok := swiftRegistryIdentity(name); ok {
+			pkg := purl.New("generic", "swift-registry", identity, "", nil)
+			return pkg.String(), pkg.WithVersion(version).String()
+		}
+	}
 	if pkg := Make(ecosystem, name, ""); pkg != nil {
 		return pkg.String(), pkg.WithVersion(version).String()
 	}
-	if purl.NormalizeEcosystem(ecosystem) != "swift" {
-		return "", ""
-	}
-
-	identity, ok := swiftRegistryIdentity(name)
-	if !ok {
-		return "", ""
-	}
-
-	pkg := purl.New("generic", "swift-registry", identity, "", nil)
-	return pkg.String(), pkg.WithVersion(version).String()
+	return "", ""
 }
 
 func swiftRegistryIdentity(name string) (string, bool) {
