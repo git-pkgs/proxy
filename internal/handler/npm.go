@@ -29,6 +29,10 @@ const (
 	// npmKeysPath serves the registry signing keys `npm audit signatures` reads.
 	npmKeysPath = "/-/npm/v1/keys"
 
+	// npmAttestationsPrefix serves a version's provenance and publish
+	// attestations, as /-/npm/v1/attestations/{name}@{version}.
+	npmAttestationsPrefix = "/-/npm/v1/attestations/"
+
 	// npmSearchPath is what `npm search` queries, with the terms in the query
 	// string. npmPingPath is what `npm ping` checks.
 	npmSearchPath = "/-/v1/search"
@@ -94,6 +98,11 @@ func (h *NPMHandler) Routes() http.Handler {
 
 		if r.Method != http.MethodGet {
 			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+
+		if strings.HasPrefix(r.URL.Path, npmAttestationsPrefix) {
+			h.handleAttestations(w, r)
 			return
 		}
 
@@ -634,26 +643,33 @@ func npmVersionTarball(body []byte, version string) string {
 }
 
 func validateTarballURL(raw, registryURL string) (string, error) {
-	tarball, err := url.Parse(raw)
+	return validateRegistryURL("tarball", raw, registryURL)
+}
+
+// validateRegistryURL checks that a URL a packument lists for a version's
+// file is on the package's registry, under its base path, and returns it.
+// what names the file in errors.
+func validateRegistryURL(what, raw, registryURL string) (string, error) {
+	parsed, err := url.Parse(raw)
 	if err != nil {
-		return "", fmt.Errorf("parsing npm tarball URL: %w", err)
+		return "", fmt.Errorf("parsing npm %s URL: %w", what, err)
 	}
 	upstream, err := url.Parse(registryURL)
 	if err != nil {
 		return "", fmt.Errorf("parsing npm upstream URL: %w", err)
 	}
-	if tarball.User != nil || tarball.Fragment != "" ||
-		tarball.Scheme != upstream.Scheme || !strings.EqualFold(tarball.Host, upstream.Host) {
-		return "", errors.New("npm tarball URL does not match upstream registry")
+	if parsed.User != nil || parsed.Fragment != "" ||
+		parsed.Scheme != upstream.Scheme || !strings.EqualFold(parsed.Host, upstream.Host) {
+		return "", fmt.Errorf("npm %s URL does not match upstream registry", what)
 	}
-	if containsPathTraversal(tarball.Path) || strings.Contains(tarball.Path, "\\") {
-		return "", errors.New("npm tarball URL contains path traversal")
+	if containsPathTraversal(parsed.Path) || strings.Contains(parsed.Path, "\\") {
+		return "", fmt.Errorf("npm %s URL contains path traversal", what)
 	}
 	basePath := strings.TrimRight(upstream.Path, "/")
-	if basePath != "" && !strings.HasPrefix(tarball.Path, basePath+"/") {
-		return "", errors.New("npm tarball URL is outside upstream base path")
+	if basePath != "" && !strings.HasPrefix(parsed.Path, basePath+"/") {
+		return "", fmt.Errorf("npm %s URL is outside upstream base path", what)
 	}
-	return tarball.String(), nil
+	return parsed.String(), nil
 }
 
 // versionInCooldown reports whether a version is still inside the cooldown

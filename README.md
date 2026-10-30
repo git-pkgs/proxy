@@ -186,7 +186,10 @@ through the proxy: the audit and signing-key endpoints are passed through to the
 configured upstream registry, with upstream authentication applied. Advisories
 therefore come from upstream's database, not from the proxy's own vulnerability
 data, and versions withheld by [cooldown](#version-cooldown) are not excluded
-from the report.
+from the report. Packuments point each version's attestations (provenance) at
+the proxy, which fetches them from the package's registry and caches them;
+attestations of versions held back by cooldown or blocked by the denylist are
+not served.
 
 To serve private packages through the same registry URL, see [Private package routes](docs/configuration.md#private-package-routes).
 
@@ -1262,6 +1265,7 @@ Recently cached:
 | `POST /npm/-/npm/v1/security/*` | npm/pnpm/Yarn audit endpoints, passed through to upstream |
 | `GET /npm/-/npm/v1/keys` | npm registry signing keys, passed through to upstream |
 | `GET /npm/-/package/{name}/dist-tags` | `npm dist-tag ls`, answered from the packument the proxy serves (cooldown and pushed versions applied); changing tags is not supported |
+| `GET /npm/-/npm/v1/attestations/{name}@{version}` | npm provenance attestations of a version, fetched from the package's registry and cached |
 | `GET /npm/-/v1/search`, `GET /npm/-/ping` | `npm search` and `npm ping`, passed through to upstream uncached |
 | `GET /cargo/*` | Cargo sparse index protocol |
 | `GET /gem/*` | RubyGems protocol |

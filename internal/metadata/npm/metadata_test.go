@@ -165,3 +165,32 @@ func TestAbbreviated(t *testing.T) {
 		}
 	}
 }
+
+// TestNPMRewriteAttestationsURL checks that dist.attestations.url points at
+// the proxy whichever order dist lists its members in, and that nothing else
+// in dist changes.
+func TestNPMRewriteAttestationsURL(t *testing.T) {
+	options := Options{ProxyURL: "http://proxy"}
+	tests := []struct{ name, version, dist, want string }{
+		{"demo", "1.0.0",
+			`{"tarball":"https://registry.npmjs.org/demo/-/demo-1.0.0.tgz","attestations":{"url":"https://registry.npmjs.org/-/npm/v1/attestations/demo@1.0.0","provenance":{"predicateType":"p"}}}`,
+			`{"tarball":"http://proxy/npm/demo/-/demo-1.0.0.tgz","attestations":{"url":"http://proxy/npm/-/npm/v1/attestations/demo@1.0.0","provenance":{"predicateType":"p"}}}`},
+		{"@scope/demo", "2.0.0-rc.1",
+			`{"attestations":{"provenance":{},"url":"https://registry.npmjs.org/-/npm/v1/attestations/@scope%2fdemo@2.0.0-rc.1"},"tarball":"https://registry.npmjs.org/@scope/demo/-/demo-2.0.0-rc.1.tgz"}`,
+			`{"attestations":{"provenance":{},"url":"http://proxy/npm/-/npm/v1/attestations/@scope%2Fdemo@2.0.0-rc.1"},"tarball":"http://proxy/npm/@scope%2Fdemo/-/demo-2.0.0-rc.1.tgz"}`},
+		{"demo", "3.0.0",
+			`{"attestations":{"url":7}}`,
+			`{"attestations":{"url":7}}`},
+	}
+	for _, tt := range tests {
+		input := `{"versions":{"` + tt.version + `":{"dist":` + tt.dist + `}}}`
+		out, _, err := Rewrite(tt.name, []byte(input), options)
+		if err != nil {
+			t.Fatal(err)
+		}
+		want := `{"versions":{"` + tt.version + `":{"dist":` + tt.want + `}}}`
+		if string(out) != want {
+			t.Errorf("%s@%s: rewrite =\n%s\nwant\n%s", tt.name, tt.version, out, want)
+		}
+	}
+}

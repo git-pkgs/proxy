@@ -388,6 +388,7 @@ upstream:
 - Composer metadata of routed packages carries an empty `notification-url`, so Composer does not report their installs to the default upstream's `notify-batch` endpoint.
 - Use `upstream.auth` for the registry's credentials. The proxy has no authentication of its own, so every client that can reach it can download routed packages.
 - Search (`/composer/search.json`) and the package list (`/composer/packages/list.json`) still come from the default upstream only.
+- Attestations of a routed npm version (`/npm/-/npm/v1/attestations/...`) come from the route, like its tarballs.
 - npm audit, signing-key, search and ping requests still go to `upstream.npm`. An audit request lists every package in the dependency tree, routed ones included.
 - Routes can only be set in the configuration file, not with environment variables.
 
