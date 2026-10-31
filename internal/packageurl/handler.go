@@ -31,6 +31,9 @@ func HandlerEcosystem(purlType string) string {
 //     bare
 //   - pypi and nuget: the name in purl's comparison form, PEP 503 for PyPI
 //     and lowercased for NuGet, as the handlers store them
+//   - swift: namespace/name, the registry scope or the source repository
+//     with the package, which the Swift mirror resolves; purl's full name
+//     is the registry identity scope.name
 //
 // Other types use purl's full name, which keeps the namespace: "@babel/core",
 // or "org.slf4j:slf4j-api" for Maven, as its handler stores it.
@@ -43,6 +46,8 @@ func HandlerPackage(p *purl.PURL) (ecosystem, name string) {
 		return ecosystem, condaName(p.Namespace, p.Name, p.Qualifier("channel"))
 	case p.Type == "pypi" || p.Type == "nuget":
 		return ecosystem, p.ComparisonForm().FullName()
+	case p.Type == "swift" && p.Namespace != "":
+		return ecosystem, p.Namespace + "/" + p.Name
 	}
 	return ecosystem, p.FullName()
 }

@@ -39,6 +39,13 @@ func TestHandlerPackage(t *testing.T) {
 		{"pkg:maven/org.slf4j/slf4j-api@2.0.13", "maven", "org.slf4j:slf4j-api"},
 		{"pkg:docker/library/alpine@3.20", "docker", "library/alpine"},
 		{"pkg:julia/Example@0.5.3?uuid=7876af07-990d-54b4-ab0e-23690620f79a", "julia", "Example"},
+		// Swift keeps namespace/name, the scope or the source repository,
+		// which the Swift mirror splits again; purl's full name would be the
+		// registry identity "scope.name".
+		{"pkg:swift/Acme/Widget@1.0.0", "swift", "Acme/Widget"},
+		{"pkg:swift/github.com/apple/swift-nio@2.62.0", "swift", "github.com/apple/swift-nio"},
+		// Go module paths keep their case.
+		{"pkg:golang/github.com/Azure/foo@v1.2.0", "golang", "github.com/Azure/foo"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.purl, func(t *testing.T) {
