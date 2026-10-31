@@ -137,43 +137,64 @@ func cachedUnder(ecosystem, base string, packages []database.UsedPackage) []cach
 }
 
 // newerIndexFiles returns, per package and architecture cached below base,
-// the newest file the index lists when it is newer than every cached one.
+// the newest file the index lists when it isn't cached and an older version
+// is. Suites sharing a pool are told apart that way: a newer version cached
+// from another suite doesn't hide an update to this one, and a package only
+// cached in a newer version than this suite has isn't mirrored for it.
 func (m *Mirror) newerIndexFiles(ix osIndex, base string, cached []cachedOSFile, files []indexFile) []PackageVersion {
-	newestCached := map[string]cachedOSFile{}
+	cachedByKey := map[string][]cachedOSFile{}
 	for _, c := range cached {
-		if current, ok := newestCached[c.key()]; !ok || vers.CompareWithScheme(c.version, current.version, ix.scheme) > 0 {
-			newestCached[c.key()] = c
-		}
+		cachedByKey[c.key()] = append(cachedByKey[c.key()], c)
 	}
-	newest := map[string]PackageVersion{}
+	type candidate struct {
+		file          indexFile
+		name, version string
+	}
+	newest := map[string]candidate{}
 	var order []string
 	for _, f := range files {
 		name, version, arch := handler.OSPackageIdentity(ix.ecosystem, f.Path)
 		key := name + "\x00" + arch
-		c, ok := newestCached[key]
-		if name == "" || !ok || vers.CompareWithScheme(version, c.version, ix.scheme) <= 0 {
+		if name == "" || len(cachedByKey[key]) == 0 {
 			continue
 		}
 		if m.proxy != nil && !m.proxy.ReleaseAllowed(ix.ecosystem, name, version, time.Time{}) {
 			continue
 		}
-		if current, seen := newest[key]; seen && vers.CompareWithScheme(version, current.Version, ix.scheme) <= 0 {
-			continue
-		} else if !seen {
+		current, seen := newest[key]
+		if !seen {
 			order = append(order, key)
 		}
-		cacheFilename := path.Base(f.Path)
-		if dir := path.Dir(c.file.Filename); dir != "." {
-			cacheFilename = dir + "/" + cacheFilename
-		}
-		newest[key] = PackageVersion{
-			Ecosystem: ix.ecosystem, Name: name, Version: version,
-			fileURL: base + "/" + f.Path, cacheFilename: cacheFilename, digest: f.Digest,
+		if !seen || vers.CompareWithScheme(version, current.version, ix.scheme) > 0 {
+			newest[key] = candidate{file: f, name: name, version: version}
 		}
 	}
+
 	items := make([]PackageVersion, 0, len(order))
 	for _, key := range order {
-		items = append(items, newest[key])
+		n := newest[key]
+		var older *cachedOSFile
+		for i, c := range cachedByKey[key] {
+			cmp := vers.CompareWithScheme(n.version, c.version, ix.scheme)
+			if cmp == 0 {
+				older = nil
+				break
+			}
+			if cmp > 0 && older == nil {
+				older = &cachedByKey[key][i]
+			}
+		}
+		if older == nil {
+			continue
+		}
+		cacheFilename := path.Base(n.file.Path)
+		if dir := path.Dir(older.file.Filename); dir != "." {
+			cacheFilename = dir + "/" + cacheFilename
+		}
+		items = append(items, PackageVersion{
+			Ecosystem: ix.ecosystem, Name: n.name, Version: n.version,
+			fileURL: base + "/" + n.file.Path, cacheFilename: cacheFilename, digest: n.file.Digest,
+		})
 	}
 	return items
 }
