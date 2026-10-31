@@ -87,3 +87,84 @@ mirror:
 		t.Error("Validate() accepted a 30s interval in the second schedule")
 	}
 }
+
+func TestMirrorRefreshValidate(t *testing.T) {
+	tests := []struct {
+		name    string
+		refresh *MirrorRefresh
+		wantErr bool
+	}{
+		{name: "defaults", refresh: &MirrorRefresh{Interval: "24h"}},
+		{name: "all fields", refresh: &MirrorRefresh{Interval: "12h", Top: 20, Since: "14d", MaxVersions: 100, MaxBytes: "2GB"}},
+		{name: "missing interval", refresh: &MirrorRefresh{}, wantErr: true},
+		{name: "interval under a minute", refresh: &MirrorRefresh{Interval: "10s"}, wantErr: true},
+		{name: "negative top", refresh: &MirrorRefresh{Interval: "1h", Top: -1}, wantErr: true},
+		{name: "bad since", refresh: &MirrorRefresh{Interval: "1h", Since: "recently"}, wantErr: true},
+		{name: "negative since", refresh: &MirrorRefresh{Interval: "1h", Since: "-1d"}, wantErr: true},
+		{name: "negative max_versions", refresh: &MirrorRefresh{Interval: "1h", MaxVersions: -1}, wantErr: true},
+		{name: "bad max_bytes", refresh: &MirrorRefresh{Interval: "1h", MaxBytes: "lots"}, wantErr: true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			m := MirrorConfig{Refresh: tt.refresh}
+			err := m.Validate()
+			if (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestMirrorRefreshDefaults(t *testing.T) {
+	m := MirrorConfig{Refresh: &MirrorRefresh{Interval: "24h"}}
+	if err := m.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	r := m.Refresh
+	if r.IntervalDuration() != 24*time.Hour || r.TopPackages() != 50 || r.SinceDuration() != 14*24*time.Hour ||
+		r.MaxVersionsPerRun() != 0 || r.MaxBytesPerRun() != 0 {
+		t.Errorf("got interval %v top %d since %v max_versions %d max_bytes %d, want 24h 50 336h 0 0",
+			r.IntervalDuration(), r.TopPackages(), r.SinceDuration(), r.MaxVersionsPerRun(), r.MaxBytesPerRun())
+	}
+}
+
+func TestValidateRejectsMirrorRefreshWithoutCachedArtifacts(t *testing.T) {
+	cfg := Default()
+	cfg.Mirror.Refresh = &MirrorRefresh{Interval: "24h"}
+	cfg.Storage.CacheArtifacts = false
+	if err := cfg.Validate(); err == nil {
+		t.Error("Validate() accepted mirror.refresh with storage.cache_artifacts: false")
+	}
+}
+
+func TestLoadYAMLMirrorRefresh(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	data := `
+mirror:
+  refresh:
+    interval: 12h
+    top: 10
+    since: 7d
+    max_versions: 200
+    max_bytes: 1GB
+`
+	if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	r := cfg.Mirror.Refresh
+	if r == nil {
+		t.Fatal("mirror.refresh not loaded")
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if r.IntervalDuration() != 12*time.Hour || r.TopPackages() != 10 || r.SinceDuration() != 7*24*time.Hour ||
+		r.MaxVersionsPerRun() != 200 || r.MaxBytesPerRun() != 1<<30 {
+		t.Errorf("got interval %v top %d since %v max_versions %d max_bytes %d",
+			r.IntervalDuration(), r.TopPackages(), r.SinceDuration(), r.MaxVersionsPerRun(), r.MaxBytesPerRun())
+	}
+}

@@ -1299,7 +1299,7 @@ func (db *DB) GetMetadataCache(ecosystem, name string) (*MetadataCacheEntry, err
 	var entry MetadataCacheEntry
 	query := db.Rebind(`
 		SELECT id, ecosystem, name, storage_path, etag, link, content_type, content_encoding,
-		       content_digest, size, last_modified, fetched_at, last_accessed_at, created_at, updated_at
+		       content_digest, upstream_url, size, last_modified, fetched_at, last_accessed_at, created_at, updated_at
 		FROM metadata_cache WHERE ecosystem = ? AND name = ?
 	`)
 	err := db.Get(&entry, query, ecosystem, name)
@@ -1310,6 +1310,26 @@ func (db *DB) GetMetadataCache(ecosystem, name string) (*MetadataCacheEntry, err
 		return nil, err
 	}
 	return &entry, nil
+}
+
+// MetadataDocument names a cached metadata document and where it was
+// fetched from.
+type MetadataDocument struct {
+	Name        string `db:"name"`
+	UpstreamURL string `db:"upstream_url"`
+}
+
+// RecentMetadataDocuments returns the documents of an ecosystem cached or
+// served since cutoff whose upstream URL was recorded.
+func (db *DB) RecentMetadataDocuments(ecosystem string, cutoff time.Time) ([]MetadataDocument, error) {
+	var docs []MetadataDocument
+	err := db.Select(&docs, db.Rebind(`
+		SELECT name, upstream_url FROM metadata_cache
+		WHERE ecosystem = ? AND upstream_url IS NOT NULL
+		  AND COALESCE(last_accessed_at, updated_at) >= ?
+		ORDER BY upstream_url, name
+	`), ecosystem, cutoff.UTC())
+	return docs, err
 }
 
 // RefreshMetadataCache sets fetched_at on the metadata cache row for ecosystem
@@ -1326,6 +1346,14 @@ func (db *DB) RefreshMetadataCache(ecosystem, name, digest string, fetchedAt tim
 	}
 	n, err := res.RowsAffected()
 	return n > 0, err
+}
+
+// SetMetadataUpstreamURL records the upstream URL of the metadata cache row
+// for ecosystem and name, for rows cached before URLs were recorded.
+func (db *DB) SetMetadataUpstreamURL(ecosystem, name, upstreamURL string) error {
+	_, err := db.Exec(db.Rebind(`UPDATE metadata_cache SET upstream_url = ? WHERE ecosystem = ? AND name = ?`),
+		upstreamURL, ecosystem, name)
+	return err
 }
 
 // MoveMetadataCache points the metadata cache row for ecosystem and name at
@@ -1373,8 +1401,8 @@ func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 	if db.dialect == DialectPostgres {
 		query = `
 			INSERT INTO metadata_cache (ecosystem, name, storage_path, etag, link, content_type, content_encoding,
-			                            content_digest, size, last_modified, fetched_at, last_accessed_at, created_at, updated_at)
-			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)
+			                            content_digest, upstream_url, size, last_modified, fetched_at, last_accessed_at, created_at, updated_at)
+			VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)
 			ON CONFLICT(ecosystem, name) DO UPDATE SET
 				storage_path = EXCLUDED.storage_path,
 				etag = EXCLUDED.etag,
@@ -1382,6 +1410,7 @@ func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 				content_type = EXCLUDED.content_type,
 				content_encoding = EXCLUDED.content_encoding,
 				content_digest = EXCLUDED.content_digest,
+				upstream_url = COALESCE(EXCLUDED.upstream_url, metadata_cache.upstream_url),
 				size = EXCLUDED.size,
 				last_modified = EXCLUDED.last_modified,
 				fetched_at = EXCLUDED.fetched_at,
@@ -1391,8 +1420,8 @@ func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 	} else {
 		query = `
 			INSERT INTO metadata_cache (ecosystem, name, storage_path, etag, link, content_type, content_encoding,
-			                            content_digest, size, last_modified, fetched_at, last_accessed_at, created_at, updated_at)
-			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			                            content_digest, upstream_url, size, last_modified, fetched_at, last_accessed_at, created_at, updated_at)
+			VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 			ON CONFLICT(ecosystem, name) DO UPDATE SET
 				storage_path = excluded.storage_path,
 				etag = excluded.etag,
@@ -1400,6 +1429,7 @@ func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 				content_type = excluded.content_type,
 				content_encoding = excluded.content_encoding,
 				content_digest = excluded.content_digest,
+				upstream_url = COALESCE(excluded.upstream_url, metadata_cache.upstream_url),
 				size = excluded.size,
 				last_modified = excluded.last_modified,
 				fetched_at = excluded.fetched_at,
@@ -1410,7 +1440,7 @@ func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
 
 	_, err := db.Exec(query,
 		entry.Ecosystem, entry.Name, entry.StoragePath, entry.ETag, entry.Link,
-		entry.ContentType, entry.ContentEncoding, entry.ContentDigest, entry.Size, entry.LastModified, fetchedAt, now.UTC(), now, now,
+		entry.ContentType, entry.ContentEncoding, entry.ContentDigest, entry.UpstreamURL, entry.Size, entry.LastModified, fetchedAt, now.UTC(), now, now,
 	)
 	if err != nil {
 		return fmt.Errorf("upserting metadata cache: %w", err)

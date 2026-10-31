@@ -1943,6 +1943,8 @@ type upstreamMetadata struct {
 	contentEncoding string
 	etag            string
 	lastModified    time.Time
+	// url is the upstream URL the document was fetched from.
+	url string
 	// notModified is the cache row upstream answered 304 for, whose stored
 	// bytes body holds. It is nil for a document upstream sent.
 	notModified *database.MetadataCacheEntry
@@ -1987,7 +1989,7 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		if readErr != nil {
 			return nil, errStale304
 		}
-		meta := &upstreamMetadata{body: data, contentType: contentTypeJSON, etag: entry.ETag.String, notModified: entry}
+		meta := &upstreamMetadata{body: data, contentType: contentTypeJSON, etag: entry.ETag.String, url: upstreamURL, notModified: entry}
 		if entry.ContentType.Valid {
 			meta.contentType = entry.ContentType.String
 		}
@@ -2020,6 +2022,7 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		contentType:     resp.Header.Get(headerContentType),
 		contentEncoding: resp.Header.Get(headerContentEncoding),
 		etag:            resp.Header.Get(headerETag),
+		url:             upstreamURL,
 	}
 	if meta.contentType == "" {
 		meta.contentType = contentTypeJSON
@@ -2048,6 +2051,11 @@ func (p *Proxy) refreshMetadataBlob(ecosystem, cacheKey string, meta *upstreamMe
 	}
 	if !refreshed {
 		return ""
+	}
+	if !entry.UpstreamURL.Valid && meta.url != "" {
+		if err := p.DB.SetMetadataUpstreamURL(ecosystem, cacheKey, meta.url); err != nil {
+			p.Logger.Warn("failed to record metadata upstream URL", "ecosystem", ecosystem, "key", cacheKey, "error", err)
+		}
 	}
 	p.recordMetadataRead(entry)
 	return entry.ContentDigest.String
@@ -2081,6 +2089,7 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 		// The digest identifies the stored bytes, so a rewrite cached for them
 		// can be found without reading them back (see storedRewrite).
 		ContentDigest: sql.NullString{String: digest, Valid: digest != ""},
+		UpstreamURL:   sql.NullString{String: meta.url, Valid: meta.url != ""},
 		Size:          sql.NullInt64{Int64: size, Valid: true},
 		LastModified:  sql.NullTime{Time: meta.lastModified, Valid: !meta.lastModified.IsZero()},
 		FetchedAt:     sql.NullTime{Time: time.Now(), Valid: true},

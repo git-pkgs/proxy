@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -1582,5 +1583,56 @@ func TestCanonicalPackagePURLMatchesConfig(t *testing.T) {
 				t.Errorf("lookup key %q not found in normalized config %v", lookup, normalized)
 			}
 		})
+	}
+}
+
+func TestProxyCachedRecordsUpstreamURL(t *testing.T) {
+	proxy, upstream := setupCachedProxy(t, `"abc123"`, "")
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	proxy.ProxyCached(httptest.NewRecorder(), req, upstream.URL+"/test", "test-eco", "url-key")
+
+	entry, err := proxy.DB.GetMetadataCache("test-eco", "url-key")
+	if err != nil || entry == nil {
+		t.Fatalf("GetMetadataCache: %+v, %v", entry, err)
+	}
+	if entry.UpstreamURL.String != upstream.URL+"/test" {
+		t.Errorf("upstream_url = %q, want %q", entry.UpstreamURL.String, upstream.URL+"/test")
+	}
+}
+
+// A row cached before upstream URLs were recorded gets its URL on the next
+// revalidation, even when upstream answers 304.
+func TestProxyCachedRecordsUpstreamURLOnNotModified(t *testing.T) {
+	var notModified atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1"`)
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			notModified.Add(1)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.HTTPClient = upstream.Client()
+
+	proxy.ProxyCached(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/test", nil), upstream.URL+"/test", "test-eco", "url-304-key")
+	if _, err := proxy.DB.Exec("UPDATE metadata_cache SET upstream_url = NULL"); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	proxy.ProxyCached(w, httptest.NewRequest(http.MethodGet, "/test", nil), upstream.URL+"/test", "test-eco", "url-304-key")
+	if w.Code != http.StatusOK || notModified.Load() != 1 {
+		t.Fatalf("status = %d, upstream 304s = %d; want 200 after one 304", w.Code, notModified.Load())
+	}
+	entry, err := proxy.DB.GetMetadataCache("test-eco", "url-304-key")
+	if err != nil || entry == nil {
+		t.Fatalf("GetMetadataCache: %+v, %v", entry, err)
+	}
+	if entry.UpstreamURL.String != upstream.URL+"/test" {
+		t.Errorf("upstream_url after a 304 = %q, want %q", entry.UpstreamURL.String, upstream.URL+"/test")
 	}
 }
