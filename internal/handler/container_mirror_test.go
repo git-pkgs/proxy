@@ -21,8 +21,10 @@ import (
 // fakeImageRegistry serves manifests and blobs of a small multi-arch image,
 // a single-arch image and a moved tag. It fails with 503 once offline.
 type fakeImageRegistry struct {
-	server    *httptest.Server
-	offline   atomic.Bool
+	server  *httptest.Server
+	offline atomic.Bool
+	// mu guards manifests against a test changing it while blobs are served.
+	mu        sync.RWMutex
 	manifests map[string]fakeManifest
 	blobs     map[string]string
 	blobGets  atomic.Int32
@@ -119,7 +121,10 @@ func newFakeImageRegistry(t *testing.T) (*fakeImageRegistry, fakeImage) {
 			http.Error(w, "offline", http.StatusServiceUnavailable)
 			return
 		}
-		if doc, ok := r.manifests[req.URL.Path]; ok {
+		r.mu.RLock()
+		doc, ok := r.manifests[req.URL.Path]
+		r.mu.RUnlock()
+		if ok {
 			w.Header().Set("Content-Type", doc.contentType)
 			w.Header().Set("Docker-Content-Digest", sha256Digest([]byte(doc.body)))
 			if req.Method == http.MethodGet && !strings.Contains(req.URL.Path, "/manifests/sha256:") {
@@ -434,7 +439,9 @@ func TestMirrorImageKeepsTagMovedByPullDuringWalk(t *testing.T) {
 	var once atomic.Bool
 	registry.onBlob = func(string) {
 		if once.CompareAndSwap(false, true) {
+			registry.mu.Lock()
 			registry.manifests["/v2/team/app/manifests/single"] = moved
+			registry.mu.Unlock()
 			if response := pull(t, h, "/team/app/manifests/single", dockerManifestAccept); response.Code != http.StatusOK {
 				t.Errorf("client pull during the walk: status %d", response.Code)
 			}
