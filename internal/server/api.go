@@ -2,6 +2,7 @@ package server
 
 import (
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -219,6 +220,10 @@ func (h *APIHandler) getPackage(w http.ResponseWriter, r *http.Request, ecosyste
 
 func (h *APIHandler) getVersion(w http.ResponseWriter, r *http.Request, ecosystem, name, version string) {
 	result, err := h.enrichment.EnrichFull(r.Context(), ecosystem, name, version)
+	if errors.Is(err, shared.ErrUnsupportedVulnerabilityIdentity) {
+		badRequest(w, "package identity is not supported for vulnerability lookups")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, ErrCodeUpstream, "failed to enrich version")
 		return
@@ -303,6 +308,10 @@ func (h *APIHandler) HandleVulnsPath(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vulns, err := h.enrichment.CheckVulnerabilities(r.Context(), ecosystem, name, version)
+	if errors.Is(err, shared.ErrUnsupportedVulnerabilityIdentity) {
+		badRequest(w, "package identity is not supported for vulnerability lookups")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, ErrCodeUpstream, "failed to check vulnerabilities")
 		return

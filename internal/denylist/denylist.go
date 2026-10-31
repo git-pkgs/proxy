@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/purl"
 )
 
@@ -138,5 +139,5 @@ func identify(pkg *purl.PURL) identity {
 		channel = c.Qualifier("channel")
 	}
 	key := purl.New(c.Type, c.Namespace, c.Name, "", nil).String()
-	return identity{key: key, channel: channel, version: c.Version}
+	return identity{key: packageurl.PolicyPackageKey(key), channel: channel, version: c.Version}
 }
