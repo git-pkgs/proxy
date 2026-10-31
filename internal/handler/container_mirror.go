@@ -12,6 +12,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"golang.org/x/sync/errgroup"
@@ -462,14 +463,25 @@ func (m *imageMirror) mirrorBlobs(ctx context.Context, manifest *ociManifest) er
 	}
 
 	// Large layers take most of the time, so they are fetched side by side.
+	// A failure starts no further blobs but lets those in flight finish
+	// rather than cancelling them: a client pull may share their fetch, and
+	// they would have to be fetched again next run.
 	var mu sync.Mutex
-	g, gctx := errgroup.WithContext(ctx)
+	var failed atomic.Bool
+	var g errgroup.Group
 	g.SetLimit(mirrorBlobConcurrency)
 	for _, digest := range digests {
 		g.Go(func() error {
-			size, fetched, err := m.mirrorBlob(gctx, digest)
-			if err != nil || !fetched {
+			if failed.Load() {
+				return nil
+			}
+			size, fetched, err := m.mirrorBlob(ctx, digest)
+			if err != nil {
+				failed.Store(true)
 				return err
+			}
+			if !fetched {
+				return nil
 			}
 			mu.Lock()
 			m.result.Fetched++

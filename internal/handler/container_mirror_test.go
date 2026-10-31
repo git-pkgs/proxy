@@ -546,3 +546,30 @@ func TestMirrorImageFetchesBlobsConcurrently(t *testing.T) {
 		t.Errorf("fetched = %d, want the manifest and its two blobs", result.Fetched)
 	}
 }
+
+// TestMirrorImageBlobFailureKeepsOtherFetches checks that a blob failing
+// doesn't cancel the blobs already being fetched: their fetch may be shared
+// with a client pull, which would fail with it, and the next run would have
+// to fetch them again.
+func TestMirrorImageBlobFailureKeepsOtherFetches(t *testing.T) {
+	registry, image := newFakeImageRegistry(t)
+	proxy := newMirrorTestProxy(t, registry)
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example", registry.server.URL)
+
+	// The config blob is gone upstream; the layer is still being sent when
+	// its 404 arrives.
+	for path := range registry.blobs {
+		if !strings.HasSuffix(path, image.singleLayer) {
+			delete(registry.blobs, path)
+		}
+	}
+	registry.onBlob = func(string) { time.Sleep(300 * time.Millisecond) }
+
+	if _, err := h.MirrorImage(context.Background(), ImageRef{Name: "team/app", References: []string{"single"}}, nil); err == nil {
+		t.Fatal("MirrorImage succeeded with a blob missing upstream")
+	}
+	registry.offline.Store(true)
+	if response := pull(t, h, "/team/app/blobs/"+image.singleLayer, ""); response.Code != http.StatusOK {
+		t.Errorf("layer fetched alongside the failing blob: status %d, want it cached", response.Code)
+	}
+}
