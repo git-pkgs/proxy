@@ -22,6 +22,9 @@ type PackageVersion struct {
 	Qualifiers map[string]string
 	// Platforms limit which platforms of an image index are mirrored.
 	Platforms []string
+	// variants, when set, limit the files of a version that are mirrored to
+	// those of these variants (see fileEcosystem.variant).
+	variants map[string]bool
 }
 
 func (pv PackageVersion) String() string {

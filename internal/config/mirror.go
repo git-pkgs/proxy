@@ -15,6 +15,102 @@ type MirrorConfig struct {
 	// Schedules re-mirror container image tags at a fixed interval, so a
 	// moved tag is picked up even when nobody pulls it.
 	Schedules []MirrorSchedule `json:"schedules" yaml:"schedules"`
+
+	// Refresh, when set, keeps the most used packages up to date in the
+	// background.
+	Refresh *MirrorRefresh `json:"refresh" yaml:"refresh"`
+}
+
+const (
+	defaultMirrorRefreshTop   = 50
+	defaultMirrorRefreshSince = 14 * 24 * time.Hour
+)
+
+// MirrorRefresh mirrors new releases of the packages clients use most, so
+// they are cached before the first client asks for them.
+type MirrorRefresh struct {
+	// Interval is how often the refresh runs, at least one minute (e.g.
+	// "24h").
+	Interval string `json:"interval" yaml:"interval"`
+
+	// Top is how many packages per ecosystem are refreshed, the ones with
+	// the most downloads among those used within Since. Default: 50.
+	Top int `json:"top" yaml:"top"`
+
+	// Since is how recently a package must have been downloaded to be
+	// refreshed (e.g. "14d"). Default: 14d.
+	Since string `json:"since" yaml:"since"`
+
+	// MaxVersions caps how many new versions one run mirrors. 0 means no
+	// cap.
+	MaxVersions int `json:"max_versions" yaml:"max_versions"`
+
+	// MaxBytes caps how much one run downloads (e.g. "2GB"). Empty means no
+	// cap.
+	MaxBytes string `json:"max_bytes" yaml:"max_bytes"`
+
+	interval time.Duration
+	since    time.Duration
+	maxBytes int64
+}
+
+// IntervalDuration returns the parsed Interval. Validate must run first.
+func (r *MirrorRefresh) IntervalDuration() time.Duration { return r.interval }
+
+// TopPackages returns Top, or its default.
+func (r *MirrorRefresh) TopPackages() int {
+	if r.Top == 0 {
+		return defaultMirrorRefreshTop
+	}
+	return r.Top
+}
+
+// SinceDuration returns the parsed Since, or its default. Validate must run
+// first.
+func (r *MirrorRefresh) SinceDuration() time.Duration { return r.since }
+
+// MaxVersionsPerRun returns MaxVersions; 0 means no cap.
+func (r *MirrorRefresh) MaxVersionsPerRun() int { return r.MaxVersions }
+
+// MaxBytesPerRun returns the parsed MaxBytes; 0 means no cap. Validate must
+// run first.
+func (r *MirrorRefresh) MaxBytesPerRun() int64 { return r.maxBytes }
+
+func (r *MirrorRefresh) validate() error {
+	d, err := time.ParseDuration(r.Interval)
+	if err != nil {
+		return fmt.Errorf("invalid mirror.refresh.interval %q: %w", r.Interval, err)
+	}
+	if d < minMirrorScheduleInterval {
+		return fmt.Errorf("invalid mirror.refresh.interval %q: must be at least %s", r.Interval, minMirrorScheduleInterval)
+	}
+	r.interval = d
+	if r.Top < 0 {
+		return fmt.Errorf("invalid mirror.refresh.top %d: must not be negative", r.Top)
+	}
+	r.since = defaultMirrorRefreshSince
+	if r.Since != "" {
+		since, err := parseDayDuration(r.Since)
+		if err != nil {
+			return fmt.Errorf("invalid mirror.refresh.since %q: %w", r.Since, err)
+		}
+		if since <= 0 {
+			return fmt.Errorf("invalid mirror.refresh.since %q: must be positive", r.Since)
+		}
+		r.since = since
+	}
+	if r.MaxVersions < 0 {
+		return fmt.Errorf("invalid mirror.refresh.max_versions %d: must not be negative", r.MaxVersions)
+	}
+	r.maxBytes = 0
+	if r.MaxBytes != "" {
+		n, err := ParseSize(r.MaxBytes)
+		if err != nil {
+			return fmt.Errorf("invalid mirror.refresh.max_bytes %q: %w", r.MaxBytes, err)
+		}
+		r.maxBytes = n
+	}
+	return nil
 }
 
 // MirrorSchedule is a set of image PURLs mirrored every Interval.
@@ -44,6 +140,9 @@ func (m *MirrorConfig) Validate() error {
 		if err := m.Schedules[i].validate(fmt.Sprintf("mirror.schedules[%d]", i)); err != nil {
 			return err
 		}
+	}
+	if m.Refresh != nil {
+		return m.Refresh.validate()
 	}
 	return nil
 }

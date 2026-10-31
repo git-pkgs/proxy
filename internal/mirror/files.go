@@ -2,6 +2,8 @@ package mirror
 
 import (
 	"fmt"
+	"path"
+	"regexp"
 	"slices"
 	"strings"
 
@@ -22,6 +24,12 @@ type fileEcosystem struct {
 	// check refuses a package the ecosystem can't mirror, before its files
 	// are listed.
 	check func(pv PackageVersion) error
+	// variant names the kind of a file, such as a wheel's tags or a conda
+	// package's platform, so a refresh mirrors the same kinds of files of a
+	// new version as were cached of an old one. cachedVariant names it for
+	// the filename cacheKey returns.
+	variant       func(file registries.Artifact) string
+	cachedVariant func(cacheFilename string) string
 }
 
 var fileEcosystems = map[string]fileEcosystem{
@@ -37,6 +45,8 @@ var fileEcosystems = map[string]fileEcosystem{
 			}
 			return name, version, file.Filename, true
 		},
+		variant:       func(file registries.Artifact) string { return pypiVariant(file.Filename) },
+		cachedVariant: pypiVariant,
 	},
 	"conda": {
 		qualifiers: []string{"subdir", "build", "type"},
@@ -60,7 +70,45 @@ var fileEcosystems = map[string]fileEcosystem{
 			}
 			return nil
 		},
+		variant: func(file registries.Artifact) string {
+			subdir, _ := file.Metadata["subdir"].(string)
+			return condaVariant(subdir, file.Filename)
+		},
+		cachedVariant: func(cacheFilename string) string {
+			subdir, filename := path.Split(cacheFilename)
+			return condaVariant(strings.TrimSuffix(subdir, "/"), filename)
+		},
 	},
+}
+
+// pypiVariant names a wheel by its tags, python-abi-platform; every sdist
+// is one variant.
+func pypiVariant(filename string) string {
+	stem, wheel := strings.CutSuffix(filename, ".whl")
+	if !wheel {
+		return "sdist"
+	}
+	parts := strings.Split(stem, "-")
+	if len(parts) < 5 { //nolint:mnd // name, version and three tags
+		return stem
+	}
+	return strings.Join(parts[len(parts)-3:], "-")
+}
+
+// condaBuildHash matches the hash and build number a conda build string
+// ends in, such as h8753938_0 in py312h8753938_0.
+var condaBuildHash = regexp.MustCompile(`h[0-9a-f]{7}_\d+$`)
+
+// condaVariant names a conda package file by its subdir, the part of its
+// build string before the hash, such as py312, and its type.
+func condaVariant(subdir, filename string) string {
+	fileType := condaFileType(filename)
+	stem := strings.TrimSuffix(strings.TrimSuffix(filename, ".conda"), ".tar.bz2")
+	build := stem[strings.LastIndex(stem, "-")+1:]
+	if loc := condaBuildHash.FindStringIndex(build); loc != nil {
+		build = build[:loc[0]]
+	}
+	return subdir + "/" + build + "/" + fileType
 }
 
 // condaFileType returns the PURL type qualifier of a conda package file.
@@ -78,6 +126,9 @@ func condaFileType(filename string) string {
 // selection returns the qualifiers of pv that select files, as
 // "key=value" pairs, for error messages.
 func (e fileEcosystem) selection(pv PackageVersion) string {
+	if pv.variants != nil {
+		return "the kinds of files cached of earlier versions"
+	}
 	var pairs []string
 	for _, key := range e.qualifiers {
 		if value := pv.Qualifiers[key]; value != "" {
@@ -89,6 +140,9 @@ func (e fileEcosystem) selection(pv PackageVersion) string {
 
 // selects reports whether file matches every selecting qualifier of pv.
 func (e fileEcosystem) selects(pv PackageVersion, file registries.Artifact) bool {
+	if pv.variants != nil && !pv.variants[e.variant(file)] {
+		return false
+	}
 	attrs := e.attrs(file)
 	for _, key := range e.qualifiers {
 		if want := pv.Qualifiers[key]; want != "" && attrs[key] != want {
