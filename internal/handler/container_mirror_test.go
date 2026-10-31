@@ -10,8 +10,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/git-pkgs/registries/fetch"
 )
@@ -501,5 +503,39 @@ func TestMirrorImageRefetchesBlobMissingFromStorage(t *testing.T) {
 	}
 	if got := registry.blobGets.Load() - gets; got != 1 {
 		t.Errorf("second run fetched %d blobs, want the one missing from storage", got)
+	}
+}
+
+func TestMirrorImageFetchesBlobsConcurrently(t *testing.T) {
+	registry, _ := newFakeImageRegistry(t)
+	proxy := newMirrorTestProxy(t, registry)
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example", registry.server.URL)
+
+	// "single" has a config and a layer blob. Each request waits until the
+	// other is in flight too, or gives up after a while.
+	var inFlight atomic.Int32
+	var concurrent atomic.Bool
+	both := make(chan struct{})
+	var once sync.Once
+	registry.onBlob = func(string) {
+		defer inFlight.Add(-1)
+		if inFlight.Add(1) >= 2 {
+			concurrent.Store(true)
+			once.Do(func() { close(both) })
+		}
+		select {
+		case <-both:
+		case <-time.After(2 * time.Second):
+		}
+	}
+	result, err := h.MirrorImage(context.Background(), ImageRef{Name: "team/app", References: []string{"single"}}, nil)
+	if err != nil {
+		t.Fatalf("MirrorImage: %v", err)
+	}
+	if !concurrent.Load() {
+		t.Error("blobs were fetched one after another, want them fetched concurrently")
+	}
+	if result.Fetched != 3 {
+		t.Errorf("fetched = %d, want the manifest and its two blobs", result.Fetched)
 	}
 }
