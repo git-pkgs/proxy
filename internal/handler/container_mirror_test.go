@@ -10,8 +10,10 @@ import (
 	"net/url"
 	"strconv"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/git-pkgs/registries/fetch"
 )
@@ -19,8 +21,10 @@ import (
 // fakeImageRegistry serves manifests and blobs of a small multi-arch image,
 // a single-arch image and a moved tag. It fails with 503 once offline.
 type fakeImageRegistry struct {
-	server    *httptest.Server
-	offline   atomic.Bool
+	server  *httptest.Server
+	offline atomic.Bool
+	// mu guards manifests against a test changing it while blobs are served.
+	mu        sync.RWMutex
 	manifests map[string]fakeManifest
 	blobs     map[string]string
 	blobGets  atomic.Int32
@@ -117,7 +121,10 @@ func newFakeImageRegistry(t *testing.T) (*fakeImageRegistry, fakeImage) {
 			http.Error(w, "offline", http.StatusServiceUnavailable)
 			return
 		}
-		if doc, ok := r.manifests[req.URL.Path]; ok {
+		r.mu.RLock()
+		doc, ok := r.manifests[req.URL.Path]
+		r.mu.RUnlock()
+		if ok {
 			w.Header().Set("Content-Type", doc.contentType)
 			w.Header().Set("Docker-Content-Digest", sha256Digest([]byte(doc.body)))
 			if req.Method == http.MethodGet && !strings.Contains(req.URL.Path, "/manifests/sha256:") {
@@ -432,7 +439,9 @@ func TestMirrorImageKeepsTagMovedByPullDuringWalk(t *testing.T) {
 	var once atomic.Bool
 	registry.onBlob = func(string) {
 		if once.CompareAndSwap(false, true) {
+			registry.mu.Lock()
 			registry.manifests["/v2/team/app/manifests/single"] = moved
+			registry.mu.Unlock()
 			if response := pull(t, h, "/team/app/manifests/single", dockerManifestAccept); response.Code != http.StatusOK {
 				t.Errorf("client pull during the walk: status %d", response.Code)
 			}
@@ -501,5 +510,39 @@ func TestMirrorImageRefetchesBlobMissingFromStorage(t *testing.T) {
 	}
 	if got := registry.blobGets.Load() - gets; got != 1 {
 		t.Errorf("second run fetched %d blobs, want the one missing from storage", got)
+	}
+}
+
+func TestMirrorImageFetchesBlobsConcurrently(t *testing.T) {
+	registry, _ := newFakeImageRegistry(t)
+	proxy := newMirrorTestProxy(t, registry)
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example", registry.server.URL)
+
+	// "single" has a config and a layer blob. Each request waits until the
+	// other is in flight too, or gives up after a while.
+	var inFlight atomic.Int32
+	var concurrent atomic.Bool
+	both := make(chan struct{})
+	var once sync.Once
+	registry.onBlob = func(string) {
+		defer inFlight.Add(-1)
+		if inFlight.Add(1) >= 2 {
+			concurrent.Store(true)
+			once.Do(func() { close(both) })
+		}
+		select {
+		case <-both:
+		case <-time.After(2 * time.Second):
+		}
+	}
+	result, err := h.MirrorImage(context.Background(), ImageRef{Name: "team/app", References: []string{"single"}}, nil)
+	if err != nil {
+		t.Fatalf("MirrorImage: %v", err)
+	}
+	if !concurrent.Load() {
+		t.Error("blobs were fetched one after another, want them fetched concurrently")
+	}
+	if result.Fetched != 3 {
+		t.Errorf("fetched = %d, want the manifest and its two blobs", result.Fetched)
 	}
 }
