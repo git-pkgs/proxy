@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"slices"
+	"sync"
 	"testing"
 	"time"
 )
@@ -202,6 +203,57 @@ func TestMigrateAddsProjects(t *testing.T) {
 		usages, err := db.GetProjectsUsingPackage("pkg:npm/lodash", "4.17.20")
 		if err != nil || len(usages) != 1 {
 			t.Fatalf("GetProjectsUsingPackage after migration = %v, %v", usages, err)
+		}
+	})
+}
+
+// TestSaveProjectConcurrentUploads checks that concurrent uploads of one
+// project all succeed and leave the components of exactly one of them.
+func TestSaveProjectConcurrentUploads(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		const uploads = 8
+		sets := make([][]ProjectComponent, uploads)
+		for i := range sets {
+			for j := 0; j <= i; j++ {
+				sets[i] = append(sets[i], ProjectComponent{
+					PackagePURL: "pkg:npm/dep" + string(rune('a'+j)), Ecosystem: "npm",
+					Name: "dep" + string(rune('a'+j)), Version: "1.0." + string(rune('0'+i)),
+				})
+			}
+		}
+		now := time.Now().UTC()
+		errs := make(chan error, uploads)
+		var wg sync.WaitGroup
+		for i := range uploads {
+			wg.Go(func() { errs <- db.SaveProject("acme/web", "", "", now, sets[i]) })
+		}
+		wg.Wait()
+		close(errs)
+		for err := range errs {
+			if err != nil {
+				t.Errorf("SaveProject: %v", err)
+			}
+		}
+
+		project, err := db.GetProject("acme/web")
+		if err != nil || project == nil {
+			t.Fatalf("GetProject = %v, %v", project, err)
+		}
+		components, err := db.GetProjectComponents(project.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(components) == 0 || len(components) > uploads {
+			t.Fatalf("%d components, want those of one upload", len(components))
+		}
+		version := components[0].Version
+		for _, c := range components {
+			if c.Version != version {
+				t.Fatalf("components mix uploads: %+v", components)
+			}
+		}
+		if want := int(version[len(version)-1]-'0') + 1; len(components) != want {
+			t.Errorf("%d components of the upload with version %s, want %d", len(components), version, want)
 		}
 	})
 }
