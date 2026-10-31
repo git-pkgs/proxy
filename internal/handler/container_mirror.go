@@ -11,7 +11,11 @@ import (
 	"regexp"
 	"slices"
 	"strings"
+	"sync"
+	"sync/atomic"
 	"time"
+
+	"golang.org/x/sync/errgroup"
 )
 
 const (
@@ -19,6 +23,9 @@ const (
 	maxMirrorIndexDepth = 2
 	// mirrorErrorBodyLimit bounds how much of an error response is quoted.
 	mirrorErrorBodyLimit = 200
+	// mirrorBlobConcurrency is how many blobs of one manifest are fetched at
+	// once, as many as a Docker pull fetches by default.
+	mirrorBlobConcurrency = 3
 
 	dockerReferenceTypeAnnotation   = "vnd.docker.reference.type"
 	dockerReferenceDigestAnnotation = "vnd.docker.reference.digest"
@@ -439,6 +446,7 @@ func (m *imageMirror) mirrorBlobs(ctx context.Context, manifest *ociManifest) er
 	if manifest.Config != nil {
 		blobs = append([]ociDescriptor{*manifest.Config}, blobs...)
 	}
+	var digests []string
 	for _, blob := range blobs {
 		if len(blob.URLs) > 0 || strings.Contains(blob.MediaType, "nondistributable") || strings.Contains(blob.MediaType, "foreign") {
 			m.result.Warnings = append(m.result.Warnings, fmt.Sprintf("skipped non-distributable layer %s", blob.Digest))
@@ -451,34 +459,60 @@ func (m *imageMirror) mirrorBlobs(ctx context.Context, manifest *ociManifest) er
 			continue
 		}
 		m.seen[blob.Digest] = true
-		if err := m.mirrorBlob(ctx, blob.Digest); err != nil {
-			return err
-		}
+		digests = append(digests, blob.Digest)
 	}
-	return nil
+
+	// Large layers take most of the time, so they are fetched side by side.
+	// A failure starts no further blobs but lets those in flight finish
+	// rather than cancelling them: a client pull may share their fetch, and
+	// they would have to be fetched again next run.
+	var mu sync.Mutex
+	var failed atomic.Bool
+	var g errgroup.Group
+	g.SetLimit(mirrorBlobConcurrency)
+	for _, digest := range digests {
+		g.Go(func() error {
+			if failed.Load() {
+				return nil
+			}
+			size, fetched, err := m.mirrorBlob(ctx, digest)
+			if err != nil {
+				failed.Store(true)
+				return err
+			}
+			if !fetched {
+				return nil
+			}
+			mu.Lock()
+			m.result.Fetched++
+			m.result.Bytes += size
+			mu.Unlock()
+			return nil
+		})
+	}
+	return g.Wait()
 }
 
-// mirrorBlob stores a blob under the same identity handleBlobDownload uses.
-func (m *imageMirror) mirrorBlob(ctx context.Context, digest string) error {
+// mirrorBlob stores a blob under the same identity handleBlobDownload uses,
+// and returns its size when it had to be fetched.
+func (m *imageMirror) mirrorBlob(ctx context.Context, digest string) (int64, bool, error) {
 	proxy := m.h.proxy
 	cached, err := proxy.HasCachedArtifact(ctx, "oci", m.cacheName, digest, digest)
 	if err != nil {
-		return fmt.Errorf("blob %s: %w", digest, err)
+		return 0, false, fmt.Errorf("blob %s: %w", digest, err)
 	}
 	if cached {
-		return nil
+		return 0, false, nil
 	}
 	result, err := proxy.GetOrFetchArtifactFromURLWithDigest(ctx, "oci", m.cacheName, digest, digest,
 		fmt.Sprintf("%s/v2/%s/blobs/%s", m.registryURL, m.upstreamName, digest), digest)
 	if err != nil {
-		return fmt.Errorf("blob %s: %w", digest, err)
+		return 0, false, fmt.Errorf("blob %s: %w", digest, err)
 	}
 	if result.Reader != nil {
 		_ = result.Reader.Close()
 	}
-	m.result.Fetched++
-	m.result.Bytes += result.Artifact.Size
-	return nil
+	return result.Artifact.Size, true, nil
 }
 
 // mirrorResponse collects the handler's manifest response in memory.
