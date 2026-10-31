@@ -1406,7 +1406,7 @@ When upstream is unreachable and the cached entry is past its TTL, the proxy ser
 
 ### Metadata size limit
 
-Upstream metadata responses are buffered in memory before being rewritten and served. `metadata_max_size` caps that buffer to protect against OOM from a misbehaving upstream. Some npm packages with thousands of versions (for example `renovate`) exceed the 100 MB default, so raise this if you see `metadata response exceeds size limit` in the logs. Conda `repodata.json` with cooldown enabled is filtered as it streams and isn't held in memory decompressed. With `cache_metadata` the limit applies to the compressed document as it does without cooldown; one over it is filtered as it streams from the upstream and not cached.
+Upstream metadata responses are buffered in memory before being rewritten and served. `metadata_max_size` caps that buffer to protect against OOM from a misbehaving upstream. Some npm packages with thousands of versions (for example `renovate`) exceed the 100 MB default, so raise this if you see `metadata response exceeds size limit` in the logs. Conda `repodata.json` with cooldown enabled is filtered as it streams and isn't held in memory decompressed. With `cache_metadata` the limit applies to the compressed document as it does without cooldown; one over it is filtered as it streams from the upstream and not cached. With `cache_metadata` and the metadata rewrite cache on, an npm packument is streamed from the upstream into storage and rewritten from there in two passes, so it isn't held in memory and the limit doesn't apply to it; the rewritten copy is kept gzip-compressed. Requests for a single version (`/<package>/<version>`) still read the packument into memory.
 
 ```yaml
 metadata_max_size: "100MB"   # default

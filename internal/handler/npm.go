@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"fmt"
 	"io"
@@ -12,6 +13,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/integrity"
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/jsonscan"
 	"github.com/git-pkgs/proxy/internal/metadata/npm"
 	"github.com/git-pkgs/proxy/internal/retention"
@@ -264,6 +266,10 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
+	if !versionLookup && h.serveStreamedPackument(w, r, packageName, upstreamURL, accept, metadataCacheKey) {
+		return
+	}
+
 	var validate func([]byte) error
 	if !versionLookup {
 		validate = h.packumentValidator()
@@ -315,6 +321,179 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 	}
 
 	serveRewrittenMetadata(w, r, rewritten)
+}
+
+// serveStreamedPackument serves a packument rewritten from storage: the
+// document is streamed from upstream into storage, then read twice, once to
+// collect the time map and version names cooldown and the denylist decide
+// on, and once to copy each kept version. registry.npmjs.org writes
+// dist-tags before versions and time after them, so one pass can't do it.
+// Neither the packument nor its rewrite is held in memory uncompressed, and
+// packuments larger than metadata_max_size can be served.
+//
+// It reports false when it leaves the request to the in-memory rewrite:
+// without metadata or rewrite caching, for a document it can't stream, such
+// as an abbreviated packument where the full one is required, and when the
+// rewrite fails. The document is stored by then, so the in-memory path reads
+// it from storage.
+func (h *NPMHandler) serveStreamedPackument(w http.ResponseWriter, r *http.Request, packageName, upstreamURL, accept, metadataCacheKey string) bool {
+	if h.proxy.rewrites == nil {
+		return false
+	}
+	entry, err := h.storedPackument(r.Context(), upstreamURL, accept, metadataCacheKey)
+	switch {
+	case err == nil:
+	case errors.Is(err, errInMemory):
+		return false
+	default:
+		h.writeFetchError(w, err)
+		return true
+	}
+
+	fullRequired := h.packumentValidator() != nil
+	options := h.npmRewriteOptions(packageName, nil)
+	rewritten, err := h.proxy.streamedRewrite(r.Context(), "npm", h.proxyURL, metadataCacheKey, entry, func(open func() (io.ReadCloser, error), out io.Writer) error {
+		var scan *npm.Scan
+		err := readStored(open, func(in io.Reader) (err error) {
+			scan, err = npm.ScanPackument(in)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if fullRequired && scan.Abbreviated() {
+			return npm.ErrNotStreamable
+		}
+		return readStored(open, func(in io.Reader) error {
+			_, err := npm.RewriteStream(packageName, scan, in, out, options)
+			return err
+		})
+	})
+	if err != nil {
+		if r.Context().Err() != nil {
+			return true // the client left while waiting on a shared rewrite
+		}
+		if !errors.Is(err, npm.ErrNotStreamable) {
+			h.proxy.Logger.Warn("failed to rewrite stored npm metadata, rewriting in memory",
+				"package", packageName, "error", err)
+		}
+		return false
+	}
+	serveRewrittenMetadata(w, r, rewritten)
+	return true
+}
+
+// npmFetchError is a failure to fetch a packument, answered as such rather
+// than as a failure to filter it.
+type npmFetchError struct{ err error }
+
+func (e *npmFetchError) Error() string { return e.err.Error() }
+func (e *npmFetchError) Unwrap() error { return e.err }
+
+// writeFetchError answers a request whose packument could not be fetched.
+func (h *NPMHandler) writeFetchError(w http.ResponseWriter, err error) {
+	switch {
+	case errors.Is(err, ErrUpstreamNotFound):
+		JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
+	case writeUpstreamHeld(w, err):
+	default:
+		h.proxy.Logger.Error("failed to fetch npm metadata", "error", err)
+		JSONError(w, http.StatusBadGateway, "failed to fetch from upstream")
+	}
+}
+
+// errInMemory is returned when a packument has to be read into memory to
+// answer the request: metadata is not cached in storage, or the stored
+// document can't be read as a stream.
+var errInMemory = errors.New("npm packument needs the in-memory path")
+
+// storedPackument returns the cache row of the packument stored for cacheKey,
+// fetching it into storage first when needed. It returns errInMemory when
+// metadata isn't cached in storage, and ErrUpstreamNotFound and upstream
+// errors as they come.
+func (h *NPMHandler) storedPackument(ctx context.Context, packumentURL, accept, cacheKey string) (*database.MetadataCacheEntry, error) {
+	entry, err := h.proxy.storedMetadataDocument(ctx, "npm", cacheKey, packumentURL, accept, h.packumentStreamValidator())
+	if errors.Is(err, errMetadataNotStored) {
+		return nil, errInMemory
+	}
+	return entry, err
+}
+
+// packumentStreamValidator is packumentValidator for a packument read from
+// storage.
+func (h *NPMHandler) packumentStreamValidator() func(io.Reader) error {
+	if h.packumentValidator() == nil {
+		return nil
+	}
+	return func(r io.Reader) error {
+		entry, err := npm.LookupVersion(r, "")
+		if err != nil {
+			return err
+		}
+		if entry.Abbreviated {
+			return errAbbreviatedPackument
+		}
+		return nil
+	}
+}
+
+// streamedVersionMetadata resolves a version or dist-tag through the
+// packument stored in storage, as rewriteNPMVersionFromPackument does in
+// memory: one pass collects what cooldown and the denylist decide on, and a
+// second finds the version entry. It returns errInMemory when the request
+// has to take the in-memory path.
+func (h *NPMHandler) streamedVersionMetadata(ctx context.Context, packageName, specifier, packumentURL, accept, cacheKey, metadataCacheKey string) (rewrittenMetadata, error) {
+	if h.proxy.rewrites == nil {
+		return rewrittenMetadata{}, errInMemory
+	}
+	entry, err := h.storedPackument(ctx, packumentURL, accept, cacheKey)
+	if errors.Is(err, errInMemory) {
+		return rewrittenMetadata{}, err
+	}
+	if err != nil {
+		return rewrittenMetadata{}, &npmFetchError{err}
+	}
+	fullRequired := h.packumentValidator() != nil
+	options := h.npmRewriteOptions(packageName, nil)
+	m, err := h.proxy.streamedRewrite(ctx, "npm", h.proxyURL, metadataCacheKey, entry, func(open func() (io.ReadCloser, error), out io.Writer) error {
+		var scan *npm.Scan
+		err := readStored(open, func(in io.Reader) (err error) {
+			scan, err = npm.ScanPackument(in)
+			return err
+		})
+		if err != nil {
+			return err
+		}
+		if fullRequired && scan.Abbreviated() {
+			return npm.ErrNotStreamable
+		}
+		return readStored(open, func(in io.Reader) error {
+			version, err := npm.VersionStream(packageName, specifier, scan, in, options)
+			if err != nil {
+				return npmRewriteError(err)
+			}
+			_, err = out.Write(version)
+			return err
+		})
+	})
+	switch {
+	case err == nil, ctx.Err() != nil, errors.Is(err, ErrVersionDenied), errors.Is(err, ErrVersionNotFound):
+		return m, err
+	case !errors.Is(err, npm.ErrNotStreamable):
+		h.proxy.Logger.Warn("failed to read stored npm metadata, reading it in memory",
+			"package", packageName, "error", err)
+	}
+	return rewrittenMetadata{}, errInMemory
+}
+
+// readStored opens a stored document and reads it with read.
+func readStored(open func() (io.ReadCloser, error), read func(io.Reader) error) error {
+	in, err := open()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = in.Close() }()
+	return read(in)
 }
 
 // packumentAccept returns the Accept header packuments are requested with.
@@ -371,7 +550,19 @@ func requireFullPackument(body []byte) error {
 // filtered packument so cooldown and dist-tags match the root metadata response.
 func (h *NPMHandler) handleFilteredNPMVersionMetadata(w http.ResponseWriter, r *http.Request, packageName, specifier, accept, registryURL, cacheKey, metadataCacheKey string) {
 	_, packumentPath := npmMetadataPath(packageName)
-	packument, _, _, err := h.proxy.fetchOrCacheMetadata(r.Context(), "npm", cacheKey, registryURL+"/"+packumentPath, "", h.packumentValidator(), accept)
+	packumentURL := registryURL + "/" + packumentPath
+	rewritten, err := h.streamedVersionMetadata(r.Context(), packageName, specifier, packumentURL, accept, cacheKey, metadataCacheKey)
+	var fetchErr *npmFetchError
+	switch {
+	case errors.As(err, &fetchErr):
+		h.writeFetchError(w, fetchErr.err)
+		return
+	case !errors.Is(err, errInMemory):
+		h.writeVersionMetadata(w, r, packageName, rewritten, err)
+		return
+	}
+
+	packument, _, _, err := h.proxy.fetchOrCacheMetadata(r.Context(), "npm", cacheKey, packumentURL, "", h.packumentValidator(), accept)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
@@ -385,10 +576,16 @@ func (h *NPMHandler) handleFilteredNPMVersionMetadata(w http.ResponseWriter, r *
 		return
 	}
 
-	rewritten, err := h.proxy.cachedRewrite(r.Context(), "npm", h.proxyURL, metadataCacheKey, packument, "", func(b []byte) ([]byte, []string, error) {
+	rewritten, err = h.proxy.cachedRewrite(r.Context(), "npm", h.proxyURL, metadataCacheKey, packument, "", func(b []byte) ([]byte, []string, error) {
 		out, err := h.rewriteNPMVersionFromPackument(packageName, specifier, b)
 		return out, nil, err
 	})
+	h.writeVersionMetadata(w, r, packageName, rewritten, err)
+}
+
+// writeVersionMetadata answers a version metadata request with its rewrite
+// or the error that kept it from being made.
+func (h *NPMHandler) writeVersionMetadata(w http.ResponseWriter, r *http.Request, packageName string, rewritten rewrittenMetadata, err error) {
 	if err != nil {
 		if r.Context().Err() != nil {
 			return
@@ -549,10 +746,8 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	registryURL, cacheKey := h.sourceFor(packageName)
-	metadata := sync.OnceValues(func() ([]byte, error) {
-		upstreamURL := registryURL + "/" + url.PathEscape(packageName)
-		body, _, _, err := h.proxy.fetchOrCacheMetadata(r.Context(), "npm", cacheKey, upstreamURL, "", h.packumentValidator(), h.packumentAccept())
-		return body, err
+	metadata := sync.OnceValues(func() (npmVersionData, error) {
+		return h.versionData(r.Context(), registryURL+"/"+url.PathEscape(packageName), cacheKey, version)
 	})
 	inCooldown, err := h.versionInCooldown(packageName, version, metadata)
 	if err != nil {
@@ -594,7 +789,7 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	ServeArtifactRequest(w, r, result)
 }
 
-func (h *NPMHandler) getTarball(r *http.Request, registryURL, packageName, version, filename string, metadata func() ([]byte, error)) (*CacheResult, error) {
+func (h *NPMHandler) getTarball(r *http.Request, registryURL, packageName, version, filename string, metadata func() (npmVersionData, error)) (*CacheResult, error) {
 	cacheFilename := h.routes.cacheFilename(packageName, filename)
 	if cached, err := h.proxy.GetCachedArtifact(r.Context(), "npm", packageName, version, cacheFilename); err != nil || cached != nil {
 		return cached, err
@@ -602,35 +797,35 @@ func (h *NPMHandler) getTarball(r *http.Request, registryURL, packageName, versi
 	// The packument says where the tarball is and what it must hash to.
 	// Without it the tarball could not be verified, and an unverified copy
 	// would be cached and served to everyone, so the download fails instead.
-	body, err := metadata()
+	data, err := metadata()
 	if err != nil {
 		return nil, fmt.Errorf("fetching npm metadata to verify tarball: %w", err)
 	}
 	downloadURL := fmt.Sprintf("%s/%s/-/%s", registryURL, escapeNPMDownloadPackage(packageName), url.PathEscape(filename))
-	if tarball := npmVersionTarball(body, version); tarball != "" {
+	if tarball := npmEntryTarball(data.entry); tarball != "" {
 		downloadURL, err = validateTarballURL(tarball, registryURL)
 		if err != nil {
 			return nil, err
 		}
 	}
-	sri := npmVersionIntegrity(body, version)
+	sri := npmEntryIntegrity(data.entry)
 	return h.proxy.GetOrFetchArtifactFromURLWithIntegrity(r.Context(), "npm", packageName, version, cacheFilename, downloadURL, sri)
 }
 
-// npmVersionIntegrity returns the integrity a packument declares for a
-// version's tarball: dist.integrity when it is a Subresource Integrity string
+// npmEntryIntegrity returns the integrity a version's packument entry
+// declares for its tarball: dist.integrity when it is a Subresource Integrity string
 // the proxy can verify, or else the SHA-1 in dist.shasum, which is all
 // versions published before integrity existed carry, as "sha1-<hex>". It
 // returns "" when neither is usable, and the tarball is fetched unverified as
 // before.
-func npmVersionIntegrity(body []byte, version string) string {
-	sri, _, _ := jsonscan.LookupString(body, "versions", version, "dist", "integrity")
+func npmEntryIntegrity(entry []byte) string {
+	sri, _, _ := jsonscan.LookupString(entry, "dist", "integrity")
 	if sri != "" {
 		if _, err := integrity.ParseSRI(sri); err == nil {
 			return sri
 		}
 	}
-	shasum, _, _ := jsonscan.LookupString(body, "versions", version, "dist", "shasum")
+	shasum, _, _ := jsonscan.LookupString(entry, "dist", "shasum")
 	return sha1Checksum(shasum)
 }
 
@@ -638,8 +833,55 @@ func npmVersionIntegrity(body []byte, version string) string {
 // or "" if it has none. It reads that one value in place rather than decoding
 // every version, since it runs on each tarball the proxy has not cached yet.
 func npmVersionTarball(body []byte, version string) string {
-	tarball, _, _ := jsonscan.LookupString(body, "versions", version, "dist", "tarball")
+	entry, _ := jsonscan.Lookup(body, "versions", version)
+	return npmEntryTarball(entry)
+}
+
+// npmEntryTarball is npmVersionTarball for the version's entry.
+func npmEntryTarball(entry []byte) string {
+	tarball, _, _ := jsonscan.LookupString(entry, "dist", "tarball")
 	return tarball
+}
+
+// npmVersionData is what a tarball download reads from the packument: the
+// version's entry, nil when it has none, and its publish time from the time
+// map, "" when it has none.
+type npmVersionData struct {
+	entry     []byte
+	published string
+}
+
+// versionData reads what a tarball download needs about version from the
+// packument: from storage in one pass when metadata is cached there, and
+// otherwise from the packument read into memory.
+func (h *NPMHandler) versionData(ctx context.Context, packumentURL, cacheKey, version string) (npmVersionData, error) {
+	accept := h.packumentAccept()
+	if entry, err := h.storedPackument(ctx, packumentURL, accept, cacheKey); err == nil {
+		var found npm.VersionEntry
+		err := readStored(func() (io.ReadCloser, error) { return h.proxy.openStoredMetadata(ctx, entry) }, func(in io.Reader) (err error) {
+			found, err = npm.LookupVersion(in, version)
+			return err
+		})
+		switch {
+		case err == nil && (!found.Abbreviated || h.packumentValidator() == nil):
+			return npmVersionData{entry: found.Entry, published: found.Published}, nil
+		case err != nil:
+			h.proxy.Logger.Warn("failed to read stored npm metadata, reading it in memory", "url", packumentURL, "error", err)
+		}
+	} else if !errors.Is(err, errInMemory) {
+		return npmVersionData{}, err
+	}
+
+	body, _, _, err := h.proxy.fetchOrCacheMetadata(ctx, "npm", cacheKey, packumentURL, "", h.packumentValidator(), accept)
+	if err != nil {
+		return npmVersionData{}, err
+	}
+	entry, _ := jsonscan.Lookup(body, "versions", version)
+	published, _, err := jsonscan.LookupString(body, "time", version)
+	if err != nil {
+		return npmVersionData{}, fmt.Errorf("parsing npm metadata: %w", err)
+	}
+	return npmVersionData{entry: entry, published: published}, nil
 }
 
 func validateTarballURL(raw, registryURL string) (string, error) {
@@ -692,7 +934,7 @@ func validateRegistryURL(what, raw, registryURL string) (string, error) {
 // for a private version of the same name, a private time would hold back the
 // public version, and moving a route to another upstream would keep the old
 // one's times.
-func (h *NPMHandler) versionInCooldown(packageName, version string, metadata func() ([]byte, error)) (bool, error) {
+func (h *NPMHandler) versionInCooldown(packageName, version string, metadata func() (npmVersionData, error)) (bool, error) {
 	if !h.proxy.cooldownApplies("npm", packageName) {
 		return false, nil
 	}
@@ -705,7 +947,7 @@ func (h *NPMHandler) versionInCooldown(packageName, version string, metadata fun
 		}
 	}
 
-	body, err := metadata()
+	data, err := metadata()
 	if errors.Is(err, ErrUpstreamNotFound) {
 		return false, nil
 	}
@@ -713,11 +955,8 @@ func (h *NPMHandler) versionInCooldown(packageName, version string, metadata fun
 		return false, err
 	}
 
-	published, ok, err := jsonscan.LookupString(body, "time", version)
-	if err != nil {
-		return false, fmt.Errorf("parsing npm metadata: %w", err)
-	}
-	if !ok {
+	published := data.published
+	if published == "" {
 		return false, nil
 	}
 

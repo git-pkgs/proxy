@@ -40,10 +40,8 @@ func (h *NPMHandler) handleAttestations(w http.ResponseWriter, r *http.Request) 
 	}
 
 	registryURL, cacheKey := h.sourceFor(packageName)
-	metadata := sync.OnceValues(func() ([]byte, error) {
-		upstreamURL := registryURL + "/" + url.PathEscape(packageName)
-		body, _, _, err := h.proxy.fetchOrCacheMetadata(r.Context(), "npm", cacheKey, upstreamURL, "", h.packumentValidator(), h.packumentAccept())
-		return body, err
+	metadata := sync.OnceValues(func() (npmVersionData, error) {
+		return h.versionData(r.Context(), registryURL+"/"+url.PathEscape(packageName), cacheKey, version)
 	})
 
 	inCooldown, err := h.versionInCooldown(packageName, version, metadata)
@@ -61,7 +59,7 @@ func (h *NPMHandler) handleAttestations(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	packument, err := metadata()
+	data, err := metadata()
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
@@ -74,7 +72,7 @@ func (h *NPMHandler) handleAttestations(w http.ResponseWriter, r *http.Request) 
 		JSONError(w, http.StatusBadGateway, "failed to fetch from upstream")
 		return
 	}
-	listed, _, _ := jsonscan.LookupString(packument, "versions", version, "dist", "attestations", "url")
+	listed, _, _ := jsonscan.LookupString(data.entry, "dist", "attestations", "url")
 	if listed == "" {
 		JSONError(w, http.StatusNotFound, errNoAttestations.Error())
 		return
