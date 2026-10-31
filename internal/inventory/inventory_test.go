@@ -246,9 +246,9 @@ func TestParseSkipsTheProjectsOwnPackages(t *testing.T) {
 	}
 }
 
-func TestParseSkipsMainModuleRegardlessOfCase(t *testing.T) {
-	// syft keeps the module path's case in mainModule; package URLs of Go
-	// modules are lowercased.
+func TestParseSkipsMixedCaseMainModule(t *testing.T) {
+	// syft keeps the module path's case in mainModule, and so does the
+	// package URL.
 	doc := `{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
 		{"bom-ref":"bin","type":"library","name":"github.com/Azure/foo","version":"v1.2.0","purl":"pkg:golang/github.com/Azure/foo@v1.2.0",
 		 "properties":[{"name":"syft:metadata:mainModule","value":"github.com/Azure/foo"}]},
@@ -261,5 +261,24 @@ func TestParseSkipsMainModuleRegardlessOfCase(t *testing.T) {
 	}
 	if len(components) != 1 || components[0].Name != "github.com/spf13/cobra" || skipped != 1 {
 		t.Errorf("components = %+v, skipped = %d; want only cobra, 1 skipped", components, skipped)
+	}
+}
+
+func TestParseMainModuleKeepsCase(t *testing.T) {
+	// Go module paths are case-sensitive, and package URLs keep their case,
+	// so github.com/azure/foo is another module than the main module
+	// github.com/Azure/foo, and a dependency.
+	doc := `{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+		{"bom-ref":"bin","type":"library","name":"github.com/Azure/foo","version":"v1.2.0","purl":"pkg:golang/github.com/Azure/foo@v1.2.0",
+		 "properties":[{"name":"syft:metadata:mainModule","value":"github.com/Azure/foo"}]},
+		{"bom-ref":"other","type":"library","name":"github.com/azure/foo","version":"v0.1.0","purl":"pkg:golang/github.com/azure/foo@v0.1.0",
+		 "properties":[{"name":"syft:metadata:mainModule","value":"github.com/Azure/foo"}]}
+	]}`
+	components, skipped, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 1 || components[0].Name != "github.com/azure/foo" || skipped != 1 {
+		t.Errorf("components = %+v, skipped = %d; want only github.com/azure/foo, 1 skipped", components, skipped)
 	}
 }

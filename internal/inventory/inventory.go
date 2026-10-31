@@ -99,7 +99,7 @@ func Parse(data []byte) (components []Component, skipped int, err error) {
 	seen := make(map[[2]string]bool, len(doc.Packages))
 	for _, pkg := range doc.Packages {
 		c, ok := componentOf(pkg)
-		if !ok || lockRoots[pkg.ID] || (c.Ecosystem == "golang" && ownModules[strings.ToLower(c.Name)]) {
+		if !ok || lockRoots[pkg.ID] || (c.Ecosystem == "golang" && ownModules[c.Name]) {
 			skipped++
 			continue
 		}
@@ -161,14 +161,14 @@ func lockFileRoots(doc *sbom.SBOM) map[string]bool {
 }
 
 // mainModules returns the Go modules the SBOM's binaries were built from,
-// which are the project's own, lowercased: syft keeps the module path's case
-// while FromPURL lowercases golang names.
+// which are the project's own. Module paths are case-sensitive and package
+// URLs keep their case, so they are compared as they are.
 func mainModules(pkgs []sbom.Package) map[string]bool {
 	own := map[string]bool{}
 	for _, pkg := range pkgs {
 		for _, prop := range pkg.Properties {
 			if prop.Name == syftMainModule && prop.Value != "" {
-				own[strings.ToLower(prop.Value)] = true
+				own[prop.Value] = true
 			}
 		}
 	}
