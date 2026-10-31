@@ -412,3 +412,53 @@ func TestGetEcosystemStatsAttributesPublishTimesByPURL(t *testing.T) {
 		}
 	})
 }
+
+// TestGetEcosystemStatsVersionsReconcile checks that the versions counted
+// per ecosystem add up to the cache stats' total, with publish times stored
+// under namespaced PURLs, an alias of a package row's ecosystem, and a PURL
+// that can't be parsed.
+func TestGetEcosystemStatsVersionsReconcile(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		seedArtifact(t, db, "npm", "lodash", "4.17.21", 1000, 2)
+		seedArtifact(t, db, "go", "github.com/pkg/errors", "v0.9.1", 500, 1)
+		published := time.Now().Add(-time.Hour)
+		for _, v := range []struct{ version, pkg string }{
+			{"pkg:npm/%40babel/core@7.25.2", "pkg:npm/%40babel/core"},
+			{"pkg:maven/org.apache.commons/commons-lang3@3.14.0", "pkg:maven/org.apache.commons/commons-lang3"},
+			{"pkg:pypi/requests@2.32.3", "pkg:pypi/requests"},
+			{"pkg:golang/github.com/swaggo/swag@v1.16.4", "pkg:golang/github.com/swaggo/swag"},
+			{"~odd@1", "~odd"},
+		} {
+			if err := db.SetVersionPublishedAt(v.version, v.pkg, published); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		stats, err := db.GetEcosystemStats()
+		if err != nil {
+			t.Fatalf("GetEcosystemStats: %v", err)
+		}
+		versions := map[string]int64{}
+		var sum int64
+		for _, e := range stats {
+			versions[e.Ecosystem] += e.Versions
+			sum += e.Versions
+		}
+		want := map[string]int64{"npm": 2, "go": 2, "maven": 1, "pypi": 1, unattributedEcosystem: 1}
+		if len(versions) != len(want) {
+			t.Errorf("ecosystems = %v, want %v", versions, want)
+		}
+		for ecosystem, n := range want {
+			if versions[ecosystem] != n {
+				t.Errorf("versions of %s = %d, want %d (all: %v)", ecosystem, versions[ecosystem], n, versions)
+			}
+		}
+		cache, err := db.GetCacheStats()
+		if err != nil {
+			t.Fatal(err)
+		}
+		if sum != cache.TotalVersions {
+			t.Errorf("versions per ecosystem add up to %d, cache stats count %d", sum, cache.TotalVersions)
+		}
+	})
+}
