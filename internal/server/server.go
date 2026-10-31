@@ -234,6 +234,33 @@ func (s *Server) Start(listeners ...net.Listener) error {
 	return s.serve(listener)
 }
 
+// configureGitCache sets up the cache of upstream git repositories, when any
+// are configured.
+func (s *Server) configureGitCache(client *http.Client) error {
+	if len(s.cfg.Upstream.Git) == 0 {
+		return nil
+	}
+	upstreamDirs := make(map[string]string, len(s.cfg.Upstream.Git))
+	for name, upstream := range s.cfg.Upstream.Git {
+		upstreamDirs[name] = gitcache.UpstreamDir(name, upstream.URL)
+	}
+	gitCache, err := gitcache.New(gitcache.Options{
+		CacheDir:    s.cfg.Git.CacheDir,
+		MaxSize:     s.cfg.Git.MaxSizeBytes(),
+		MaxRepoSize: s.cfg.Git.MaxRepoSizeBytes(),
+		RefreshWait: s.cfg.Git.RefreshWaitDuration(),
+		StaleMaxAge: s.cfg.Git.StaleMaxAgeDuration(),
+		Client:      client,
+		Logger:      s.logger,
+		Upstreams:   upstreamDirs,
+	})
+	if err != nil {
+		return fmt.Errorf("configuring git cache: %w", err)
+	}
+	s.git = gitCache
+	return nil
+}
+
 func (s *Server) serve(listener net.Listener) error {
 	metadataClient, artifactClient := s.newUpstreamClients(s.cfg.ParseArtifactTimeout())
 
@@ -283,25 +310,8 @@ func (s *Server) serve(listener net.Listener) error {
 	proxy.DirectServeBaseURL = s.cfg.Storage.DirectServeBaseURL
 	proxy.StreamArtifacts = !s.cfg.Storage.CacheArtifacts
 
-	if len(s.cfg.Upstream.Git) > 0 {
-		upstreamDirs := make(map[string]string, len(s.cfg.Upstream.Git))
-		for name, upstream := range s.cfg.Upstream.Git {
-			upstreamDirs[name] = gitcache.UpstreamDir(name, upstream.URL)
-		}
-		gitCache, err := gitcache.New(gitcache.Options{
-			CacheDir:    s.cfg.Git.CacheDir,
-			MaxSize:     s.cfg.Git.MaxSizeBytes(),
-			MaxRepoSize: s.cfg.Git.MaxRepoSizeBytes(),
-			RefreshWait: s.cfg.Git.RefreshWaitDuration(),
-			StaleMaxAge: s.cfg.Git.StaleMaxAgeDuration(),
-			Client:      artifactClient,
-			Logger:      s.logger,
-			Upstreams:   upstreamDirs,
-		})
-		if err != nil {
-			return fmt.Errorf("configuring git cache: %w", err)
-		}
-		s.git = gitCache
+	if err := s.configureGitCache(artifactClient); err != nil {
+		return err
 	}
 
 	// Create router with Chi
@@ -430,6 +440,7 @@ func (s *Server) serve(listener net.Listener) error {
 	s.background.Go(func() { backfillMetadataAccess(bgCtx, s.db, s.logger, metadataBackfillBatch) })
 	s.background.Go(func() { s.startEvictionLoop(bgCtx) })
 	s.background.Go(func() { s.startRetentionLoop(bgCtx) })
+	s.background.Go(func() { s.startAPKSnapshotPruning(bgCtx) })
 	s.background.Go(func() { s.startReclaimLoop(bgCtx) })
 
 	if listener != nil {
@@ -495,7 +506,8 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	containerHandler := s.newContainerHandler(proxy)
 	helmHandler := handler.NewHelmHandlerWithOCIRegistries(
 		proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm, s.cfg.Upstream.OCIDefault, s.cfg.Upstream.OCI)
-	apkHandler := handler.NewAPKHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.APK)
+	apkHandler := handler.NewAPKHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.APK).
+		WithSnapshots(s.cfg.ParseAPKSnapshots())
 	archHandler := handler.NewArchHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Arch)
 	freebsdHandler := handler.NewFreeBSDHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.FreeBSD)
 	debianHandler := handler.NewDebianHandler(

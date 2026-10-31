@@ -323,6 +323,7 @@ Each upstream used by a built-in package route can be set in YAML or JSON under 
 | `upstream.rpm` | `PROXY_UPSTREAM_RPM` | `https://dl.fedoraproject.org/pub/fedora/linux` |
 | `upstream.homebrew_api` | `PROXY_UPSTREAM_HOMEBREW_API` | `https://formulae.brew.sh/api` |
 | `upstream.homebrew_artifact` | `PROXY_UPSTREAM_HOMEBREW_ARTIFACT` | `https://ghcr.io` |
+| `upstream.apk_snapshots` | `PROXY_UPSTREAM_APK_SNAPSHOTS` | disabled; see [Alpine APK snapshots](#alpine-apk-snapshots) |
 
 Private, ULA, CGNAT, and loopback addresses are rejected by default. Add each private upstream hostname or IP address to `upstream.allow_private_hosts`. The matching environment variable accepts a comma-separated list. Loopback upstreams also require `upstream.allow_loopback: true`. That setting permits upstream requests and redirects to reach any loopback address.
 
@@ -576,6 +577,8 @@ with the metadata TTL and served byte-for-byte unchanged so apk signature
 verification keeps working; `.apk` packages use the shared artifact cache.
 When `upstream.apk` is empty, a single repository named `alpine` pointing at
 the official mirror is available; configuring any entry replaces that default.
+Earlier index versions can be kept and served by date; see
+[Alpine APK snapshots](#alpine-apk-snapshots).
 
 ```yaml
 upstream:
@@ -622,6 +625,53 @@ official mirror is) and bootstrap pkg without the proxy. Everything else, such
 as signatures and keys, is passed through uncached. When `upstream.freebsd` is empty, a single
 repository named `freebsd` pointing at `https://pkg.freebsd.org` is available;
 configuring any entry replaces that default.
+
+### Alpine APK snapshots
+
+```yaml
+upstream:
+  # Keep replaced APK indexes for 90 days.
+  apk_snapshots: "90d"
+```
+
+Alpine mirrors only keep the current build of each package, so after an
+upgrade `apk add curl=8.5.0-r0` fails because the index no longer lists that
+build. With `upstream.apk_snapshots` set, the proxy keeps every version of an
+index (and of a detached signature) it stores, and serves them under a dated
+repository name:
+
+```
+http://localhost:8080/apk/alpine@2026-10-01/v3.22/main
+```
+
+`/apk/{name}@{YYYY-MM-DD}/…` returns the index that was current at the end of
+that day (UTC). The kept files are the signed upstream bytes, so apk verifies
+them as usual. A day before the first stored version of an index, or a day
+that has not started yet, is `404`. Today's snapshot can still change until the
+day ends. Packages under a snapshot path are the same as under the plain path:
+they come from the artifact cache, or from upstream if not cached; a build the
+upstream has dropped and the proxy never cached is `404`. A configured
+repository whose name contains `@` takes precedence over a snapshot path.
+
+Snapshots are recorded when an index is requested through the plain path, so
+they only exist for repositories clients use. A version counts from the first
+time the proxy served it, which can be up to `metadata_ttl` after upstream
+published it. A version is deleted once it was replaced more than the
+configured duration ago; the newest version of each index is always kept.
+Durations take a `d` suffix; empty or `"0"` disables snapshots. Snapshots need
+`cache_metadata`. Their files live under `_snapshots/` in storage and do not
+count towards `storage.max_size`.
+
+Turning snapshots off, or `cache_metadata` off, leaves the kept versions in
+place. To remove them, first set a short duration such as `"1h"` and let the
+hourly prune delete everything but the newest version of each index.
+
+Snapshots keep indexes, not packages. A package listed by an old snapshot can
+still be evicted by `storage.max_size` or [retention](#retention), and is then
+only available while upstream still has it. Retention counts from a package's
+last download, so a pinned build nobody installed for longer than the `alpine`
+retention is evicted even while a snapshot lists it. Use package rules with
+`"0"` for builds that must stay installable.
 
 ### Go checksum database
 

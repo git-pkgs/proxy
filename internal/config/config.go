@@ -773,6 +773,12 @@ type UpstreamConfig struct {
 	// Default when empty: {"alpine": "https://dl-cdn.alpinelinux.org/alpine"}.
 	APK map[string]string `json:"apk" yaml:"apk"`
 
+	// APKSnapshots keeps earlier versions of Alpine APK indexes for this
+	// long after upstream replaced them, and serves them at
+	// /apk/{name}@{YYYY-MM-DD}/. Accepts a "d" suffix, e.g. "90d".
+	// Empty or "0" disables snapshots.
+	APKSnapshots string `json:"apk_snapshots" yaml:"apk_snapshots"`
+
 	// Arch maps repository names to Arch Linux pacman mirror base URLs,
 	// served at /arch/{name}/. The remaining request path mirrors the
 	// upstream layout, e.g. /arch/archlinux/core/os/x86_64/core.db.
@@ -880,6 +886,11 @@ func (u *UpstreamConfig) Validate() error {
 	}
 	if err := validateNamedUpstreams("upstream.apk", u.APK); err != nil {
 		return err
+	}
+	if u.APKSnapshots != "" {
+		if _, err := parseRetentionDuration("upstream.apk_snapshots", u.APKSnapshots); err != nil {
+			return err
+		}
 	}
 	if err := validateNamedUpstreams("upstream.arch", u.Arch); err != nil {
 		return err
@@ -1462,6 +1473,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Upstream.Swift, "PROXY_UPSTREAM_SWIFT")
 	setEnvString(&c.Upstream.OCIDefault, "PROXY_UPSTREAM_OCI_DEFAULT")
 	setEnvString(&c.Upstream.Debian, "PROXY_UPSTREAM_DEBIAN")
+	setEnvString(&c.Upstream.APKSnapshots, "PROXY_UPSTREAM_APK_SNAPSHOTS")
 	setEnvString(&c.Upstream.RPM, "PROXY_UPSTREAM_RPM")
 	setEnvString(&c.Upstream.HomebrewAPI, "PROXY_UPSTREAM_HOMEBREW_API")
 	setEnvString(&c.Upstream.HomebrewArtifact, "PROXY_UPSTREAM_HOMEBREW_ARTIFACT")
@@ -1957,6 +1969,20 @@ func (c *Config) ParseGradleBuildCacheMaxUploadSize() int64 {
 		return defaultGradleBuildCacheMaxUploadSize
 	}
 	return size
+}
+
+// ParseAPKSnapshots returns how long earlier Alpine APK indexes are kept
+// after upstream replaced them. Returns 0 when snapshots are disabled or the
+// value is invalid.
+func (c *Config) ParseAPKSnapshots() time.Duration {
+	if c.Upstream.APKSnapshots == "" {
+		return 0
+	}
+	d, err := parseDayDuration(c.Upstream.APKSnapshots)
+	if err != nil || d < 0 {
+		return 0
+	}
+	return d
 }
 
 // ParseGradleBuildCacheMaxAge returns age-based eviction threshold.

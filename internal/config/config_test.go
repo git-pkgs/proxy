@@ -2057,6 +2057,41 @@ upstream:
 	}
 }
 
+func TestAPKSnapshots(t *testing.T) {
+	cfg := Default()
+	if got := cfg.ParseAPKSnapshots(); got != 0 {
+		t.Errorf("default ParseAPKSnapshots = %v, want 0", got)
+	}
+
+	for value, want := range map[string]time.Duration{
+		"90d": 90 * 24 * time.Hour,
+		"12h": 12 * time.Hour,
+		"0":   0,
+	} {
+		cfg.Upstream.APKSnapshots = value
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate(%q): %v", value, err)
+		}
+		if got := cfg.ParseAPKSnapshots(); got != want {
+			t.Errorf("ParseAPKSnapshots(%q) = %v, want %v", value, got, want)
+		}
+	}
+
+	for _, value := range []string{"forever", "-1d"} {
+		cfg.Upstream.APKSnapshots = value
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("Validate(%q) succeeded, want an error", value)
+		}
+	}
+
+	cfg = Default()
+	t.Setenv("PROXY_UPSTREAM_APK_SNAPSHOTS", "30d")
+	cfg.LoadFromEnv()
+	if cfg.Upstream.APKSnapshots != "30d" {
+		t.Errorf("APKSnapshots from env = %q, want 30d", cfg.Upstream.APKSnapshots)
+	}
+}
+
 func TestCooldownShortest(t *testing.T) {
 	for _, tc := range []struct {
 		name string

@@ -1,0 +1,341 @@
+package handler
+
+import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"strings"
+	"sync"
+	"sync/atomic"
+	"testing"
+	"time"
+
+	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/registries/fetch"
+)
+
+const apkSnapshotIndexPath = "/v3.22/main/x86_64/APKINDEX.tar.gz"
+
+// apkSnapshotUpstream serves the index held in index, initially "index v1",
+// and counts package downloads.
+type apkSnapshotUpstream struct {
+	index     atomic.Value
+	downloads atomic.Int32
+	server    *httptest.Server
+}
+
+func newAPKSnapshotUpstream(t *testing.T) *apkSnapshotUpstream {
+	t.Helper()
+	u := &apkSnapshotUpstream{}
+	u.index.Store("index v1")
+	u.server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case apkSnapshotIndexPath:
+			_, _ = w.Write([]byte(u.index.Load().(string)))
+		case "/v3.22/main/x86_64/curl-8.5.0-r0.apk":
+			u.downloads.Add(1)
+			_, _ = w.Write([]byte("curl 8.5.0"))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(u.server.Close)
+	return u
+}
+
+// newSnapshotAPKHandler returns an APK handler with snapshots enabled whose
+// metadata TTL is 0, so every index request asks upstream.
+func newSnapshotAPKHandler(t *testing.T, upstreamURL string) (*APKHandler, *database.DB) {
+	t.Helper()
+	proxy, db, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = 0
+	proxy.HTTPClient = http.DefaultClient
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(http.DefaultClient), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+	h := NewAPKHandler(proxy, "http://proxy.example", map[string]string{"alpine": upstreamURL}).
+		WithSnapshots(30 * 24 * time.Hour)
+	return h, db
+}
+
+func snapshotCount(t *testing.T, db *database.DB) int {
+	t.Helper()
+	var n int
+	if err := db.Get(&n, `SELECT COUNT(*) FROM metadata_snapshots`); err != nil {
+		t.Fatal(err)
+	}
+	return n
+}
+
+func expectAPKResponse(t *testing.T, h *APKHandler, target string, status int, body string) {
+	t.Helper()
+	w := serveAPKRequest(h, target)
+	if w.Code != status {
+		t.Fatalf("%s: status = %d, want %d: %s", target, w.Code, status, w.Body.String())
+	}
+	if status == http.StatusOK && w.Body.String() != body {
+		t.Errorf("%s: body = %q, want %q", target, w.Body.String(), body)
+	}
+}
+
+// TestAPKSnapshots_ServeIndexCurrentAtDate records two versions of an index
+// through the plain path and checks that each dated path serves the version
+// that was current at the end of that day.
+func TestAPKSnapshots_ServeIndexCurrentAtDate(t *testing.T) {
+	upstream := newAPKSnapshotUpstream(t)
+	h, db := newSnapshotAPKHandler(t, upstream.server.URL)
+
+	expectAPKResponse(t, h, "/alpine"+apkSnapshotIndexPath, http.StatusOK, "index v1")
+	// Pretend v1 was first stored on 2026-01-10.
+	recorded := time.Date(2026, 1, 10, 12, 0, 0, 0, time.UTC)
+	if _, err := db.Exec(`UPDATE metadata_snapshots SET valid_from_ms = ?`, recorded.UnixMilli()); err != nil {
+		t.Fatal(err)
+	}
+
+	upstream.index.Store("index v2")
+	expectAPKResponse(t, h, "/alpine"+apkSnapshotIndexPath, http.StatusOK, "index v2")
+	// An unchanged index adds no snapshot.
+	expectAPKResponse(t, h, "/alpine"+apkSnapshotIndexPath, http.StatusOK, "index v2")
+	if got := snapshotCount(t, db); got != 2 {
+		t.Fatalf("snapshots = %d, want 2", got)
+	}
+
+	today := time.Now().UTC().Format(apkSnapshotDateLayout)
+	future := time.Now().UTC().AddDate(0, 0, 2).Format(apkSnapshotDateLayout)
+	expectAPKResponse(t, h, "/alpine@2026-01-09"+apkSnapshotIndexPath, http.StatusNotFound, "")
+	expectAPKResponse(t, h, "/alpine@2026-01-10"+apkSnapshotIndexPath, http.StatusOK, "index v1")
+	expectAPKResponse(t, h, "/alpine@"+today+apkSnapshotIndexPath, http.StatusOK, "index v2")
+	expectAPKResponse(t, h, "/alpine@"+future+apkSnapshotIndexPath, http.StatusNotFound, "")
+	expectAPKResponse(t, h, "/alpine@2026-13-01"+apkSnapshotIndexPath, http.StatusNotFound, "")
+	expectAPKResponse(t, h, "/other@2026-01-10"+apkSnapshotIndexPath, http.StatusNotFound, "")
+	expectAPKResponse(t, h, "/alpine@2026-01-10/v3.22/community/x86_64/APKINDEX.tar.gz", http.StatusNotFound, "")
+}
+
+func TestAPKSnapshots_ConditionalRequest(t *testing.T) {
+	upstream := newAPKSnapshotUpstream(t)
+	h, _ := newSnapshotAPKHandler(t, upstream.server.URL)
+	expectAPKResponse(t, h, "/alpine"+apkSnapshotIndexPath, http.StatusOK, "index v1")
+
+	target := "/alpine@" + time.Now().UTC().Format(apkSnapshotDateLayout) + apkSnapshotIndexPath
+	first := serveAPKRequest(h, target)
+	etag := first.Header().Get("ETag")
+	if first.Code != http.StatusOK || etag == "" {
+		t.Fatalf("status = %d, ETag = %q, want 200 with an ETag", first.Code, etag)
+	}
+	req := httptest.NewRequest(http.MethodGet, target, nil)
+	req.Header.Set("If-None-Match", etag)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+	if w.Code != http.StatusNotModified {
+		t.Errorf("conditional request: status = %d, want 304", w.Code)
+	}
+}
+
+// TestAPKSnapshots_PackagesShareTheCache checks that a package requested
+// under a snapshot path is the cached artifact of the plain path.
+func TestAPKSnapshots_PackagesShareTheCache(t *testing.T) {
+	upstream := newAPKSnapshotUpstream(t)
+	h, _ := newSnapshotAPKHandler(t, upstream.server.URL)
+
+	pkg := "/v3.22/main/x86_64/curl-8.5.0-r0.apk"
+	expectAPKResponse(t, h, "/alpine"+pkg, http.StatusOK, "curl 8.5.0")
+	expectAPKResponse(t, h, "/alpine@2026-01-10"+pkg, http.StatusOK, "curl 8.5.0")
+	if got := upstream.downloads.Load(); got != 1 {
+		t.Errorf("upstream downloads = %d, want 1", got)
+	}
+	expectAPKResponse(t, h, "/alpine@2026-01-10/v3.22/main/x86_64/gone-1.0-r0.apk", http.StatusNotFound, "")
+}
+
+func TestAPKSnapshots_DisabledByDefault(t *testing.T) {
+	upstream := newAPKSnapshotUpstream(t)
+	h, db := newSnapshotAPKHandler(t, upstream.server.URL)
+	h.WithSnapshots(0)
+
+	expectAPKResponse(t, h, "/alpine"+apkSnapshotIndexPath, http.StatusOK, "index v1")
+	if got := snapshotCount(t, db); got != 0 {
+		t.Errorf("snapshots = %d, want 0", got)
+	}
+	today := time.Now().UTC().Format(apkSnapshotDateLayout)
+	expectAPKResponse(t, h, "/alpine@"+today+apkSnapshotIndexPath, http.StatusNotFound, "")
+}
+
+// TestAPKSnapshots_ConfiguredNameWins checks that a repository whose
+// configured name contains '@' is served as configured, not as a snapshot.
+func TestAPKSnapshots_ConfiguredNameWins(t *testing.T) {
+	upstream := newAPKSnapshotUpstream(t)
+	h, _ := newSnapshotAPKHandler(t, upstream.server.URL)
+	h.repositories["alpine@2026-01-10"] = upstream.server.URL
+
+	expectAPKResponse(t, h, "/alpine@2026-01-10"+apkSnapshotIndexPath, http.StatusOK, "index v1")
+}
+
+// TestAPKSnapshots_SameVersionRecordedTwice checks that two requests
+// recording the same version in the same millisecond, as coalesced fetches
+// after an upstream update can, leave the recorded snapshot readable: the
+// request whose row is not added must not delete the other's blob.
+func TestAPKSnapshots_SameVersionRecordedTwice(t *testing.T) {
+	u := newAPKSnapshotUpstream(t)
+	h, db := newSnapshotAPKHandler(t, u.server.URL)
+	expectAPKResponse(t, h, "/alpine"+apkSnapshotIndexPath, http.StatusOK, "index v1")
+
+	key := h.metadataCacheKey("alpine", u.server.URL, apkSnapshotIndexPath[1:])
+	entry, err := db.GetMetadataCache(apkEcosystem, key)
+	if err != nil || entry == nil {
+		t.Fatalf("cached index row = %v, %v", entry, err)
+	}
+	if _, err := db.Exec(`DELETE FROM metadata_snapshots`); err != nil {
+		t.Fatal(err)
+	}
+	validFrom := time.Now()
+	h.storeSnapshot(t.Context(), key, entry, validFrom)
+	h.storeSnapshot(t.Context(), key, entry, validFrom)
+
+	if n := snapshotCount(t, db); n != 1 {
+		t.Fatalf("%d snapshots recorded, want 1", n)
+	}
+	snap, err := db.LatestMetadataSnapshot(apkEcosystem, key)
+	if err != nil || snap == nil {
+		t.Fatalf("latest snapshot = %v, %v", snap, err)
+	}
+	body, err := h.proxy.Storage.Open(t.Context(), snap.StoragePath)
+	if err != nil {
+		t.Fatalf("recorded snapshot blob unreadable: %v", err)
+	}
+	_ = body.Close()
+	day := validFrom.UTC().Format(apkSnapshotDateLayout)
+	expectAPKResponse(t, h, "/alpine@"+day+apkSnapshotIndexPath, http.StatusOK, "index v1")
+}
+
+// pausingWriter blocks the first Write until release is closed, after
+// signalling on writing.
+type pausingWriter struct {
+	*httptest.ResponseRecorder
+	once    sync.Once
+	writing chan struct{}
+	release chan struct{}
+}
+
+func (w *pausingWriter) Write(b []byte) (int, error) {
+	w.once.Do(func() {
+		close(w.writing)
+		<-w.release
+	})
+	return w.ResponseRecorder.Write(b)
+}
+
+// TestAPKSnapshots_OverlappingRequests pauses a request while it writes
+// index v1, lets a second request fetch and serve v2, and then lets the first
+// one finish. Both versions must be kept, in the order they were fetched,
+// with readable blobs.
+func TestAPKSnapshots_OverlappingRequests(t *testing.T) {
+	u := newAPKSnapshotUpstream(t)
+	h, db := newSnapshotAPKHandler(t, u.server.URL)
+	target := "/alpine" + apkSnapshotIndexPath
+
+	first := &pausingWriter{
+		ResponseRecorder: httptest.NewRecorder(),
+		writing:          make(chan struct{}),
+		release:          make(chan struct{}),
+	}
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.Routes().ServeHTTP(first, httptest.NewRequest(http.MethodGet, target, nil))
+	}()
+	select {
+	case <-first.writing:
+	case <-done:
+		t.Fatal("first request finished without writing a body")
+	}
+
+	u.index.Store("index v2")
+	expectAPKResponse(t, h, target, http.StatusOK, "index v2")
+	close(first.release)
+	<-done
+	if first.Code != http.StatusOK || first.Body.String() != "index v1" {
+		t.Fatalf("first request = %d %q, want 200 with index v1", first.Code, first.Body.String())
+	}
+
+	var snaps []database.MetadataSnapshot
+	if err := db.Select(&snaps, `SELECT `+
+		`id, ecosystem, name, storage_path, content_type, content_encoding, content_digest, size, valid_from_ms `+
+		`FROM metadata_snapshots ORDER BY valid_from_ms, id`); err != nil {
+		t.Fatal(err)
+	}
+	if len(snaps) != 2 {
+		t.Fatalf("%d snapshots recorded, want 2", len(snaps))
+	}
+	for i, want := range []string{"index v1", "index v2"} {
+		body, err := h.proxy.Storage.Open(t.Context(), snaps[i].StoragePath)
+		if err != nil {
+			t.Fatalf("snapshot %d blob unreadable: %v", i, err)
+		}
+		got, _ := io.ReadAll(body)
+		_ = body.Close()
+		if string(got) != want {
+			t.Errorf("snapshot %d = %q, want %q", i, got, want)
+		}
+		if snaps[i].Size != int64(len(want)) {
+			t.Errorf("snapshot %d size = %d, want %d", i, snaps[i].Size, len(want))
+		}
+	}
+}
+
+// TestAPKSnapshots_ConcurrentReplicas records the same index version from
+// two replicas sharing a Postgres database, many times at once. One snapshot
+// row must remain, with a readable blob, and the other copies are deleted.
+func TestAPKSnapshots_ConcurrentReplicas(t *testing.T) {
+	a, b, db := sharedInstances(t)
+	u := newAPKSnapshotUpstream(t)
+	handlers := make([]*APKHandler, 0, 2)
+	for _, p := range []*Proxy{a, b} {
+		p.CacheMetadata = true
+		p.HTTPClient = http.DefaultClient
+		handlers = append(handlers, NewAPKHandler(p, "http://proxy.example", map[string]string{"alpine": u.server.URL}).
+			WithSnapshots(30*24*time.Hour))
+	}
+	expectAPKResponse(t, handlers[0], "/alpine"+apkSnapshotIndexPath, http.StatusOK, "index v1")
+
+	key := handlers[0].metadataCacheKey("alpine", u.server.URL, apkSnapshotIndexPath[1:])
+	entry, err := db.GetMetadataCache(apkEcosystem, key)
+	if err != nil || entry == nil {
+		t.Fatalf("cached index row = %v, %v", entry, err)
+	}
+	if _, err := db.Exec(`DELETE FROM metadata_snapshots`); err != nil {
+		t.Fatal(err)
+	}
+	// The request above recorded a copy of its own, which the test leaves be.
+	store := a.Storage.(*mockStorage)
+	store.mu.Lock()
+	before := map[string]bool{}
+	for path := range store.files {
+		before[path] = true
+	}
+	store.mu.Unlock()
+
+	validFrom := time.Now()
+	var wg sync.WaitGroup
+	for i := range 16 {
+		wg.Go(func() { handlers[i%2].storeSnapshot(t.Context(), key, entry, validFrom) })
+	}
+	wg.Wait()
+
+	if n := snapshotCount(t, db); n != 1 {
+		t.Fatalf("%d snapshots recorded, want 1", n)
+	}
+	snap, err := db.LatestMetadataSnapshot(apkEcosystem, key)
+	if err != nil || snap == nil {
+		t.Fatalf("latest snapshot = %v, %v", snap, err)
+	}
+	store.mu.Lock()
+	defer store.mu.Unlock()
+	if got := string(store.files[snap.StoragePath]); got != "index v1" {
+		t.Errorf("snapshot blob = %q, want the index", got)
+	}
+	for path := range store.files {
+		if strings.HasPrefix(path, "_snapshots/") && path != snap.StoragePath && !before[path] {
+			t.Errorf("copy %s of a snapshot that wasn't recorded is left in storage", path)
+		}
+	}
+}
