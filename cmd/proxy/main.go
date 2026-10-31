@@ -124,7 +124,6 @@ import (
 
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
-	"github.com/git-pkgs/proxy/internal/denylist"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/memlimit"
 	"github.com/git-pkgs/proxy/internal/mirror"
@@ -552,15 +551,16 @@ func runMirror() {
 
 	// Build proxy with the same upstream clients and authentication as serve
 	proxy, images := server.NewMirrorProxy(cfg, db, store, logger)
-	proxy.Denylist, err = denylist.New(cfg.Denylist.Packages)
-	if err != nil {
-		_ = db.Close()
-		fmt.Fprintf(os.Stderr, "invalid denylist: %v\n", err)
-		os.Exit(1) //nolint:gocritic // db closed above
-	}
 	proxy.CacheMetadata = true // mirror always caches metadata
 	proxy.MetadataTTL = cfg.ParseMetadataTTL()
 	proxy.MetadataMaxSize = cfg.ParseMetadataMaxSize()
+	// As serve does, resolve Swift source repositories in the denylist through
+	// the upstream, and refuse to run when one can't be.
+	if err := server.ConfigureDenylist(cfg, proxy); err != nil {
+		_ = db.Close()
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1) //nolint:gocritic // db closed above
+	}
 
 	m := newCommandMirror(cfg, proxy, images, db, store, logger, *concurrency)
 	switch s := source.(type) {
