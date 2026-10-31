@@ -348,6 +348,8 @@ upstream:
   composer_repository: "https://upstream-proxy.example.com/composer"
 ```
 
+The proxy reads `packages.json` from `upstream.composer_repository` and keeps it in memory for the metadata TTL, or an hour when the TTL is 0, whether or not `cache_metadata` is on. A failed fetch is not retried within that time: the last good copy is used, or the entries are left out. It passes on its `security-advisories` and `filter` entries (Packagist's malware list) with URLs pointing at the proxy. An upstream that offers neither is still usable; `composer audit` then reports nothing from it. A filter `api-url` is not passed on; Composer reads filter entries from package metadata instead.
+
 `upstream.hex_api` is used for cooldown timestamps and must expose Hex's `/api/packages/{name}` JSON endpoint.
 
 `upstream.chef` is the Supermarket served at `/chef/`, for Berkshelf (`source "https://proxy.example.com/chef"`) and Policyfiles (`default_source :supermarket, "https://proxy.example.com/chef"`). The upstream has to serve the Supermarket API: `/universe`, `/api/v1/cookbooks/{name}`, its versions and their downloads. A private Supermarket that needs credentials takes them from `upstream.auth`, scoped to its URL. A download redirect to another host, such as the storage bucket behind Supermarket, does not receive them:
@@ -388,6 +390,7 @@ upstream:
 - Composer metadata of routed packages carries an empty `notification-url`, so Composer does not report their installs to the default upstream's `notify-batch` endpoint.
 - Use `upstream.auth` for the registry's credentials. The proxy has no authentication of its own, so every client that can reach it can download routed packages.
 - Search (`/composer/search.json`) and the package list (`/composer/packages/list.json`) still come from the default upstream only.
+- Composer security advisories and filter lists come from the default upstream. Routed package names, and those in `hosted.composer_vendors`, are removed from advisories requests before they are sent, so they only get advisories that their route's own metadata carries.
 - Attestations of a routed npm version (`/npm/-/npm/v1/attestations/...`) come from the route, like its tarballs.
 - npm audit, signing-key, search and ping requests still go to `upstream.npm`. An audit request lists every package in the dependency tree, routed ones included.
 - Routes can only be set in the configuration file, not with environment variables.
