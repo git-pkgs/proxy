@@ -373,3 +373,42 @@ func TestMergeAliasedEcosystemsBreaksSizeTiesByName(t *testing.T) {
 		t.Errorf("input order changed the surviving spelling: %q vs %q", first, second)
 	}
 }
+
+// Cooldown stores publish times of versions nobody downloaded, without a
+// package row. They count under the ecosystem of their package PURL, not as
+// unattributed.
+func TestGetEcosystemStatsAttributesPublishTimesByPURL(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		seedArtifact(t, db, "npm", "lodash", "4.17.21", 1000, 2)
+		published := time.Now().Add(-time.Hour)
+		for _, v := range []struct{ version, pkg string }{
+			{"pkg:npm/react@19.0.0", "pkg:npm/react"},
+			{"pkg:golang/github.com/swaggo/swag@v1.16.3", "pkg:golang/github.com/swaggo/swag"},
+			{"pkg:golang/github.com/swaggo/swag@v1.16.4", "pkg:golang/github.com/swaggo/swag"},
+			{"pkg:composer/vendor/pkg@1.0.0", "pkg:composer/vendor/pkg"},
+			{"not-a-purl@1", "not-a-purl"},
+		} {
+			if err := db.SetVersionPublishedAt(v.version, v.pkg, published); err != nil {
+				t.Fatal(err)
+			}
+		}
+
+		stats, err := db.GetEcosystemStats()
+		if err != nil {
+			t.Fatalf("GetEcosystemStats: %v", err)
+		}
+		versions := map[string]int64{}
+		for _, e := range stats {
+			versions[e.Ecosystem] = e.Versions
+		}
+		want := map[string]int64{"npm": 2, "golang": 2, "composer": 1, unattributedEcosystem: 1}
+		for ecosystem, n := range want {
+			if versions[ecosystem] != n {
+				t.Errorf("versions of %s = %d, want %d (all: %v)", ecosystem, versions[ecosystem], n, versions)
+			}
+		}
+		if len(versions) != len(want) {
+			t.Errorf("ecosystems = %v, want %v", versions, want)
+		}
+	})
+}
