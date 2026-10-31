@@ -422,19 +422,19 @@ func (h *NPMHandler) storedPackument(ctx context.Context, packumentURL, accept, 
 }
 
 // readStoredPackument reads the packument stored for cacheKey with read,
-// fetching it into storage first when needed. When the stored copy is gone,
-// although its row says otherwise, the packument is fetched again and read
-// once more. fetchErr is what storedPackument returned when the packument
+// fetching it into storage first when needed. When the stored copy is gone
+// or no longer has the digest its row records, the packument is fetched
+// again and read once more. fetchErr is what storedPackument returned when the packument
 // couldn't be fetched, and err is what read returned.
 func (h *NPMHandler) readStoredPackument(ctx context.Context, packumentURL, accept, cacheKey string, read func(*database.MetadataCacheEntry) error) (err, fetchErr error) {
 	entry, fetchErr := h.storedPackument(ctx, packumentURL, accept, cacheKey)
 	if fetchErr != nil {
 		return nil, fetchErr
 	}
-	if err = read(entry); !errors.Is(err, storage.ErrNotFound) {
+	if err = read(entry); !errors.Is(err, storage.ErrNotFound) && !errors.Is(err, errStoredMetadataChanged) {
 		return err, nil
 	}
-	h.proxy.Logger.Warn("stored npm metadata is missing, fetching it again", "url", packumentURL)
+	h.proxy.Logger.Warn("stored npm metadata is missing or changed, fetching it again", "url", packumentURL, "error", err)
 	entry, fetchErr = h.proxy.restoreStoredMetadata(ctx, "npm", cacheKey, packumentURL, accept, h.packumentStreamValidator(), entry)
 	if errors.Is(fetchErr, errMetadataNotStored) {
 		return nil, errInMemory

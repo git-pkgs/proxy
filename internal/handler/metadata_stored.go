@@ -200,9 +200,9 @@ func (p *Proxy) storeUpstreamMetadata(ctx context.Context, ecosystem, cacheKey, 
 	}
 	// Go decompresses the body, since no Accept-Encoding was set, so it is
 	// stored uncompressed.
-	var body io.Reader = resp.Body
+	var body io.Reader = upstreamBodyReader{resp.Body}
 	if validate != nil {
-		staged, err := p.stageMetadata(ctx, ecosystem, cacheKey, resp.Body, validate)
+		staged, err := p.stageMetadata(ctx, ecosystem, cacheKey, body, validate)
 		if err != nil {
 			return nil, err
 		}
@@ -210,7 +210,7 @@ func (p *Proxy) storeUpstreamMetadata(ctx context.Context, ecosystem, cacheKey, 
 		body = staged
 	}
 	if _, err := p.storeMetadataBlob(ctx, ecosystem, cacheKey, metadataStoragePath(ecosystem, cacheKey), body, meta); err != nil {
-		return nil, fmt.Errorf("%w: %w", errMetadataNotStored, err)
+		return nil, notStored("", err)
 	}
 	stored, err := p.DB.GetMetadataCache(ecosystem, cacheKey)
 	if err != nil || !usableStoredMetadata(stored) {
@@ -232,7 +232,7 @@ func (p *Proxy) stageMetadata(ctx context.Context, ecosystem, cacheKey string, b
 	}
 	if _, _, err := p.Storage.Store(ctx, path, body); err != nil {
 		discard()
-		return nil, fmt.Errorf("%w: staging: %w", errMetadataNotStored, err)
+		return nil, notStored("staging: ", err)
 	}
 	if err := readStored(func() (io.ReadCloser, error) { return p.Storage.Open(ctx, path) }, validate); err != nil {
 		discard()
@@ -244,6 +244,34 @@ func (p *Proxy) stageMetadata(ctx context.Context, ecosystem, cacheKey string, b
 		return nil, fmt.Errorf("%w: reading staged copy: %w", errMetadataNotStored, err)
 	}
 	return &stagedReader{ReadCloser: staged, discard: discard}, nil
+}
+
+// upstreamBodyReader marks a failure to read a document from upstream, so
+// it is told apart from a failure to store it.
+type upstreamBodyReader struct{ r io.Reader }
+
+func (u upstreamBodyReader) Read(b []byte) (int, error) {
+	n, err := u.r.Read(b)
+	if err != nil && !errors.Is(err, io.EOF) {
+		err = &upstreamBodyError{err}
+	}
+	return n, err
+}
+
+// upstreamBodyError is a failure to read a document from upstream. It is
+// handled as an upstream failure: the stored copy, if any, is served.
+type upstreamBodyError struct{ err error }
+
+func (e *upstreamBodyError) Error() string { return "reading upstream metadata: " + e.err.Error() }
+func (e *upstreamBodyError) Unwrap() error { return e.err }
+
+// notStored returns a failure to store a document as errMetadataNotStored,
+// unless reading it from upstream failed.
+func notStored(what string, err error) error {
+	if body := (*upstreamBodyError)(nil); errors.As(err, &body) {
+		return body
+	}
+	return fmt.Errorf("%w: %s%w", errMetadataNotStored, what, err)
 }
 
 // stagedReader deletes the staged copy it reads when closed.

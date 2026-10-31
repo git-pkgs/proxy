@@ -49,10 +49,13 @@ func bigPackumentAt(base string, n int) string {
 
 type streamUpstream struct {
 	*httptest.Server
-	body     atomic.Value // string
-	etag     atomic.Value // string
-	fail     atomic.Bool
-	gone     atomic.Bool
+	body atomic.Value // string
+	etag atomic.Value // string
+	fail atomic.Bool
+	gone atomic.Bool
+	// truncate makes upstream close the connection halfway through the
+	// document it announced.
+	truncate atomic.Bool
 	requests atomic.Int32
 	// sent counts the responses that carried the document.
 	sent atomic.Int32
@@ -80,9 +83,15 @@ func newStreamUpstream(t *testing.T, body string) *streamUpstream {
 			w.WriteHeader(http.StatusNotModified)
 		case r.URL.Path == "/big":
 			u.sent.Add(1)
+			body := u.body.Load().(string)
 			w.Header().Set("Content-Type", "application/json")
 			w.Header().Set("ETag", u.etag.Load().(string))
-			_, _ = io.WriteString(w, u.body.Load().(string))
+			if u.truncate.Load() {
+				w.Header().Set("Content-Length", fmt.Sprint(len(body)))
+				_, _ = io.WriteString(w, body[:len(body)/2])
+				return
+			}
+			_, _ = io.WriteString(w, body)
 		default:
 			http.NotFound(w, r)
 		}
@@ -98,7 +107,13 @@ func streamProxy(t *testing.T, u *streamUpstream) (*Proxy, *mockStorage, http.Ha
 	proxy.CacheMetadata = true
 	proxy.MetadataTTL = time.Hour
 	proxy.SetMetadataRewriteCacheSize(64 << 20)
-	proxy.Cooldown = &cooldown.Config{Default: "3d"}
+	// As the server does: a cooldown.Config parses itself on first use,
+	// which concurrent requests would race on.
+	policy, err := cooldown.NewPolicy(&cooldown.Config{Default: "3d"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy.Cooldown = policy
 	return proxy, store, NewNPMHandler(proxy, "http://proxy.example", u.URL).Routes()
 }
 
