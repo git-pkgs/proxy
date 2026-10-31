@@ -17,6 +17,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/jsonscan"
 	"github.com/git-pkgs/proxy/internal/metadata/npm"
 	"github.com/git-pkgs/proxy/internal/retention"
+	"github.com/git-pkgs/proxy/internal/storage"
 )
 
 const (
@@ -340,35 +341,36 @@ func (h *NPMHandler) serveStreamedPackument(w http.ResponseWriter, r *http.Reque
 	if h.proxy.rewrites == nil {
 		return false
 	}
-	entry, err := h.storedPackument(r.Context(), upstreamURL, accept, metadataCacheKey)
-	switch {
-	case err == nil:
-	case errors.Is(err, errInMemory):
-		return false
-	default:
-		h.writeFetchError(w, err)
-		return true
-	}
-
 	fullRequired := h.packumentValidator() != nil
 	options := h.npmRewriteOptions(packageName, nil)
-	rewritten, err := h.proxy.streamedRewrite(r.Context(), "npm", h.proxyURL, metadataCacheKey, entry, func(open func() (io.ReadCloser, error), out io.Writer) error {
-		var scan *npm.Scan
-		err := readStored(open, func(in io.Reader) (err error) {
-			scan, err = npm.ScanPackument(in)
-			return err
+	var rewritten rewrittenMetadata
+	err, fetchErr := h.readStoredPackument(r.Context(), upstreamURL, accept, metadataCacheKey, func(entry *database.MetadataCacheEntry) (err error) {
+		rewritten, err = h.proxy.streamedRewrite(r.Context(), "npm", h.proxyURL, metadataCacheKey, entry, func(open func() (io.ReadCloser, error), out io.Writer) error {
+			var scan *npm.Scan
+			err := readStored(open, func(in io.Reader) (err error) {
+				scan, err = npm.ScanPackument(in)
+				return err
+			})
+			if err != nil {
+				return err
+			}
+			if fullRequired && scan.Abbreviated() {
+				return npm.ErrNotStreamable
+			}
+			return readStored(open, func(in io.Reader) error {
+				_, err := npm.RewriteStream(packageName, scan, in, out, options)
+				return err
+			})
 		})
-		if err != nil {
-			return err
-		}
-		if fullRequired && scan.Abbreviated() {
-			return npm.ErrNotStreamable
-		}
-		return readStored(open, func(in io.Reader) error {
-			_, err := npm.RewriteStream(packageName, scan, in, out, options)
-			return err
-		})
+		return err
 	})
+	switch {
+	case errors.Is(fetchErr, errInMemory):
+		return false
+	case fetchErr != nil:
+		h.writeFetchError(w, fetchErr)
+		return true
+	}
 	if err != nil {
 		if r.Context().Err() != nil {
 			return true // the client left while waiting on a shared rewrite
@@ -419,6 +421,30 @@ func (h *NPMHandler) storedPackument(ctx context.Context, packumentURL, accept, 
 	return entry, err
 }
 
+// readStoredPackument reads the packument stored for cacheKey with read,
+// fetching it into storage first when needed. When the stored copy is gone,
+// although its row says otherwise, the packument is fetched again and read
+// once more. fetchErr is what storedPackument returned when the packument
+// couldn't be fetched, and err is what read returned.
+func (h *NPMHandler) readStoredPackument(ctx context.Context, packumentURL, accept, cacheKey string, read func(*database.MetadataCacheEntry) error) (err, fetchErr error) {
+	entry, fetchErr := h.storedPackument(ctx, packumentURL, accept, cacheKey)
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
+	if err = read(entry); !errors.Is(err, storage.ErrNotFound) {
+		return err, nil
+	}
+	h.proxy.Logger.Warn("stored npm metadata is missing, fetching it again", "url", packumentURL)
+	entry, fetchErr = h.proxy.restoreStoredMetadata(ctx, "npm", cacheKey, packumentURL, accept, h.packumentStreamValidator(), entry)
+	if errors.Is(fetchErr, errMetadataNotStored) {
+		return nil, errInMemory
+	}
+	if fetchErr != nil {
+		return nil, fetchErr
+	}
+	return read(entry), nil
+}
+
 // packumentStreamValidator is packumentValidator for a packument read from
 // storage.
 func (h *NPMHandler) packumentStreamValidator() func(io.Reader) error {
@@ -446,36 +472,39 @@ func (h *NPMHandler) streamedVersionMetadata(ctx context.Context, packageName, s
 	if h.proxy.rewrites == nil {
 		return rewrittenMetadata{}, errInMemory
 	}
-	entry, err := h.storedPackument(ctx, packumentURL, accept, cacheKey)
-	if errors.Is(err, errInMemory) {
-		return rewrittenMetadata{}, err
-	}
-	if err != nil {
-		return rewrittenMetadata{}, &npmFetchError{err}
-	}
 	fullRequired := h.packumentValidator() != nil
 	options := h.npmRewriteOptions(packageName, nil)
-	m, err := h.proxy.streamedRewrite(ctx, "npm", h.proxyURL, metadataCacheKey, entry, func(open func() (io.ReadCloser, error), out io.Writer) error {
-		var scan *npm.Scan
-		err := readStored(open, func(in io.Reader) (err error) {
-			scan, err = npm.ScanPackument(in)
-			return err
-		})
-		if err != nil {
-			return err
-		}
-		if fullRequired && scan.Abbreviated() {
-			return npm.ErrNotStreamable
-		}
-		return readStored(open, func(in io.Reader) error {
-			version, err := npm.VersionStream(packageName, specifier, scan, in, options)
+	var m rewrittenMetadata
+	err, fetchErr := h.readStoredPackument(ctx, packumentURL, accept, cacheKey, func(entry *database.MetadataCacheEntry) (err error) {
+		m, err = h.proxy.streamedRewrite(ctx, "npm", h.proxyURL, metadataCacheKey, entry, func(open func() (io.ReadCloser, error), out io.Writer) error {
+			var scan *npm.Scan
+			err := readStored(open, func(in io.Reader) (err error) {
+				scan, err = npm.ScanPackument(in)
+				return err
+			})
 			if err != nil {
-				return npmRewriteError(err)
+				return err
 			}
-			_, err = out.Write(version)
-			return err
+			if fullRequired && scan.Abbreviated() {
+				return npm.ErrNotStreamable
+			}
+			return readStored(open, func(in io.Reader) error {
+				version, err := npm.VersionStream(packageName, specifier, scan, in, options)
+				if err != nil {
+					return npmRewriteError(err)
+				}
+				_, err = out.Write(version)
+				return err
+			})
 		})
+		return err
 	})
+	switch {
+	case errors.Is(fetchErr, errInMemory):
+		return rewrittenMetadata{}, fetchErr
+	case fetchErr != nil:
+		return rewrittenMetadata{}, &npmFetchError{fetchErr}
+	}
 	switch {
 	case err == nil, ctx.Err() != nil, errors.Is(err, ErrVersionDenied), errors.Is(err, ErrVersionNotFound):
 		return m, err
@@ -856,20 +885,20 @@ type npmVersionData struct {
 // otherwise from the packument read into memory.
 func (h *NPMHandler) versionData(ctx context.Context, packumentURL, cacheKey, version string) (npmVersionData, error) {
 	accept := h.packumentAccept()
-	if entry, err := h.storedPackument(ctx, packumentURL, accept, cacheKey); err == nil {
-		var found npm.VersionEntry
-		err := readStored(func() (io.ReadCloser, error) { return h.proxy.openStoredMetadata(ctx, entry) }, func(in io.Reader) (err error) {
+	var found npm.VersionEntry
+	err, fetchErr := h.readStoredPackument(ctx, packumentURL, accept, cacheKey, func(entry *database.MetadataCacheEntry) error {
+		return readStored(func() (io.ReadCloser, error) { return h.proxy.openStoredMetadata(ctx, entry) }, func(in io.Reader) (err error) {
 			found, err = npm.LookupVersion(in, version)
 			return err
 		})
-		switch {
-		case err == nil && (!found.Abbreviated || h.packumentValidator() == nil):
-			return npmVersionData{entry: found.Entry, published: found.Published}, nil
-		case err != nil:
-			h.proxy.Logger.Warn("failed to read stored npm metadata, reading it in memory", "url", packumentURL, "error", err)
-		}
-	} else if !errors.Is(err, errInMemory) {
-		return npmVersionData{}, err
+	})
+	switch {
+	case fetchErr == nil && err == nil && (!found.Abbreviated || h.packumentValidator() == nil):
+		return npmVersionData{entry: found.Entry, published: found.Published}, nil
+	case fetchErr == nil && err != nil:
+		h.proxy.Logger.Warn("failed to read stored npm metadata, reading it in memory", "url", packumentURL, "error", err)
+	case fetchErr != nil && !errors.Is(fetchErr, errInMemory):
+		return npmVersionData{}, fetchErr
 	}
 
 	body, _, _, err := h.proxy.fetchOrCacheMetadata(ctx, "npm", cacheKey, packumentURL, "", h.packumentValidator(), accept)

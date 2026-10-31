@@ -45,13 +45,27 @@ var errStoredMetadataChanged = errors.New("stored metadata changed while it was 
 // It returns errMetadataNotStored when the proxy doesn't cache metadata or
 // storing the document failed, and the caller reads it into memory instead.
 func (p *Proxy) storedMetadataDocument(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept string, validate func(io.Reader) error) (*database.MetadataCacheEntry, error) {
+	return p.storedMetadata(ctx, ecosystem, cacheKey, upstreamURL, accept, validate, "")
+}
+
+// restoreStoredMetadata is storedMetadataDocument for a document whose row
+// gone describes but whose stored copy was missing when read: the row is not
+// served or revalidated, within its TTL or not, and the document is fetched
+// again.
+func (p *Proxy) restoreStoredMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept string, validate func(io.Reader) error, gone *database.MetadataCacheEntry) (*database.MetadataCacheEntry, error) {
+	return p.storedMetadata(ctx, ecosystem, cacheKey, upstreamURL, accept, validate, gone.ContentDigest.String)
+}
+
+// storedMetadata implements storedMetadataDocument. A row with the digest
+// gone is treated as if there were none.
+func (p *Proxy) storedMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept string, validate func(io.Reader) error, gone string) (*database.MetadataCacheEntry, error) {
 	if !p.CacheMetadata || p.DB == nil || p.Storage == nil || p.MetadataTTL <= 0 {
 		return nil, errMetadataNotStored
 	}
 	if containsPathTraversal(cacheKey) {
 		return nil, fmt.Errorf("invalid cache key: %q", cacheKey)
 	}
-	if entry, fresh := p.storedMetadataEntryState(ctx, ecosystem, cacheKey); fresh {
+	if entry, fresh := p.storedMetadataEntryState(ctx, ecosystem, cacheKey, gone); fresh {
 		metrics.RecordMetadataCacheHit(ecosystem, int(entry.Size.Int64))
 		p.recordMetadataRead(entry)
 		return entry, nil
@@ -60,12 +74,12 @@ func (p *Proxy) storedMetadataDocument(ctx context.Context, ecosystem, cacheKey,
 
 	key := metadataCoalesceKey(ecosystem, cacheKey, upstreamURL, accept, "", false) + "\x00stored"
 	res, _ := p.coalesceMetadata(ctx, key, func(fetchCtx context.Context) metadataResult {
-		entry, fresh := p.storedMetadataEntryState(fetchCtx, ecosystem, cacheKey)
+		entry, fresh := p.storedMetadataEntryState(fetchCtx, ecosystem, cacheKey, gone)
 		if fresh {
 			return metadataResult{entry: entry}
 		}
 		release, outcome, err := p.awaitFetchLease(fetchCtx, metrics.CacheKindMetadata, key, func() bool {
-			entry, fresh = p.storedMetadataEntryState(fetchCtx, ecosystem, cacheKey)
+			entry, fresh = p.storedMetadataEntryState(fetchCtx, ecosystem, cacheKey, gone)
 			return fresh
 		})
 		if err != nil {
@@ -92,10 +106,14 @@ func (p *Proxy) storedMetadataDocument(ctx context.Context, ecosystem, cacheKey,
 }
 
 // storedMetadataEntryState reads the cache row of a document and reports
-// whether it is within its TTL and usable by storedMetadataDocument.
-func (p *Proxy) storedMetadataEntryState(ctx context.Context, ecosystem, cacheKey string) (*database.MetadataCacheEntry, bool) {
+// whether it is within its TTL and usable by storedMetadataDocument. A row
+// with the digest gone is returned as nil.
+func (p *Proxy) storedMetadataEntryState(ctx context.Context, ecosystem, cacheKey, gone string) (*database.MetadataCacheEntry, bool) {
 	entry, _ := p.DB.GetMetadataCache(ecosystem, cacheKey)
 	entry = p.migrateLegacyMetadataEntry(ctx, ecosystem, cacheKey, entry)
+	if gone != "" && entry != nil && entry.ContentDigest.String == gone {
+		return nil, false
+	}
 	fresh := usableStoredMetadata(entry) && entry.FetchedAt.Valid && time.Since(entry.FetchedAt.Time) < p.MetadataTTL
 	return entry, fresh
 }

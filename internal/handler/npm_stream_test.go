@@ -232,33 +232,74 @@ func TestNPMStreamedPackumentStaleOn404(t *testing.T) {
 	}
 }
 
-// TestNPMStreamedPackumentBlobMissing checks that a 304 for a row whose
-// document is gone from storage fetches the document again, also when it is
-// larger than metadata_max_size.
+// TestNPMStreamedPackumentBlobMissing checks that a row whose document is
+// gone from storage, within its TTL or revalidated by a 304 after it, fetches
+// the document again, also when it is larger than metadata_max_size.
 func TestNPMStreamedPackumentBlobMissing(t *testing.T) {
-	body := bigPackument(400)
-	u := newStreamUpstream(t, body)
+	for _, tt := range []struct {
+		name string
+		ttl  time.Duration
+	}{
+		{"fresh row", time.Hour},
+		{"expired row", time.Nanosecond},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			body := bigPackument(400)
+			u := newStreamUpstream(t, body)
+			proxy, store, handler := streamProxy(t, u)
+			proxy.MetadataMaxSize = int64(len(body) / 4)
+			decodeStreamed(t, serve(handler, "/big", nil))
+
+			path := metadataStoragePath("npm", "big")
+			store.mu.Lock()
+			delete(store.files, path)
+			store.mu.Unlock()
+			proxy.MetadataTTL = tt.ttl
+			proxy.SetMetadataRewriteCacheSize(64 << 20)
+
+			if doc := decodeStreamed(t, serve(handler, "/big", nil)); len(doc.Versions) != 400 {
+				t.Errorf("served %d versions, want 400", len(doc.Versions))
+			}
+			if n := u.sent.Load(); n != 2 {
+				t.Errorf("upstream sent the document %d times, want 2", n)
+			}
+			store.mu.Lock()
+			defer store.mu.Unlock()
+			if string(store.files[path]) != body {
+				t.Error("the document was not stored again")
+			}
+		})
+	}
+}
+
+// TestNPMStreamedVersionBlobMissing checks that a version request and a
+// tarball download fetch a packument again whose stored copy is gone while
+// its row is within the TTL.
+func TestNPMStreamedVersionBlobMissing(t *testing.T) {
+	u := newStreamUpstream(t, "")
+	u.body.Store(bigPackumentAt(u.URL, 100))
 	proxy, store, handler := streamProxy(t, u)
-	proxy.MetadataMaxSize = int64(len(body) / 4)
-	decodeStreamed(t, serve(handler, "/big", nil))
-
+	proxy.MetadataMaxSize = 1024
+	fetcher := proxy.Fetcher.(*mockFetcher)
+	fetcher.artifact = &fetch.Artifact{Body: io.NopCloser(strings.NewReader("package"))}
 	path := metadataStoragePath("npm", "big")
-	store.mu.Lock()
-	delete(store.files, path)
-	store.mu.Unlock()
-	proxy.MetadataTTL = time.Nanosecond
-	proxy.SetMetadataRewriteCacheSize(64 << 20)
 
-	if doc := decodeStreamed(t, serve(handler, "/big", nil)); len(doc.Versions) != 400 {
-		t.Errorf("served %d versions, want 400", len(doc.Versions))
-	}
-	if n := u.sent.Load(); n != 2 {
-		t.Errorf("upstream sent the document %d times, want 2", n)
-	}
-	store.mu.Lock()
-	defer store.mu.Unlock()
-	if string(store.files[path]) != body {
-		t.Error("the document was not stored again")
+	for _, req := range []string{"/big/1.0.5", "/big/-/big-1.0.5.tgz"} {
+		decodeStreamed(t, serve(handler, "/big", nil))
+		store.mu.Lock()
+		delete(store.files, path)
+		store.mu.Unlock()
+		proxy.SetMetadataRewriteCacheSize(64 << 20)
+
+		if rec := serve(handler, req, nil); rec.Code != http.StatusOK {
+			t.Errorf("%s: status %d: %.200s", req, rec.Code, rec.Body.String())
+		}
+		store.mu.Lock()
+		_, ok := store.files[path]
+		store.mu.Unlock()
+		if !ok {
+			t.Errorf("%s: the packument was not stored again", req)
+		}
 	}
 }
 
