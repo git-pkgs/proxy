@@ -3,6 +3,7 @@ package mirror
 import (
 	"context"
 	"fmt"
+	"slices"
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/database"
@@ -162,12 +163,13 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 	return items, nil
 }
 
-// refreshable reports whether a refresh can list the releases of an
-// ecosystem's packages.
+// refreshable reports whether a refresh lists the releases of an
+// ecosystem's packages. Images follow mirror.schedules, OS packages their
+// repository indexes, and Julia files are cached by tree hash rather than by
+// version.
 func refreshable(ecosystem string) bool {
-	if isImageEcosystem(ecosystem) || osIndexes[ecosystem].ecosystem != "" {
+	if isImageEcosystem(ecosystem) || osIndexes[ecosystem].ecosystem != "" || ecosystem == "julia" {
 		return false
 	}
-	_, err := registries.New(purl.EcosystemToPURLType(ecosystem), "", nil)
-	return err == nil
+	return slices.Contains(registries.SupportedEcosystems(), purl.EcosystemToPURLType(ecosystem))
 }

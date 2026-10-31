@@ -304,3 +304,20 @@ func TestFileVariants(t *testing.T) {
 		}
 	}
 }
+
+func TestRefreshable(t *testing.T) {
+	for ecosystem, want := range map[string]bool{
+		"npm": true, "pypi": true, "conda": true, "composer": true,
+		// Their registries need the configured upstream URL.
+		"swift": true, "helm": true,
+		// Julia files are cached by tree hash, not by version.
+		"julia": false,
+		// Images follow mirror.schedules; OS packages their indexes.
+		"docker": false, "oci": false, "deb": false, "alpine": false, "rpm": false,
+		"generic": false,
+	} {
+		if got := refreshable(ecosystem); got != want {
+			t.Errorf("refreshable(%s) = %v, want %v", ecosystem, got, want)
+		}
+	}
+}
