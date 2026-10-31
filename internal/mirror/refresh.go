@@ -55,35 +55,70 @@ func (m *Mirror) releaseLister() ReleaseLister { //nolint:ireturn // any lister 
 // it: releases within cooldown or on the denylist are left out. Packages it
 // can't list are counted as failed.
 func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
-	packages, err := m.db.MostUsedPackages(time.Now().Add(-r.Since), r.Top)
+	cutoff := time.Now().Add(-r.Since)
+	packages, err := m.db.MostUsedPackages(cutoff, r.Top)
 	if err != nil {
 		return nil, fmt.Errorf("listing the most used packages: %w", err)
 	}
 	tracker := newProgressTracker()
 	tracker.phase.Store("downloading")
-refresh:
-	for _, pkg := range packages {
-		if ctx.Err() != nil {
-			break
-		}
-		items, err := m.refreshItems(ctx, pkg)
-		if err != nil {
-			m.recordFailure(tracker, PackageVersion{Ecosystem: pkg.Ecosystem, Name: pkg.Name}, err)
-			continue
-		}
+	run := func(items []PackageVersion) bool {
 		for _, item := range items {
+			if ctx.Err() != nil {
+				return false
+			}
 			if r.spent(tracker) {
 				m.logger.Info("mirror refresh reached its cap for one run",
 					"mirrored", tracker.completed.Load(), "bytes", tracker.bytes.Load())
-				break refresh
+				return false
 			}
 			tracker.total.Add(1)
 			m.mirrorOne(ctx, item, tracker)
+		}
+		return true
+	}
+	for _, group := range byEcosystem(packages) {
+		if ix, ok := osIndexes[group[0].Ecosystem]; ok {
+			items, errs := m.indexRefreshItems(ctx, ix, group, cutoff)
+			for _, err := range errs {
+				m.recordFailure(tracker, PackageVersion{Ecosystem: ix.ecosystem}, err)
+			}
+			if !run(items) {
+				break
+			}
+			continue
+		}
+		done := true
+		for _, pkg := range group {
+			items, err := m.refreshItems(ctx, pkg)
+			if err != nil {
+				m.recordFailure(tracker, PackageVersion{Ecosystem: pkg.Ecosystem, Name: pkg.Name}, err)
+				continue
+			}
+			if done = run(items); !done {
+				break
+			}
+		}
+		if !done {
+			break
 		}
 	}
 	tracker.phase.Store("complete")
 	p := tracker.snapshot()
 	return &p, nil
+}
+
+// byEcosystem splits packages, ordered by ecosystem, into one group per
+// ecosystem.
+func byEcosystem(packages []database.UsedPackage) [][]database.UsedPackage {
+	var groups [][]database.UsedPackage
+	for i, pkg := range packages {
+		if i == 0 || pkg.Ecosystem != packages[i-1].Ecosystem {
+			groups = append(groups, nil)
+		}
+		groups[len(groups)-1] = append(groups[len(groups)-1], pkg)
+	}
+	return groups
 }
 
 // refreshItems returns the versions to mirror for a used package.
@@ -130,7 +165,7 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 // refreshable reports whether a refresh can list the releases of an
 // ecosystem's packages.
 func refreshable(ecosystem string) bool {
-	if isImageEcosystem(ecosystem) {
+	if isImageEcosystem(ecosystem) || osIndexes[ecosystem].ecosystem != "" {
 		return false
 	}
 	_, err := registries.New(purl.EcosystemToPURLType(ecosystem), "", nil)

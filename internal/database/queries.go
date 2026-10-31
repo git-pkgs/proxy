@@ -1312,17 +1312,24 @@ func (db *DB) GetMetadataCache(ecosystem, name string) (*MetadataCacheEntry, err
 	return &entry, nil
 }
 
-// RecentMetadataURLs returns the upstream URLs of the documents of an
-// ecosystem cached or served since cutoff, as far as they were recorded.
-func (db *DB) RecentMetadataURLs(ecosystem string, cutoff time.Time) ([]string, error) {
-	var urls []string
-	err := db.Select(&urls, db.Rebind(`
-		SELECT DISTINCT upstream_url FROM metadata_cache
+// MetadataDocument names a cached metadata document and where it was
+// fetched from.
+type MetadataDocument struct {
+	Name        string `db:"name"`
+	UpstreamURL string `db:"upstream_url"`
+}
+
+// RecentMetadataDocuments returns the documents of an ecosystem cached or
+// served since cutoff whose upstream URL was recorded.
+func (db *DB) RecentMetadataDocuments(ecosystem string, cutoff time.Time) ([]MetadataDocument, error) {
+	var docs []MetadataDocument
+	err := db.Select(&docs, db.Rebind(`
+		SELECT name, upstream_url FROM metadata_cache
 		WHERE ecosystem = ? AND upstream_url IS NOT NULL
 		  AND COALESCE(last_accessed_at, updated_at) >= ?
-		ORDER BY upstream_url
+		ORDER BY upstream_url, name
 	`), ecosystem, cutoff.UTC())
-	return urls, err
+	return docs, err
 }
 
 // RefreshMetadataCache sets fetched_at on the metadata cache row for ecosystem

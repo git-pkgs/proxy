@@ -67,7 +67,7 @@ func TestUpsertMetadataCacheKeepsUpstreamURL(t *testing.T) {
 	})
 }
 
-func TestRecentMetadataURLs(t *testing.T) {
+func TestRecentMetadataDocuments(t *testing.T) {
 	runWithBothDatabases(t, func(t *testing.T, db *DB) {
 		upsertMetadataURL(t, db, "apk", "k1", "https://a.test/v3.20/main/aarch64/APKINDEX.tar.gz")
 		upsertMetadataURL(t, db, "apk", "k2", "https://a.test/v3.19/main/aarch64/APKINDEX.tar.gz")
@@ -78,13 +78,13 @@ func TestRecentMetadataURLs(t *testing.T) {
 			t.Fatal(err)
 		}
 
-		got, err := db.RecentMetadataURLs("apk", time.Now().Add(-14*24*time.Hour))
+		got, err := db.RecentMetadataDocuments("apk", time.Now().Add(-14*24*time.Hour))
 		if err != nil {
 			t.Fatal(err)
 		}
-		want := []string{"https://a.test/v3.20/main/aarch64/APKINDEX.tar.gz"}
+		want := []MetadataDocument{{Name: "k1", UpstreamURL: "https://a.test/v3.20/main/aarch64/APKINDEX.tar.gz"}}
 		if !reflect.DeepEqual(got, want) {
-			t.Errorf("RecentMetadataURLs = %v, want %v", got, want)
+			t.Errorf("RecentMetadataDocuments = %+v, want %+v", got, want)
 		}
 	})
 }

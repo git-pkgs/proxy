@@ -25,6 +25,10 @@ type PackageVersion struct {
 	// variants, when set, limit the files of a version that are mirrored to
 	// those of these variants (see fileEcosystem.variant).
 	variants map[string]bool
+	// fileURL, when set, is the one file to mirror, cached as cacheFilename
+	// and checked against digest when there is one. A refresh finds it in
+	// a repository index.
+	fileURL, cacheFilename, digest string
 }
 
 func (pv PackageVersion) String() string {

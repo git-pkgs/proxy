@@ -29,6 +29,7 @@ require (
 	github.com/prometheus/client_golang v1.25.0
 	github.com/prometheus/client_model v0.6.3
 	github.com/swaggo/swag v1.16.6
+	github.com/ulikunitz/xz v0.5.17
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	gocloud.dev v0.47.0
 	golang.org/x/mod v0.42.0
@@ -108,7 +109,6 @@ require (
 	github.com/rogpeppe/go-internal v1.16.0 // indirect
 	github.com/rs/dnscache v0.0.0-20230804202142-fc85eb664529 // indirect
 	github.com/rubyist/circuitbreaker v2.2.1+incompatible // indirect
-	github.com/ulikunitz/xz v0.5.17 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
 	go.opentelemetry.io/auto/sdk v1.2.1 // indirect
 	go.opentelemetry.io/otel v1.46.0 // indirect
