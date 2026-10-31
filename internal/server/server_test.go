@@ -1098,6 +1098,11 @@ func TestVersionShowPage_PlusInVersion(t *testing.T) {
 	}); err != nil {
 		t.Fatalf("failed to upsert version: %v", err)
 	}
+	if err := ts.db.UpsertArtifact(&database.Artifact{
+		VersionPURL: versionPURL, Filename: "nmap.deb", UpstreamURL: "https://example.com/nmap.deb",
+	}); err != nil {
+		t.Fatalf("failed to upsert artifact: %v", err)
+	}
 
 	// The package page must link to and display the decoded version.
 	req := httptest.NewRequest("GET", "/ui/package/deb/nmap", nil)

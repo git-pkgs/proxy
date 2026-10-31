@@ -1127,7 +1127,7 @@ Exact `packages` entries take precedence over patterns. When several patterns ma
 
 Resolution order: exact package override, then package pattern, then ecosystem override, then global default. This lets you set a conservative default while exempting trusted package families.
 
-The web UI's dashboard shows the default and the ecosystem overrides, and how many package overrides and patterns there are; their names aren't shown, since the UI has no authentication. A package's page shows the cooldown that applies to it and which kind of rule it comes from; it shows none for ecosystems without cooldown support, and the dashboard marks an ecosystem override for one as not supported.
+The web UI's dashboard shows the default and the ecosystem overrides, and how many package overrides and patterns there are; their names aren't shown, since the UI has no authentication. A package's page shows the cooldown that applies to it and which kind of rule it comes from; it shows none for ecosystems without cooldown support, and the dashboard marks an ecosystem override for one as not supported. The version list marks versions held back with when they become available, and leaves out versions the proxy only saw in metadata once they're out of cooldown. `/api/package/{ecosystem}/{name}` returns the package's `cooldown` in the configuration's syntax, and a held-back version has `available_at`.
 
 Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyGems, Hex, Go, Maven and Helm. Most of these ecosystems include publish timestamps in their metadata; Go and Maven are described below.
 

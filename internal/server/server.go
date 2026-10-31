@@ -372,7 +372,7 @@ func (s *Server) serve(listener net.Listener) error {
 
 	// API endpoints for enrichment data
 	enrichSvc := enrichment.New(s.logger)
-	apiHandler := NewAPIHandler(enrichSvc, s.db)
+	apiHandler := s.newAPIHandler(enrichSvc)
 
 	r.Get("/api/package/{ecosystem}/*", apiHandler.HandlePackagePath)
 	r.Get("/api/vulns/{ecosystem}/*", apiHandler.HandleVulnsPath)
@@ -1163,6 +1163,15 @@ func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, 
 		s.logger.Error("failed to get versions", "error", err)
 		versions = []database.Version{}
 	}
+	fetched, err := s.db.GetFetchedVersionPURLs(pkg.PURL)
+	if err != nil {
+		// List every version rather than hide fetched ones.
+		s.logger.Error("failed to get fetched versions", "error", err)
+		fetched = make(map[string]bool, len(versions))
+		for _, v := range versions {
+			fetched[v.PURL] = true
+		}
+	}
 
 	vulns, err := s.db.GetVulnerabilitiesForPackage(ecosystem, name)
 	if err != nil {
@@ -1173,7 +1182,7 @@ func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, 
 	data := PackageShowData{
 		Layout:          s.layoutFor(r),
 		Package:         pkg,
-		Versions:        versions,
+		Versions:        s.cooldown.packageVersions(pkg, versions, fetched, time.Now()),
 		Vulnerabilities: vulns,
 		LicenseCategory: categorizeLicense(pkg.License),
 		Cooldown:        s.cooldown.forPackage(pkg.Ecosystem, pkg.Name),

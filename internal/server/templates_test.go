@@ -8,6 +8,7 @@ import (
 	"regexp"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/git-pkgs/proxy/internal/database"
 )
@@ -122,8 +123,12 @@ func TestTemplatesRenderAllPages(t *testing.T) {
 				LatestVersion: sql.NullString{String: "4.17.21", Valid: true},
 				License:       sql.NullString{String: "MIT", Valid: true},
 			},
-			Versions: []database.Version{
-				{PURL: "pkg:npm/lodash@4.17.21", PackagePURL: "pkg:npm/lodash"},
+			Versions: []PackageVersion{
+				{Version: database.Version{PURL: "pkg:npm/lodash@4.17.21", PackagePURL: "pkg:npm/lodash"}},
+				{
+					Version:     database.Version{PURL: "pkg:npm/lodash@4.17.22", PackagePURL: "pkg:npm/lodash"},
+					AvailableAt: time.Date(2026, 1, 2, 3, 4, 0, 0, time.UTC),
+				},
 			},
 			Vulnerabilities: []database.Vulnerability{},
 			LicenseCategory: "permissive",
@@ -134,7 +139,7 @@ func TestTemplatesRenderAllPages(t *testing.T) {
 				Ecosystem: "npm",
 				Name:      "minimal",
 			},
-			Versions:        []database.Version{},
+			Versions:        []PackageVersion{},
 			Vulnerabilities: []database.Vulnerability{},
 			LicenseCategory: "unknown",
 		}},

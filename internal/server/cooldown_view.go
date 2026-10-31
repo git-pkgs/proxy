@@ -7,6 +7,7 @@ import (
 
 	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/packageurl"
 )
@@ -28,6 +29,14 @@ type CooldownOverride struct {
 	Ecosystem   string
 	Duration    string
 	Unsupported bool
+}
+
+// PackageVersion is a version on the package page.
+type PackageVersion struct {
+	database.Version
+	// AvailableAt is when the version leaves cooldown, zero when it is not
+	// held back.
+	AvailableAt time.Time
 }
 
 // PackageCooldown is the cooldown that applies to one package, and the kind
@@ -104,6 +113,37 @@ func (v *cooldownView) forPackage(ecosystem, name string) *PackageCooldown {
 	return &PackageCooldown{Duration: formatCooldown(v.policy.For(ecosystem, purl)), Rule: rule}
 }
 
+// availableAt returns when a version published at publishedAt leaves
+// cooldown, or zero when it is not held back at now.
+func (v *cooldownView) availableAt(ecosystem, name string, publishedAt, now time.Time) time.Time {
+	if !v.enabled() || !handler.CooldownSupported(ecosystem) || publishedAt.IsZero() {
+		return time.Time{}
+	}
+	d := v.policy.Evaluate(ecosystem, packageurl.MakeString(ecosystem, name, ""), publishedAt, now)
+	if d.Allowed {
+		return time.Time{}
+	}
+	return d.AvailableAt
+}
+
+// packageVersions returns the versions to list on a package page. A version
+// without an artifact row was only seen in metadata, by a cooldown filter or
+// a download check, and is listed only while it is held back.
+func (v *cooldownView) packageVersions(pkg *database.Package, versions []database.Version, fetched map[string]bool, now time.Time) []PackageVersion {
+	rows := make([]PackageVersion, 0, len(versions))
+	for _, ver := range versions {
+		var at time.Time
+		if ver.PublishedAt.Valid {
+			at = v.availableAt(pkg.Ecosystem, pkg.Name, ver.PublishedAt.Time, now)
+		}
+		if at.IsZero() && !fetched[ver.PURL] {
+			continue
+		}
+		rows = append(rows, PackageVersion{Version: ver, AvailableAt: at})
+	}
+	return rows
+}
+
 func formatConfigDuration(s string) string {
 	d, err := cooldown.ParseDuration(s)
 	if err != nil {
@@ -112,13 +152,16 @@ func formatConfigDuration(s string) string {
 	return formatCooldown(d)
 }
 
+// cooldownOff is how formatCooldown writes a zero cooldown.
+const cooldownOff = "off"
+
 // formatCooldown writes d as the configuration does: "3d", "12h", "30m",
 // and "off" for zero.
 func formatCooldown(d time.Duration) string {
 	const day = 24 * time.Hour
 	switch {
 	case d <= 0:
-		return "off"
+		return cooldownOff
 	case d%day == 0:
 		return fmt.Sprintf("%dd", d/day)
 	case d%time.Hour == 0:
