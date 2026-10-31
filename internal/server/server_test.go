@@ -633,13 +633,6 @@ func TestSwiftCachedVersionPURLUsesStoredPackagePURL(t *testing.T) {
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func TestNPMPackageMetadata(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()

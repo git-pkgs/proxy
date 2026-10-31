@@ -1141,6 +1141,17 @@ func TestLoadMetadataTTLFromEnv(t *testing.T) {
 	}
 }
 
+func TestLoadChangeFeedsFromEnv(t *testing.T) {
+	cfg := Default()
+	t.Setenv("PROXY_UPSTREAM_NPM_CHANGE_FEED", "true")
+	t.Setenv("PROXY_UPSTREAM_COMPOSER_CHANGE_FEED", "true")
+	cfg.LoadFromEnv()
+
+	if !cfg.Upstream.NPMChangeFeed || !cfg.Upstream.ComposerChangeFeed {
+		t.Errorf("change feeds = npm %t, composer %t, want both on", cfg.Upstream.NPMChangeFeed, cfg.Upstream.ComposerChangeFeed)
+	}
+}
+
 func TestParseGradleBuildCacheConfig(t *testing.T) {
 	cfg := Default()
 
@@ -1727,6 +1738,30 @@ func TestValidateGoSumDBs(t *testing.T) {
 			modify: func(cfg *Config) {
 				cfg.CacheMetadata = true
 				cfg.Upstream.GoSumDBsOffline = true
+			},
+		},
+		{
+			name: "npm change feed requires metadata caching",
+			modify: func(cfg *Config) {
+				cfg.CacheMetadata = false
+				cfg.Upstream.NPMChangeFeed = true
+			},
+			wantErr: true,
+		},
+		{
+			name: "Composer change feed requires metadata caching",
+			modify: func(cfg *Config) {
+				cfg.CacheMetadata = false
+				cfg.Upstream.ComposerChangeFeed = true
+			},
+			wantErr: true,
+		},
+		{
+			name: "change feeds with metadata caching",
+			modify: func(cfg *Config) {
+				cfg.CacheMetadata = true
+				cfg.Upstream.NPMChangeFeed = true
+				cfg.Upstream.ComposerChangeFeed = true
 			},
 		},
 	}

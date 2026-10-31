@@ -189,6 +189,10 @@ upstream:
   # npm_routes:
   #   "@example/*": "https://npm.example.com/registry"
 
+  # Follow the npm registry's change feed, so a new release is fetched on the
+  # next request instead of after metadata_ttl. Requires cache_metadata.
+  # npm_change_feed: true
+
   # Cargo sparse index URL
   cargo: "https://index.crates.io"
 
@@ -244,6 +248,11 @@ upstream:
   # Matching packages are never looked up on composer_repository.
   # composer_routes:
   #   "example/*": "https://composer.example.com/packages"
+
+  # Follow the change feed of the Packagist at composer, so a new release is
+  # fetched on the next request instead of after metadata_ttl. Requires
+  # cache_metadata.
+  # composer_change_feed: true
 
   # Conan registry URL
   conan: "https://center.conan.io"

@@ -86,6 +86,14 @@ var (
 		[]string{"ecosystem"},
 	)
 
+	MetadataExpiredByChangeFeed = prometheus.NewCounterVec(
+		prometheus.CounterOpts{
+			Name: "proxy_metadata_expired_by_change_feed_total",
+			Help: "Cached metadata documents set to revalidate because an upstream change feed listed them, by ecosystem",
+		},
+		[]string{"ecosystem"},
+	)
+
 	FetchLeaseWaits = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "proxy_fetch_lease_waits_total",
@@ -319,6 +327,7 @@ func init() {
 		CachedArtifacts,
 		ArtifactsEvicted,
 		MetadataEvicted,
+		MetadataExpiredByChangeFeed,
 		FetchLeaseWaits,
 		UpstreamFetchDuration,
 		UpstreamErrors,
@@ -416,6 +425,13 @@ func RecordArtifactEvicted(reason, ecosystem string) {
 // counter.
 func RecordMetadataEvicted(ecosystem string) {
 	MetadataEvicted.WithLabelValues(purl.NormalizeEcosystem(ecosystem)).Inc()
+}
+
+// RecordMetadataExpiredByChangeFeed counts n metadata documents an upstream
+// change feed listed as changed. ecosystem is the metadata cache's,
+// normalized like the cache hit counter.
+func RecordMetadataExpiredByChangeFeed(ecosystem string, n int) {
+	MetadataExpiredByChangeFeed.WithLabelValues(purl.NormalizeEcosystem(ecosystem)).Add(float64(n))
 }
 
 // RecordFetchLeaseWait counts a cache miss that found another instance
