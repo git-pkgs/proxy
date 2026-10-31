@@ -4,11 +4,15 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/proxy/internal/retention"
+	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
 	gomodule "golang.org/x/mod/module"
 )
@@ -18,15 +22,13 @@ const (
 	asciiCaseOffset = 32 // difference between lowercase and uppercase ASCII letters
 )
 
-// Module zips are stored under pkg:golang/{module path}, which the PURL
-// rules lowercase, so a package rule covers a module whatever case either
-// is written in. A major version suffix (/v2) is part of the module path
-// and so a module of its own. A key in the escaped form proxy URLs and the
-// module cache use (github.com/!azure) does not survive the default
-// mapping's round trip and is refused; the handler stores decoded paths,
-// so such a key could never match.
 func init() {
-	retention.Default.Register(retention.Spec{Key: "golang", CanonicalPackage: retention.DefaultCanonical("golang")})
+	retention.Default.Register(retention.Spec{Key: "golang", CanonicalPackage: golangRetentionKey})
+}
+
+func golangRetentionKey(p *purl.PURL) (string, bool) {
+	key, ok := retention.DefaultCanonical("golang")(p)
+	return packageurl.PolicyPackageKey(key), ok
 }
 
 // GoHandler handles Go module proxy protocol requests.
@@ -200,13 +202,7 @@ func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, modul
 	ServeArtifactRequest(w, r, result)
 }
 
-// goZipFilename is the name a module zip is cached under. Module paths are
-// case-sensitive, but the zip is stored under the module's PURL, which
-// lowercases golang names, so github.com/Sirupsen/logrus and
-// github.com/sirupsen/logrus share one package. A path with uppercase
-// letters therefore gets a hash of its exact spelling in the filename. An
-// all-lowercase path keeps the plain name, so existing cache entries stay
-// valid.
+// Keep the module spelling hash used by caches with lowercased PURL keys.
 func goZipFilename(module, version string) string {
 	base := lastComponent(module) + "@" + version
 	if module == strings.ToLower(module) {
@@ -219,6 +215,40 @@ func goZipFilename(module, version string) string {
 // goModuleHashBytes is how much of a module path's hash a cached zip's
 // filename carries: enough to tell apart paths that differ only in case.
 const goModuleHashBytes = 8
+
+// An old cache key may combine case-distinct modules. The upstream path
+// identifies which module owns an individual archive.
+func (p *Proxy) rekeyLegacyGoArtifact(pkgPURL, versionPURL, filename string) (bool, error) {
+	if !strings.HasPrefix(versionPURL, "pkg:golang/") {
+		return false, nil
+	}
+	parsed, err := purl.Parse(versionPURL)
+	if err != nil || parsed.FullName() == strings.ToLower(parsed.FullName()) {
+		return false, nil
+	}
+	name := parsed.FullName()
+	_, legacyVersion, err := packagePURLStrings("golang", strings.ToLower(name), parsed.Version)
+	if err != nil {
+		return false, err
+	}
+	record, err := p.DB.GetArtifact(legacyVersion, filename)
+	if err != nil {
+		return false, fmt.Errorf("reading legacy Go artifact: %w", err)
+	}
+	if record == nil || !record.StoragePath.Valid || record.Source != database.SourceUpstream {
+		return false, nil
+	}
+	escaped, err := gomodule.EscapePath(name)
+	if err != nil {
+		return false, nil
+	}
+	upstream, err := url.Parse(record.UpstreamURL)
+	if err != nil || !strings.HasSuffix(upstream.Path, "/"+escaped+"/@v/"+parsed.Version+".zip") {
+		return false, nil
+	}
+	return p.DB.RekeyCachedArtifact(record, &database.Package{PURL: pkgPURL, Ecosystem: "golang", Name: name},
+		&database.Version{PURL: versionPURL, PackagePURL: pkgPURL})
+}
 
 // discardOtherModulesZip drops a cached zip that another module stored
 // under filename. Before module paths kept their case, a module with

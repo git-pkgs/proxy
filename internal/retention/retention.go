@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/purl"
 )
 
@@ -41,8 +42,8 @@ type Spec struct {
 	// derived from Key that belong to this ecosystem.
 	ExtraDBEcosystems []string
 
-	// CanonicalPackage turns a package PURL from the config into the
-	// package PURL the handler stores in the cache, reporting false when the
+	// CanonicalPackage turns a package PURL from the config into a
+	// policy key, reporting false when the
 	// PURL does not belong to this ecosystem. Nil means the ecosystem accepts
 	// no package overrides.
 	CanonicalPackage func(p *purl.PURL) (string, bool)
@@ -150,8 +151,7 @@ func (r *Registry) KeyForDBEcosystem(ecosystem string) (string, bool) {
 	return key, ok
 }
 
-// Canonical returns the stored package PURL a configured package PURL
-// stands for, asking the registered specs in key order.
+// Canonical returns the policy key for a configured package PURL.
 func (r *Registry) Canonical(p *purl.PURL) (string, bool) {
 	for _, key := range r.Keys() {
 		s, _ := r.Lookup(key)
@@ -173,7 +173,7 @@ type Rules struct {
 	Default time.Duration
 	// Ecosystems holds rules keyed by registered ecosystem key.
 	Ecosystems map[string]time.Duration
-	// Packages holds rules keyed by the package PURL stored in the cache.
+	// Packages holds rules keyed by package PURL, with Go keys lowercased.
 	Packages map[string]time.Duration
 }
 
@@ -181,6 +181,7 @@ type Rules struct {
 // stored package PURL: the package rule, else the ecosystem rule, else the
 // default. Generic artifacts require an explicit package or ecosystem rule.
 func (r Rules) For(key, packagePURL string) time.Duration {
+	packagePURL = packageurl.PolicyPackageKey(packagePURL)
 	if d, ok := r.Packages[packagePURL]; ok {
 		return d
 	}
