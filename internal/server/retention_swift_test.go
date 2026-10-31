@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -178,16 +179,21 @@ func TestSwiftRetentionSourceKeysPending(t *testing.T) {
 // swiftIdentifiers answers /identifiers for the swift-nio and swift-log
 // repositories while up is set, and fails otherwise.
 func swiftIdentifiers(up *atomic.Bool, next http.Handler) http.Handler {
-	ids := map[string]string{
-		"https://github.com/apple/swift-nio": "apple.swift-nio",
-		"https://github.com/apple/swift-log": "apple.swift-log",
-	}
+	return swiftIdentifiersFor(up, map[string][]string{
+		"https://github.com/apple/swift-nio": {"apple.swift-nio"},
+		"https://github.com/apple/swift-log": {"apple.swift-log"},
+	}, next)
+}
+
+// swiftIdentifiersFor answers /identifiers from ids, by repository URL, while
+// up is set, and fails otherwise.
+func swiftIdentifiersFor(up *atomic.Bool, ids map[string][]string, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/identifiers" {
 			next.ServeHTTP(w, r)
 			return
 		}
-		id, ok := ids[r.URL.Query().Get("url")]
+		list, ok := ids[r.URL.Query().Get("url")]
 		switch {
 		case !up.Load():
 			http.Error(w, "down", http.StatusBadGateway)
@@ -195,7 +201,7 @@ func swiftIdentifiers(up *atomic.Bool, next http.Handler) http.Handler {
 			http.NotFound(w, r)
 		default:
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = fmt.Fprintf(w, `{"identifiers":[%q]}`, id)
+			_ = json.NewEncoder(w).Encode(map[string][]string{"identifiers": list})
 		}
 	})
 }
@@ -330,5 +336,42 @@ func TestSwiftRetentionPackageRules(t *testing.T) {
 		if swiftArtifact(t, db, log).StoragePath.Valid {
 			t.Errorf("with %s: swift-log kept past the swift rule", key)
 		}
+	}
+}
+
+// The registry may list several identities for one repository. A source rule
+// covers all of them, so the stored archive is kept even when its identity
+// is not the first one listed.
+func TestSwiftRetentionSourceRuleCoversEveryIdentity(t *testing.T) {
+	archives, _ := swiftRetentionUpstream(t)
+	var up atomic.Bool
+	up.Store(true)
+	identifiers := httptest.NewServer(swiftIdentifiersFor(&up, map[string][]string{
+		"https://github.com/apple/swift-nio": {"other.swift-nio", "apple.swift-nio"},
+	}, http.NotFoundHandler()))
+	t.Cleanup(identifiers.Close)
+	srv, db := newSwiftRetentionProxy(t, archives)
+	const nio = "swift-nio-2.65.0.zip"
+	swiftGet(t, srv.URL+"/apple/swift-nio/2.65.0.zip")
+	old := time.Now().Add(-30 * retentionDay)
+	swiftBackdate(t, db, nio, old, old)
+
+	cfg := config.Default()
+	cfg.Storage.Retention.Ecosystems = map[string]string{"swift": "1d"}
+	cfg.Storage.Retention.Packages = map[string]string{"pkg:swift/github.com/apple/swift-nio": "0"}
+	rules, err := cfg.RetentionRules(retention.Default)
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy := handler.NewProxy(db, nil, nil, fetch.NewResolver(), discardLogger())
+	proxy.HTTPClient = identifiers.Client()
+	resolvers := map[string]sourceResolver{
+		"swift": swiftRetentionResolver(handler.NewSwiftHandler(proxy, "http://proxy.test", identifiers.URL), retention.Default),
+	}
+
+	resolveRetentionSources(context.Background(), discardLogger(), resolvers, rules)
+	sweepRetention(context.Background(), db, discardLogger(), retention.Default, rules, time.Now())
+	if !swiftArtifact(t, db, nio).StoragePath.Valid {
+		t.Error("apple.swift-nio evicted although its repository has a never-evict rule")
 	}
 }

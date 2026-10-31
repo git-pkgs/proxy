@@ -206,18 +206,25 @@ func (r Rules) Pending(key string) bool {
 	return len(r.Sources[key]) > 0
 }
 
-// Resolve moves the rule for source in ecosystem key to the stored package
-// PURL it resolved to. A different rule already set for that package is a
-// conflict, and the source stays pending.
-func (r Rules) Resolve(key, source, canonical string) error {
+// Resolve moves the rule for source in ecosystem key to every stored package
+// PURL it resolved to. A different rule already set for any of them is a
+// conflict, and the source stays pending with none of them set.
+func (r Rules) Resolve(key, source string, canonical []string) error {
 	d, ok := r.Sources[key][source]
 	if !ok {
 		return nil
 	}
-	if prev, set := r.Packages[canonical]; set && prev != d {
-		return fmt.Errorf("%s resolves to %s, which another rule sets differently", source, canonical)
+	if len(canonical) == 0 {
+		return fmt.Errorf("%s resolves to no stored package", source)
 	}
-	r.Packages[canonical] = d
+	for _, c := range canonical {
+		if prev, set := r.Packages[c]; set && prev != d {
+			return fmt.Errorf("%s resolves to %s, which another rule sets differently", source, c)
+		}
+	}
+	for _, c := range canonical {
+		r.Packages[c] = d
+	}
 	delete(r.Sources[key], source)
 	return nil
 }

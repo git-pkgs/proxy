@@ -204,19 +204,41 @@ func TestRulesResolveSources(t *testing.T) {
 	if got := rules.MinPositive(); got != time.Hour {
 		t.Errorf("MinPositive = %v, want the pending rule's hour", got)
 	}
-	if err := rules.Resolve("swift", "pkg:swift/github.com/a/two", "pkg:x/kept"); err == nil {
+	if err := rules.Resolve("swift", "pkg:swift/github.com/a/two", []string{"pkg:x/kept"}); err == nil {
 		t.Error("a rule resolving to a package another rule sets differently was accepted")
 	}
 	if !rules.Pending("swift") {
 		t.Fatal("conflicting rule no longer pending")
 	}
-	if err := rules.Resolve("swift", "pkg:swift/github.com/a/one", "pkg:x/kept"); err != nil {
+	if err := rules.Resolve("swift", "pkg:swift/github.com/a/one", []string{"pkg:x/kept"}); err != nil {
 		t.Errorf("same duration for the same package: %v", err)
 	}
-	if err := rules.Resolve("swift", "pkg:swift/github.com/a/two", "pkg:x/two"); err != nil {
+	if err := rules.Resolve("swift", "pkg:swift/github.com/a/two", []string{"pkg:x/two"}); err != nil {
 		t.Fatal(err)
 	}
 	if rules.Pending("swift") || rules.Packages["pkg:x/two"] != time.Hour {
+		t.Errorf("after resolving: sources %v, packages %v", rules.Sources, rules.Packages)
+	}
+}
+
+// A source that resolves to several stored packages sets the rule for all
+// of them, or, on a conflict with any, for none.
+func TestRulesResolveSeveralPackages(t *testing.T) {
+	rules := Rules{
+		Packages: map[string]time.Duration{"pkg:x/b": time.Hour},
+		Sources:  map[string]map[string]time.Duration{"swift": {"pkg:swift/github.com/a/one": 0}},
+	}
+	if err := rules.Resolve("swift", "pkg:swift/github.com/a/one", []string{"pkg:x/a", "pkg:x/b"}); err == nil {
+		t.Error("a rule conflicting for one of its packages was accepted")
+	}
+	if _, set := rules.Packages["pkg:x/a"]; set || !rules.Pending("swift") {
+		t.Fatalf("conflicting rule partly applied: sources %v, packages %v", rules.Sources, rules.Packages)
+	}
+	delete(rules.Packages, "pkg:x/b")
+	if err := rules.Resolve("swift", "pkg:swift/github.com/a/one", []string{"pkg:x/a", "pkg:x/b"}); err != nil {
+		t.Fatal(err)
+	}
+	if rules.Pending("swift") || len(rules.Packages) != 2 {
 		t.Errorf("after resolving: sources %v, packages %v", rules.Sources, rules.Packages)
 	}
 }

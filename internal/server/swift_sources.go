@@ -6,6 +6,7 @@ import (
 	"log/slog"
 	"maps"
 	"slices"
+	"strings"
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/config"
@@ -27,19 +28,24 @@ import (
 const sourceResolveTimeout = time.Minute
 
 // sourceResolver resolves a package PURL that names a package by its source
-// to the stored package PURL retention compares.
-type sourceResolver func(ctx context.Context, p *purl.PURL) (string, error)
+// to the stored package PURLs retention compares.
+type sourceResolver func(ctx context.Context, p *purl.PURL) ([]string, error)
 
-// swiftRetentionResolver resolves Swift source repositories through h.
+// swiftRetentionResolver resolves Swift source repositories through h, to
+// every identity the upstream lists.
 func swiftRetentionResolver(h *handler.SwiftHandler, reg *retention.Registry) sourceResolver {
-	return func(ctx context.Context, p *purl.PURL) (string, error) {
+	return func(ctx context.Context, p *purl.PURL) ([]string, error) {
 		resolved, err := h.ResolveSourcePURL(ctx, p)
 		if err != nil {
-			return "", err
+			return nil, err
 		}
-		canonical, ok := reg.Canonical(resolved)
-		if !ok {
-			return "", fmt.Errorf("%s resolved to %s, which names no stored package", p, resolved)
+		canonical := make([]string, 0, len(resolved))
+		for _, r := range resolved {
+			c, ok := reg.Canonical(r)
+			if !ok {
+				return nil, fmt.Errorf("%s resolved to %s, which names no stored package", p, r)
+			}
+			canonical = append(canonical, c)
 		}
 		return canonical, nil
 	}
@@ -54,7 +60,7 @@ func (s *Server) retentionResolvers(proxy *handler.Proxy) map[string]sourceResol
 }
 
 // resolveDenylistSources returns entries with each Swift source repository
-// replaced by the registry identity the upstream lists for it, keeping the
+// replaced by every registry identity the upstream lists for it, keeping the
 // version. An entry that can't be resolved is an error: left out, it would
 // let the version through.
 func resolveDenylistSources(ctx context.Context, h *handler.SwiftHandler, entries []string) ([]string, error) {
@@ -65,11 +71,13 @@ func resolveDenylistSources(ctx context.Context, h *handler.SwiftHandler, entrie
 			resolved = append(resolved, entry)
 			continue
 		}
-		identity, err := h.ResolveSourcePURL(ctx, p)
+		identities, err := h.ResolveSourcePURL(ctx, p)
 		if err != nil {
 			return nil, fmt.Errorf("resolving denylist package %q: %w", entry, err)
 		}
-		resolved = append(resolved, identity.String())
+		for _, identity := range identities {
+			resolved = append(resolved, identity.String())
+		}
 	}
 	return resolved, nil
 }
@@ -98,7 +106,7 @@ func resolveRetentionSources(ctx context.Context, logger *slog.Logger, resolvers
 					"package", source, "error", err)
 				continue
 			}
-			logger.Info("retention: resolved package rule", "package", source, "stored", canonical)
+			logger.Info("retention: resolved package rule", "package", source, "stored", strings.Join(canonical, ", "))
 		}
 	}
 }

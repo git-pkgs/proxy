@@ -62,18 +62,23 @@ func SwiftSourcePURL(p *purl.PURL) string {
 }
 
 // ResolveSourcePURL returns p with a source repository namespace replaced by
-// the registry scope and name the upstream lists for it, and p itself when it
-// already names a registry identity.
-func (h *SwiftHandler) ResolveSourcePURL(ctx context.Context, p *purl.PURL) (*purl.PURL, error) {
+// each registry scope and name the upstream lists for it, and p itself when
+// it already names a registry identity. A policy for the repository applies
+// to all of them, since a client may use any.
+func (h *SwiftHandler) ResolveSourcePURL(ctx context.Context, p *purl.PURL) ([]*purl.PURL, error) {
 	source := SwiftSourcePURL(p)
 	if source == "" {
-		return p, nil
+		return []*purl.PURL{p}, nil
 	}
-	scope, name, err := h.ResolveIdentity(ctx, source)
+	ids, err := h.ResolveIdentities(ctx, source)
 	if err != nil {
 		return nil, err
 	}
-	return purl.New("swift", scope, name, p.Version, nil), nil
+	resolved := make([]*purl.PURL, 0, len(ids))
+	for _, id := range ids {
+		resolved = append(resolved, purl.New("swift", id.Scope, id.Name, p.Version, nil))
+	}
+	return resolved, nil
 }
 
 // swiftRetentionKey maps a package rule to the stored package PURL, refusing

@@ -3,6 +3,7 @@ package main
 import (
 	"crypto/sha256"
 	"encoding/hex"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -20,9 +21,17 @@ const swiftWidgetArchive = "acme widget archive"
 
 // swiftMirrorUpstream serves acme.widget 1.0.0 the way a Swift package
 // registry does, with https://github.com/acme/widget as its source
-// repository, and counts archive downloads and identifier lookups.
-func swiftMirrorUpstream(t *testing.T) (srv *httptest.Server, downloads, lookups *atomic.Int64) {
+// repository, and counts archive downloads and identifier lookups. The
+// repository's identifiers are ids, or only acme.widget.
+func swiftMirrorUpstream(t *testing.T, ids ...string) (srv *httptest.Server, downloads, lookups *atomic.Int64) {
 	t.Helper()
+	if len(ids) == 0 {
+		ids = []string{"acme.widget"}
+	}
+	identifiers, err := json.Marshal(map[string][]string{"identifiers": ids})
+	if err != nil {
+		t.Fatal(err)
+	}
 	downloads, lookups = new(atomic.Int64), new(atomic.Int64)
 	sum := sha256.Sum256([]byte(swiftWidgetArchive))
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -35,7 +44,7 @@ func swiftMirrorUpstream(t *testing.T) (srv *httptest.Server, downloads, lookups
 				return
 			}
 			w.Header().Set("Content-Type", "application/json")
-			_, _ = io.WriteString(w, `{"identifiers":["acme.widget"]}`)
+			_, _ = w.Write(identifiers)
 		case "/acme/widget":
 			w.Header().Set("Content-Type", "application/json")
 			_, _ = io.WriteString(w, `{"releases":{"1.0.0":{}}}`)
@@ -132,6 +141,23 @@ func TestMirrorDenylistSwiftSourceEntry(t *testing.T) {
 	}
 	if n := cachedArtifacts(t, dir); n != 0 {
 		t.Errorf("cached artifacts = %d, want 0", n)
+	}
+}
+
+// The registry may list several identities for one repository. A source
+// entry denies all of them, not only the first.
+func TestMirrorDenylistSwiftSourceEntryEveryIdentity(t *testing.T) {
+	upstream, downloads, _ := swiftMirrorUpstream(t, "other.widget", "acme.widget")
+	dir := t.TempDir()
+	configPath := writeSwiftMirrorConfig(t, dir, upstream.URL, "pkg:swift/github.com/acme/widget@1.0.0")
+
+	output := runMirrorProcess(t, 1, "-config", configPath, "pkg:swift/acme/widget@1.0.0")
+
+	if !strings.Contains(output, "0 downloaded") || !strings.Contains(output, "1 failed") {
+		t.Errorf("output:\n%s", output)
+	}
+	if n := downloads.Load(); n != 0 {
+		t.Errorf("archive downloads = %d, want 0", n)
 	}
 }
 
