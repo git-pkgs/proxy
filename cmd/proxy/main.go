@@ -8,7 +8,7 @@
 // @securityDefinitions.apikey BearerAuth
 // @in header
 // @name Authorization
-// @description "Bearer " followed by hosted.token
+// @description "Bearer " followed by hosted.token, or projects.token for /api/projects
 //
 // The proxy caches package artifacts from upstream registries (npm, cargo, etc.)
 // providing faster, more reliable access for development teams.
@@ -93,6 +93,9 @@
 //	PROXY_HOSTED_MAX_UPLOAD_SIZE             - Max size of one pushed archive (default "100MB")
 //	PROXY_HOSTED_NPM_SCOPES                  - npm scopes served from pushed packages only
 //	PROXY_HOSTED_COMPOSER_VENDORS            - Composer vendors served from pushed packages only
+//	PROXY_PROJECTS_ENABLED                   - Enable the project inventory (/api/projects, /ui/projects)
+//	PROXY_PROJECTS_TOKEN                     - Bearer token for uploading and deleting project SBOMs
+//	PROXY_PROJECTS_MAX_AGE                   - Remove projects not uploaded for this long (e.g. "90d")
 //	PROXY_URL                                - Proxy URL for proxy hosted
 //
 // Example:

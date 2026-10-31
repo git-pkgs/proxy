@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries"
 	"github.com/git-pkgs/sbom"
@@ -26,18 +27,6 @@ type PackageVersion struct {
 
 func (pv PackageVersion) String() string {
 	return fmt.Sprintf("pkg:%s/%s@%s", pv.Ecosystem, pv.Name, pv.Version)
-}
-
-// handlerEcosystem returns the ecosystem name the proxy's handlers store
-// packages of a PURL type under. purl names gem and composer after their
-// registries, rubygems and packagist; the handlers use the type.
-func handlerEcosystem(purlType string) string {
-	switch purlType {
-	case "gem", "composer":
-		return purlType
-	default:
-		return purl.PURLTypeToEcosystem(purlType)
-	}
 }
 
 // Source produces PackageVersion items for mirroring.
@@ -140,13 +129,7 @@ func (s *PURLSource) listVersions(ctx context.Context, versions VersionLister, e
 // mirrorTarget returns the ecosystem, name and file qualifiers a PURL is
 // mirrored under.
 func mirrorTarget(p *purl.PURL) (ecosystem, name string, qualifiers map[string]string) {
-	ecosystem = handlerEcosystem(p.Type)
-	name = p.Name
-	if ecosystem == "conda" {
-		name = condaName(p.Namespace, p.Name, p.Qualifier("channel"))
-	} else if p.Namespace != "" {
-		name = p.Namespace + "/" + p.Name
-	}
+	ecosystem, name = packageurl.HandlerPackage(p)
 	qualifiers = fileQualifiers(ecosystem, p.Qualifiers.Map())
 	if ecosystem == "julia" {
 		qualifiers = map[string]string{"uuid": p.Qualifier("uuid")}

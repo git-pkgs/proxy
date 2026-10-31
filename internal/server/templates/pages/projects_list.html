@@ -1,0 +1,33 @@
+{{define "title"}}Projects - git-pkgs proxy{{end}}
+
+{{define "content"}}
+<div class="mb-8">
+    <h1 class="text-3xl font-bold mb-2">Projects</h1>
+    <p class="text-gray-600 dark:text-gray-400">{{len .Projects}} projects, as of their latest SBOM upload</p>
+</div>
+
+{{if .Projects}}
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
+    <div class="divide-y divide-gray-200 dark:divide-gray-800">
+        {{range .Projects}}
+        <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div class="min-w-0">
+                <a href="/ui/projects/{{.Name}}" class="font-medium break-all hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
+                {{if or .Branch .Ref}}
+                <div class="text-sm text-gray-500 dark:text-gray-400 font-mono truncate">{{.Branch}}{{if and .Branch .Ref}} @ {{end}}{{.Ref}}</div>
+                {{end}}
+            </div>
+            <div class="flex items-center gap-4 text-sm text-gray-500 dark:text-gray-400 shrink-0">
+                <span class="tabular-nums">{{.Components}} packages</span>
+                <span class="w-24 text-right">{{.UploadedAt}}</span>
+            </div>
+        </div>
+        {{end}}
+    </div>
+</div>
+{{else}}
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-12 text-center">
+    <p class="text-gray-500 dark:text-gray-400">No project has uploaded an SBOM yet</p>
+</div>
+{{end}}
+{{end}}

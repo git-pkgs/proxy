@@ -460,6 +460,194 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/projects": {
+            "get": {
+                "description": "Lists the projects that uploaded an SBOM. With purl, lists the projects using that package, or only that version of it when the purl has one; each entry then carries the version the project uses.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "projects"
+                ],
+                "summary": "List projects",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Package URL, e.g. pkg:npm/lodash or pkg:npm/lodash@4.17.20",
+                        "name": "purl",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.ProjectListResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{project}": {
+            "get": {
+                "description": "Returns the project with the package versions recorded for it.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "projects"
+                ],
+                "summary": "Get a project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project path, e.g. group/sub/repo",
+                        "name": "project",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.ProjectResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    }
+                }
+            },
+            "delete": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Removes the project and the package versions recorded for it. The path names the project itself, without the /sbom of the upload path: a path ending in /sbom that names no project is answered with 400.",
+                "tags": [
+                    "projects"
+                ],
+                "summary": "Delete a project",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project path, e.g. group/sub/repo",
+                        "name": "project",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "204": {
+                        "description": "No Content"
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
+        "/api/projects/{project}/sbom": {
+            "put": {
+                "security": [
+                    {
+                        "BearerAuth": []
+                    }
+                ],
+                "description": "Replaces the package versions recorded for the project with the ones the SBOM lists. CycloneDX (JSON or XML) and SPDX (JSON or tag-value) are accepted, e.g. the output of ` + "`" + `syft dir:. -o cyclonedx-json` + "`" + `. Entries without a package URL or version, of a package type the proxy doesn't serve, and the project's own packages are skipped and counted. The project may be given as path segments or URL-encoded as one segment.",
+                "consumes": [
+                    "application/json",
+                    "application/xml",
+                    "text/plain"
+                ],
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "projects"
+                ],
+                "summary": "Upload a project's SBOM",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Project path, e.g. group/sub/repo",
+                        "name": "project",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Commit the SBOM was generated from",
+                        "name": "ref",
+                        "in": "query"
+                    },
+                    {
+                        "type": "string",
+                        "description": "Branch the SBOM was generated from",
+                        "name": "branch",
+                        "in": "query"
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.ProjectUploadResponse"
+                        }
+                    },
+                    "400": {
+                        "description": "Bad Request",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    },
+                    "401": {
+                        "description": "Unauthorized",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    },
+                    "413": {
+                        "description": "Request Entity Too Large",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/search": {
             "get": {
                 "produces": [
@@ -1120,6 +1308,106 @@ const docTemplate = `{
                 }
             }
         },
+        "server.ProjectComponent": {
+            "type": "object",
+            "properties": {
+                "ecosystem": {
+                    "type": "string"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "purl": {
+                    "type": "string"
+                },
+                "version": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.ProjectListResponse": {
+            "type": "object",
+            "properties": {
+                "projects": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.ProjectSummary"
+                    }
+                }
+            }
+        },
+        "server.ProjectResponse": {
+            "type": "object",
+            "properties": {
+                "branch": {
+                    "type": "string"
+                },
+                "component_count": {
+                    "description": "ComponentCount is the number of package versions recorded. It is not\nset when listing the projects using a package.",
+                    "type": "integer"
+                },
+                "components": {
+                    "type": "array",
+                    "items": {
+                        "$ref": "#/definitions/server.ProjectComponent"
+                    }
+                },
+                "name": {
+                    "type": "string"
+                },
+                "ref": {
+                    "type": "string"
+                },
+                "uploaded_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "description": "Version is set when listing the projects using a package: the version\nof it this project uses.",
+                    "type": "string"
+                }
+            }
+        },
+        "server.ProjectSummary": {
+            "type": "object",
+            "properties": {
+                "branch": {
+                    "type": "string"
+                },
+                "component_count": {
+                    "description": "ComponentCount is the number of package versions recorded. It is not\nset when listing the projects using a package.",
+                    "type": "integer"
+                },
+                "name": {
+                    "type": "string"
+                },
+                "ref": {
+                    "type": "string"
+                },
+                "uploaded_at": {
+                    "type": "string"
+                },
+                "version": {
+                    "description": "Version is set when listing the projects using a package: the version\nof it this project uses.",
+                    "type": "string"
+                }
+            }
+        },
+        "server.ProjectUploadResponse": {
+            "type": "object",
+            "properties": {
+                "components": {
+                    "description": "Components is the number of package versions recorded.",
+                    "type": "integer"
+                },
+                "project": {
+                    "type": "string"
+                },
+                "skipped": {
+                    "description": "Skipped is the number of SBOM entries not recorded: without a package\nURL or a version, of a package type the proxy doesn't serve, conda\nentries without a channel, and the project's own packages.",
+                    "type": "integer"
+                }
+            }
+        },
         "server.SearchPackageResult": {
             "type": "object",
             "properties": {
@@ -1206,7 +1494,7 @@ const docTemplate = `{
     },
     "securityDefinitions": {
         "BearerAuth": {
-            "description": "\"Bearer \" followed by hosted.token",
+            "description": "\"Bearer \" followed by hosted.token, or projects.token for /api/projects",
             "type": "apiKey",
             "name": "Authorization",
             "in": "header"
