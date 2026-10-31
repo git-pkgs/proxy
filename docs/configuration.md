@@ -91,7 +91,7 @@ storage:
 
 Every download is a fresh upstream fetch, and concurrent requests for the same artifact are not combined. Artifacts with a digest known up front (OCI blobs, Swift archives, Helm charts) are verified while streaming: the response is sent chunked, and on a mismatch the connection is aborted before the response completes so the client never receives a tampered artifact as a good one. The same happens when the upstream connection fails mid-download.
 
-`cache_artifacts: false` cannot be combined with `scanning.enabled`, `storage.direct_serve`, `mirror_api` or `mirror.schedules`, which all need stored artifacts, and the `mirror` command refuses to run with it.
+`cache_artifacts: false` cannot be combined with `scanning.enabled`, `storage.direct_serve`, `mirror_api`, `mirror.schedules` or `mirror.refresh`, which all need stored artifacts, and the `mirror` command refuses to run with it.
 
 ### Retention
 
@@ -1736,6 +1736,37 @@ Each run checks the tag with a HEAD request. If the tag still points to the cach
 - Docker Hub does not count HEAD requests against its pull limit, but every changed manifest is a pull. Set `platforms` and `upstream.auth` for `registry-1.docker.io` to stay under the anonymous limit.
 - Mirrored layers are scanned when `scanning.enabled` is set. A blocked layer fails the run and keeps the previous image.
 - Schedules are read at startup; changes need a restart. They do not need `mirror_api`.
+
+### Refreshing the most used packages
+
+For packages, the cache learns about a new release only when a client asks for it, and that first install waits on the upstream or fails while it is down. `mirror.refresh` mirrors new releases of the packages clients download most, so they are cached before anyone asks:
+
+```yaml
+mirror:
+  refresh:
+    interval: 24h
+    top: 50
+    since: 14d
+    max_versions: 200
+    max_bytes: 2GB
+```
+
+| Setting | Env | Description |
+|---------|-----|-------------|
+| `mirror.refresh.interval` | - | How often the refresh runs, at least `1m` |
+| `mirror.refresh.top` | - | Packages per ecosystem to refresh, the ones with the most downloads among those downloaded within `since`. Default: `50` |
+| `mirror.refresh.since` | - | How recently a package must have been downloaded, with a `d` suffix for days. Default: `14d` |
+| `mirror.refresh.max_versions` | - | Stop a run after mirroring this many new versions. Default: no cap |
+| `mirror.refresh.max_bytes` | - | Stop a run once it has downloaded this much, such as `2GB`. It is checked before each version, so the last one can go over it. Default: no cap |
+
+For each of those packages a run lists the releases on the configured upstream and mirrors, for each major line a version is cached on, the newest release of that line. A major line is the major version, or `0.minor` below 1.0. Prereleases and yanked, retracted or deprecated releases are skipped, and so are releases cooldown still withholds or the denylist names, so a run mirrors what clients would be served rather than the newest published. A release that leaves cooldown later is mirrored by a later run.
+
+- PyPI and conda versions publish many files. Only the kinds clients fetched of earlier versions are mirrored: wheels with the same python, ABI and platform tags, and the sdist, or conda packages of the same subdir, build variant (such as `py312`) and file type.
+- Debian, Alpine and RPM clients find new versions in repository indexes. A run fetches the `InRelease`, `APKINDEX.tar.gz` and `repomd.xml` files clients fetched within `since` again, reads the `Packages` and primary indexes they point at for the components and architectures of the cached packages, and mirrors the newer file of each package and architecture. Files are checked against the SHA-256 the index lists, where it lists one. Indexes are found by the URL the metadata cache records with them, which caches from before this release lack until they are next revalidated.
+- Container images are not refreshed; list the tags to follow in `mirror.schedules`.
+- Hit counts are kept per file since it was cached, so `top` ranks by all downloads of the files used within `since`.
+- Runs are spread and shared between instances like schedules: the first run comes within ten minutes of startup, later ones every `interval` ±10 %, and instances sharing a PostgreSQL database take turns. A run fetches one version at a time.
+- What a run mirrors is evicted by `storage.max_size` and retention like any other file. With `max_versions` and `max_bytes` a run stays bounded when many packages release at once.
 
 ## Docker
 
