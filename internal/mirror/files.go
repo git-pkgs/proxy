@@ -116,17 +116,3 @@ func fileQualifiers(ecosystem string, qualifiers map[string]string) map[string]s
 	}
 	return kept
 }
-
-// condaName returns a conda package name with its channel, taken from the
-// namespace or the channel qualifier. Without either it stays bare, and
-// mirroring refuses it.
-func condaName(namespace, name, channel string) string {
-	switch {
-	case namespace != "":
-		return namespace + "/" + name
-	case channel != "":
-		return channel + "/" + name
-	default:
-		return name
-	}
-}

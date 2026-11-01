@@ -39,8 +39,10 @@
 //   - /ui/packages        - List all cached packages
 //   - /ui/search          - Search packages
 //   - /ui/package/...     - Package and version detail pages
+//   - /ui/projects/...    - Project inventory (when projects.enabled)
 //   - /ui/api/browse/...  - Archive browsing (used by the UI)
 //   - /ui/api/compare/... - Archive diffing (used by the UI)
+//   - /ui/api/projects/... - Project deletion (used by the UI, needs the token)
 //
 // API endpoints for enrichment data:
 //   - GET  /api/package/{ecosystem}/{name}          - Package metadata
@@ -50,6 +52,12 @@
 //   - POST /api/outdated                            - Check outdated packages
 //   - POST /api/bulk                                - Bulk package lookup
 //   - GET  /api/packages                            - List cached packages (JSON)
+//
+// Project inventory endpoints (when projects.enabled):
+//   - PUT    /api/projects/{project}/sbom - Upload a project's SBOM (token)
+//   - DELETE /api/projects/{project}      - Delete a project (token)
+//   - GET    /api/projects                - List projects, or those using ?purl=
+//   - GET    /api/projects/{project}      - A project's package versions
 package server
 
 import (
@@ -233,6 +241,17 @@ func (s *Server) Start(listeners ...net.Listener) error {
 	return s.serve(listener)
 }
 
+// mountEnrichmentAPI registers the API endpoints for enrichment data.
+func (s *Server) mountEnrichmentAPI(r chi.Router) {
+	apiHandler := NewAPIHandler(enrichment.New(s.logger), s.db)
+	r.Get("/api/package/{ecosystem}/*", apiHandler.HandlePackagePath)
+	r.Get("/api/vulns/{ecosystem}/*", apiHandler.HandleVulnsPath)
+	r.Post("/api/outdated", apiHandler.HandleOutdated)
+	r.Post("/api/bulk", apiHandler.HandleBulkLookup)
+	r.Get("/api/search", apiHandler.HandleSearch)
+	r.Get("/api/packages", apiHandler.HandlePackagesList)
+}
+
 func (s *Server) serve(listener net.Listener) error {
 	metadataClient, artifactClient := s.newUpstreamClients(s.cfg.ParseArtifactTimeout())
 
@@ -359,6 +378,7 @@ func (s *Server) serve(listener net.Listener) error {
 		if s.cfg.CacheDelete {
 			ui.Delete("/api/cache/{ecosystem}/*", s.handleCacheDelete)
 		}
+		s.mountProjectUI(ui)
 	})
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
@@ -367,16 +387,7 @@ func (s *Server) serve(listener net.Listener) error {
 		r.Delete("/api/cache/{ecosystem}/*", s.handleCacheDelete)
 	}
 
-	// API endpoints for enrichment data
-	enrichSvc := enrichment.New(s.logger)
-	apiHandler := NewAPIHandler(enrichSvc, s.db)
-
-	r.Get("/api/package/{ecosystem}/*", apiHandler.HandlePackagePath)
-	r.Get("/api/vulns/{ecosystem}/*", apiHandler.HandleVulnsPath)
-	r.Post("/api/outdated", apiHandler.HandleOutdated)
-	r.Post("/api/bulk", apiHandler.HandleBulkLookup)
-	r.Get("/api/search", apiHandler.HandleSearch)
-	r.Get("/api/packages", apiHandler.HandlePackagesList)
+	s.mountEnrichmentAPI(r)
 
 	// Start background context (used by mirror jobs and cleanup)
 	bgCtx, bgCancel := context.WithCancel(context.Background())
@@ -405,6 +416,9 @@ func (s *Server) serve(listener net.Listener) error {
 		hostedAPI := NewHostedAPIHandler(proxy, s.cfg.Hosted.MaxUploadBytes(), s.logger)
 		registerHostedRoutes(r, hostedAPI, s.cfg.Hosted.TokenExpanded())
 	}
+
+	// Project inventory endpoints (opt-in via projects.enabled or PROXY_PROJECTS_ENABLED)
+	s.mountProjectAPI(bgCtx, r)
 
 	s.http = &http.Server{
 		Addr:         s.cfg.Listen,
@@ -1176,6 +1190,7 @@ func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, 
 		LicenseCategory: categorizeLicense(pkg.License),
 		Cooldown:        s.cooldown.forPackage(pkg.Ecosystem, pkg.Name),
 	}
+	data.UsedBy = s.packageUsedBy(pkg, versions)
 
 	if err := s.templates.Render(w, "package_show", data); err != nil {
 		s.logger.Error("failed to render package show", "error", err)

@@ -213,6 +213,9 @@ type Config struct {
 	// Hosted configures pushing packages to the proxy (/api/hosted).
 	Hosted HostedConfig `json:"hosted" yaml:"hosted"`
 
+	// Projects configures the project inventory (/api/projects).
+	Projects ProjectsConfig `json:"projects" yaml:"projects"`
+
 	// Gradle configures Gradle HttpBuildCache behavior.
 	Gradle GradleConfig `json:"gradle" yaml:"gradle"`
 
@@ -1479,6 +1482,9 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Hosted.MaxUploadSize, "PROXY_HOSTED_MAX_UPLOAD_SIZE")
 	setEnvStringSlice(&c.Hosted.NPMScopes, "PROXY_HOSTED_NPM_SCOPES")
 	setEnvStringSlice(&c.Hosted.ComposerVendors, "PROXY_HOSTED_COMPOSER_VENDORS")
+	setEnvBool(&c.Projects.Enabled, "PROXY_PROJECTS_ENABLED")
+	setEnvString(&c.Projects.Token, "PROXY_PROJECTS_TOKEN")
+	setEnvString(&c.Projects.MaxAge, "PROXY_PROJECTS_MAX_AGE")
 	setEnvString(&c.MetadataTTL, "PROXY_METADATA_TTL")
 	setEnvString(&c.MetadataMaxSize, "PROXY_METADATA_MAX_SIZE")
 	setEnvString(&c.ArtifactMaxSize, "PROXY_ARTIFACT_MAX_SIZE")
@@ -1651,6 +1657,10 @@ func (c *Config) validateComponents() error {
 	if _, reserved := c.Upstream.Generic[HostedGenericRepository]; reserved && c.Hosted.Enabled {
 		return fmt.Errorf("invalid upstream.generic name %q: reserved for pushed files at /generic/%s/ when hosted.enabled is set",
 			HostedGenericRepository, HostedGenericRepository)
+	}
+
+	if err := c.Projects.Validate(); err != nil {
+		return err
 	}
 
 	if err := c.Mirror.Validate(); err != nil {

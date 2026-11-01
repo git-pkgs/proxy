@@ -367,6 +367,10 @@ Selective package mirroring for pre-populating the proxy cache. Supports multipl
 
 The package also provides a `MetadataCache` for storing raw upstream metadata blobs so the proxy can serve metadata responses offline. The `JobStore` manages async mirror jobs exposed via the `/api/mirror` endpoints.
 
+### `internal/inventory`
+
+Turns an SBOM uploaded to `/api/projects` into the package versions recorded for the project. Package URLs are mapped to the ecosystem names and unversioned PURLs the handlers record packages under, so a project's components join with `packages` by `purl`. Also compares versions for the outdated marker on the project pages.
+
 ### `internal/config`
 
 Configuration loading.

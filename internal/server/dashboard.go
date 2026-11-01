@@ -69,6 +69,9 @@ type PackageShowData struct {
 	Versions        []database.Version
 	Vulnerabilities []database.Vulnerability
 	LicenseCategory string
+	// UsedBy lists the projects using each version, when the project
+	// inventory is enabled.
+	UsedBy []VersionUsage
 	// Cooldown is nil with cooldown off.
 	Cooldown *PackageCooldown
 }

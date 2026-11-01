@@ -3,6 +3,7 @@ package mirror
 import (
 	"context"
 	"encoding/json"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -229,26 +230,38 @@ func marshalJSON(t *testing.T, v any) []byte {
 	return data
 }
 
-// The mirror files packages under the ecosystem names the handlers use, so
-// a mirrored package and the same package cached by a client share one name.
+// The mirror files packages under the ecosystem and package names the
+// handlers use, so a mirrored package and the same package cached by a client
+// share one name.
 func TestPURLSourceUsesHandlerEcosystemNames(t *testing.T) {
 	source := &PURLSource{PURLs: []string{
 		"pkg:gem/rake@13.2.1",
 		"pkg:composer/psr/log@3.0.2",
-		"pkg:apk/curl@8.14.1-r2",
+		"pkg:apk/alpine/curl@8.14.1-r2",
 		"pkg:npm/left-pad@1.3.0",
+		"pkg:maven/org.slf4j/slf4j-api@2.0.13",
+		"pkg:pypi/Zope.Interface@6.4",
+		"pkg:nuget/Newtonsoft.Json@13.0.3",
 	}}
 
 	var got []string
 	if err := source.Enumerate(context.Background(), func(pv PackageVersion) error {
-		got = append(got, pv.Ecosystem)
+		got = append(got, pv.Ecosystem+" "+pv.Name)
 		return nil
 	}); err != nil {
 		t.Fatalf("Enumerate() error = %v", err)
 	}
 
-	want := []string{"gem", "composer", "alpine", "npm"}
-	if strings.Join(got, ",") != strings.Join(want, ",") {
-		t.Errorf("ecosystems = %v, want %v", got, want)
+	want := []string{
+		"gem rake",
+		"composer psr/log",
+		"alpine curl",
+		"npm left-pad",
+		"maven org.slf4j:slf4j-api",
+		"pypi zope-interface",
+		"nuget newtonsoft.json",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("packages = %q, want %q", got, want)
 	}
 }

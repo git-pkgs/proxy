@@ -442,6 +442,15 @@ gradle:
 #   npm_scopes: ["@acme"]
 #   composer_vendors: ["acme"]
 
+# Project inventory (disabled by default). Repositories upload an SBOM to
+# PUT /api/projects/{project}/sbom, and the UI shows which project uses
+# which package versions. Project names are visible on the unauthenticated UI.
+# projects:
+#   enabled: true
+#   token: "${PROXY_PROJECTS_TOKEN}"
+#   # Drop projects that have not uploaded for this long ("" keeps them)
+#   max_age: "90d"
+
 # Re-mirror container image tags on a schedule, so a moved tag is picked up
 # even when nobody pulls it. An unchanged tag costs one HEAD request.
 # mirror:
