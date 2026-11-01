@@ -142,6 +142,10 @@ func ifNoneMatchHits(header, etag string) bool {
 // defaultMetadataMaxSize is used when Proxy.MetadataMaxSize is unset.
 const defaultMetadataMaxSize = 100 << 20
 
+// defaultMetadataStreamMaxSize is used when Proxy.MetadataStreamMaxSize is
+// unset.
+const defaultMetadataStreamMaxSize = 1 << 30
+
 // ErrMetadataTooLarge is returned when upstream metadata exceeds the configured limit.
 var ErrMetadataTooLarge = errors.New("metadata response exceeds size limit")
 
@@ -215,14 +219,17 @@ type Proxy struct {
 	Cooldown CooldownPolicy
 	// ShortestCooldown is the shortest cooldown configured anywhere. It
 	// bounds how long a rewrite filtered by cooldown is cached.
-	ShortestCooldown    time.Duration
-	Denylist            *denylist.Policy
-	CacheMetadata       bool
-	MetadataTTL         time.Duration
-	MetadataMaxSize     int64
-	GradleReadOnly      bool
-	HostedEnabled       bool
-	GradleMaxUploadSize int64
+	ShortestCooldown time.Duration
+	Denylist         *denylist.Policy
+	CacheMetadata    bool
+	MetadataTTL      time.Duration
+	MetadataMaxSize  int64
+	// MetadataStreamMaxSize caps a metadata document streamed from upstream
+	// into storage, which metadata_max_size doesn't cover. Default 1 GB.
+	MetadataStreamMaxSize int64
+	GradleReadOnly        bool
+	HostedEnabled         bool
+	GradleMaxUploadSize   int64
 	// NPMFullMetadata requests full npm packuments from upstream even when
 	// cooldown is disabled, so served metadata carries publish times.
 	NPMFullMetadata bool

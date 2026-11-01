@@ -181,3 +181,58 @@ func TestNPMStreamedPackumentClientRevalidates(t *testing.T) {
 		t.Errorf("served %d versions, want 401", len(doc.Versions))
 	}
 }
+
+// TestNPMStreamedPackumentOverStreamLimit checks that a document over
+// MetadataStreamMaxSize is neither stored nor served: the stored copy is
+// served instead, with and without cooldown, and with nothing stored the
+// request fails.
+func TestNPMStreamedPackumentOverStreamLimit(t *testing.T) {
+	for _, withCooldown := range []bool{true, false} {
+		t.Run(map[bool]string{true: "cooldown", false: "no cooldown"}[withCooldown], func(t *testing.T) {
+			body := bigPackument(400)
+			u := newStreamUpstream(t, body)
+			proxy, store, handler := streamProxy(t, u)
+			if !withCooldown {
+				proxy.Cooldown = nil
+			}
+			proxy.MetadataMaxSize = int64(len(body) / 4)
+			proxy.MetadataStreamMaxSize = int64(len(body) + 1000)
+			want := len(decodeStreamed(t, serve(handler, "/big", nil)).Versions)
+			before := bigMetadataFiles(store)
+
+			u.replace(bigPackument(500), `"v2"`)
+			proxy.MetadataTTL = time.Nanosecond
+			proxy.SetMetadataRewriteCacheSize(64 << 20)
+
+			if doc := decodeStreamed(t, serve(handler, "/big", nil)); len(doc.Versions) != want {
+				t.Errorf("served %d versions, want the stored %d", len(doc.Versions), want)
+			}
+			after := bigMetadataFiles(store)
+			if len(after) != len(before) {
+				t.Errorf("storage holds %d files, %d before", len(after), len(before))
+			}
+			for path, b := range before {
+				if after[path] != b {
+					t.Errorf("%s was changed", path)
+				}
+			}
+		})
+	}
+	t.Run("uncached", func(t *testing.T) {
+		body := bigPackument(400)
+		u := newStreamUpstream(t, body)
+		proxy, store, handler := streamProxy(t, u)
+		proxy.MetadataMaxSize = int64(len(body) / 4)
+		proxy.MetadataStreamMaxSize = int64(len(body) / 2)
+
+		if rec := serve(handler, "/big", nil); rec.Code != http.StatusBadGateway {
+			t.Errorf("status %d, want 502", rec.Code)
+		}
+		if files := bigMetadataFiles(store); len(files) != 0 {
+			t.Errorf("left %d files in storage", len(files))
+		}
+		if entry, _ := proxy.DB.GetMetadataCache("npm", "big"); entry != nil {
+			t.Error("left a metadata cache row")
+		}
+	})
+}

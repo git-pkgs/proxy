@@ -268,10 +268,7 @@ func (s *Server) serve(listener net.Listener) error {
 	if err != nil {
 		return fmt.Errorf("configuring scanners: %w", err)
 	}
-	proxy.CacheMetadata = s.cfg.CacheMetadata
-	proxy.MetadataTTL = s.cfg.ParseMetadataTTL()
-	proxy.MetadataMaxSize = s.cfg.ParseMetadataMaxSize()
-	proxy.SetMetadataRewriteCacheSize(s.cfg.ParseMetadataRewriteCacheSize())
+	configureMetadata(proxy, s.cfg)
 	proxy.GradleReadOnly = s.cfg.Gradle.BuildCache.ReadOnly
 	proxy.HostedEnabled = s.cfg.Hosted.Enabled
 	proxy.HostedNPMScopes = s.cfg.Hosted.NPMScopes
@@ -616,6 +613,15 @@ func (s *Server) newContainerHandler(proxy *handler.Proxy) *handler.ContainerHan
 	containerHandler.SetMirroredRegistries(s.cfg.Upstream.OCIMirrors)
 	handler.RegisterHomebrewArtifacts(containerHandler, s.cfg.Upstream.HomebrewArtifact)
 	return containerHandler
+}
+
+// configureMetadata applies the metadata cache settings to proxy.
+func configureMetadata(proxy *handler.Proxy, cfg *config.Config) {
+	proxy.CacheMetadata = cfg.CacheMetadata
+	proxy.MetadataTTL = cfg.ParseMetadataTTL()
+	proxy.MetadataMaxSize = cfg.ParseMetadataMaxSize()
+	proxy.MetadataStreamMaxSize = cfg.ParseMetadataStreamMaxSize()
+	proxy.SetMetadataRewriteCacheSize(cfg.ParseMetadataRewriteCacheSize())
 }
 
 func configureScanning(proxy *handler.Proxy, cfg config.ScanningConfig, baseURL string, logger *slog.Logger) (*scanner.Group, error) {

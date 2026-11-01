@@ -198,9 +198,13 @@ func (p *Proxy) storeUpstreamMetadata(ctx context.Context, ecosystem, cacheKey, 
 	if lm := resp.Header.Get(headerLastModified); lm != "" {
 		meta.lastModified, _ = http.ParseTime(lm)
 	}
+	limit := p.MetadataStreamMaxSize
+	if limit <= 0 {
+		limit = defaultMetadataStreamMaxSize
+	}
 	// Go decompresses the body, since no Accept-Encoding was set, so it is
 	// stored uncompressed.
-	var body io.Reader = upstreamBodyReader{resp.Body}
+	var body io.Reader = &limitedBody{r: upstreamBodyReader{resp.Body}, left: limit}
 	if validate != nil {
 		staged, err := p.stageMetadata(ctx, ecosystem, cacheKey, body, validate)
 		if err != nil {
@@ -244,6 +248,21 @@ func (p *Proxy) stageMetadata(ctx context.Context, ecosystem, cacheKey string, b
 		return nil, fmt.Errorf("%w: reading staged copy: %w", errMetadataNotStored, err)
 	}
 	return &stagedReader{ReadCloser: staged, discard: discard}, nil
+}
+
+// limitedBody fails with ErrMetadataTooLarge, as an upstream failure, once
+// r has sent more than left bytes.
+type limitedBody struct {
+	r    io.Reader
+	left int64
+}
+
+func (l *limitedBody) Read(b []byte) (int, error) {
+	n, err := l.r.Read(b)
+	if l.left -= int64(n); l.left < 0 {
+		return 0, &upstreamBodyError{ErrMetadataTooLarge}
+	}
+	return n, err
 }
 
 // notStored returns a failure to store a document as errMetadataNotStored,
