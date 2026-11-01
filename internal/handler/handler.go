@@ -157,9 +157,7 @@ func (p *Proxy) ReadMetadata(r io.Reader) ([]byte, error) {
 // Reading into a buffer of that size avoids io.ReadAll growing its buffer
 // step by step, which peaks at more than twice the document size. size is
 // only a hint: a negative one, or one above the limit, reads as ReadMetadata
-// does, and a body of a different length is still read correctly. A body
-// read through upstreamBodyReader that upstream cuts off fails, even though
-// it ends like a body shorter than size.
+// does, and a body of a different length is still read correctly.
 func (p *Proxy) ReadMetadataSized(r io.Reader, size int64) ([]byte, error) {
 	limit := p.MetadataMaxSize
 	if limit <= 0 {
@@ -172,10 +170,7 @@ func (p *Proxy) ReadMetadataSized(r io.Reader, size int64) ([]byte, error) {
 	// the buffer and a longer one is noticed.
 	buf := make([]byte, size+1)
 	n, err := io.ReadFull(r, buf)
-	var cut *upstreamBodyError
 	switch {
-	case errors.As(err, &cut):
-		return nil, err
 	case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF):
 		if int64(n) < size/2 {
 			// The hint was far off; don't keep the oversized buffer alive.
@@ -1994,7 +1989,7 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 
 	// ContentLength is -1 when the transport decompresses the body, and
 	// otherwise the length of the bytes read here.
-	body, err := p.ReadMetadataSized(upstreamBodyReader{resp.Body}, resp.ContentLength)
+	body, err := p.ReadMetadataSized(resp.Body, resp.ContentLength)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}

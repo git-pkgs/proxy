@@ -246,25 +246,6 @@ func (p *Proxy) stageMetadata(ctx context.Context, ecosystem, cacheKey string, b
 	return &stagedReader{ReadCloser: staged, discard: discard}, nil
 }
 
-// upstreamBodyReader marks a failure to read a document from upstream, so
-// it is told apart from a failure to store it.
-type upstreamBodyReader struct{ r io.Reader }
-
-func (u upstreamBodyReader) Read(b []byte) (int, error) {
-	n, err := u.r.Read(b)
-	if err != nil && !errors.Is(err, io.EOF) {
-		err = &upstreamBodyError{err}
-	}
-	return n, err
-}
-
-// upstreamBodyError is a failure to read a document from upstream. It is
-// handled as an upstream failure: the stored copy, if any, is served.
-type upstreamBodyError struct{ err error }
-
-func (e *upstreamBodyError) Error() string { return "reading upstream metadata: " + e.err.Error() }
-func (e *upstreamBodyError) Unwrap() error { return e.err }
-
 // notStored returns a failure to store a document as errMetadataNotStored,
 // unless reading it from upstream failed.
 func notStored(what string, err error) error {

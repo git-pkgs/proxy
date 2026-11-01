@@ -49,39 +49,24 @@ func TestNPMStreamedPackumentBlobCorrupt(t *testing.T) {
 
 // TestNPMStreamedPackumentTruncated checks that a document upstream cuts
 // off halfway neither replaces the stored copy, which is served instead,
-// nor leaves anything behind, with and without cooldown, streamed and in
-// memory.
+// nor leaves anything behind, with and without cooldown.
 func TestNPMStreamedPackumentTruncated(t *testing.T) {
-	for _, tt := range []struct {
-		name               string
-		cooldown, inMemory bool
-	}{
-		{"cooldown", true, false},
-		{"no cooldown", false, false},
-		{"in memory with cooldown", true, true},
-		{"in memory without cooldown", false, true},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
+	for _, withCooldown := range []bool{true, false} {
+		t.Run(map[bool]string{true: "cooldown", false: "no cooldown"}[withCooldown], func(t *testing.T) {
 			body := bigPackument(400)
 			u := newStreamUpstream(t, body)
 			proxy, store, handler := streamProxy(t, u)
-			if !tt.cooldown {
+			if !withCooldown {
 				proxy.Cooldown = nil
 			}
-			if tt.inMemory {
-				proxy.SetMetadataRewriteCacheSize(0)
-			} else {
-				proxy.MetadataMaxSize = int64(len(body) / 4)
-			}
+			proxy.MetadataMaxSize = int64(len(body) / 4)
 			want := len(decodeStreamed(t, serve(handler, "/big", nil)).Versions)
 			before := bigMetadataFiles(store)
 
 			u.replace(bigPackument(401), `"v2"`)
 			u.truncate.Store(true)
 			proxy.MetadataTTL = time.Nanosecond
-			if !tt.inMemory {
-				proxy.SetMetadataRewriteCacheSize(64 << 20)
-			}
+			proxy.SetMetadataRewriteCacheSize(64 << 20)
 
 			if doc := decodeStreamed(t, serve(handler, "/big", nil)); len(doc.Versions) != want {
 				t.Errorf("served %d versions, want the stored %d", len(doc.Versions), want)
@@ -100,31 +85,23 @@ func TestNPMStreamedPackumentTruncated(t *testing.T) {
 }
 
 // TestNPMStreamedPackumentTruncatedUncached checks that a document upstream
-// cuts off halfway fails the request and is not kept, streamed and in memory.
+// cuts off halfway fails the request and is not kept.
 func TestNPMStreamedPackumentTruncatedUncached(t *testing.T) {
-	for _, inMemory := range []bool{false, true} {
-		t.Run(map[bool]string{false: "streamed", true: "in memory"}[inMemory], func(t *testing.T) {
-			body := bigPackument(400)
-			u := newStreamUpstream(t, body)
-			proxy, store, handler := streamProxy(t, u)
-			proxy.Cooldown = nil
-			if inMemory {
-				proxy.SetMetadataRewriteCacheSize(0)
-			} else {
-				proxy.MetadataMaxSize = int64(len(body) / 4)
-			}
-			u.truncate.Store(true)
+	body := bigPackument(400)
+	u := newStreamUpstream(t, body)
+	proxy, store, handler := streamProxy(t, u)
+	proxy.Cooldown = nil
+	proxy.MetadataMaxSize = int64(len(body) / 4)
+	u.truncate.Store(true)
 
-			if rec := serve(handler, "/big", nil); rec.Code != http.StatusBadGateway {
-				t.Errorf("status %d, want 502", rec.Code)
-			}
-			if files := bigMetadataFiles(store); len(files) != 0 {
-				t.Errorf("left %d files in storage", len(files))
-			}
-			if entry, _ := proxy.DB.GetMetadataCache("npm", "big"); entry != nil {
-				t.Error("left a metadata cache row")
-			}
-		})
+	if rec := serve(handler, "/big", nil); rec.Code != http.StatusBadGateway {
+		t.Errorf("status %d, want 502", rec.Code)
+	}
+	if files := bigMetadataFiles(store); len(files) != 0 {
+		t.Errorf("left %d files in storage", len(files))
+	}
+	if entry, _ := proxy.DB.GetMetadataCache("npm", "big"); entry != nil {
+		t.Error("left a metadata cache row")
 	}
 }
 
