@@ -87,7 +87,11 @@ Cooldown requires publish timestamps in metadata. Registries without a "Yes" in 
 brew install git-pkgs/git-pkgs/proxy
 ```
 
-Or download a binary from the [releases page](https://github.com/git-pkgs/proxy/releases).
+Or download a binary from the [releases page](https://github.com/git-pkgs/proxy/releases), or run the container image:
+
+```bash
+docker run -p 8080:8080 -v proxy-data:/data ghcr.io/git-pkgs/proxy:latest
+```
 
 ### Helm
 
@@ -1715,12 +1719,20 @@ sudo systemctl start proxy
 
 ### Docker
 
-A Dockerfile is included in the repo. Build and run:
+Images for linux/amd64 and linux/arm64 are published to `ghcr.io/git-pkgs/proxy` for each release, tagged with the version and `latest`:
+
+```bash
+docker run -p 8080:8080 -v proxy-data:/data ghcr.io/git-pkgs/proxy:latest
+```
+
+To build the image from the repo instead:
 
 ```bash
 docker build -t proxy .
 docker run -p 8080:8080 -v proxy-data:/data proxy
 ```
+
+The image has a health check that requests `/health` on port 8080. It checks the database and storage, so a container reports unhealthy when either fails. If you change the port with `PROXY_LISTEN`, override it with `--health-cmd`.
 
 With `--read-only`, also pass `--tmpfs /tmp`: the proxy writes some uploads to a temporary file before reading them.
 
