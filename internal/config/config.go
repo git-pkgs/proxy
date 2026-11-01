@@ -170,6 +170,11 @@ type Config struct {
 	// size return ErrMetadataTooLarge. Default: "100MB".
 	MetadataMaxSize string `json:"metadata_max_size" yaml:"metadata_max_size"`
 
+	// MetadataStreamMaxSize is the largest metadata document the proxy
+	// streams from upstream into storage instead of buffering it, which
+	// metadata_max_size doesn't cover (e.g. "1GB"). Default: "1GB".
+	MetadataStreamMaxSize string `json:"metadata_stream_max_size" yaml:"metadata_stream_max_size"`
+
 	// ArtifactMaxSize is the largest upstream artifact the proxy will fetch
 	// (e.g. "2GB"). Larger artifacts are refused and not cached. Default: ""
 	// (unlimited). "0" is also unlimited.
@@ -1481,6 +1486,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvStringSlice(&c.Hosted.ComposerVendors, "PROXY_HOSTED_COMPOSER_VENDORS")
 	setEnvString(&c.MetadataTTL, "PROXY_METADATA_TTL")
 	setEnvString(&c.MetadataMaxSize, "PROXY_METADATA_MAX_SIZE")
+	setEnvString(&c.MetadataStreamMaxSize, "PROXY_METADATA_STREAM_MAX_SIZE")
 	setEnvString(&c.ArtifactMaxSize, "PROXY_ARTIFACT_MAX_SIZE")
 	setEnvString(&c.MetadataRewriteCacheSize, "PROXY_METADATA_REWRITE_CACHE_SIZE")
 	setEnvString(&c.HTTPTimeout, "PROXY_HTTP_TIMEOUT")
@@ -1727,6 +1733,7 @@ const (
 	defaultHTTPTimeout                   = 30 * time.Second //nolint:mnd // sensible default
 	defaultHitFlushInterval              = time.Second
 	defaultMetadataMaxSize               = 100 << 20
+	defaultMetadataStreamMaxSize         = 1 << 30
 	defaultMetadataRewriteCacheSize      = 256 << 20
 	defaultGradleBuildCacheMaxUploadSize = 100 << 20
 	defaultGradleBuildCacheSweepInterval = 10 * time.Minute
@@ -1780,22 +1787,25 @@ func validateRequestTimeout(field, s string) error {
 	return nil
 }
 
-func validateMetadataMaxSize(s string) error {
+func validateMetadataMaxSize(name, s string) error {
 	if s == "" {
 		return nil
 	}
 	size, err := ParseSize(s)
 	if err != nil {
-		return fmt.Errorf("invalid metadata_max_size: %w", err)
+		return fmt.Errorf("invalid %s: %w", name, err)
 	}
 	if size <= 0 {
-		return fmt.Errorf("invalid metadata_max_size %q: must be positive", s)
+		return fmt.Errorf("invalid %s %q: must be positive", name, s)
 	}
 	return nil
 }
 
 func (c *Config) validateDownloadSizeLimits() error {
-	if err := validateMetadataMaxSize(c.MetadataMaxSize); err != nil {
+	if err := validateMetadataMaxSize("metadata_max_size", c.MetadataMaxSize); err != nil {
+		return err
+	}
+	if err := validateMetadataMaxSize("metadata_stream_max_size", c.MetadataStreamMaxSize); err != nil {
 		return err
 	}
 	return validateArtifactMaxSize(c.ArtifactMaxSize)
@@ -1854,6 +1864,19 @@ func (c *Config) ParseMetadataMaxSize() int64 {
 	size, err := ParseSize(c.MetadataMaxSize)
 	if err != nil || size <= 0 {
 		return defaultMetadataMaxSize
+	}
+	return size
+}
+
+// ParseMetadataStreamMaxSize returns the size limit for metadata streamed
+// into storage in bytes. Returns 1GB if unset or invalid.
+func (c *Config) ParseMetadataStreamMaxSize() int64 {
+	if c.MetadataStreamMaxSize == "" {
+		return defaultMetadataStreamMaxSize
+	}
+	size, err := ParseSize(c.MetadataStreamMaxSize)
+	if err != nil || size <= 0 {
+		return defaultMetadataStreamMaxSize
 	}
 	return size
 }

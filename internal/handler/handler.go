@@ -142,6 +142,10 @@ func ifNoneMatchHits(header, etag string) bool {
 // defaultMetadataMaxSize is used when Proxy.MetadataMaxSize is unset.
 const defaultMetadataMaxSize = 100 << 20
 
+// defaultMetadataStreamMaxSize is used when Proxy.MetadataStreamMaxSize is
+// unset.
+const defaultMetadataStreamMaxSize = 1 << 30
+
 // ErrMetadataTooLarge is returned when upstream metadata exceeds the configured limit.
 var ErrMetadataTooLarge = errors.New("metadata response exceeds size limit")
 
@@ -215,14 +219,17 @@ type Proxy struct {
 	Cooldown CooldownPolicy
 	// ShortestCooldown is the shortest cooldown configured anywhere. It
 	// bounds how long a rewrite filtered by cooldown is cached.
-	ShortestCooldown    time.Duration
-	Denylist            *denylist.Policy
-	CacheMetadata       bool
-	MetadataTTL         time.Duration
-	MetadataMaxSize     int64
-	GradleReadOnly      bool
-	HostedEnabled       bool
-	GradleMaxUploadSize int64
+	ShortestCooldown time.Duration
+	Denylist         *denylist.Policy
+	CacheMetadata    bool
+	MetadataTTL      time.Duration
+	MetadataMaxSize  int64
+	// MetadataStreamMaxSize caps a metadata document streamed from upstream
+	// into storage, which metadata_max_size doesn't cover. Default 1 GB.
+	MetadataStreamMaxSize int64
+	GradleReadOnly        bool
+	HostedEnabled         bool
+	GradleMaxUploadSize   int64
 	// NPMFullMetadata requests full npm packuments from upstream even when
 	// cooldown is disabled, so served metadata carries publish times.
 	NPMFullMetadata bool
@@ -1816,6 +1823,10 @@ type metadataResult struct {
 	// fromCache is set when the body is a stored copy within its TTL, read
 	// without asking upstream.
 	fromCache bool
+	// entry is the cache row of the stored document, for a lookup that
+	// leaves the document in storage (see storedMetadataDocument). body is
+	// nil then.
+	entry *database.MetadataCacheEntry
 }
 
 // describedBy returns res with the digest that entry, the cache row its body
@@ -1955,24 +1966,9 @@ type upstreamMetadata struct {
 // alongside for the caller to store and replay. An empty acceptEncoding leaves Go to negotiate and
 // decompress transparently.
 func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept, acceptEncoding string) (*upstreamMetadata, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL, nil)
+	resp, err := p.requestUpstreamMetadata(ctx, upstreamURL, entry, accept, acceptEncoding)
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Accept", accept)
-	if acceptEncoding != "" {
-		req.Header.Set(headerAcceptEncoding, acceptEncoding)
-	}
-
-	if entry != nil && entry.ETag.Valid {
-		req.Header.Set("If-None-Match", entry.ETag.String)
-	} else if entry != nil && entry.LastModified.Valid {
-		req.Header.Set("If-Modified-Since", entry.LastModified.Time.UTC().Format(http.TimeFormat))
-	}
-
-	resp, err := p.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetching metadata: %w", err)
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -2000,12 +1996,8 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		return meta, nil
 	}
 
-	if resp.StatusCode == http.StatusNotFound {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, upstreamNotFoundBodyLimit))
-		return nil, &upstreamNotFoundError{body: body}
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream returned %d", resp.StatusCode)
+	if err := upstreamMetadataStatus(resp); err != nil {
+		return nil, err
 	}
 
 	// ContentLength is -1 when the transport decompresses the body, and
@@ -2028,6 +2020,44 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		meta.lastModified, _ = http.ParseTime(lm)
 	}
 	return meta, nil
+}
+
+// requestUpstreamMetadata sends the request for a metadata document,
+// revalidating entry when it is given.
+func (p *Proxy) requestUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept, acceptEncoding string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Accept", accept)
+	if acceptEncoding != "" {
+		req.Header.Set(headerAcceptEncoding, acceptEncoding)
+	}
+
+	if entry != nil && entry.ETag.Valid {
+		req.Header.Set("If-None-Match", entry.ETag.String)
+	} else if entry != nil && entry.LastModified.Valid {
+		req.Header.Set("If-Modified-Since", entry.LastModified.Time.UTC().Format(http.TimeFormat))
+	}
+
+	resp, err := p.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching metadata: %w", err)
+	}
+	return resp, nil
+}
+
+// upstreamMetadataStatus returns the error for a metadata response other
+// than 200. Callers handle a 304 they asked for before.
+func upstreamMetadataStatus(resp *http.Response) error {
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, upstreamNotFoundBodyLimit))
+		return &upstreamNotFoundError{body: body}
+	}
+	return fmt.Errorf("upstream returned %d", resp.StatusCode)
 }
 
 // refreshMetadataBlob records that upstream answered 304 for the cached
@@ -2057,14 +2087,22 @@ func (p *Proxy) refreshMetadataBlob(ecosystem, cacheKey string, meta *upstreamMe
 // database. It returns the digest it recorded for the bytes, or "" when they
 // were not cached.
 func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, storagePath string, meta *upstreamMetadata) string {
+	digest, _ := p.storeMetadataBlob(ctx, ecosystem, cacheKey, storagePath, bytes.NewReader(meta.body), meta)
+	return digest
+}
+
+// storeMetadataBlob is cacheMetadataBlob for a document read from body,
+// which meta describes. It also returns the error that kept it from caching
+// the document.
+func (p *Proxy) storeMetadataBlob(ctx context.Context, ecosystem, cacheKey, storagePath string, body io.Reader, meta *upstreamMetadata) (string, error) {
 	if p.DB == nil || p.Storage == nil {
-		return ""
+		return "", errMetadataNotStored
 	}
 
-	size, hash, err := p.Storage.Store(ctx, storagePath, bytes.NewReader(meta.body))
+	size, hash, err := p.Storage.Store(ctx, storagePath, body)
 	if err != nil {
 		p.Logger.Warn("failed to cache metadata", "ecosystem", ecosystem, "key", cacheKey, "error", err)
-		return ""
+		return "", err
 	}
 	var digest string
 	if hash != "" {
@@ -2094,9 +2132,9 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 		if delErr := p.Storage.Delete(ctx, storagePath); delErr != nil {
 			p.Logger.Warn("failed to discard metadata blob", "ecosystem", ecosystem, "key", cacheKey, "error", delErr)
 		}
-		return ""
+		return "", err
 	}
-	return digest
+	return digest, nil
 }
 
 // currentMetadataEntry re-reads the metadata cache row and returns it, or

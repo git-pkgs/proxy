@@ -18,6 +18,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
 )
 
@@ -253,6 +254,18 @@ func (c *rewriteCache) rewrite(ctx context.Context, key string, in []byte, expir
 	if c == nil {
 		return rewriteWithETag(in, rewrite)
 	}
+	return c.produce(ctx, key, expiry, func() (rewrittenMetadata, error) {
+		m, err := rewriteWithETag(in, rewrite)
+		if err == nil {
+			m.gzipped = gzipIfSmaller(m.plain)
+		}
+		return m, err
+	})
+}
+
+// produce is rewrite for a document that build makes with its validators
+// and gzip copy.
+func (c *rewriteCache) produce(ctx context.Context, key string, expiry func(start time.Time) time.Time, build func() (rewrittenMetadata, error)) (rewrittenMetadata, error) {
 
 	c.mu.Lock()
 	if e, ok := c.lookup(key, c.clock()); ok {
@@ -288,10 +301,7 @@ func (c *rewriteCache) rewrite(ctx context.Context, key string, in []byte, expir
 		c.mu.Unlock()
 		close(f.done)
 	}()
-	f.m, f.err = rewriteWithETag(in, rewrite)
-	if f.err == nil {
-		f.m.gzipped = gzipIfSmaller(f.m.plain)
-	}
+	f.m, f.err = build()
 	return f.m, f.err
 }
 
@@ -389,6 +399,60 @@ func (p *Proxy) cachedRewrite(ctx context.Context, ecosystem, proxyURL, name str
 		m.lastModified = p.metadataDate(ecosystem, proxyURL, name, m.etag)
 	}
 	return m, err
+}
+
+// streamedRewrite rewrites a document stored in storage, through the
+// proxy's rewrite cache, without holding the document or its rewrite in
+// memory uncompressed. rewrite is given a way to open the stored document,
+// as often as it needs to read it, and writes the rewritten document to w.
+// The result is cached under the same key cachedRewrite uses for the
+// document, and expires the same way with cooldown on.
+//
+// It returns errMetadataNotStored without the rewrite cache, which the
+// result has to be kept in.
+func (p *Proxy) streamedRewrite(ctx context.Context, ecosystem, proxyURL, name string, entry *database.MetadataCacheEntry, rewrite func(open func() (io.ReadCloser, error), w io.Writer) error) (rewrittenMetadata, error) {
+	if p.rewrites == nil {
+		return rewrittenMetadata{}, errMetadataNotStored
+	}
+	var expiry func(time.Time) time.Time
+	if p.cooldownEnabled() {
+		rec := p.watchCooldown()
+		defer p.unwatchCooldown(rec)
+		expiry = func(start time.Time) time.Time { return p.cooldownExpiry(rec, start) }
+	}
+	key := rewriteCacheKeyForDigest(ecosystem, proxyURL, name, entry.ContentDigest.String)
+	m, err := p.rewrites.produce(ctx, key, expiry, func() (rewrittenMetadata, error) {
+		// The rewrite runs to completion for the cache even when the
+		// caller leaves.
+		readCtx := context.WithoutCancel(ctx)
+		return gzipRewrite(func(w io.Writer) error {
+			return rewrite(func() (io.ReadCloser, error) { return p.openStoredMetadata(readCtx, entry) }, w)
+		})
+	})
+	if err == nil {
+		m.lastModified = p.metadataDate(ecosystem, proxyURL, name, m.etag)
+	}
+	return m, err
+}
+
+// gzipRewrite runs write and keeps what it writes gzip-compressed only, with
+// the ETag and length of the uncompressed output.
+func gzipRewrite(write func(w io.Writer) error) (rewrittenMetadata, error) {
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	sum := sha256.New()
+	n := &countingWriter{w: io.Discard}
+	if err := write(io.MultiWriter(zw, sum, n)); err != nil {
+		return rewrittenMetadata{}, err
+	}
+	if err := zw.Close(); err != nil {
+		return rewrittenMetadata{}, err
+	}
+	return rewrittenMetadata{
+		metadataValidators: metadataValidators{etag: `"` + hex.EncodeToString(sum.Sum(nil)) + `"`},
+		gzipped:            buf.Bytes(),
+		size:               int(n.n),
+	}, nil
 }
 
 // uncachedRewrite gives a rewrite made outside the cache its validators: an
@@ -501,16 +565,28 @@ func serveRewrittenMetadataAs(w http.ResponseWriter, r *http.Request, m rewritte
 		w.WriteHeader(http.StatusNotModified)
 		return
 	}
-	body := m.gzipped
-	if !compressed {
-		body = m.content()
-	}
 	w.Header().Set(headerContentType, contentType)
 	if compressed {
 		w.Header().Set(headerContentEncoding, "gzip")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write(m.gzipped)
+		return
+	}
+	if m.plain == nil && m.gzipped != nil {
+		// Decompressed as it is sent, rather than into a copy of the
+		// whole document.
+		zr, err := gzip.NewReader(bytes.NewReader(m.gzipped))
+		if err != nil {
+			http.Error(w, "failed to read cached metadata", http.StatusInternalServerError)
+			return
+		}
+		w.Header().Set(headerContentLength, strconv.Itoa(m.size))
+		w.WriteHeader(http.StatusOK)
+		_, _ = io.Copy(w, zr)
+		return
 	}
 	w.WriteHeader(http.StatusOK)
-	_, _ = w.Write(body)
+	_, _ = w.Write(m.plain)
 }
 
 // ensureVary adds field to the Vary header unless it is listed already.

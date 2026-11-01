@@ -785,6 +785,29 @@ func TestParseMetadataMaxSize(t *testing.T) {
 	}
 }
 
+func TestParseMetadataStreamMaxSize(t *testing.T) {
+	cfg := Default()
+	if got := cfg.ParseMetadataStreamMaxSize(); got != defaultMetadataStreamMaxSize {
+		t.Errorf("unset: %d, want %d", got, defaultMetadataStreamMaxSize)
+	}
+	cfg.MetadataStreamMaxSize = "2GB"
+	if got := cfg.ParseMetadataStreamMaxSize(); got != 2<<30 {
+		t.Errorf("2GB: %d", got)
+	}
+	t.Setenv("PROXY_METADATA_STREAM_MAX_SIZE", "300MB")
+	cfg = Default()
+	cfg.LoadFromEnv()
+	if got := cfg.ParseMetadataStreamMaxSize(); got != 300<<20 {
+		t.Errorf("from env: %d", got)
+	}
+	for _, bad := range []string{"0", "lots"} {
+		cfg.MetadataStreamMaxSize = bad
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("metadata_stream_max_size %q validated", bad)
+		}
+	}
+}
+
 func TestValidateMetadataMaxSize(t *testing.T) {
 	cfg := Default()
 	cfg.MetadataMaxSize = "not-a-size"
