@@ -540,7 +540,7 @@ func (h *CondaHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(r.URL.Path, ".json") {
 		acceptEncoding = "gzip"
 	}
-	h.proxy.proxyCachedWithEncoding(w, r, h.upstreamURL+r.URL.Path, "conda", cacheKey, acceptEncoding, "*/*")
+	h.proxy.proxyCachedWithEncoding(w, r, h.upstreamURL+r.URL.Path, "conda", cacheKey, acceptEncoding, nil, "*/*")
 }
 
 // proxyUpstream forwards a request to Anaconda without caching.

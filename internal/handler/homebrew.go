@@ -64,7 +64,7 @@ func (h *HomebrewHandler) Routes() http.Handler {
 		if strings.HasPrefix(requestPath, "analytics/") {
 			acceptEncoding = "identity"
 		}
-		h.proxy.proxyCachedWithEncoding(w, r, upstreamURL, homebrewMetadataEcosystem, homebrewMetadataCacheKey(requestPath, r.URL.RawQuery), acceptEncoding, "*/*")
+		h.proxy.proxyCachedWithEncoding(w, r, upstreamURL, homebrewMetadataEcosystem, homebrewMetadataCacheKey(requestPath, r.URL.RawQuery), acceptEncoding, nil, "*/*")
 	})
 }
 
