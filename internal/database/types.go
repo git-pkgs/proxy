@@ -184,12 +184,15 @@ type MetadataCacheEntry struct {
 	ContentType     sql.NullString `db:"content_type" json:"content_type,omitempty"`
 	ContentEncoding sql.NullString `db:"content_encoding" json:"content_encoding,omitempty"`
 	ContentDigest   sql.NullString `db:"content_digest" json:"content_digest,omitempty"`
-	Size            sql.NullInt64  `db:"size" json:"size,omitempty"`
-	LastModified    sql.NullTime   `db:"last_modified" json:"last_modified,omitempty"`
-	FetchedAt       sql.NullTime   `db:"fetched_at" json:"fetched_at,omitempty"`
-	LastAccessedAt  sql.NullTime   `db:"last_accessed_at" json:"last_accessed_at,omitempty"`
-	CreatedAt       time.Time      `db:"created_at" json:"created_at"`
-	UpdatedAt       time.Time      `db:"updated_at" json:"updated_at"`
+	// UpstreamURL is where the document was fetched from. Rows written
+	// before it was recorded, and by writers that don't know it, have none.
+	UpstreamURL    sql.NullString `db:"upstream_url" json:"upstream_url,omitempty"`
+	Size           sql.NullInt64  `db:"size" json:"size,omitempty"`
+	LastModified   sql.NullTime   `db:"last_modified" json:"last_modified,omitempty"`
+	FetchedAt      sql.NullTime   `db:"fetched_at" json:"fetched_at,omitempty"`
+	LastAccessedAt sql.NullTime   `db:"last_accessed_at" json:"last_accessed_at,omitempty"`
+	CreatedAt      time.Time      `db:"created_at" json:"created_at"`
+	UpdatedAt      time.Time      `db:"updated_at" json:"updated_at"`
 }
 
 // Vulnerability represents a cached vulnerability record.

@@ -1614,6 +1614,8 @@ func (c *Config) validateCacheArtifacts() error {
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror_api: mirrored artifacts would never be served")
 	case len(c.Mirror.Schedules) > 0:
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror.schedules: mirrored artifacts would never be served")
+	case c.Mirror.Refresh != nil:
+		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror.refresh: mirrored artifacts would never be served")
 	case c.Hosted.Enabled:
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with hosted.enabled: pushed packages would never be served")
 	}

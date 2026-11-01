@@ -279,3 +279,36 @@ func TestScheduleKey(t *testing.T) {
 		}
 	}
 }
+
+func TestSchedulerRunsRefresh(t *testing.T) {
+	m, fetcher := setupRefreshMirror(t, "tarball")
+	cacheNPM(t, m, "lodash", "4.17.20")
+	m.Versions = stubReleases{"npm/lodash": oldReleases("4.17.20", "4.17.21")}
+	fetcher.reset()
+
+	schedule := Schedule{Refresh: &Refresh{Top: 10, Since: time.Hour}, Interval: time.Hour}
+	s := NewScheduler(m, []Schedule{schedule}, m.logger)
+	s.run(context.Background(), 0, schedule)
+
+	if urls := fetcher.fetched(); len(urls) != 1 || len(fetchedMatching(urls, "lodash-4.17.21.tgz")) != 1 {
+		t.Errorf("fetched %v, want lodash 4.17.21", urls)
+	}
+}
+
+func TestScheduleKeyRefresh(t *testing.T) {
+	base := Schedule{Refresh: &Refresh{Top: 50, Since: time.Hour}, Interval: time.Hour}
+	same := Schedule{Refresh: &Refresh{Top: 50, Since: time.Hour}, Interval: time.Hour}
+	if scheduleKey(base) != scheduleKey(same) {
+		t.Error("same refresh gave different keys")
+	}
+	for name, other := range map[string]Schedule{
+		"no refresh": {Interval: time.Hour},
+		"top":        {Refresh: &Refresh{Top: 10, Since: time.Hour}, Interval: time.Hour},
+		"since":      {Refresh: &Refresh{Top: 50, Since: 2 * time.Hour}, Interval: time.Hour},
+		"interval":   {Refresh: &Refresh{Top: 50, Since: time.Hour}, Interval: 2 * time.Hour},
+	} {
+		if scheduleKey(other) == scheduleKey(base) {
+			t.Errorf("changing %s kept the key", name)
+		}
+	}
+}

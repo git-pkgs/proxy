@@ -120,8 +120,8 @@ storage:
   # Store fetched artifacts. Set to false to stream every download from
   # upstream without storing it; metadata filtering, cooldown and the
   # denylist still apply. Useful when another cache sits in front of the
-  # proxy. false is incompatible with direct_serve, scanning, mirror_api and
-  # mirror.schedules.
+  # proxy. false is incompatible with direct_serve, scanning, mirror_api,
+  # mirror.schedules and mirror.refresh.
   cache_artifacts: true
 
   # Redirect cached artifact downloads to presigned storage URLs (HTTP 302)
@@ -449,6 +449,16 @@ gradle:
 #     - images: ["pkg:docker/library/alpine@3.20", "pkg:docker/library/nginx@stable"]
 #       interval: "6h"
 #       platforms: ["linux/amd64"]
+#
+# Mirror new releases of the most used packages in the background, so the
+# first install after a release doesn't wait on the upstream. Cooldown and
+# the denylist apply.
+#   refresh:
+#     interval: "24h"
+#     top: 50              # packages per ecosystem, by recent downloads
+#     since: "14d"
+#     max_versions: 200    # per run; default no cap
+#     max_bytes: "2GB"     # per run; default no cap
 
 # Health endpoint configuration.
 health:

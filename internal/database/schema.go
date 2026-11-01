@@ -128,6 +128,7 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 	content_type TEXT,
 	content_encoding TEXT,
 	content_digest TEXT,
+	upstream_url TEXT,
 	size INTEGER,
 	last_modified DATETIME,
 	fetched_at DATETIME,
@@ -271,6 +272,7 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 	content_type TEXT,
 	content_encoding TEXT,
 	content_digest TEXT,
+	upstream_url TEXT,
 	size BIGINT,
 	last_modified TIMESTAMP,
 	fetched_at TIMESTAMP,
@@ -468,6 +470,7 @@ var migrations = []migration{
 	{"017_add_artifact_content_hash_index", migrateAddArtifactContentHashIndex},
 	{"018_add_upstream_holds", migrateAddUpstreamHolds},
 	{"019_add_artifact_filename_index", migrateAddArtifactFilenameIndex},
+	{"020_add_metadata_upstream_url", migrateAddMetadataUpstreamURL},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -724,6 +727,22 @@ func migrateAddMetadataLink(db *DB) error {
 	}
 	if _, err := db.Exec("ALTER TABLE metadata_cache ADD COLUMN link TEXT"); err != nil {
 		return fmt.Errorf("adding metadata_cache link column: %w", err)
+	}
+	return nil
+}
+
+// migrateAddMetadataUpstreamURL adds the URL a metadata document was
+// fetched from, which the mirror refresh fetches it from again.
+func migrateAddMetadataUpstreamURL(db *DB) error {
+	hasColumn, err := db.HasColumn("metadata_cache", "upstream_url")
+	if err != nil {
+		return fmt.Errorf("checking metadata_cache upstream_url column: %w", err)
+	}
+	if hasColumn {
+		return nil
+	}
+	if _, err := db.Exec("ALTER TABLE metadata_cache ADD COLUMN upstream_url TEXT"); err != nil {
+		return fmt.Errorf("adding metadata_cache upstream_url column: %w", err)
 	}
 	return nil
 }

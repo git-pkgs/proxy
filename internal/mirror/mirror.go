@@ -246,6 +246,15 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 			"ecosystem", pv.Ecosystem, "name", pv.Name, "version", pv.Version, "reason", m.RefusePackages)
 		return
 	}
+	if pv.fileURL != "" {
+		result, err := m.proxy.GetOrFetchArtifactFromURLWithDigest(ctx, pv.Ecosystem, pv.Name, pv.Version, pv.cacheFilename, pv.fileURL, pv.digest)
+		if err != nil {
+			m.recordFailure(tracker, pv, err)
+			return
+		}
+		m.recordResult(tracker, pv, result)
+		return
+	}
 	if eco, ok := fileEcosystems[pv.Ecosystem]; ok {
 		m.mirrorFiles(ctx, pv, eco, tracker)
 		return

@@ -17,10 +17,12 @@ const (
 	scheduleJitter = 10
 )
 
-// Schedule mirrors a set of image PURLs every Interval.
+// Schedule mirrors a set of image PURLs every Interval, or refreshes the
+// most used packages when Refresh is set.
 type Schedule struct {
 	PURLs     []string
 	Platforms []string
+	Refresh   *Refresh
 	Interval  time.Duration
 }
 
@@ -102,7 +104,13 @@ func (s *Scheduler) run(ctx context.Context, index int, schedule Schedule) {
 		}
 	}
 	started := time.Now()
-	progress, err := s.mirror.Run(ctx, &PURLSource{PURLs: schedule.PURLs, Versions: s.mirror.Versions, Platforms: schedule.Platforms})
+	var progress *Progress
+	var err error
+	if schedule.Refresh != nil {
+		progress, err = s.mirror.Refresh(ctx, *schedule.Refresh)
+	} else {
+		progress, err = s.mirror.Run(ctx, &PURLSource{PURLs: schedule.PURLs, Versions: s.mirror.Versions, Platforms: schedule.Platforms})
+	}
 	if ctx.Err() != nil {
 		if s.Claim != nil && s.Release != nil {
 			if err := s.Release(key); err != nil {
@@ -140,6 +148,9 @@ func scheduleDelay(interval time.Duration, first bool, randN func(int64) int64) 
 // does not inherit the old one's last run.
 func scheduleKey(schedule Schedule) string {
 	h := sha256.New()
+	if r := schedule.Refresh; r != nil {
+		_, _ = fmt.Fprintf(h, "refresh top %d since %s max_versions %d max_bytes %d\n", r.Top, r.Since, r.MaxVersions, r.MaxBytes)
+	}
 	for _, purl := range schedule.PURLs {
 		_, _ = fmt.Fprintf(h, "purl %s\n", purl)
 	}
