@@ -150,7 +150,7 @@ The package rule covers every release and asset in that repository, but each cac
 | `pub` | yes | `pkg:pub/http`, the package name as published. |
 | `pypi` | yes | `pkg:pypi/requests`; case and single `_`/`-` don't matter. Dots and repeated separators are kept as written, so a project like `zope.interface` can be stored as `zope.interface` and `zope-interface`; add a rule for each. |
 | `rpm` | yes | `pkg:rpm/curl`, the name as packaged, case included (`pkg:rpm/NetworkManager`). A vendor namespace such as `pkg:rpm/fedora/curl` is accepted and dropped. Fedora and EPEL update repositories keep only the latest build of a package, so an evicted older one may not be fetchable again. |
-| `swift` | yes | `pkg:swift/apple/swift-nio`, with the registry scope as the namespace, or the stored form `pkg:generic/swift-registry/apple.swift-nio`; case doesn't matter. A source repository key like `pkg:swift/github.com/apple/swift-nio` is refused, since it doesn't name a registry identity. |
+| `swift` | yes | `pkg:swift/apple/swift-nio`, with the registry scope as the namespace, or the stored form `pkg:generic/swift-registry/apple.swift-nio`; case doesn't matter. A source repository key like `pkg:swift/github.com/apple/swift-nio` is looked up through `upstream.swift`'s `/identifiers` before each sweep and applies to every identity listed for it; until every such key resolves, Swift artifacts aren't swept, so a rule that keeps a package is never skipped. |
 
 An evicted artifact is fetched again from upstream on the next request. Packages preloaded with `proxy mirror` age from the time they were mirrored, so an unused mirrored package is evicted like any other. Running `proxy mirror` again over a package that is still cached counts as a download and restarts its clock, so packages a scheduled mirror job keeps listing never age out. A registry that removes old releases (Linux distribution archives in particular) cannot serve an evicted version again, so set those ecosystems' rules with that in mind.
 
@@ -1119,6 +1119,8 @@ Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to
 
 Package PURL keys are normalized to canonical form before matching, so `pkg:npm/@babel/core` and `pkg:npm/%40babel/core` are equivalent, as are `pkg:pypi/Django` and `pkg:pypi/django`. If both forms configure the same package, the canonical entry wins.
 
+Go module names in exact cooldown overrides are matched case-insensitively. If both lowercase and mixed-case keys are configured, the lowercase entry wins. Go package patterns match lowercase module names.
+
 `package_patterns` matches canonical, versionless PURLs using `*` for zero or more characters and `?` for one character. Neither wildcard crosses `/` separators. Character classes (`[...]`) and backslash escapes are rejected at startup. For example, `"pkg:npm/@example/*"` matches packages under the `@example` npm scope. Patterns accept `@` as an alias for `%40`; other characters must use their canonical PURL form. Equivalent patterns with different durations are rejected at startup. Equal durations, such as `1d` and `24h`, are accepted.
 
 Exact `packages` entries take precedence over patterns. When several patterns match, longer patterns win after excluding `*` and `?` from the length. Ties use lexical order of the normalized patterns.
@@ -1180,9 +1182,15 @@ Names and versions are compared the way each ecosystem treats them:
   `pkg:composer/symfony/console@6.1.7` also covers `v6.1.7`.
 - Go versions are matched as written, `pkg:golang/example.com/mod@v1.0.0-RC1`,
   though download URLs escape uppercase letters (`v1.0.0-!r!c1`).
+  Go module names in denylist entries are matched case-insensitively.
 - A Swift entry names the registry scope and package, ignoring case:
   `pkg:swift/apple/swift-nio@2.62.0`. The stored form,
-  `pkg:generic/swift-registry/apple.swift-nio@2.62.0`, works too.
+  `pkg:generic/swift-registry/apple.swift-nio@2.62.0`, works too, and so does
+  the source repository, as SBOM tools and GHSA advisories write it:
+  `pkg:swift/github.com/apple/swift-nio@2.62.0`. The proxy looks a source
+  repository up through `upstream.swift`'s `/identifiers` when `serve` or
+  `proxy mirror` starts and denies every identity listed for it; neither runs
+  when one can't be resolved.
 - An OCI entry names the repository as it is pulled through the proxy and a
   digest or tag: `pkg:oci/library/alpine@sha256:<digest>` refuses the blob or
   manifest with that digest, including a manifest a tag resolves to, and

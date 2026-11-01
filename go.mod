@@ -12,12 +12,12 @@ require (
 	github.com/git-pkgs/archives v0.10.0
 	github.com/git-pkgs/artifacts v0.2.1
 	github.com/git-pkgs/cooldown v0.3.0
-	github.com/git-pkgs/enrichment v0.7.4
+	github.com/git-pkgs/enrichment v0.7.5
 	github.com/git-pkgs/gcs v0.1.0
 	github.com/git-pkgs/integrity v0.2.0
 	github.com/git-pkgs/magic v0.6.0
-	github.com/git-pkgs/purl v0.1.24
-	github.com/git-pkgs/registries v0.12.0
+	github.com/git-pkgs/purl v0.2.1
+	github.com/git-pkgs/registries v0.13.0
 	github.com/git-pkgs/sbom v0.1.7
 	github.com/git-pkgs/spdx v0.3.3
 	github.com/go-chi/chi/v5 v5.5.0
@@ -31,7 +31,7 @@ require (
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	gocloud.dev v0.47.0
 	golang.org/x/mod v0.42.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.24.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1

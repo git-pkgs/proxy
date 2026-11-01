@@ -505,6 +505,12 @@ func (p *Proxy) lookupCache(ctx context.Context, pkgPURL, versionPURL, filename 
 	if p.StreamArtifacts {
 		return nil, nil
 	}
+	if cached, err := p.readStored(ctx, pkgPURL, versionPURL, filename); err != nil || cached != nil {
+		return cached, err
+	}
+	if moved, err := p.rekeyLegacyGoArtifact(pkgPURL, versionPURL, filename); err != nil || !moved {
+		return nil, err
+	}
 	return p.readStored(ctx, pkgPURL, versionPURL, filename)
 }
 

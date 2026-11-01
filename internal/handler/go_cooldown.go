@@ -71,12 +71,8 @@ func (h *GoHandler) fetchGoMetadata(ctx context.Context, escapedModule, module, 
 	return body, err
 }
 
-// goTimeKey returns the versions-table PURLs a module's times are stored
-// under. golang PURLs lowercase the name, so the key uses the escaped module
-// path (github.com/!azure for github.com/Azure), which keeps modules that
-// differ only in case apart and is the plain path for lowercase modules.
-// Only canonical versions are stored: a query such as a branch name can
-// resolve to another commit later.
+// Keep escaped module paths in publish-time keys for cache compatibility.
+// Only canonical versions are stored; branch queries can resolve differently.
 func (h *GoHandler) goTimeKey(module, version string) (versionPURL, packagePURL string, ok bool) {
 	if h.proxy.DB == nil || gomodule.CanonicalVersion(version) != version {
 		return "", "", false
