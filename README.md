@@ -192,7 +192,7 @@ the proxy, which fetches them from the package's registry and caches them;
 attestations of versions held back by cooldown or blocked by the denylist are
 not served.
 
-To serve private packages through the same registry URL, see [Private package routes](docs/configuration.md#private-package-routes).
+To serve private packages through the same registry URL, see [Private package routes](docs/configuration.md#private-package-routes). To see new releases before `metadata_ttl` runs out, see [Change feeds](docs/configuration.md#change-feeds).
 
 ### Cargo
 
@@ -399,7 +399,7 @@ Or set globally:
 composer config -g repositories.proxy composer http://localhost:8080/composer
 ```
 
-To serve private packages through the same URL, see [Private package routes](docs/configuration.md#private-package-routes).
+To serve private packages through the same URL, see [Private package routes](docs/configuration.md#private-package-routes). To see new releases before `metadata_ttl` runs out, see [Change feeds](docs/configuration.md#change-feeds).
 
 ### Conan (C/C++)
 
@@ -1538,6 +1538,7 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 | `proxy_metadata_cache_entries` | gauge | `ecosystem` | Number of cached metadata documents per ecosystem. |
 | `proxy_artifacts_evicted_total` | counter | `reason`, `ecosystem` | Artifacts evicted by the size limit (`lru`) or by age (`retention`) |
 | `proxy_metadata_evicted_total` | counter | `ecosystem` | Cached metadata documents evicted by the size limit |
+| `proxy_metadata_expired_by_change_feed_total` | counter | `ecosystem` | Cached metadata documents set to revalidate because an upstream [change feed](docs/configuration.md#change-feeds) listed them |
 | `proxy_fetch_lease_waits_total` | counter | `kind` | Cache misses (`artifact` or `metadata`) that waited for another instance sharing the database to fetch them |
 | `proxy_upstream_fetch_duration_seconds` | histogram | `ecosystem` | Time spent fetching from upstream |
 | `proxy_upstream_errors_total` | counter | `ecosystem`, `error_type` | Upstream fetch failures |
@@ -1608,7 +1609,7 @@ The `kind` label on `proxy_cache_hits_total` and `proxy_cache_misses_total` keep
 
 `ecosystem` means three slightly different things across `/metrics`, and queries that join across them need to know which.
 
-**From the package record, normalized.** The six `proxy_ecosystem_*` gauges, `proxy_cache_hits_total`, `proxy_cache_misses_total`, the three `proxy_metadata_cache_*` metrics, `proxy_artifacts_evicted_total`, `proxy_metadata_evicted_total`, `proxy_integrity_failures_total` and the scan metrics. Aliases collapse here: `gem` reads as `rubygems`, `composer` as `packagist`, `go` as `golang`.
+**From the package record, normalized.** The six `proxy_ecosystem_*` gauges, `proxy_cache_hits_total`, `proxy_cache_misses_total`, the three `proxy_metadata_cache_*` metrics, `proxy_artifacts_evicted_total`, `proxy_metadata_evicted_total`, `proxy_metadata_expired_by_change_feed_total`, `proxy_integrity_failures_total` and the scan metrics. Aliases collapse here: `gem` reads as `rubygems`, `composer` as `packagist`, `go` as `golang`.
 
 **From the request path.** `proxy_requests_total`, `proxy_request_duration_seconds` and `proxy_response_bytes_total`. The names mostly coincide with the normalized ones -- these also report `rubygems`, `packagist` and `golang` -- but the Debian route reports `debian` where the package record says `deb`, and any path that is not a package endpoint reports `other`, which corresponds to no ecosystem at all.
 

@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/git-pkgs/artifacts"
@@ -1355,6 +1357,50 @@ func (db *DB) ForgetMetadataDocument(ecosystem, name, from, to string) error {
 		WHERE ecosystem = ? AND name = ? AND storage_path = ?
 	`), to, time.Now(), ecosystem, name, from)
 	return err
+}
+
+// expireMetadataBatch is how many names one ExpireMetadataCache statement
+// covers, well below the bind parameter limits of SQLite and Postgres.
+const expireMetadataBatch = 500
+
+// ExpireMetadataCache clears fetched_at on the metadata cache rows for
+// ecosystem and names that were fetched before cutoff, and returns the names
+// of the rows it changed. The rows keep their documents and validators, so
+// the next lookup of each revalidates it upstream instead of serving it as
+// fresh. It is for an upstream that reports which documents changed.
+func (db *DB) ExpireMetadataCache(ecosystem string, names []string, cutoff time.Time) ([]string, error) {
+	var expired []string
+	for batch := range slices.Chunk(names, expireMetadataBatch) {
+		args := []any{time.Now(), ecosystem, cutoff.UTC()}
+		for _, name := range batch {
+			args = append(args, name)
+		}
+		var got []string
+		err := db.DB.Select(&got, db.Rebind(`
+			UPDATE metadata_cache SET fetched_at = NULL, updated_at = ?
+			WHERE ecosystem = ? AND fetched_at < ?
+			  AND name IN (`+strings.TrimSuffix(strings.Repeat("?, ", len(batch)), ", ")+`)
+			RETURNING name
+		`), args...)
+		if err != nil {
+			return expired, err
+		}
+		expired = append(expired, got...)
+	}
+	return expired, nil
+}
+
+// ExpireAllMetadataCache is ExpireMetadataCache for every row of ecosystem,
+// except those of packages routed to another registry (named "routes/..."),
+// for an upstream that can't say which of its documents changed.
+func (db *DB) ExpireAllMetadataCache(ecosystem string, cutoff time.Time) ([]string, error) {
+	var expired []string
+	err := db.DB.Select(&expired, db.Rebind(`
+		UPDATE metadata_cache SET fetched_at = NULL, updated_at = ?
+		WHERE ecosystem = ? AND fetched_at < ? AND name NOT LIKE 'routes/%'
+		RETURNING name
+	`), time.Now(), ecosystem, cutoff.UTC())
+	return expired, err
 }
 
 // UpsertMetadataCache writes entry and marks it accessed now, since a
