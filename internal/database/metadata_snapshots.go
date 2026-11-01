@@ -61,17 +61,11 @@ func (db *DB) metadataSnapshotBefore(ecosystem, name string, beforeMS int64) (*M
 }
 
 // AddMetadataSnapshot records snap as the version of its document current
-// from snap.ValidFromMS, unless the snapshot current at that time already
-// has its digest, and reports whether it did. Comparing with the version
-// current at that time rather than the newest one keeps a version a request
-// recorded late, after a newer one, in its place in the history. On
-// Postgres, replicas recording the same document take an advisory lock on it
-// first, so their check and insert don't interleave: without it, two
-// transactions can both read the previous digest and both insert. SQLite
-// runs one write at a time, so the single statement is enough there. A
-// document going back to an earlier digest is recorded again, since only the
-// snapshot current at that time is compared. The casts let Postgres type the
-// parameters of the INSERT ... SELECT.
+// from snap.ValidFromMS, unless the snapshot current at that time already has
+// its digest, and reports whether it did. On Postgres it first takes an
+// advisory lock on the document, so two replicas can't both read the previous
+// digest and both insert. The casts let Postgres type the parameters of the
+// INSERT ... SELECT.
 func (db *DB) AddMetadataSnapshot(snap *MetadataSnapshot) (bool, error) {
 	tx, err := db.Beginx()
 	if err != nil {

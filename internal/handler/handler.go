@@ -2151,7 +2151,7 @@ func (p *Proxy) cachedMetaFor(entry *database.MetadataCacheEntry) cachedMeta {
 // When metadata caching is disabled, the response is streamed directly to avoid buffering
 // large metadata responses (e.g. npm packages with many versions) in memory.
 func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL, ecosystem, cacheKey string, acceptHeaders ...string) {
-	p.proxyCachedWithEncoding(w, r, upstreamURL, ecosystem, cacheKey, "identity", acceptHeaders...)
+	p.proxyCachedWithEncoding(w, r, upstreamURL, ecosystem, cacheKey, "identity", nil, acceptHeaders...)
 }
 
 // proxyCachedWithEncoding is ProxyCached with an explicit upstream Accept-Encoding.
@@ -2159,14 +2159,30 @@ func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL,
 // compressed for large, non-hash-pinned metadata whose clients decode gzip
 // (Homebrew API and Conda repodata). The stored bytes and Content-Encoding are
 // replayed verbatim either way.
-func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, upstreamURL, ecosystem, cacheKey, acceptEncoding string, acceptHeaders ...string) {
+// metadataHooks are optional callbacks for proxyCachedWithEncoding: hit runs
+// after a fresh cached row is served, with that row and when it was read, and
+// fetched runs with a fetched document before it is written.
+type metadataHooks struct {
+	hit     func(entry *database.MetadataCacheEntry, seen time.Time)
+	fetched func(body []byte, contentType, contentEncoding string)
+}
+
+func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, upstreamURL, ecosystem, cacheKey, acceptEncoding string, hooks *metadataHooks, acceptHeaders ...string) {
 	if !p.CacheMetadata {
 		// Stream directly without buffering when caching is off.
 		p.proxyMetadataStream(w, r, upstreamURL, acceptEncoding, acceptHeaders...)
 		return
 	}
 
-	if p.serveCachedMetadata(w, r, ecosystem, cacheKey) {
+	if hooks != nil && hooks.hit != nil {
+		if entry := p.freshMetadataEntry(ecosystem, cacheKey); entry != nil {
+			seen := time.Now()
+			if p.serveCachedMetadata(w, r, ecosystem, cacheKey) {
+				hooks.hit(entry, seen)
+				return
+			}
+		}
+	} else if p.serveCachedMetadata(w, r, ecosystem, cacheKey) {
 		return
 	}
 
@@ -2176,6 +2192,9 @@ func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	if hooks != nil && hooks.fetched != nil {
+		hooks.fetched(body, contentType, contentEncoding)
+	}
 	p.writeMetadataCachedResponseWithEncoding(w, r, ecosystem, cacheKey, body, contentType, contentEncoding)
 }
 

@@ -105,35 +105,17 @@ func (h *APKHandler) serveSnapshot(w http.ResponseWriter, r *http.Request, repos
 	}
 }
 
-// serveMetadataWithSnapshot is ProxyCached for an index or signature that
-// keeps each version it serves as a snapshot. A version is recorded from the
-// document the request serves, not by reading the cache again afterwards: a
-// concurrent refresh can replace the cached copy at any time, and the version
-// it replaced would then never be recorded.
+// serveMetadataWithSnapshot is ProxyCached, recording each version it serves.
 func (h *APKHandler) serveMetadataWithSnapshot(w http.ResponseWriter, r *http.Request, upstream, cacheKey string) {
-	p := h.proxy
 	ctx := context.WithoutCancel(r.Context())
-
-	// A cached copy within its TTL was recorded by the request that fetched
-	// it; this only catches one stored before snapshots were enabled, or
-	// whose recording failed.
-	if entry := p.freshMetadataEntry(apkEcosystem, cacheKey); entry != nil {
-		seen := time.Now()
-		if p.serveCachedMetadata(w, r, apkEcosystem, cacheKey) {
+	h.proxy.proxyCachedWithEncoding(w, r, upstream, apkEcosystem, cacheKey, "identity", &metadataHooks{
+		hit: func(entry *database.MetadataCacheEntry, seen time.Time) {
 			h.recordStoredSnapshot(ctx, cacheKey, entry, seen)
-			return
-		}
-	}
-
-	body, contentType, contentEncoding, err := p.fetchOrCacheMetadata(r.Context(), apkEcosystem, cacheKey, upstream, "identity", nil, "*/*")
-	if err != nil {
-		p.writeMetadataFetchError(w, err)
-		return
-	}
-	// Record before responding, so the version is kept by the time a
-	// client has it.
-	h.recordServedSnapshot(ctx, cacheKey, body, contentType, contentEncoding, time.Now())
-	p.writeMetadataCachedResponseWithEncoding(w, r, apkEcosystem, cacheKey, body, contentType, contentEncoding)
+		},
+		fetched: func(body []byte, contentType, contentEncoding string) {
+			h.recordServedSnapshot(ctx, cacheKey, body, contentType, contentEncoding, time.Now())
+		},
+	}, "*/*")
 }
 
 // recordServedSnapshot keeps body, the document a request is serving, as the

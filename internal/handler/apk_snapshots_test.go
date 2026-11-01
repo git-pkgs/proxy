@@ -339,3 +339,44 @@ func TestAPKSnapshots_ConcurrentReplicas(t *testing.T) {
 		}
 	}
 }
+
+// TestAPKSnapshots_CacheHit records an index cached before snapshots were
+// enabled when a request is served from the cache within its TTL, and adds
+// no row for a later hit on the same version.
+func TestAPKSnapshots_CacheHit(t *testing.T) {
+	u := newAPKSnapshotUpstream(t)
+	h, db := newSnapshotAPKHandler(t, u.server.URL)
+	h.proxy.MetadataTTL = 5 * time.Minute
+	h.WithSnapshots(0)
+	expectAPKResponse(t, h, "/alpine"+apkSnapshotIndexPath, http.StatusOK, "index v1")
+	if n := snapshotCount(t, db); n != 0 {
+		t.Fatalf("%d snapshots recorded with snapshots off, want 0", n)
+	}
+
+	h.WithSnapshots(30 * 24 * time.Hour)
+	// Upstream moved on; a hit still serves the cached v1.
+	u.index.Store("index v2")
+	expectAPKResponse(t, h, "/alpine"+apkSnapshotIndexPath, http.StatusOK, "index v1")
+	if n := snapshotCount(t, db); n != 1 {
+		t.Fatalf("%d snapshots recorded on a cache hit, want 1", n)
+	}
+	key := h.metadataCacheKey("alpine", u.server.URL, apkSnapshotIndexPath[1:])
+	snap, err := db.LatestMetadataSnapshot(apkEcosystem, key)
+	if err != nil || snap == nil {
+		t.Fatalf("latest snapshot = %v, %v", snap, err)
+	}
+	body, err := h.proxy.Storage.Open(t.Context(), snap.StoragePath)
+	if err != nil {
+		t.Fatalf("recorded snapshot blob unreadable: %v", err)
+	}
+	got, _ := io.ReadAll(body)
+	_ = body.Close()
+	if string(got) != "index v1" {
+		t.Fatalf("snapshot blob = %q, want %q", got, "index v1")
+	}
+
+	expectAPKResponse(t, h, "/alpine"+apkSnapshotIndexPath, http.StatusOK, "index v1")
+	if n := snapshotCount(t, db); n != 1 {
+		t.Fatalf("%d snapshots after a second hit on the same version, want 1", n)
+	}
+}
