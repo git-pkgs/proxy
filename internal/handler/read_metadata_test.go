@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"runtime"
+	"strings"
 	"testing"
 	"testing/iotest"
 )
@@ -129,5 +130,20 @@ func TestReadMetadataSizedAllocatesOnce(t *testing.T) {
 	}
 	if allocated := after.TotalAlloc - before.TotalAlloc; allocated > size*3/2 {
 		t.Errorf("allocated %d bytes reading %d", allocated, size)
+	}
+}
+
+// TestReadMetadataSizedTruncatedUpstream checks that an upstream body cut
+// off before its Content-Length fails, while a body shorter than a size
+// hint is still read.
+func TestReadMetadataSizedTruncatedUpstream(t *testing.T) {
+	p := &Proxy{}
+	cut := io.MultiReader(strings.NewReader(`{"name":`), iotest.ErrReader(io.ErrUnexpectedEOF))
+	if _, err := p.ReadMetadataSized(upstreamBodyReader{cut}, 100); !errors.Is(err, io.ErrUnexpectedEOF) {
+		t.Errorf("cut off body: error %v, want io.ErrUnexpectedEOF", err)
+	}
+	got, err := p.ReadMetadataSized(strings.NewReader(`{"name":"x"}`), 100)
+	if err != nil || string(got) != `{"name":"x"}` {
+		t.Errorf("short body = %q, %v", got, err)
 	}
 }
