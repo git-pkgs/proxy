@@ -1,0 +1,17 @@
+# Version and commit come in as build args, so the build doesn't need .git.
+.git
+.github
+
+# Local build output and runtime data
+/proxy
+dist/
+build/
+cache/
+*.db
+*.tar.gz
+
+# Local config and secrets
+.env
+.env.local
+proxy.cfg
+config.yaml

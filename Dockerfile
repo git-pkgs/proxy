@@ -14,7 +14,11 @@ COPY . .
 
 # Build the binary for the target platform
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /proxy ./cmd/proxy
+ARG VERSION=dev
+ARG COMMIT=unknown
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+    -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT}" \
+    -o /proxy ./cmd/proxy
 
 FROM alpine:3.24.2
 
