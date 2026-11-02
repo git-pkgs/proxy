@@ -104,6 +104,12 @@ using SQLite and filesystem artifact storage under `/data`. See
 [`deploy/charts/proxy/values.yaml`](deploy/charts/proxy/values.yaml) for ingress,
 external database and object-storage configuration options.
 
+The SQLite database needs a local disk or a block-backed volume, even with one
+replica; `ReadWriteOnce` alone doesn't guarantee that, since the storage class
+can still be NFS. If the cluster only offers network filesystem storage, use
+Postgres. Artifact storage can stay on NFS, separately from the database. See
+[SQLite](docs/configuration.md#sqlite).
+
 To trust a private CA, for example when upstreams sit behind a TLS-intercepting
 corporate proxy or are internal registries signed by an in-house CA, mount the
 certificate with `extraVolumes` and `extraVolumeMounts` and add its directory
@@ -1048,7 +1054,7 @@ Run with config file:
 
 ### PostgreSQL
 
-SQLite is the default and works well for single-node deployments. For multi-node setups or if you prefer a managed database, switch to Postgres:
+SQLite is the default and works well for single-node deployments, with the database file on a local disk or block-backed volume. For multi-node setups, when only network filesystem storage such as NFS is available, or if you prefer a managed database, switch to Postgres:
 
 ```yaml
 database:

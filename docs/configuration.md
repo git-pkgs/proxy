@@ -201,6 +201,8 @@ database:
 
 The database runs in WAL mode. Writes go through a single connection, since SQLite allows one writer at a time. Reads use a separate pool of read-only connections (one per CPU, between 2 and 8), so request lookups don't wait behind writes, stats queries or eviction scans. An in-memory database (`:memory:`) uses one connection for both.
 
+The SQLite database needs a local disk or a block-backed volume, even with one replica. SQLite's WAL mode doesn't work on network filesystems such as NFS ([sqlite.org/wal.html](https://www.sqlite.org/wal.html)), which shows up as stalled requests and `database disk image is malformed`. A Kubernetes `ReadWriteOnce` volume doesn't guarantee suitable storage, since its storage class can still be NFS. If only network filesystem storage is available to the proxy, use `driver: postgres`. Artifact storage can stay on NFS, on a separate volume from the SQLite database.
+
 ### PostgreSQL
 
 ```yaml
