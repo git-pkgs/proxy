@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.66.5
 	github.com/git-pkgs/archives v0.10.0
 	github.com/git-pkgs/artifacts v0.2.1
-	github.com/git-pkgs/cooldown v0.3.0
+	github.com/git-pkgs/cooldown v0.3.1
 	github.com/git-pkgs/enrichment v0.7.5
 	github.com/git-pkgs/gcs v0.1.0
 	github.com/git-pkgs/integrity v0.2.0

@@ -107,13 +107,7 @@ func streamProxy(t *testing.T, u *streamUpstream) (*Proxy, *mockStorage, http.Ha
 	proxy.CacheMetadata = true
 	proxy.MetadataTTL = time.Hour
 	proxy.SetMetadataRewriteCacheSize(64 << 20)
-	// As the server does: a cooldown.Config parses itself on first use,
-	// which concurrent requests would race on.
-	policy, err := cooldown.NewPolicy(&cooldown.Config{Default: "3d"}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	proxy.Cooldown = policy
+	proxy.Cooldown = &cooldown.Config{Default: "3d"}
 	return proxy, store, NewNPMHandler(proxy, "http://proxy.example", u.URL).Routes()
 }
 
