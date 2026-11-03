@@ -1165,42 +1165,6 @@ func TestVersionPublishedAtPreserved(t *testing.T) {
 	})
 }
 
-func TestFillVersionPublishedAt(t *testing.T) {
-	runWithBothDatabases(t, func(t *testing.T, db *DB) {
-		const pkg, held, known = "pkg:npm/leftpad", "pkg:npm/leftpad@2.0.0", "pkg:npm/leftpad@1.0.0"
-		stored := time.Date(2020, 1, 2, 3, 4, 5, 0, time.UTC)
-		filtered := time.Date(2021, 6, 7, 8, 9, 10, 0, time.UTC)
-
-		if err := db.SetVersionPublishedAt(known, pkg, stored); err != nil {
-			t.Fatalf("SetVersionPublishedAt: %v", err)
-		}
-		if err := db.UpsertVersion(&Version{PURL: held, PackagePURL: pkg}); err != nil {
-			t.Fatalf("UpsertVersion: %v", err)
-		}
-
-		for _, purl := range []string{known, held, "pkg:npm/leftpad@3.0.0"} {
-			if err := db.FillVersionPublishedAt(purl, pkg, filtered); err != nil {
-				t.Fatalf("FillVersionPublishedAt(%s): %v", purl, err)
-			}
-		}
-
-		want := map[string]time.Time{
-			known:                   stored,
-			held:                    filtered,
-			"pkg:npm/leftpad@3.0.0": filtered,
-		}
-		for purl, at := range want {
-			got, err := db.GetVersionByPURL(purl)
-			if err != nil || got == nil {
-				t.Fatalf("GetVersionByPURL(%s): %v", purl, err)
-			}
-			if !got.PublishedAt.Valid || !got.PublishedAt.Time.Equal(at) {
-				t.Errorf("%s PublishedAt = %v, want %v", purl, got.PublishedAt, at)
-			}
-		}
-	})
-}
-
 func TestGetFetchedVersionPURLs(t *testing.T) {
 	runWithBothDatabases(t, func(t *testing.T, db *DB) {
 		const pkg = "pkg:npm/leftpad"

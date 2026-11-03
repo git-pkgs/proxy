@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"net/http"
@@ -22,11 +23,20 @@ const (
 
 // APIHandler provides REST endpoints for package enrichment data.
 type APIHandler struct {
-	enrichment *enrichment.Service
+	enrichment enricher
 	ecosystems *shared.EcosystemsClient
 	db         DBSearcher
 	// cooldown is nil with cooldown off.
 	cooldown *cooldownView
+}
+
+// enricher is the part of enrichment.Service the API uses.
+type enricher interface {
+	EnrichPackage(ctx context.Context, ecosystem, name string) (*enrichment.PackageInfo, error)
+	EnrichFull(ctx context.Context, ecosystem, name, version string) (*enrichment.EnrichmentResult, error)
+	CheckVulnerabilities(ctx context.Context, ecosystem, name, version string) ([]enrichment.VulnInfo, error)
+	GetLatestVersion(ctx context.Context, ecosystem, name string) (string, error)
+	BulkEnrichPackages(ctx context.Context, packages []struct{ Ecosystem, Name string }) map[string]*enrichment.PackageInfo
 }
 
 // DBSearcher defines the interface for database search operations.
@@ -50,7 +60,6 @@ func NewAPIHandler(svc *enrichment.Service, db DBSearcher) *APIHandler {
 	return h
 }
 
-// newAPIHandler returns the server's API handler, with its cooldown policy.
 func (s *Server) newAPIHandler(svc *enrichment.Service) *APIHandler {
 	h := NewAPIHandler(svc, s.db)
 	h.cooldown = s.cooldown
@@ -87,7 +96,6 @@ type VersionResponse struct {
 	IsOutdated  bool   `json:"is_outdated"`
 }
 
-// apiTimeFormat is the format of the API's timestamps.
 const apiTimeFormat = "2006-01-02T15:04:05Z"
 
 // VulnResponse contains vulnerability information.
