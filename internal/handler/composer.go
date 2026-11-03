@@ -905,9 +905,9 @@ type composerDist struct {
 }
 
 // findDownloadURLFromMetadata fetches a metadata document and returns the dist
-// of the given version, with an empty URL if the version is not present. An
-// error is returned only on transport failure; a missing document (non-200)
-// or a missing version both yield an empty URL so the caller can fall back.
+// of the given version, with an empty URL if the version is not present. A
+// missing document (404 or 410) or a missing version both yield an empty URL
+// so the caller can fall back; any other failure is an error.
 func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaURL, packageName, version string) (composerDist, error) {
 	h.proxy.Logger.Debug("fetching upstream metadata for download lookup",
 		"url", metaURL, "package", packageName, "version", version)
@@ -926,8 +926,16 @@ func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaU
 	h.proxy.Logger.Debug("upstream metadata response",
 		"url", metaURL, "status", resp.StatusCode)
 
-	if resp.StatusCode != http.StatusOK {
+	switch {
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:
 		return composerDist{}, nil
+	case resp.StatusCode == http.StatusTooManyRequests && h.proxy.RateLimits != nil:
+		if err := h.proxy.RateLimits.Held(metaURL); err != nil {
+			return composerDist{}, err
+		}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return composerDist{}, fmt.Errorf("upstream metadata returned %d", resp.StatusCode)
 	}
 
 	body, err := h.proxy.ReadMetadata(resp.Body)
