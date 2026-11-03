@@ -554,6 +554,7 @@ func runMirror() {
 	proxy.CacheMetadata = true // mirror always caches metadata
 	proxy.MetadataTTL = cfg.ParseMetadataTTL()
 	proxy.MetadataMaxSize = cfg.ParseMetadataMaxSize()
+	proxy.MetadataStreamMaxSize = cfg.ParseMetadataStreamMaxSize()
 	// As serve does, resolve Swift source repositories in the denylist through
 	// the upstream, and refuse to run when one can't be.
 	if err := server.ConfigureDenylist(cfg, proxy); err != nil {
