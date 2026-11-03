@@ -10,7 +10,6 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
@@ -402,7 +401,7 @@ func (h *transformer) tarballsRewritten(count int) {
 }
 
 // applyCooldownFiltering removes versions that are too recently published,
-// and updates dist-tags.latest if the current latest was filtered out.
+// and the dist-tags pointing at them, as applyDenylistFiltering does.
 func (h *transformer) applyCooldownFiltering(metadata map[string]any, versions map[string]any, packageName string) {
 	if h.Cooldown == nil || !h.Cooldown.Enabled() {
 		return
@@ -415,6 +414,7 @@ func (h *transformer) applyCooldownFiltering(metadata map[string]any, versions m
 
 	packagePURL := packageurl.MakeString("npm", packageName, "")
 
+	removed := map[string]bool{}
 	for version := range versions {
 		publishedStr, ok := timeMap[version].(string)
 		if !ok {
@@ -430,32 +430,11 @@ func (h *transformer) applyCooldownFiltering(metadata map[string]any, versions m
 			}
 			delete(versions, version)
 			delete(timeMap, version)
+			removed[version] = true
 		}
 	}
 
-	h.updateDistTagsLatest(metadata, versions, timeMap)
-}
-
-// updateDistTagsLatest updates the dist-tags.latest field if the current latest
-// version was removed by cooldown filtering.
-func (h *transformer) updateDistTagsLatest(metadata, versions, timeMap map[string]any) {
-	distTags, ok := metadata["dist-tags"].(map[string]any)
-	if !ok {
-		return
-	}
-
-	latest, ok := distTags["latest"].(string)
-	if !ok {
-		return
-	}
-
-	if _, exists := versions[latest]; exists {
-		return
-	}
-
-	if newLatest := h.findNewestVersion(versions, timeMap); newLatest != "" {
-		distTags["latest"] = newLatest
-	}
+	removeDistTags(metadata, versions, removed)
 }
 
 // TarballURL returns the proxy URL that serves the tarball upstream
@@ -481,38 +460,6 @@ func TarballURL(proxyURL, packageName, version, tarball string) string {
 // slash encoded, "@", and the version.
 func AttestationsURL(proxyURL, packageName, version string) string {
 	return fmt.Sprintf("%s/npm/-/npm/v1/attestations/%s@%s", proxyURL, url.PathEscape(packageName), url.PathEscape(version))
-}
-
-// findNewestVersion returns the version string with the most recent timestamp
-// from the remaining versions, using the time map.
-func (h *transformer) findNewestVersion(versions map[string]any, timeMap map[string]any) string {
-	if timeMap == nil {
-		return ""
-	}
-
-	type versionTime struct {
-		version string
-		t       time.Time
-	}
-
-	var vts []versionTime
-	for v := range versions {
-		if ts, ok := timeMap[v].(string); ok {
-			if t, err := time.Parse(time.RFC3339, ts); err == nil {
-				vts = append(vts, versionTime{v, t})
-			}
-		}
-	}
-
-	if len(vts) == 0 {
-		return ""
-	}
-
-	sort.Slice(vts, func(i, j int) bool {
-		return vts[i].t.After(vts[j].t)
-	})
-
-	return vts[0].version
 }
 
 // VersionFromFilename extracts a version from an npm tarball filename.

@@ -12,10 +12,18 @@ func (h *transformer) applyDenylistFiltering(metadata, versions map[string]any) 
 		delete(versions, version)
 		delete(times, version)
 	}
+	removeDistTags(metadata, versions, denied)
+}
+
+// removeDistTags deletes the dist-tags pointing at removed versions.
+func removeDistTags(metadata, versions map[string]any, removed map[string]bool) {
+	if len(removed) == 0 {
+		return
+	}
 	tags, _ := metadata["dist-tags"].(map[string]any)
 	for tag, value := range tags {
 		version, _ := value.(string)
-		if !denied[version] {
+		if !removed[version] {
 			continue
 		}
 		delete(tags, tag)

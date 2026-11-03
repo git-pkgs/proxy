@@ -51,6 +51,10 @@ func streamCases() (map[string]string, map[string]Options) {
 			`"4.0.0":{"dist":{"tarball":"https://registry.npmjs.org/demo/-/renamed.tgz"}},"5.0.0":{"dist":{}}}}`,
 		"whitespace":     "{ \"name\" : \"demo\" ,\n\t\"versions\" : {\n \"1.0.0\" : { \"dist\" : { \"tarball\" : \"https://registry.npmjs.org/demo/-/demo-1.0.0.tgz\" } } } }",
 		"empty versions": `{"name":"demo","versions":{}}`,
+		"prerelease and backport": `{"name":"demo","dist-tags":{"latest":"4.18.0","next":"5.0.0-rc.1","v3":"3.10.2"},"versions":{` +
+			version("3.10.2") + `,` + version("4.17.21") + `,` + version("4.18.0") + `,` + version("5.0.0-beta.1") + `,` + version("5.0.0-rc.1") + `},` +
+			`"time":{"3.10.2":"` + ts(9*24*time.Hour) + `","4.17.21":"` + ts(1000*24*time.Hour) + `","4.18.0":"` + ts(24*time.Hour) + `",` +
+			`"5.0.0-beta.1":"` + ts(14*24*time.Hour) + `","5.0.0-rc.1":"` + ts(24*time.Hour) + `"}}`,
 	}
 	options := map[string]Options{
 		"plain":    {ProxyURL: "http://proxy"},

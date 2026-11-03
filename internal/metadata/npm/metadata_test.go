@@ -136,6 +136,41 @@ func TestNPMRewriteMetadataCooldownAndDenylist(t *testing.T) {
 	}
 }
 
+// TestNPMRewriteMetadataCooldownRetargetsLatest checks that when cooldown
+// holds back the latest version, latest moves to the highest stable version
+// left rather than the newest by publish time, which can be a prerelease or a
+// backport to an older major, and that other tags pointing at held back
+// versions are removed.
+func TestNPMRewriteMetadataCooldownRetargetsLatest(t *testing.T) {
+	options := Options{ProxyURL: "http://proxy", EvaluatedAt: time.Date(2026, 11, 3, 12, 0, 0, 0, time.UTC)}
+	options.Cooldown = &cooldown.Config{Default: "3d"}
+
+	version := func(v string) string {
+		return fmt.Sprintf(`%q:{"version":%q,"dist":{"tarball":"https://registry.npmjs.org/demo/-/demo-%s.tgz"}}`, v, v, v)
+	}
+	input := `{"name":"demo",` +
+		`"dist-tags":{"latest":"4.18.0","next":"5.0.0-rc.1","v3":"3.10.2"},` +
+		`"versions":{` + version("3.10.2") + `,` + version("4.17.21") + `,` + version("4.18.0") + `,` +
+		version("5.0.0-beta.1") + `,` + version("5.0.0-rc.1") + `},` +
+		`"time":{"3.10.2":"2026-10-25T00:00:00Z","4.17.21":"2024-01-01T00:00:00Z","4.18.0":"2026-11-02T00:00:00Z",` +
+		`"5.0.0-beta.1":"2026-10-20T00:00:00Z","5.0.0-rc.1":"2026-11-02T00:00:00Z"}}`
+
+	out, _, err := Rewrite("demo", []byte(input), options)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var doc struct {
+		DistTags map[string]string `json:"dist-tags"`
+	}
+	if err := json.Unmarshal(out, &doc); err != nil {
+		t.Fatalf("output is not JSON: %v\n%s", err, out)
+	}
+	want := map[string]string{"latest": "4.17.21", "v3": "3.10.2"}
+	if fmt.Sprint(doc.DistTags) != fmt.Sprint(want) {
+		t.Errorf("dist-tags = %v, want %v", doc.DistTags, want)
+	}
+}
+
 // TestNPMRewriteMetadataDuplicateKeys checks that a repeated top-level key
 // cannot smuggle an unfiltered copy of the versions past the filters.
 func TestNPMRewriteMetadataDuplicateKeys(t *testing.T) {
