@@ -150,7 +150,7 @@ The package rule covers every release and asset in that repository, but each cac
 | `pub` | yes | `pkg:pub/http`, the package name as published. |
 | `pypi` | yes | `pkg:pypi/requests`; case and single `_`/`-` don't matter. Dots and repeated separators are kept as written, so a project like `zope.interface` can be stored as `zope.interface` and `zope-interface`; add a rule for each. |
 | `rpm` | yes | `pkg:rpm/curl`, the name as packaged, case included (`pkg:rpm/NetworkManager`). A vendor namespace such as `pkg:rpm/fedora/curl` is accepted and dropped. Fedora and EPEL update repositories keep only the latest build of a package, so an evicted older one may not be fetchable again. |
-| `swift` | yes | `pkg:swift/apple/swift-nio`, with the registry scope as the namespace, or the stored form `pkg:generic/swift-registry/apple.swift-nio`; case doesn't matter. A source repository key like `pkg:swift/github.com/apple/swift-nio` is refused, since it doesn't name a registry identity. |
+| `swift` | yes | `pkg:swift/apple/swift-nio`, with the registry scope as the namespace, or the stored form `pkg:generic/swift-registry/apple.swift-nio`; case doesn't matter. A source repository key like `pkg:swift/github.com/apple/swift-nio` is looked up through `upstream.swift`'s `/identifiers` before each sweep and applies to every identity listed for it; until every such key resolves, Swift artifacts aren't swept, so a rule that keeps a package is never skipped. |
 
 An evicted artifact is fetched again from upstream on the next request. Packages preloaded with `proxy mirror` age from the time they were mirrored, so an unused mirrored package is evicted like any other. Running `proxy mirror` again over a package that is still cached counts as a download and restarts its clock, so packages a scheduled mirror job keeps listing never age out. A registry that removes old releases (Linux distribution archives in particular) cannot serve an evicted version again, so set those ecosystems' rules with that in mind.
 
@@ -200,6 +200,8 @@ database:
 | `database.path` | `PROXY_DATABASE_PATH` | `-database-path` | SQLite file path |
 
 The database runs in WAL mode. Writes go through a single connection, since SQLite allows one writer at a time. Reads use a separate pool of read-only connections (one per CPU, between 2 and 8), so request lookups don't wait behind writes, stats queries or eviction scans. An in-memory database (`:memory:`) uses one connection for both.
+
+The SQLite database needs a local disk or a block-backed volume, even with one replica. SQLite's WAL mode doesn't work on network filesystems such as NFS ([sqlite.org/wal.html](https://www.sqlite.org/wal.html)), which shows up as stalled requests and `database disk image is malformed`. A Kubernetes `ReadWriteOnce` volume doesn't guarantee suitable storage, since its storage class can still be NFS. If only network filesystem storage is available to the proxy, use `driver: postgres`. Artifact storage can stay on NFS, on a separate volume from the SQLite database.
 
 ### PostgreSQL
 
@@ -325,6 +327,7 @@ Each upstream used by a built-in package route can be set in YAML or JSON under 
 | `upstream.rpm` | `PROXY_UPSTREAM_RPM` | `https://dl.fedoraproject.org/pub/fedora/linux` |
 | `upstream.homebrew_api` | `PROXY_UPSTREAM_HOMEBREW_API` | `https://formulae.brew.sh/api` |
 | `upstream.homebrew_artifact` | `PROXY_UPSTREAM_HOMEBREW_ARTIFACT` | `https://ghcr.io` |
+| `upstream.apk_snapshots` | `PROXY_UPSTREAM_APK_SNAPSHOTS` | disabled; see [Alpine APK snapshots](#alpine-apk-snapshots) |
 
 Private, ULA, CGNAT, and loopback addresses are rejected by default. Add each private upstream hostname or IP address to `upstream.allow_private_hosts`. The matching environment variable accepts a comma-separated list. Loopback upstreams also require `upstream.allow_loopback: true`. That setting permits upstream requests and redirects to reach any loopback address.
 
@@ -578,6 +581,8 @@ with the metadata TTL and served byte-for-byte unchanged so apk signature
 verification keeps working; `.apk` packages use the shared artifact cache.
 When `upstream.apk` is empty, a single repository named `alpine` pointing at
 the official mirror is available; configuring any entry replaces that default.
+Earlier index versions can be kept and served by date; see
+[Alpine APK snapshots](#alpine-apk-snapshots).
 
 ```yaml
 upstream:
@@ -624,6 +629,53 @@ official mirror is) and bootstrap pkg without the proxy. Everything else, such
 as signatures and keys, is passed through uncached. When `upstream.freebsd` is empty, a single
 repository named `freebsd` pointing at `https://pkg.freebsd.org` is available;
 configuring any entry replaces that default.
+
+### Alpine APK snapshots
+
+```yaml
+upstream:
+  # Keep replaced APK indexes for 90 days.
+  apk_snapshots: "90d"
+```
+
+Alpine mirrors only keep the current build of each package, so after an
+upgrade `apk add curl=8.5.0-r0` fails because the index no longer lists that
+build. With `upstream.apk_snapshots` set, the proxy keeps every version of an
+index (and of a detached signature) it stores, and serves them under a dated
+repository name:
+
+```
+http://localhost:8080/apk/alpine@2026-10-01/v3.22/main
+```
+
+`/apk/{name}@{YYYY-MM-DD}/…` returns the index that was current at the end of
+that day (UTC). The kept files are the signed upstream bytes, so apk verifies
+them as usual. A day before the first stored version of an index, or a day
+that has not started yet, is `404`. Today's snapshot can still change until the
+day ends. Packages under a snapshot path are the same as under the plain path:
+they come from the artifact cache, or from upstream if not cached; a build the
+upstream has dropped and the proxy never cached is `404`. A configured
+repository whose name contains `@` takes precedence over a snapshot path.
+
+Snapshots are recorded when an index is requested through the plain path, so
+they only exist for repositories clients use. A version counts from the first
+time the proxy served it, which can be up to `metadata_ttl` after upstream
+published it. A version is deleted once it was replaced more than the
+configured duration ago; the newest version of each index is always kept.
+Durations take a `d` suffix; empty or `"0"` disables snapshots. Snapshots need
+`cache_metadata`. Their files live under `_snapshots/` in storage and do not
+count towards `storage.max_size`.
+
+Turning snapshots off, or `cache_metadata` off, leaves the kept versions in
+place. To remove them, first set a short duration such as `"1h"` and let the
+hourly prune delete everything but the newest version of each index.
+
+Snapshots keep indexes, not packages. A package listed by an old snapshot can
+still be evicted by `storage.max_size` or [retention](#retention), and is then
+only available while upstream still has it. Retention counts from a package's
+last download, so a pinned build nobody installed for longer than the `alpine`
+retention is evicted even while a snapshot lists it. Use package rules with
+`"0"` for builds that must stay installable.
 
 ### Go checksum database
 
@@ -1187,7 +1239,12 @@ Names and versions are compared the way each ecosystem treats them:
   Go module names in denylist entries are matched case-insensitively.
 - A Swift entry names the registry scope and package, ignoring case:
   `pkg:swift/apple/swift-nio@2.62.0`. The stored form,
-  `pkg:generic/swift-registry/apple.swift-nio@2.62.0`, works too.
+  `pkg:generic/swift-registry/apple.swift-nio@2.62.0`, works too, and so does
+  the source repository, as SBOM tools and GHSA advisories write it:
+  `pkg:swift/github.com/apple/swift-nio@2.62.0`. The proxy looks a source
+  repository up through `upstream.swift`'s `/identifiers` when `serve` or
+  `proxy mirror` starts and denies every identity listed for it; neither runs
+  when one can't be resolved.
 - An OCI entry names the repository as it is pulled through the proxy and a
   digest or tag: `pkg:oci/library/alpine@sha256:<digest>` refuses the blob or
   manifest with that digest, including a manifest a tag resolves to, and
@@ -1428,13 +1485,14 @@ A new release therefore shows up about a minute after the registry lists it rath
 
 ### Metadata size limit
 
-Upstream metadata responses are buffered in memory before being rewritten and served. `metadata_max_size` caps that buffer to protect against OOM from a misbehaving upstream. Some npm packages with thousands of versions (for example `renovate`) exceed the 100 MB default, so raise this if you see `metadata response exceeds size limit` in the logs. Conda `repodata.json` with cooldown enabled is filtered as it streams and isn't held in memory decompressed. With `cache_metadata` the limit applies to the compressed document as it does without cooldown; one over it is filtered as it streams from the upstream and not cached.
+Upstream metadata responses are buffered in memory before being rewritten and served. `metadata_max_size` caps that buffer to protect against OOM from a misbehaving upstream. Some npm packages with thousands of versions (for example `renovate`) exceed the 100 MB default, so raise this if you see `metadata response exceeds size limit` in the logs. Conda `repodata.json` with cooldown enabled is filtered as it streams and isn't held in memory decompressed. With `cache_metadata` the limit applies to the compressed document as it does without cooldown; one over it is filtered as it streams from the upstream and not cached. With `cache_metadata` and the metadata rewrite cache on, an npm packument is streamed from the upstream into storage and rewritten from there in two passes, so it isn't held in memory and the limit doesn't apply to it; the rewritten copy is kept gzip-compressed. Requests for a single version (`/<package>/<version>`) and tarball downloads read the version from the stored copy the same way. `metadata_stream_max_size` (1 GB by default) caps a document streamed this way; one over it isn't stored, and the stored copy, if any, is served instead.
 
 ```yaml
-metadata_max_size: "100MB"   # default
+metadata_max_size: "100MB"          # default
+metadata_stream_max_size: "1GB"     # default
 ```
 
-Or via environment variable: `PROXY_METADATA_MAX_SIZE=250MB`.
+Or via environment variable: `PROXY_METADATA_MAX_SIZE=250MB`, and `PROXY_METADATA_STREAM_MAX_SIZE=2GB` for `metadata_stream_max_size`.
 
 ### Artifact size limit
 

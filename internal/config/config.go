@@ -170,6 +170,11 @@ type Config struct {
 	// size return ErrMetadataTooLarge. Default: "100MB".
 	MetadataMaxSize string `json:"metadata_max_size" yaml:"metadata_max_size"`
 
+	// MetadataStreamMaxSize is the largest metadata document the proxy
+	// streams from upstream into storage instead of buffering it, which
+	// metadata_max_size doesn't cover (e.g. "1GB"). Default: "1GB".
+	MetadataStreamMaxSize string `json:"metadata_stream_max_size" yaml:"metadata_stream_max_size"`
+
 	// ArtifactMaxSize is the largest upstream artifact the proxy will fetch
 	// (e.g. "2GB"). Larger artifacts are refused and not cached. Default: ""
 	// (unlimited). "0" is also unlimited.
@@ -785,6 +790,12 @@ type UpstreamConfig struct {
 	// Default when empty: {"alpine": "https://dl-cdn.alpinelinux.org/alpine"}.
 	APK map[string]string `json:"apk" yaml:"apk"`
 
+	// APKSnapshots keeps earlier versions of Alpine APK indexes for this
+	// long after upstream replaced them, and serves them at
+	// /apk/{name}@{YYYY-MM-DD}/. Accepts a "d" suffix, e.g. "90d".
+	// Empty or "0" disables snapshots.
+	APKSnapshots string `json:"apk_snapshots" yaml:"apk_snapshots"`
+
 	// Arch maps repository names to Arch Linux pacman mirror base URLs,
 	// served at /arch/{name}/. The remaining request path mirrors the
 	// upstream layout, e.g. /arch/archlinux/core/os/x86_64/core.db.
@@ -892,6 +903,11 @@ func (u *UpstreamConfig) Validate() error {
 	}
 	if err := validateNamedUpstreams("upstream.apk", u.APK); err != nil {
 		return err
+	}
+	if u.APKSnapshots != "" {
+		if _, err := parseRetentionDuration("upstream.apk_snapshots", u.APKSnapshots); err != nil {
+			return err
+		}
 	}
 	if err := validateNamedUpstreams("upstream.arch", u.Arch); err != nil {
 		return err
@@ -1482,6 +1498,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Upstream.Swift, "PROXY_UPSTREAM_SWIFT")
 	setEnvString(&c.Upstream.OCIDefault, "PROXY_UPSTREAM_OCI_DEFAULT")
 	setEnvString(&c.Upstream.Debian, "PROXY_UPSTREAM_DEBIAN")
+	setEnvString(&c.Upstream.APKSnapshots, "PROXY_UPSTREAM_APK_SNAPSHOTS")
 	setEnvString(&c.Upstream.RPM, "PROXY_UPSTREAM_RPM")
 	setEnvString(&c.Upstream.HomebrewAPI, "PROXY_UPSTREAM_HOMEBREW_API")
 	setEnvString(&c.Upstream.HomebrewArtifact, "PROXY_UPSTREAM_HOMEBREW_ARTIFACT")
@@ -1501,6 +1518,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvStringSlice(&c.Hosted.ComposerVendors, "PROXY_HOSTED_COMPOSER_VENDORS")
 	setEnvString(&c.MetadataTTL, "PROXY_METADATA_TTL")
 	setEnvString(&c.MetadataMaxSize, "PROXY_METADATA_MAX_SIZE")
+	setEnvString(&c.MetadataStreamMaxSize, "PROXY_METADATA_STREAM_MAX_SIZE")
 	setEnvString(&c.ArtifactMaxSize, "PROXY_ARTIFACT_MAX_SIZE")
 	setEnvString(&c.MetadataRewriteCacheSize, "PROXY_METADATA_REWRITE_CACHE_SIZE")
 	setEnvString(&c.HTTPTimeout, "PROXY_HTTP_TIMEOUT")
@@ -1747,6 +1765,7 @@ const (
 	defaultHTTPTimeout                   = 30 * time.Second //nolint:mnd // sensible default
 	defaultHitFlushInterval              = time.Second
 	defaultMetadataMaxSize               = 100 << 20
+	defaultMetadataStreamMaxSize         = 1 << 30
 	defaultMetadataRewriteCacheSize      = 256 << 20
 	defaultGradleBuildCacheMaxUploadSize = 100 << 20
 	defaultGradleBuildCacheSweepInterval = 10 * time.Minute
@@ -1800,22 +1819,25 @@ func validateRequestTimeout(field, s string) error {
 	return nil
 }
 
-func validateMetadataMaxSize(s string) error {
+func validateMetadataMaxSize(name, s string) error {
 	if s == "" {
 		return nil
 	}
 	size, err := ParseSize(s)
 	if err != nil {
-		return fmt.Errorf("invalid metadata_max_size: %w", err)
+		return fmt.Errorf("invalid %s: %w", name, err)
 	}
 	if size <= 0 {
-		return fmt.Errorf("invalid metadata_max_size %q: must be positive", s)
+		return fmt.Errorf("invalid %s %q: must be positive", name, s)
 	}
 	return nil
 }
 
 func (c *Config) validateDownloadSizeLimits() error {
-	if err := validateMetadataMaxSize(c.MetadataMaxSize); err != nil {
+	if err := validateMetadataMaxSize("metadata_max_size", c.MetadataMaxSize); err != nil {
+		return err
+	}
+	if err := validateMetadataMaxSize("metadata_stream_max_size", c.MetadataStreamMaxSize); err != nil {
 		return err
 	}
 	return validateArtifactMaxSize(c.ArtifactMaxSize)
@@ -1874,6 +1896,19 @@ func (c *Config) ParseMetadataMaxSize() int64 {
 	size, err := ParseSize(c.MetadataMaxSize)
 	if err != nil || size <= 0 {
 		return defaultMetadataMaxSize
+	}
+	return size
+}
+
+// ParseMetadataStreamMaxSize returns the size limit for metadata streamed
+// into storage in bytes. Returns 1GB if unset or invalid.
+func (c *Config) ParseMetadataStreamMaxSize() int64 {
+	if c.MetadataStreamMaxSize == "" {
+		return defaultMetadataStreamMaxSize
+	}
+	size, err := ParseSize(c.MetadataStreamMaxSize)
+	if err != nil || size <= 0 {
+		return defaultMetadataStreamMaxSize
 	}
 	return size
 }
@@ -1977,6 +2012,20 @@ func (c *Config) ParseGradleBuildCacheMaxUploadSize() int64 {
 		return defaultGradleBuildCacheMaxUploadSize
 	}
 	return size
+}
+
+// ParseAPKSnapshots returns how long earlier Alpine APK indexes are kept
+// after upstream replaced them. Returns 0 when snapshots are disabled or the
+// value is invalid.
+func (c *Config) ParseAPKSnapshots() time.Duration {
+	if c.Upstream.APKSnapshots == "" {
+		return 0
+	}
+	d, err := parseDayDuration(c.Upstream.APKSnapshots)
+	if err != nil || d < 0 {
+		return 0
+	}
+	return d
 }
 
 // ParseGradleBuildCacheMaxAge returns age-based eviction threshold.

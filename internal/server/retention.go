@@ -19,7 +19,7 @@ const retentionWindow = 5000
 // follow over several intervals. A variable so tests can lower it.
 var retentionMaxClears = 10000
 
-func (s *Server) startRetentionLoop(ctx context.Context) {
+func (s *Server) startRetentionLoop(ctx context.Context, resolvers map[string]sourceResolver) {
 	reg := retention.Default
 	rules, err := s.cfg.RetentionRules(reg)
 	if err != nil {
@@ -47,14 +47,17 @@ func (s *Server) startRetentionLoop(ctx context.Context) {
 	ticker := time.NewTicker(s.cfg.ParseRetentionSweepInterval())
 	defer ticker.Stop()
 
-	s.sweepRetention(ctx, reg, rules)
-
+	sweep := func() {
+		resolveRetentionSources(ctx, s.logger, resolvers, rules)
+		s.sweepRetention(ctx, reg, rules)
+	}
+	sweep()
 	for {
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
-			s.sweepRetention(ctx, reg, rules)
+			sweep()
 		}
 	}
 }
@@ -147,7 +150,7 @@ func sweepRetention(ctx context.Context, db *database.DB, logger *slog.Logger,
 func clearIfExpired(db *database.DB, logger *slog.Logger, reg *retention.Registry,
 	rules retention.Rules, now time.Time, c database.RetentionCandidate) bool {
 	key, ok := reg.KeyForDBEcosystem(c.Ecosystem)
-	if !ok {
+	if !ok || rules.Pending(key) {
 		return false
 	}
 	d := rules.For(key, c.PackagePURL)

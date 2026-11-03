@@ -647,6 +647,7 @@ func (db *DB) GetDuePendingDeletes(cutoff time.Time, limit int) ([]string, error
 		WHERE queued_at < ?
 		  AND NOT EXISTS (SELECT 1 FROM artifacts WHERE artifacts.storage_path = pending_deletes.path)
 		  AND NOT EXISTS (SELECT 1 FROM metadata_cache WHERE metadata_cache.storage_path = pending_deletes.path)
+		  AND NOT EXISTS (SELECT 1 FROM metadata_snapshots WHERE metadata_snapshots.storage_path = pending_deletes.path)
 		ORDER BY queued_at
 		LIMIT ?
 	`)
@@ -1504,15 +1505,18 @@ func (db *DB) GetEcosystemStats() ([]EcosystemStats, error) {
 		return nil, err
 	}
 
-	// Left joined and bucketed for the same reason as artifacts below: a version
-	// whose package row is missing would otherwise vanish here while still
-	// counting in GetCacheStats' COUNT(*), leaving the two unable to reconcile.
+	// Left joined for the same reason as artifacts below: a version whose
+	// package row is missing would otherwise vanish here while still counting
+	// in GetCacheStats' COUNT(*), leaving the two unable to reconcile. Such
+	// versions are mostly publish times cooldown stored for versions nobody
+	// downloaded, so they count under the type of their package PURL, and
+	// only a PURL that can't be parsed is unattributed.
 	if err := db.eachCount(`
-		SELECT COALESCE(p.ecosystem, '`+unattributedEcosystem+`'), COUNT(*)
+		SELECT COALESCE(p.ecosystem, '`+orphanVersionPrefix+`' || v.package_purl), COUNT(*)
 		FROM versions v
 		LEFT JOIN packages p ON p.purl = v.package_purl
-		GROUP BY COALESCE(p.ecosystem, '`+unattributedEcosystem+`')
-	`, func(ecosystem string, n int64) { get(ecosystem).Versions = n }); err != nil {
+		GROUP BY COALESCE(p.ecosystem, '`+orphanVersionPrefix+`' || v.package_purl)
+	`, func(key string, n int64) { get(versionEcosystem(key)).Versions += n }); err != nil {
 		return nil, err
 	}
 
@@ -1594,6 +1598,26 @@ func mergeAliasedEcosystems(stats []EcosystemStats) []EcosystemStats {
 // GetTotalCacheSize — two numbers that sit side by side in the UI and in
 // Grafana. Bucketing them keeps the two reconcilable.
 const unattributedEcosystem = "unattributed"
+
+// orphanVersionPrefix marks the package PURL of a version without a package
+// row in GetEcosystemStats. No ecosystem name starts with it.
+const orphanVersionPrefix = "~"
+
+// versionEcosystem returns the ecosystem a GetEcosystemStats version count
+// is for: the package row's, or the type of the package PURL of a version
+// without one. The ecosystems that store publish times are named like their
+// PURL types.
+func versionEcosystem(key string) string {
+	packagePURL, orphan := strings.CutPrefix(key, orphanVersionPrefix)
+	if !orphan {
+		return key
+	}
+	p, err := purl.Parse(packagePURL)
+	if err != nil {
+		return unattributedEcosystem
+	}
+	return p.Type
+}
 
 func (db *DB) eachArtifactStat(get func(string) *EcosystemStats) error {
 	rows, err := db.Query(`

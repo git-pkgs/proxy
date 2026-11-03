@@ -145,7 +145,7 @@ func (r RegistryVersions) client() *registries.Client {
 // swiftIdentity returns the registry identity, scope.name, of the name of a
 // pkg:swift PURL, looking a source repository up on the registry at baseURL.
 func swiftIdentity(ctx context.Context, client *registries.Client, baseURL, name string) (string, error) {
-	source := swiftSourceURL(name)
+	source := handler.SwiftSourceURL(name)
 	if source == "" {
 		scope, pkg, err := swiftScopeAndName(name)
 		if err != nil {

@@ -11,7 +11,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.66.5
 	github.com/git-pkgs/archives v0.10.0
 	github.com/git-pkgs/artifacts v0.2.1
-	github.com/git-pkgs/cooldown v0.3.0
+	github.com/git-pkgs/cooldown v0.3.1
 	github.com/git-pkgs/enrichment v0.7.5
 	github.com/git-pkgs/gcs v0.1.0
 	github.com/git-pkgs/integrity v0.2.0
@@ -31,7 +31,7 @@ require (
 	github.com/vmihailenco/msgpack/v5 v5.4.1
 	gocloud.dev v0.47.0
 	golang.org/x/mod v0.42.0
-	golang.org/x/net v0.61.0
+	golang.org/x/net v0.62.0
 	golang.org/x/sync v0.24.0
 	google.golang.org/protobuf v1.36.12
 	gopkg.in/yaml.v3 v3.0.1
