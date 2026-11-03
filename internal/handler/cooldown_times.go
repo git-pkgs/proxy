@@ -126,7 +126,7 @@ func (d timedDocuments) withheld(p *Proxy, ecosystem, packagePURL, version strin
 	if published.IsZero() {
 		return false
 	}
-	return !p.Cooldown.IsAllowed(ecosystem, packagePURL, published)
+	return !p.cooldown().IsAllowed(ecosystem, packagePURL, published)
 }
 
 // decodedMetadataBody returns res's body without its Content-Encoding. The

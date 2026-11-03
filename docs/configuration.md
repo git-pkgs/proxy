@@ -150,7 +150,7 @@ The package rule covers every release and asset in that repository, but each cac
 | `pub` | yes | `pkg:pub/http`, the package name as published. |
 | `pypi` | yes | `pkg:pypi/requests`; case and single `_`/`-` don't matter. Dots and repeated separators are kept as written, so a project like `zope.interface` can be stored as `zope.interface` and `zope-interface`; add a rule for each. |
 | `rpm` | yes | `pkg:rpm/curl`, the name as packaged, case included (`pkg:rpm/NetworkManager`). A vendor namespace such as `pkg:rpm/fedora/curl` is accepted and dropped. Fedora and EPEL update repositories keep only the latest build of a package, so an evicted older one may not be fetchable again. |
-| `swift` | yes | `pkg:swift/apple/swift-nio`, with the registry scope as the namespace, or the stored form `pkg:generic/swift-registry/apple.swift-nio`; case doesn't matter. A source repository key like `pkg:swift/github.com/apple/swift-nio` is refused, since it doesn't name a registry identity. |
+| `swift` | yes | `pkg:swift/apple/swift-nio`, with the registry scope as the namespace, or the stored form `pkg:generic/swift-registry/apple.swift-nio`; case doesn't matter. A source repository key like `pkg:swift/github.com/apple/swift-nio` is looked up through `upstream.swift`'s `/identifiers` before each sweep and applies to every identity listed for it; until every such key resolves, Swift artifacts aren't swept, so a rule that keeps a package is never skipped. |
 
 An evicted artifact is fetched again from upstream on the next request. Packages preloaded with `proxy mirror` age from the time they were mirrored, so an unused mirrored package is evicted like any other. Running `proxy mirror` again over a package that is still cached counts as a download and restarts its clock, so packages a scheduled mirror job keeps listing never age out. A registry that removes old releases (Linux distribution archives in particular) cannot serve an evicted version again, so set those ecosystems' rules with that in mind.
 
@@ -200,6 +200,8 @@ database:
 | `database.path` | `PROXY_DATABASE_PATH` | `-database-path` | SQLite file path |
 
 The database runs in WAL mode. Writes go through a single connection, since SQLite allows one writer at a time. Reads use a separate pool of read-only connections (one per CPU, between 2 and 8), so request lookups don't wait behind writes, stats queries or eviction scans. An in-memory database (`:memory:`) uses one connection for both.
+
+The SQLite database needs a local disk or a block-backed volume, even with one replica. SQLite's WAL mode doesn't work on network filesystems such as NFS ([sqlite.org/wal.html](https://www.sqlite.org/wal.html)), which shows up as stalled requests and `database disk image is malformed`. A Kubernetes `ReadWriteOnce` volume doesn't guarantee suitable storage, since its storage class can still be NFS. If only network filesystem storage is available to the proxy, use `driver: postgres`. Artifact storage can stay on NFS, on a separate volume from the SQLite database.
 
 ### PostgreSQL
 
@@ -323,6 +325,7 @@ Each upstream used by a built-in package route can be set in YAML or JSON under 
 | `upstream.rpm` | `PROXY_UPSTREAM_RPM` | `https://dl.fedoraproject.org/pub/fedora/linux` |
 | `upstream.homebrew_api` | `PROXY_UPSTREAM_HOMEBREW_API` | `https://formulae.brew.sh/api` |
 | `upstream.homebrew_artifact` | `PROXY_UPSTREAM_HOMEBREW_ARTIFACT` | `https://ghcr.io` |
+| `upstream.apk_snapshots` | `PROXY_UPSTREAM_APK_SNAPSHOTS` | disabled; see [Alpine APK snapshots](#alpine-apk-snapshots) |
 
 Private, ULA, CGNAT, and loopback addresses are rejected by default. Add each private upstream hostname or IP address to `upstream.allow_private_hosts`. The matching environment variable accepts a comma-separated list. Loopback upstreams also require `upstream.allow_loopback: true`. That setting permits upstream requests and redirects to reach any loopback address.
 
@@ -576,6 +579,8 @@ with the metadata TTL and served byte-for-byte unchanged so apk signature
 verification keeps working; `.apk` packages use the shared artifact cache.
 When `upstream.apk` is empty, a single repository named `alpine` pointing at
 the official mirror is available; configuring any entry replaces that default.
+Earlier index versions can be kept and served by date; see
+[Alpine APK snapshots](#alpine-apk-snapshots).
 
 ```yaml
 upstream:
@@ -622,6 +627,53 @@ official mirror is) and bootstrap pkg without the proxy. Everything else, such
 as signatures and keys, is passed through uncached. When `upstream.freebsd` is empty, a single
 repository named `freebsd` pointing at `https://pkg.freebsd.org` is available;
 configuring any entry replaces that default.
+
+### Alpine APK snapshots
+
+```yaml
+upstream:
+  # Keep replaced APK indexes for 90 days.
+  apk_snapshots: "90d"
+```
+
+Alpine mirrors only keep the current build of each package, so after an
+upgrade `apk add curl=8.5.0-r0` fails because the index no longer lists that
+build. With `upstream.apk_snapshots` set, the proxy keeps every version of an
+index (and of a detached signature) it stores, and serves them under a dated
+repository name:
+
+```
+http://localhost:8080/apk/alpine@2026-10-01/v3.22/main
+```
+
+`/apk/{name}@{YYYY-MM-DD}/…` returns the index that was current at the end of
+that day (UTC). The kept files are the signed upstream bytes, so apk verifies
+them as usual. A day before the first stored version of an index, or a day
+that has not started yet, is `404`. Today's snapshot can still change until the
+day ends. Packages under a snapshot path are the same as under the plain path:
+they come from the artifact cache, or from upstream if not cached; a build the
+upstream has dropped and the proxy never cached is `404`. A configured
+repository whose name contains `@` takes precedence over a snapshot path.
+
+Snapshots are recorded when an index is requested through the plain path, so
+they only exist for repositories clients use. A version counts from the first
+time the proxy served it, which can be up to `metadata_ttl` after upstream
+published it. A version is deleted once it was replaced more than the
+configured duration ago; the newest version of each index is always kept.
+Durations take a `d` suffix; empty or `"0"` disables snapshots. Snapshots need
+`cache_metadata`. Their files live under `_snapshots/` in storage and do not
+count towards `storage.max_size`.
+
+Turning snapshots off, or `cache_metadata` off, leaves the kept versions in
+place. To remove them, first set a short duration such as `"1h"` and let the
+hourly prune delete everything but the newest version of each index.
+
+Snapshots keep indexes, not packages. A package listed by an old snapshot can
+still be evicted by `storage.max_size` or [retention](#retention), and is then
+only available while upstream still has it. Retention counts from a package's
+last download, so a pinned build nobody installed for longer than the `alpine`
+retention is evicted even while a snapshot lists it. Use package rules with
+`"0"` for builds that must stay installable.
 
 ### Go checksum database
 
@@ -1119,6 +1171,8 @@ Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to
 
 Package PURL keys are normalized to canonical form before matching, so `pkg:npm/@babel/core` and `pkg:npm/%40babel/core` are equivalent, as are `pkg:pypi/Django` and `pkg:pypi/django`. If both forms configure the same package, the canonical entry wins.
 
+Go module names in exact cooldown overrides are matched case-insensitively. If both lowercase and mixed-case keys are configured, the lowercase entry wins. Go package patterns match lowercase module names.
+
 `package_patterns` matches canonical, versionless PURLs using `*` for zero or more characters and `?` for one character. Neither wildcard crosses `/` separators. Character classes (`[...]`) and backslash escapes are rejected at startup. For example, `"pkg:npm/@example/*"` matches packages under the `@example` npm scope. Patterns accept `@` as an alias for `%40`; other characters must use their canonical PURL form. Equivalent patterns with different durations are rejected at startup. Equal durations, such as `1d` and `24h`, are accepted.
 
 Exact `packages` entries take precedence over patterns. When several patterns match, longer patterns win after excluding `*` and `?` from the length. Ties use lexical order of the normalized patterns.
@@ -1144,7 +1198,7 @@ Helm uses each release's `created` time from the repository's `index.yaml`. Rele
 
 RubyGems, Hex and PyPI keep their publish times outside the metadata clients read: the RubyGems versions API, the Hex HTTP API (`upstream.hex_api`) and the PyPI JSON API. The proxy fetches them alongside each compact index, package or simple page it filters, and for PyPI downloads. Cooldown fails closed: when it applies to a package and those times can't be fetched or parsed, or the metadata can't be rewritten, the request fails with 502, or with 503 and `Retry-After` while the upstream is rate limiting the proxy, instead of serving the metadata unfiltered. The same goes for npm, Composer and pub.dev metadata that can't be rewritten, and for npm tarball downloads whose publish time can't be read. A PyPI file or npm tarball that is already cached is still served when its publish time can't be read; only a download that would have to be fetched fails. A PyPI release's time is the upload time of its newest file. The proxy stores it when a download looks it up, and serves files of that release that are already cached against the stored time without reading the JSON API again. A file that isn't cached yet is always looked up, since it may have been added to the release since, and the newer time is stored. Packages exempted with a duration of `0` are served as before and don't need the times. A PyPI package the JSON API returns 404 for has no times to go by and is served unfiltered.
 
-For RubyGems and Hex, both documents go through the metadata cache. With [`cache_metadata`](#metadata-caching) they are served from it within `metadata_ttl` without asking the upstream, revalidated with their ETags after it, and filtered from the last cached copies, marked stale, while the upstream is down; without it they are still fetched once for concurrent requests. Each document has its own TTL, so the compact index or Hex package can be newer than the cached times and list a version they don't have. The times are then fetched again before filtering, and if that fails, such versions are left out until the times can be read. The filtered index or package carries an ETag of its own, so Bundler and Mix revalidate it with `304 Not Modified`. Publish times are compared with the current time on each request, but the filtered result is kept for up to an hour (see [rewritten metadata cache](#rewritten-metadata-cache)), so a version leaving cooldown can show up that much later; a newly published version shows up within `metadata_ttl`, as with other cached metadata. Upstream errors are answered as for other cached metadata (404, or 502) rather than relayed.
+For RubyGems and Hex, both documents go through the metadata cache. With [`cache_metadata`](#metadata-caching) they are served from it within `metadata_ttl` without asking the upstream, revalidated with their ETags after it, and filtered from the last cached copies, marked stale, while the upstream is down; without it they are still fetched once for concurrent requests. Each document has its own TTL, so the compact index or Hex package can be newer than the cached times and list a version they don't have. The times are then fetched again before filtering, and if that fails, such versions are left out until the times can be read. The filtered index or package carries an ETag of its own, so Bundler and Mix revalidate it with `304 Not Modified`. Publish times are compared with the current time on each request, and the filtered result is kept until the first version it held back leaves cooldown (see [rewritten metadata cache](#rewritten-metadata-cache)); a newly published version shows up within `metadata_ttl`, as with other cached metadata. Upstream errors are answered as for other cached metadata (404, or 502) rather than relayed.
 
 With cooldown on, the proxy asks npm for full packuments, since the abbreviated ones it uses otherwise carry no publish times. Abbreviated packuments cached before cooldown was turned on are fetched again in full rather than served, including as a stale copy when the upstream is down. When `latest` is in cooldown, the packument tags the newest version out of cooldown instead, and `npm dist-tag ls` shows the same tags.
 
@@ -1180,9 +1234,15 @@ Names and versions are compared the way each ecosystem treats them:
   `pkg:composer/symfony/console@6.1.7` also covers `v6.1.7`.
 - Go versions are matched as written, `pkg:golang/example.com/mod@v1.0.0-RC1`,
   though download URLs escape uppercase letters (`v1.0.0-!r!c1`).
+  Go module names in denylist entries are matched case-insensitively.
 - A Swift entry names the registry scope and package, ignoring case:
   `pkg:swift/apple/swift-nio@2.62.0`. The stored form,
-  `pkg:generic/swift-registry/apple.swift-nio@2.62.0`, works too.
+  `pkg:generic/swift-registry/apple.swift-nio@2.62.0`, works too, and so does
+  the source repository, as SBOM tools and GHSA advisories write it:
+  `pkg:swift/github.com/apple/swift-nio@2.62.0`. The proxy looks a source
+  repository up through `upstream.swift`'s `/identifiers` when `serve` or
+  `proxy mirror` starts and denies every identity listed for it; neither runs
+  when one can't be resolved.
 - An OCI entry names the repository as it is pulled through the proxy and a
   digest or tag: `pkg:oci/library/alpine@sha256:<digest>` refuses the blob or
   manifest with that digest, including a manifest a tag resolves to, and
@@ -1403,13 +1463,14 @@ When upstream is unreachable and the cached entry is past its TTL, the proxy ser
 
 ### Metadata size limit
 
-Upstream metadata responses are buffered in memory before being rewritten and served. `metadata_max_size` caps that buffer to protect against OOM from a misbehaving upstream. Some npm packages with thousands of versions (for example `renovate`) exceed the 100 MB default, so raise this if you see `metadata response exceeds size limit` in the logs. Conda `repodata.json` with cooldown enabled is filtered as it streams and isn't held in memory decompressed. With `cache_metadata` the limit applies to the compressed document as it does without cooldown; one over it is filtered as it streams from the upstream and not cached.
+Upstream metadata responses are buffered in memory before being rewritten and served. `metadata_max_size` caps that buffer to protect against OOM from a misbehaving upstream. Some npm packages with thousands of versions (for example `renovate`) exceed the 100 MB default, so raise this if you see `metadata response exceeds size limit` in the logs. Conda `repodata.json` with cooldown enabled is filtered as it streams and isn't held in memory decompressed. With `cache_metadata` the limit applies to the compressed document as it does without cooldown; one over it is filtered as it streams from the upstream and not cached. With `cache_metadata` and the metadata rewrite cache on, an npm packument is streamed from the upstream into storage and rewritten from there in two passes, so it isn't held in memory and the limit doesn't apply to it; the rewritten copy is kept gzip-compressed. Requests for a single version (`/<package>/<version>`) and tarball downloads read the version from the stored copy the same way. `metadata_stream_max_size` (1 GB by default) caps a document streamed this way; one over it isn't stored, and the stored copy, if any, is served instead.
 
 ```yaml
-metadata_max_size: "100MB"   # default
+metadata_max_size: "100MB"          # default
+metadata_stream_max_size: "1GB"     # default
 ```
 
-Or via environment variable: `PROXY_METADATA_MAX_SIZE=250MB`.
+Or via environment variable: `PROXY_METADATA_MAX_SIZE=250MB`, and `PROXY_METADATA_STREAM_MAX_SIZE=2GB` for `metadata_stream_max_size`.
 
 ### Artifact size limit
 
@@ -1423,7 +1484,7 @@ Or via environment variable: `PROXY_ARTIFACT_MAX_SIZE=2GB`.
 
 ### Rewritten metadata cache
 
-The npm, Composer, PyPI and Helm handlers rewrite every metadata document they serve, so that download URLs point at the proxy. That means decoding the whole document and encoding it again, and Composer's minified documents are also expanded, which together cost milliseconds per typical package and far more for very large ones; a large Helm `index.yaml` takes over a hundred milliseconds. The proxy keeps rewritten documents in memory, so each distinct upstream document is rewritten once and requests arriving while it is being rewritten wait for that rewrite. New bytes from upstream are rewritten again. A PyPI simple page is cached per representation (HTML or JSON) and per set of versions filtered out of it. With version cooldown enabled, a cached rewrite expires, because cooldown filtering depends on the current time: it is kept for a 24th of the shortest cooldown configured, at least a minute and at most an hour, so a version shows up at most that long after its cooldown ends. With a cooldown of a day or more that is an hour; with `"2h"` somewhere, five minutes. Cached documents carry an `ETag` of their own, and are dated like any other, so clients that revalidate with `If-None-Match` or `If-Modified-Since`, such as Composer, get `304 Not Modified`. The RubyGems compact index and Hex packages filtered by cooldown are kept the same way; they are never served gzip-compressed.
+The npm, Composer, PyPI and Helm handlers rewrite every metadata document they serve, so that download URLs point at the proxy. That means decoding the whole document and encoding it again, and Composer's minified documents are also expanded, which together cost milliseconds per typical package and far more for very large ones; a large Helm `index.yaml` takes over a hundred milliseconds. The proxy keeps rewritten documents in memory, so each distinct upstream document is rewritten once and requests arriving while it is being rewritten wait for that rewrite. New bytes from upstream are rewritten again. A PyPI simple page is cached per representation (HTML or JSON) and per set of versions filtered out of it. With version cooldown enabled, a cached rewrite expires when the first version it held back leaves cooldown, since versions it let through stay allowed and a new upstream version changes the document. A rewrite that held nothing back is kept for the shortest cooldown configured, at least a minute and at most a day. Cached documents carry an `ETag` of their own, and are dated like any other, so clients that revalidate with `If-None-Match` or `If-Modified-Since`, such as Composer, get `304 Not Modified`. The RubyGems compact index and Hex packages filtered by cooldown are kept the same way; they are never served gzip-compressed.
 
 Each cached document is kept gzip-compressed, when that makes it smaller, and served with `Content-Encoding: gzip` to clients that accept it, as npm, pnpm, Yarn and Composer do. A large packument is compressed once rather than on every request, by the proxy or by a reverse proxy in front of it. Only the compressed copy is kept, typically an eighth of the document, and it is decompressed for the clients that don't accept gzip. Documents rewritten outside the cache are served uncompressed.
 
@@ -1589,6 +1650,14 @@ curl -X POST http://localhost:8080/api/mirror \
   -d '{"purls":["pkg:docker/library/alpine@3.20"],"platforms":["linux/amd64"]}'
 ```
 
+`latest` mirrors only the newest version of PURLs without a version, like the command's `--latest` flag:
+
+```bash
+curl -X POST http://localhost:8080/api/mirror \
+  -H "Content-Type: application/json" \
+  -d '{"purls":["pkg:npm/lodash"],"latest":true}'
+```
+
 ## Cache Delete API
 
 Deleting cached artifacts is disabled by default. Enable it to register `DELETE /api/cache` and show Delete buttons on the version page of the web UI:
@@ -1638,6 +1707,7 @@ A CRAN version is mirrored as its source package from `upstream.cran`, for examp
 | `--concurrency` | `4` | Number of parallel downloads |
 | `--dry-run` | `false` | Show what would be mirrored without downloading |
 | `--platform` | | Comma-separated `os/arch[/variant]` list limiting which platforms of container images are mirrored |
+| `--latest` | `false` | Mirror only the newest version of PURLs without a version |
 | `--config` | | Path to configuration file |
 | `--storage-url` | | Storage URL |
 | `--database-driver` | | Database driver |
@@ -1653,6 +1723,12 @@ proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
 ### Unversioned PURLs
 
 A PURL without a version, here or in a mirror API job, mirrors every version the configured upstream lists, through the same client, so `upstream.auth` and `upstream.allow_private_hosts` apply. npm packages in `upstream.npm_routes` are listed from their route. Listing works for npm, gem, golang, hex (from `upstream.hex_api`), pub, pypi, maven, nuget, composer, cran, brew and swift. For cargo and conda the upstream doesn't serve the API used for listing, so versions come from the public registry while the upstream is the default one; with another upstream, and for Composer packages in `upstream.composer_routes` or any other ecosystem, give a version. Julia versions are always listed from the General registry.
+
+With `--latest`, or `"latest": true` in a mirror API job, only the latest version is mirrored, as git-pkgs/registries picks it: the version the registry advertises as latest where it has one, such as npm's `dist-tags.latest`, and otherwise the newest by publish time, leaving out yanked, retracted and deprecated versions. PURLs with a version, including those in an SBOM, are mirrored as given. Run it from cron to keep the newest releases of a list of packages cached:
+
+```bash
+proxy mirror --latest pkg:npm/lodash pkg:pypi/requests pkg:cargo/serde
+```
 
 ### Container images
 

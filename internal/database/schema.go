@@ -154,6 +154,20 @@ CREATE TABLE IF NOT EXISTS upstream_holds (
 	until_ms INTEGER NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS metadata_snapshots (
+	id INTEGER PRIMARY KEY,
+	ecosystem TEXT NOT NULL,
+	name TEXT NOT NULL,
+	storage_path TEXT NOT NULL,
+	content_type TEXT,
+	content_encoding TEXT,
+	content_digest TEXT NOT NULL,
+	size INTEGER NOT NULL,
+	valid_from_ms INTEGER NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_metadata_snapshots_key ON metadata_snapshots(ecosystem, name, valid_from_ms);
+CREATE INDEX IF NOT EXISTS idx_metadata_snapshots_path ON metadata_snapshots(storage_path);
+
 CREATE TABLE IF NOT EXISTS migrations (
 	name TEXT NOT NULL PRIMARY KEY,
 	applied_at DATETIME NOT NULL
@@ -296,6 +310,20 @@ CREATE TABLE IF NOT EXISTS upstream_holds (
 	host TEXT NOT NULL PRIMARY KEY,
 	until_ms BIGINT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS metadata_snapshots (
+	id SERIAL PRIMARY KEY,
+	ecosystem TEXT NOT NULL,
+	name TEXT NOT NULL,
+	storage_path TEXT NOT NULL,
+	content_type TEXT,
+	content_encoding TEXT,
+	content_digest TEXT NOT NULL,
+	size BIGINT NOT NULL,
+	valid_from_ms BIGINT NOT NULL
+);
+CREATE INDEX IF NOT EXISTS idx_metadata_snapshots_key ON metadata_snapshots(ecosystem, name, valid_from_ms);
+CREATE INDEX IF NOT EXISTS idx_metadata_snapshots_path ON metadata_snapshots(storage_path);
 
 CREATE TABLE IF NOT EXISTS migrations (
 	name TEXT NOT NULL PRIMARY KEY,
@@ -468,6 +496,7 @@ var migrations = []migration{
 	{"017_add_artifact_content_hash_index", migrateAddArtifactContentHashIndex},
 	{"018_add_upstream_holds", migrateAddUpstreamHolds},
 	{"019_add_artifact_filename_index", migrateAddArtifactFilenameIndex},
+	{"020_add_metadata_snapshots", migrateAddMetadataSnapshots},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -846,6 +875,36 @@ func migrateAddArtifactFilenameIndex(db *DB) error {
 	_, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_artifacts_filename ON artifacts(filename)`)
 	if err != nil {
 		return fmt.Errorf("creating artifacts filename index: %w", err)
+	}
+	return nil
+}
+
+// migrateAddMetadataSnapshots creates the table of kept earlier versions of
+// metadata documents, which dated snapshot requests are served from.
+func migrateAddMetadataSnapshots(db *DB) error {
+	pk, integer := "id INTEGER PRIMARY KEY", "INTEGER"
+	if db.dialect == DialectPostgres {
+		pk, integer = "id SERIAL PRIMARY KEY", "BIGINT"
+	}
+	statements := []string{
+		fmt.Sprintf(`CREATE TABLE IF NOT EXISTS metadata_snapshots (
+			%s,
+			ecosystem TEXT NOT NULL,
+			name TEXT NOT NULL,
+			storage_path TEXT NOT NULL,
+			content_type TEXT,
+			content_encoding TEXT,
+			content_digest TEXT NOT NULL,
+			size %s NOT NULL,
+			valid_from_ms %s NOT NULL
+		)`, pk, integer, integer),
+		`CREATE INDEX IF NOT EXISTS idx_metadata_snapshots_key ON metadata_snapshots(ecosystem, name, valid_from_ms)`,
+		`CREATE INDEX IF NOT EXISTS idx_metadata_snapshots_path ON metadata_snapshots(storage_path)`,
+	}
+	for _, query := range statements {
+		if _, err := db.Exec(query); err != nil {
+			return fmt.Errorf("creating metadata_snapshots: %w", err)
+		}
 	}
 	return nil
 }

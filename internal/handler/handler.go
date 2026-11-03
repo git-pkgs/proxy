@@ -142,6 +142,10 @@ func ifNoneMatchHits(header, etag string) bool {
 // defaultMetadataMaxSize is used when Proxy.MetadataMaxSize is unset.
 const defaultMetadataMaxSize = 100 << 20
 
+// defaultMetadataStreamMaxSize is used when Proxy.MetadataStreamMaxSize is
+// unset.
+const defaultMetadataStreamMaxSize = 1 << 30
+
 // ErrMetadataTooLarge is returned when upstream metadata exceeds the configured limit.
 var ErrMetadataTooLarge = errors.New("metadata response exceeds size limit")
 
@@ -157,7 +161,9 @@ func (p *Proxy) ReadMetadata(r io.Reader) ([]byte, error) {
 // Reading into a buffer of that size avoids io.ReadAll growing its buffer
 // step by step, which peaks at more than twice the document size. size is
 // only a hint: a negative one, or one above the limit, reads as ReadMetadata
-// does, and a body of a different length is still read correctly.
+// does, and a body of a different length is still read correctly. A body
+// read through upstreamBodyReader that upstream cuts off fails, even though
+// it ends like a body shorter than size.
 func (p *Proxy) ReadMetadataSized(r io.Reader, size int64) ([]byte, error) {
 	limit := p.MetadataMaxSize
 	if limit <= 0 {
@@ -170,7 +176,10 @@ func (p *Proxy) ReadMetadataSized(r io.Reader, size int64) ([]byte, error) {
 	// the buffer and a longer one is noticed.
 	buf := make([]byte, size+1)
 	n, err := io.ReadFull(r, buf)
+	var cut *upstreamBodyError
 	switch {
+	case errors.As(err, &cut):
+		return nil, err
 	case errors.Is(err, io.EOF) || errors.Is(err, io.ErrUnexpectedEOF):
 		if int64(n) < size/2 {
 			// The hint was far off; don't keep the oversized buffer alive.
@@ -215,14 +224,17 @@ type Proxy struct {
 	Cooldown CooldownPolicy
 	// ShortestCooldown is the shortest cooldown configured anywhere. It
 	// bounds how long a rewrite filtered by cooldown is cached.
-	ShortestCooldown    time.Duration
-	Denylist            *denylist.Policy
-	CacheMetadata       bool
-	MetadataTTL         time.Duration
-	MetadataMaxSize     int64
-	GradleReadOnly      bool
-	HostedEnabled       bool
-	GradleMaxUploadSize int64
+	ShortestCooldown time.Duration
+	Denylist         *denylist.Policy
+	CacheMetadata    bool
+	MetadataTTL      time.Duration
+	MetadataMaxSize  int64
+	// MetadataStreamMaxSize caps a metadata document streamed from upstream
+	// into storage, which metadata_max_size doesn't cover. Default 1 GB.
+	MetadataStreamMaxSize int64
+	GradleReadOnly        bool
+	HostedEnabled         bool
+	GradleMaxUploadSize   int64
 	// NPMFullMetadata requests full npm packuments from upstream even when
 	// cooldown is disabled, so served metadata carries publish times.
 	NPMFullMetadata bool
@@ -284,6 +296,10 @@ type Proxy struct {
 	// the process started; see metadataDate.
 	now     func() time.Time
 	started time.Time
+
+	// cooldownWatch holds the rewrites recording which versions cooldown
+	// holds back; see cooldown_expiry.go.
+	cooldownWatch cooldownWatch
 }
 
 // cooldownEcosystems are the ecosystems whose handlers apply cooldown. Others
@@ -493,6 +509,12 @@ func (p *Proxy) lookupCache(ctx context.Context, pkgPURL, versionPURL, filename 
 	}
 	if p.StreamArtifacts {
 		return nil, nil
+	}
+	if cached, err := p.readStored(ctx, pkgPURL, versionPURL, filename); err != nil || cached != nil {
+		return cached, err
+	}
+	if moved, err := p.rekeyLegacyGoArtifact(pkgPURL, versionPURL, filename); err != nil || !moved {
+		return nil, err
 	}
 	return p.readStored(ctx, pkgPURL, versionPURL, filename)
 }
@@ -1806,6 +1828,10 @@ type metadataResult struct {
 	// fromCache is set when the body is a stored copy within its TTL, read
 	// without asking upstream.
 	fromCache bool
+	// entry is the cache row of the stored document, for a lookup that
+	// leaves the document in storage (see storedMetadataDocument). body is
+	// nil then.
+	entry *database.MetadataCacheEntry
 }
 
 // describedBy returns res with the digest that entry, the cache row its body
@@ -1945,24 +1971,9 @@ type upstreamMetadata struct {
 // alongside for the caller to store and replay. An empty acceptEncoding leaves Go to negotiate and
 // decompress transparently.
 func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept, acceptEncoding string) (*upstreamMetadata, error) {
-	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL, nil)
+	resp, err := p.requestUpstreamMetadata(ctx, upstreamURL, entry, accept, acceptEncoding)
 	if err != nil {
-		return nil, fmt.Errorf("creating request: %w", err)
-	}
-	req.Header.Set("Accept", accept)
-	if acceptEncoding != "" {
-		req.Header.Set(headerAcceptEncoding, acceptEncoding)
-	}
-
-	if entry != nil && entry.ETag.Valid {
-		req.Header.Set("If-None-Match", entry.ETag.String)
-	} else if entry != nil && entry.LastModified.Valid {
-		req.Header.Set("If-Modified-Since", entry.LastModified.Time.UTC().Format(http.TimeFormat))
-	}
-
-	resp, err := p.HTTPClient.Do(req)
-	if err != nil {
-		return nil, fmt.Errorf("fetching metadata: %w", err)
+		return nil, err
 	}
 	defer func() { _ = resp.Body.Close() }()
 
@@ -1990,17 +2001,13 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		return meta, nil
 	}
 
-	if resp.StatusCode == http.StatusNotFound {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, upstreamNotFoundBodyLimit))
-		return nil, &upstreamNotFoundError{body: body}
-	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("upstream returned %d", resp.StatusCode)
+	if err := upstreamMetadataStatus(resp); err != nil {
+		return nil, err
 	}
 
 	// ContentLength is -1 when the transport decompresses the body, and
 	// otherwise the length of the bytes read here.
-	body, err := p.ReadMetadataSized(resp.Body, resp.ContentLength)
+	body, err := p.ReadMetadataSized(upstreamBodyReader{resp.Body}, resp.ContentLength)
 	if err != nil {
 		return nil, fmt.Errorf("reading response: %w", err)
 	}
@@ -2018,6 +2025,44 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		meta.lastModified, _ = http.ParseTime(lm)
 	}
 	return meta, nil
+}
+
+// requestUpstreamMetadata sends the request for a metadata document,
+// revalidating entry when it is given.
+func (p *Proxy) requestUpstreamMetadata(ctx context.Context, upstreamURL string, entry *database.MetadataCacheEntry, accept, acceptEncoding string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("creating request: %w", err)
+	}
+	req.Header.Set("Accept", accept)
+	if acceptEncoding != "" {
+		req.Header.Set(headerAcceptEncoding, acceptEncoding)
+	}
+
+	if entry != nil && entry.ETag.Valid {
+		req.Header.Set("If-None-Match", entry.ETag.String)
+	} else if entry != nil && entry.LastModified.Valid {
+		req.Header.Set("If-Modified-Since", entry.LastModified.Time.UTC().Format(http.TimeFormat))
+	}
+
+	resp, err := p.HTTPClient.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("fetching metadata: %w", err)
+	}
+	return resp, nil
+}
+
+// upstreamMetadataStatus returns the error for a metadata response other
+// than 200. Callers handle a 304 they asked for before.
+func upstreamMetadataStatus(resp *http.Response) error {
+	switch resp.StatusCode {
+	case http.StatusOK:
+		return nil
+	case http.StatusNotFound:
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, upstreamNotFoundBodyLimit))
+		return &upstreamNotFoundError{body: body}
+	}
+	return fmt.Errorf("upstream returned %d", resp.StatusCode)
 }
 
 // refreshMetadataBlob records that upstream answered 304 for the cached
@@ -2047,14 +2092,22 @@ func (p *Proxy) refreshMetadataBlob(ecosystem, cacheKey string, meta *upstreamMe
 // database. It returns the digest it recorded for the bytes, or "" when they
 // were not cached.
 func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, storagePath string, meta *upstreamMetadata) string {
+	digest, _ := p.storeMetadataBlob(ctx, ecosystem, cacheKey, storagePath, bytes.NewReader(meta.body), meta)
+	return digest
+}
+
+// storeMetadataBlob is cacheMetadataBlob for a document read from body,
+// which meta describes. It also returns the error that kept it from caching
+// the document.
+func (p *Proxy) storeMetadataBlob(ctx context.Context, ecosystem, cacheKey, storagePath string, body io.Reader, meta *upstreamMetadata) (string, error) {
 	if p.DB == nil || p.Storage == nil {
-		return ""
+		return "", errMetadataNotStored
 	}
 
-	size, hash, err := p.Storage.Store(ctx, storagePath, bytes.NewReader(meta.body))
+	size, hash, err := p.Storage.Store(ctx, storagePath, body)
 	if err != nil {
 		p.Logger.Warn("failed to cache metadata", "ecosystem", ecosystem, "key", cacheKey, "error", err)
-		return ""
+		return "", err
 	}
 	var digest string
 	if hash != "" {
@@ -2084,9 +2137,9 @@ func (p *Proxy) cacheMetadataBlob(ctx context.Context, ecosystem, cacheKey, stor
 		if delErr := p.Storage.Delete(ctx, storagePath); delErr != nil {
 			p.Logger.Warn("failed to discard metadata blob", "ecosystem", ecosystem, "key", cacheKey, "error", delErr)
 		}
-		return ""
+		return "", err
 	}
-	return digest
+	return digest, nil
 }
 
 // currentMetadataEntry re-reads the metadata cache row and returns it, or
@@ -2141,7 +2194,15 @@ func (p *Proxy) cachedMetaFor(entry *database.MetadataCacheEntry) cachedMeta {
 // When metadata caching is disabled, the response is streamed directly to avoid buffering
 // large metadata responses (e.g. npm packages with many versions) in memory.
 func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL, ecosystem, cacheKey string, acceptHeaders ...string) {
-	p.proxyCachedWithEncoding(w, r, upstreamURL, ecosystem, cacheKey, "identity", acceptHeaders...)
+	p.proxyCachedWithEncoding(w, r, upstreamURL, ecosystem, cacheKey, "identity", nil, acceptHeaders...)
+}
+
+// metadataHooks are optional callbacks for proxyCachedWithEncoding: hit runs
+// after a fresh cached row is served, with that row and when it was read, and
+// fetched runs with a fetched document before it is written.
+type metadataHooks struct {
+	hit     func(entry *database.MetadataCacheEntry, seen time.Time)
+	fetched func(body []byte, contentType, contentEncoding string)
 }
 
 // proxyCachedWithEncoding is ProxyCached with an explicit upstream Accept-Encoding.
@@ -2149,14 +2210,22 @@ func (p *Proxy) ProxyCached(w http.ResponseWriter, r *http.Request, upstreamURL,
 // compressed for large, non-hash-pinned metadata whose clients decode gzip
 // (Homebrew API and Conda repodata). The stored bytes and Content-Encoding are
 // replayed verbatim either way.
-func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, upstreamURL, ecosystem, cacheKey, acceptEncoding string, acceptHeaders ...string) {
+func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, upstreamURL, ecosystem, cacheKey, acceptEncoding string, hooks *metadataHooks, acceptHeaders ...string) {
 	if !p.CacheMetadata {
 		// Stream directly without buffering when caching is off.
 		p.proxyMetadataStream(w, r, upstreamURL, acceptEncoding, acceptHeaders...)
 		return
 	}
 
-	if p.serveCachedMetadata(w, r, ecosystem, cacheKey) {
+	if hooks != nil && hooks.hit != nil {
+		if entry := p.freshMetadataEntry(ecosystem, cacheKey); entry != nil {
+			seen := time.Now()
+			if p.serveCachedMetadata(w, r, ecosystem, cacheKey) {
+				hooks.hit(entry, seen)
+				return
+			}
+		}
+	} else if p.serveCachedMetadata(w, r, ecosystem, cacheKey) {
 		return
 	}
 
@@ -2166,6 +2235,9 @@ func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
+	if hooks != nil && hooks.fetched != nil {
+		hooks.fetched(body, contentType, contentEncoding)
+	}
 	p.writeMetadataCachedResponseWithEncoding(w, r, ecosystem, cacheKey, body, contentType, contentEncoding)
 }
 

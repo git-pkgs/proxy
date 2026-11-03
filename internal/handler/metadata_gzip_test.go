@@ -184,7 +184,7 @@ func TestRewriteCache_KeepsGzipCopyOnlyWhenSmaller(t *testing.T) {
 
 	for _, doc := range [][]byte{large, []byte("abc")} {
 		key := rewriteCacheKey("npm", "http://proxy", string(doc[:3]), doc)
-		if _, err := c.rewrite(t.Context(), key, doc, 0, identity); err != nil {
+		if _, err := c.rewrite(t.Context(), key, doc, nil, identity); err != nil {
 			t.Fatal(err)
 		}
 	}

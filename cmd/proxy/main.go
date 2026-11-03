@@ -124,7 +124,6 @@ import (
 
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
-	"github.com/git-pkgs/proxy/internal/denylist"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/memlimit"
 	"github.com/git-pkgs/proxy/internal/mirror"
@@ -442,6 +441,7 @@ func runMirror() {
 	concurrency := fs.Int("concurrency", 4, "Number of parallel downloads") //nolint:mnd // default concurrency
 	dryRun := fs.Bool("dry-run", false, "Show what would be mirrored without downloading")
 	platforms := fs.String("platform", "", "Comma-separated os/arch[/variant] list limiting which platforms of container images are mirrored")
+	latest := fs.Bool("latest", false, "Mirror only the newest version of PURLs without a version")
 
 	fs.Usage = func() {
 		fmt.Fprintf(os.Stderr, "git-pkgs proxy - Pre-populate cache\n\n")
@@ -450,6 +450,7 @@ func runMirror() {
 		fmt.Fprintf(os.Stderr, "  proxy mirror pkg:npm/lodash@4.17.21\n")
 		fmt.Fprintf(os.Stderr, "  proxy mirror --sbom sbom.cdx.json\n")
 		fmt.Fprintf(os.Stderr, "  proxy mirror pkg:npm/lodash  # all versions\n")
+		fmt.Fprintf(os.Stderr, "  proxy mirror --latest pkg:npm/lodash  # newest version\n")
 		fmt.Fprintf(os.Stderr, "  proxy mirror --platform linux/amd64 pkg:docker/library/alpine@3.20\n\n")
 		fmt.Fprintf(os.Stderr, "Flags:\n")
 		fs.PrintDefaults()
@@ -475,9 +476,9 @@ func runMirror() {
 			fmt.Fprintf(os.Stderr, "error reading SBOM %s: %v\n", *sbomPath, err)
 			os.Exit(1)
 		}
-		source = &mirror.SBOMSource{Data: data, Name: *sbomPath, Platforms: platformList}
+		source = &mirror.SBOMSource{Data: data, Name: *sbomPath, Latest: *latest, Platforms: platformList}
 	case len(purls) > 0:
-		source = &mirror.PURLSource{PURLs: purls, Platforms: platformList}
+		source = &mirror.PURLSource{PURLs: purls, Latest: *latest, Platforms: platformList}
 	default:
 		fmt.Fprintf(os.Stderr, "error: provide PURLs or --sbom\n")
 		fs.Usage()
@@ -550,15 +551,17 @@ func runMirror() {
 
 	// Build proxy with the same upstream clients and authentication as serve
 	proxy, images := server.NewMirrorProxy(cfg, db, store, logger)
-	proxy.Denylist, err = denylist.New(cfg.Denylist.Packages)
-	if err != nil {
-		_ = db.Close()
-		fmt.Fprintf(os.Stderr, "invalid denylist: %v\n", err)
-		os.Exit(1) //nolint:gocritic // db closed above
-	}
 	proxy.CacheMetadata = true // mirror always caches metadata
 	proxy.MetadataTTL = cfg.ParseMetadataTTL()
 	proxy.MetadataMaxSize = cfg.ParseMetadataMaxSize()
+	proxy.MetadataStreamMaxSize = cfg.ParseMetadataStreamMaxSize()
+	// As serve does, resolve Swift source repositories in the denylist through
+	// the upstream, and refuse to run when one can't be.
+	if err := server.ConfigureDenylist(cfg, proxy); err != nil {
+		_ = db.Close()
+		fmt.Fprintf(os.Stderr, "error: %v\n", err)
+		os.Exit(1) //nolint:gocritic // db closed above
+	}
 
 	m := newCommandMirror(cfg, proxy, images, db, store, logger, *concurrency)
 	switch s := source.(type) {

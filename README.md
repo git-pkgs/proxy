@@ -87,7 +87,11 @@ Cooldown requires publish timestamps in metadata. Registries without a "Yes" in 
 brew install git-pkgs/git-pkgs/proxy
 ```
 
-Or download a binary from the [releases page](https://github.com/git-pkgs/proxy/releases).
+Or download a binary from the [releases page](https://github.com/git-pkgs/proxy/releases), or run the container image:
+
+```bash
+docker run -p 8080:8080 -v proxy-data:/data ghcr.io/git-pkgs/proxy:latest
+```
 
 ### Helm
 
@@ -103,6 +107,12 @@ The default chart deploys one replica backed by a 10 GiB persistent volume,
 using SQLite and filesystem artifact storage under `/data`. See
 [`deploy/charts/proxy/values.yaml`](deploy/charts/proxy/values.yaml) for ingress,
 external database and object-storage configuration options.
+
+The SQLite database needs a local disk or a block-backed volume, even with one
+replica; `ReadWriteOnce` alone doesn't guarantee that, since the storage class
+can still be NFS. If the cluster only offers network filesystem storage, use
+Postgres. Artifact storage can stay on NFS, separately from the database. See
+[SQLite](docs/configuration.md#sqlite).
 
 To trust a private CA, for example when upstreams sit behind a TLS-intercepting
 corporate proxy or are internal registries signed by an in-house CA, mount the
@@ -734,6 +744,11 @@ signature verification keeps working. Indexes use the metadata cache
 (`metadata_ttl`, stale fallback); `.apk` packages are stored in the shared
 artifact cache and remain available when the upstream is unreachable.
 
+Set `upstream.apk_snapshots` (e.g. `"90d"`) to keep replaced indexes and serve
+them by date at `/apk/alpine@2026-10-01/v3.22/main`, so pinned package versions
+stay installable after the mirror moves on. See
+[Alpine APK snapshots](docs/configuration.md#alpine-apk-snapshots).
+
 To proxy other mirrors or private repositories, configure named upstreams
 under `upstream.apk` (this replaces the built-in default; re-add `alpine` if
 you still want it):
@@ -1048,7 +1063,7 @@ Run with config file:
 
 ### PostgreSQL
 
-SQLite is the default and works well for single-node deployments. For multi-node setups or if you prefer a managed database, switch to Postgres:
+SQLite is the default and works well for single-node deployments, with the database file on a local disk or block-backed volume. For multi-node setups, when only network filesystem storage such as NFS is available, or if you prefer a managed database, switch to Postgres:
 
 ```yaml
 database:
@@ -1155,6 +1170,9 @@ proxy mirror pkg:npm/lodash@4.17.21 pkg:cargo/serde@1.0.0
 
 # Mirror all versions of a package
 proxy mirror pkg:npm/lodash
+
+# Mirror only the newest version of a package
+proxy mirror --latest pkg:npm/lodash
 
 # Mirror from a CycloneDX or SPDX SBOM
 proxy mirror --sbom sbom.cdx.json
@@ -1712,12 +1730,20 @@ sudo systemctl start proxy
 
 ### Docker
 
-A Dockerfile is included in the repo. Build and run:
+Images for linux/amd64 and linux/arm64 are published to `ghcr.io/git-pkgs/proxy` for each release, tagged with the version and `latest`:
+
+```bash
+docker run -p 8080:8080 -v proxy-data:/data ghcr.io/git-pkgs/proxy:latest
+```
+
+To build the image from the repo instead:
 
 ```bash
 docker build -t proxy .
 docker run -p 8080:8080 -v proxy-data:/data proxy
 ```
+
+The image has a health check that requests `/health` on port 8080. It checks the database and storage, so a container reports unhealthy when either fails. If you change the port with `PROXY_LISTEN`, override it with `--health-cmd`.
 
 With `--read-only`, also pass `--tmpfs /tmp`: the proxy writes some uploads to a temporary file before reading them.
 

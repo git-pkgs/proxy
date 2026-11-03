@@ -500,7 +500,7 @@ func TestRewriteCacheETag(t *testing.T) {
 	exclaim := func(b []byte) ([]byte, error) { return []byte(string(b) + "!"), nil }
 	key := rewriteCacheKey("npm", "http://proxy", "demo", []byte("doc"))
 
-	m, err := c.rewrite(t.Context(), key, []byte("doc"), 0, exclaim)
+	m, err := c.rewrite(t.Context(), key, []byte("doc"), nil, exclaim)
 	if err != nil || string(m.content()) != "doc!" {
 		t.Fatalf("rewrite = %q, %v", m.content(), err)
 	}

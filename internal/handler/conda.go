@@ -409,7 +409,8 @@ func (h *CondaHandler) rememberRepodata(cacheKey, digest string, filter *repodat
 	h.repodataStates[cacheKey] = repodataState{digest: digest, etag: etag, until: filter.until}
 }
 
-// countingWriter records whether anything has reached the response yet.
+// countingWriter counts the bytes written through it, such as whether
+// anything has reached the response yet.
 type countingWriter struct {
 	w io.Writer
 	n int64
@@ -493,7 +494,7 @@ func (f *repodataFilter) inCooldown(filename string, raw []byte) bool {
 		return false
 	}
 	publishedAt := time.Unix(int64(entry.Timestamp)/condaTimestampDivisor, 0)
-	decision := f.h.proxy.Cooldown.Evaluate("conda", canonicalPackagePURL("conda", entry.Name), publishedAt, f.now)
+	decision := f.h.proxy.cooldown().Evaluate("conda", canonicalPackagePURL("conda", entry.Name), publishedAt, f.now)
 	if decision.Allowed {
 		return false
 	}
@@ -517,7 +518,7 @@ func (h *CondaHandler) recordInCooldown(filename, name, version string, timestam
 		return false
 	}
 	publishedAt := time.Unix(int64(timestamp)/condaTimestampDivisor, 0)
-	if h.proxy.Cooldown.IsAllowed("conda", canonicalPackagePURL("conda", name), publishedAt) {
+	if h.proxy.cooldown().IsAllowed("conda", canonicalPackagePURL("conda", name), publishedAt) {
 		return false
 	}
 	h.proxy.Logger.Info("cooldown: filtering conda package",
@@ -540,7 +541,7 @@ func (h *CondaHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(r.URL.Path, ".json") {
 		acceptEncoding = "gzip"
 	}
-	h.proxy.proxyCachedWithEncoding(w, r, h.upstreamURL+r.URL.Path, "conda", cacheKey, acceptEncoding, "*/*")
+	h.proxy.proxyCachedWithEncoding(w, r, h.upstreamURL+r.URL.Path, "conda", cacheKey, acceptEncoding, nil, "*/*")
 }
 
 // proxyUpstream forwards a request to Anaconda without caching.

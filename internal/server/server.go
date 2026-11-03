@@ -75,7 +75,6 @@ import (
 	"github.com/git-pkgs/proxy/internal/accesslog"
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
-	"github.com/git-pkgs/proxy/internal/denylist"
 	"github.com/git-pkgs/proxy/internal/enrichment"
 	"github.com/git-pkgs/proxy/internal/gitcache"
 	"github.com/git-pkgs/proxy/internal/handler"
@@ -234,6 +233,33 @@ func (s *Server) Start(listeners ...net.Listener) error {
 	return s.serve(listener)
 }
 
+// configureGitCache sets up the cache of upstream git repositories, when any
+// are configured.
+func (s *Server) configureGitCache(client *http.Client) error {
+	if len(s.cfg.Upstream.Git) == 0 {
+		return nil
+	}
+	upstreamDirs := make(map[string]string, len(s.cfg.Upstream.Git))
+	for name, upstream := range s.cfg.Upstream.Git {
+		upstreamDirs[name] = gitcache.UpstreamDir(name, upstream.URL)
+	}
+	gitCache, err := gitcache.New(gitcache.Options{
+		CacheDir:    s.cfg.Git.CacheDir,
+		MaxSize:     s.cfg.Git.MaxSizeBytes(),
+		MaxRepoSize: s.cfg.Git.MaxRepoSizeBytes(),
+		RefreshWait: s.cfg.Git.RefreshWaitDuration(),
+		StaleMaxAge: s.cfg.Git.StaleMaxAgeDuration(),
+		Client:      client,
+		Logger:      s.logger,
+		Upstreams:   upstreamDirs,
+	})
+	if err != nil {
+		return fmt.Errorf("configuring git cache: %w", err)
+	}
+	s.git = gitCache
+	return nil
+}
+
 func (s *Server) serve(listener net.Listener) error {
 	metadataClient, artifactClient := s.newUpstreamClients(s.cfg.ParseArtifactTimeout())
 
@@ -259,19 +285,11 @@ func (s *Server) serve(listener net.Listener) error {
 	if s.cooldown, err = newCooldownView(s.cfg.Cooldown, cooldownPolicy); err != nil {
 		return err
 	}
-	policy, err := denylist.New(s.cfg.Denylist.Packages)
-	if err != nil {
-		return fmt.Errorf("configuring denylist: %w", err)
-	}
-	proxy.Denylist = policy
 	scanGroup, err := configureScanning(proxy, s.cfg.Scanning, s.cfg.BaseURL, s.logger)
 	if err != nil {
 		return fmt.Errorf("configuring scanners: %w", err)
 	}
-	proxy.CacheMetadata = s.cfg.CacheMetadata
-	proxy.MetadataTTL = s.cfg.ParseMetadataTTL()
-	proxy.MetadataMaxSize = s.cfg.ParseMetadataMaxSize()
-	proxy.SetMetadataRewriteCacheSize(s.cfg.ParseMetadataRewriteCacheSize())
+	configureMetadata(proxy, s.cfg)
 	proxy.GradleReadOnly = s.cfg.Gradle.BuildCache.ReadOnly
 	proxy.HostedEnabled = s.cfg.Hosted.Enabled
 	proxy.HostedNPMScopes = s.cfg.Hosted.NPMScopes
@@ -282,26 +300,12 @@ func (s *Server) serve(listener net.Listener) error {
 	proxy.DirectServeTTL = s.cfg.ParseDirectServeTTL()
 	proxy.DirectServeBaseURL = s.cfg.Storage.DirectServeBaseURL
 	proxy.StreamArtifacts = !s.cfg.Storage.CacheArtifacts
+	if err := ConfigureDenylist(s.cfg, proxy); err != nil {
+		return err
+	}
 
-	if len(s.cfg.Upstream.Git) > 0 {
-		upstreamDirs := make(map[string]string, len(s.cfg.Upstream.Git))
-		for name, upstream := range s.cfg.Upstream.Git {
-			upstreamDirs[name] = gitcache.UpstreamDir(name, upstream.URL)
-		}
-		gitCache, err := gitcache.New(gitcache.Options{
-			CacheDir:    s.cfg.Git.CacheDir,
-			MaxSize:     s.cfg.Git.MaxSizeBytes(),
-			MaxRepoSize: s.cfg.Git.MaxRepoSizeBytes(),
-			RefreshWait: s.cfg.Git.RefreshWaitDuration(),
-			StaleMaxAge: s.cfg.Git.StaleMaxAgeDuration(),
-			Client:      artifactClient,
-			Logger:      s.logger,
-			Upstreams:   upstreamDirs,
-		})
-		if err != nil {
-			return fmt.Errorf("configuring git cache: %w", err)
-		}
-		s.git = gitCache
+	if err := s.configureGitCache(artifactClient); err != nil {
+		return err
 	}
 
 	// Create router with Chi
@@ -429,7 +433,9 @@ func (s *Server) serve(listener net.Listener) error {
 	s.background.Go(func() { s.updateCacheStatsMetrics(bgCtx) })
 	s.background.Go(func() { backfillMetadataAccess(bgCtx, s.db, s.logger, metadataBackfillBatch) })
 	s.background.Go(func() { s.startEvictionLoop(bgCtx) })
-	s.background.Go(func() { s.startRetentionLoop(bgCtx) })
+	retentionResolvers := s.retentionResolvers(proxy)
+	s.background.Go(func() { s.startRetentionLoop(bgCtx, retentionResolvers) })
+	s.background.Go(func() { s.startAPKSnapshotPruning(bgCtx) })
 	s.background.Go(func() { s.startReclaimLoop(bgCtx) })
 
 	if listener != nil {
@@ -495,7 +501,8 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	containerHandler := s.newContainerHandler(proxy)
 	helmHandler := handler.NewHelmHandlerWithOCIRegistries(
 		proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm, s.cfg.Upstream.OCIDefault, s.cfg.Upstream.OCI)
-	apkHandler := handler.NewAPKHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.APK)
+	apkHandler := handler.NewAPKHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.APK).
+		WithSnapshots(s.cfg.ParseAPKSnapshots())
 	archHandler := handler.NewArchHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Arch)
 	freebsdHandler := handler.NewFreeBSDHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.FreeBSD)
 	debianHandler := handler.NewDebianHandler(
@@ -616,6 +623,15 @@ func (s *Server) newContainerHandler(proxy *handler.Proxy) *handler.ContainerHan
 	containerHandler.SetMirroredRegistries(s.cfg.Upstream.OCIMirrors)
 	handler.RegisterHomebrewArtifacts(containerHandler, s.cfg.Upstream.HomebrewArtifact)
 	return containerHandler
+}
+
+// configureMetadata applies the metadata cache settings to proxy.
+func configureMetadata(proxy *handler.Proxy, cfg *config.Config) {
+	proxy.CacheMetadata = cfg.CacheMetadata
+	proxy.MetadataTTL = cfg.ParseMetadataTTL()
+	proxy.MetadataMaxSize = cfg.ParseMetadataMaxSize()
+	proxy.MetadataStreamMaxSize = cfg.ParseMetadataStreamMaxSize()
+	proxy.SetMetadataRewriteCacheSize(cfg.ParseMetadataRewriteCacheSize())
 }
 
 func configureScanning(proxy *handler.Proxy, cfg config.ScanningConfig, baseURL string, logger *slog.Logger) (*scanner.Group, error) {

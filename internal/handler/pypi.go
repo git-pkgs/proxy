@@ -318,7 +318,7 @@ func (h *PyPIHandler) fetchFilteredVersions(r *http.Request, name string) (map[s
 	filtered := make(map[string]bool)
 
 	for version, publishedAt := range times {
-		if !publishedAt.IsZero() && !h.proxy.Cooldown.IsAllowed("pypi", packagePURL, publishedAt) {
+		if !publishedAt.IsZero() && !h.proxy.cooldown().IsAllowed("pypi", packagePURL, publishedAt) {
 			filtered[version] = true
 		}
 	}
@@ -611,7 +611,7 @@ func (h *PyPIHandler) shouldFilterRelease(packagePURL string, files any) bool {
 	}
 
 	publishedAt := h.newestUploadTime(filesArr)
-	return !publishedAt.IsZero() && !h.proxy.Cooldown.IsAllowed("pypi", packagePURL, publishedAt)
+	return !publishedAt.IsZero() && !h.proxy.cooldown().IsAllowed("pypi", packagePURL, publishedAt)
 }
 
 // versionInCooldown reports whether a version is still inside the cooldown
@@ -636,7 +636,7 @@ func (h *PyPIHandler) versionInCooldown(r *http.Request, name, version string) (
 		return false, nil
 	}
 	h.storeUploadTime(name, version, publishedAt)
-	return !h.proxy.Cooldown.IsAllowed("pypi", canonicalPackagePURL("pypi", name), publishedAt), nil
+	return !h.proxy.cooldown().IsAllowed("pypi", canonicalPackagePURL("pypi", name), publishedAt), nil
 }
 
 // storeUploadTime records a release's newest upload time under the version
@@ -675,7 +675,7 @@ func (h *PyPIHandler) storedCooldown(r *http.Request, name, version, filename st
 	if err != nil || ver == nil || !ver.PublishedAt.Valid {
 		return false, false
 	}
-	if !h.proxy.Cooldown.IsAllowed("pypi", packagePURL, ver.PublishedAt.Time) {
+	if !h.proxy.cooldown().IsAllowed("pypi", packagePURL, ver.PublishedAt.Time) {
 		return true, true
 	}
 	cached, err := h.proxy.HasCachedArtifact(r.Context(), "pypi", name, version, filename)

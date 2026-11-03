@@ -14,7 +14,11 @@ COPY . .
 
 # Build the binary for the target platform
 ARG TARGETARCH
-RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build -ldflags="-s -w" -o /proxy ./cmd/proxy
+ARG VERSION=dev
+ARG COMMIT=unknown
+RUN CGO_ENABLED=0 GOOS=linux GOARCH=${TARGETARCH} go build \
+    -ldflags="-s -w -X main.Version=${VERSION} -X main.Commit=${COMMIT}" \
+    -o /proxy ./cmd/proxy
 
 FROM alpine:3.24.2
 
@@ -30,6 +34,10 @@ USER proxy
 WORKDIR /data
 
 EXPOSE 8080
+
+# /health checks the database and storage and can take up to ten seconds.
+HEALTHCHECK --interval=30s --timeout=11s --start-period=10s --retries=3 \
+  CMD wget -q -O /dev/null http://127.0.0.1:8080/health || exit 1
 
 ENTRYPOINT ["proxy"]
 CMD ["serve"]

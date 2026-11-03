@@ -5,7 +5,7 @@ import "net/http"
 // cooldownApplies reports whether cooldown withholds new versions of the
 // package, taking package overrides and exemptions into account.
 func (p *Proxy) cooldownApplies(ecosystem, name string) bool {
-	return p.cooldownEnabled() && p.Cooldown.For(ecosystem, canonicalPackagePURL(ecosystem, name)) > 0
+	return p.cooldownEnabled() && p.cooldown().For(ecosystem, canonicalPackagePURL(ecosystem, name)) > 0
 }
 
 // mustFilterMetadata reports whether the package's metadata may have

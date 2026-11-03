@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/git-pkgs/purl"
+	"github.com/git-pkgs/registries"
 	"github.com/git-pkgs/sbom"
 )
 
@@ -46,12 +47,14 @@ type Source interface {
 
 // PURLSource yields packages from PURL strings.
 // Versioned PURLs produce a single item. Unversioned PURLs produce one item
-// per version Versions lists.
+// per version Versions lists, or only the newest with Latest.
 type PURLSource struct {
 	PURLs []string
 	// Versions lists the versions of unversioned PURLs. Nil lists them from
 	// the public registries.
 	Versions VersionLister
+	// Latest mirrors only the newest version of unversioned PURLs.
+	Latest bool
 	// Platforms limit which platforms of container images are mirrored.
 	Platforms []string
 }
@@ -86,8 +89,8 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 			continue
 		}
 
-		// Unversioned: enumerate all versions
-		listed, err := versions.ListVersions(ctx, ecosystem, name)
+		// Unversioned: enumerate all versions, or the newest
+		listed, err := s.listVersions(ctx, versions, ecosystem, name)
 		if err != nil {
 			return fmt.Errorf("fetching versions for %s/%s: %w", ecosystem, name, err)
 		}
@@ -102,6 +105,36 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 		}
 	}
 	return nil
+}
+
+func (s *PURLSource) listVersions(ctx context.Context, versions VersionLister, ecosystem, name string) ([]string, error) {
+	if !s.Latest {
+		return versions.ListVersions(ctx, ecosystem, name)
+	}
+	var latest string
+	if finder, ok := versions.(LatestFinder); ok {
+		v, err := finder.LatestVersion(ctx, ecosystem, name)
+		if err != nil {
+			return nil, err
+		}
+		latest = v
+	} else {
+		listed, err := versions.ListVersions(ctx, ecosystem, name)
+		if err != nil {
+			return nil, err
+		}
+		all := make([]registries.Version, len(listed))
+		for i, v := range listed {
+			all[i] = registries.Version{Number: v}
+		}
+		if v := registries.SelectLatestVersion(all, purl.EcosystemToPURLType(ecosystem), ""); v != nil {
+			latest = v.Number
+		}
+	}
+	if latest == "" {
+		return nil, nil
+	}
+	return []string{latest}, nil
 }
 
 // mirrorTarget returns the ecosystem, name and file qualifiers a PURL is
@@ -128,6 +161,8 @@ type SBOMSource struct {
 	// Versions lists the versions of unversioned PURLs. Nil lists them from
 	// the public registries.
 	Versions VersionLister
+	// Latest mirrors only the newest version of unversioned PURLs.
+	Latest bool
 	// Platforms limit which platforms of container images are mirrored.
 	Platforms []string
 }
@@ -141,7 +176,7 @@ func (s *SBOMSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 		return fmt.Errorf("parsing SBOM: %w", err)
 	}
 
-	inner := &PURLSource{PURLs: purls, Versions: s.Versions, Platforms: s.Platforms}
+	inner := &PURLSource{PURLs: purls, Versions: s.Versions, Latest: s.Latest, Platforms: s.Platforms}
 	return inner.Enumerate(ctx, fn)
 }
 

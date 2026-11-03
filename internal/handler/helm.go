@@ -378,7 +378,7 @@ func (h *HelmHandler) buildChartLookup(upstreamURL string, body []byte) (*helmCh
 
 func (h *HelmHandler) chartOnCooldown(chartName string, created time.Time) bool {
 	return !created.IsZero() && h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled() &&
-		!h.proxy.Cooldown.IsAllowed(helmMetadataEcosystem, canonicalPackagePURL(helmMetadataEcosystem, chartName), created)
+		!h.proxy.cooldown().IsAllowed(helmMetadataEcosystem, canonicalPackagePURL(helmMetadataEcosystem, chartName), created)
 }
 
 type helmChartDownload struct {
