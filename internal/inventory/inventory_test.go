@@ -246,6 +246,59 @@ func TestParseSkipsTheProjectsOwnPackages(t *testing.T) {
 	}
 }
 
+func TestParseKeepsTopLevelDependenciesOfLockFiles(t *testing.T) {
+	// A poetry.lock doesn't list the project, so requests is a direct
+	// dependency, not the project's own entry.
+	doc := `{"bomFormat":"CycloneDX","specVersion":"1.6","components":[
+		{"bom-ref":"requests","type":"library","name":"requests","version":"2.32.3","purl":"pkg:pypi/requests@2.32.3",
+		 "properties":[{"name":"syft:package:metadataType","value":"python-poetry-lock-entry"},{"name":"syft:location:0:path","value":"/poetry.lock"}]},
+		{"bom-ref":"urllib3","type":"library","name":"urllib3","version":"2.2.3","purl":"pkg:pypi/urllib3@2.2.3",
+		 "properties":[{"name":"syft:package:metadataType","value":"python-poetry-lock-entry"},{"name":"syft:location:0:path","value":"/poetry.lock"}]}
+	],"dependencies":[{"ref":"requests","dependsOn":["urllib3"]}]}`
+	components, skipped, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 2 || skipped != 0 {
+		t.Errorf("components = %+v, skipped = %d; want requests and urllib3, 0 skipped", components, skipped)
+	}
+}
+
+func TestParseKeepsOSPackagesNothingDependsOn(t *testing.T) {
+	// syft's CycloneDX of an image: metadata.component is the image, with
+	// no edges, and busybox is something nothing else depends on.
+	doc := `{"bomFormat":"CycloneDX","specVersion":"1.6",
+	"metadata":{"component":{"bom-ref":"image","type":"container","name":"alpine:3.20"}},
+	"components":[
+		{"bom-ref":"busybox","type":"library","name":"busybox","version":"1.36.1-r29","purl":"pkg:apk/alpine/busybox@1.36.1-r29?distro=alpine-3.20.3",
+		 "properties":[{"name":"syft:package:metadataType","value":"apk-db-entry"}]},
+		{"bom-ref":"musl","type":"library","name":"musl","version":"1.2.5-r0","purl":"pkg:apk/alpine/musl@1.2.5-r0?distro=alpine-3.20.3",
+		 "properties":[{"name":"syft:package:metadataType","value":"apk-db-entry"}]}
+	],"dependencies":[{"ref":"busybox","dependsOn":["musl"]}]}`
+	components, skipped, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 2 || skipped != 0 {
+		t.Errorf("components = %+v, skipped = %d; want busybox and musl, 0 skipped", components, skipped)
+	}
+}
+
+func TestParseSkipsTheDeclaredRoot(t *testing.T) {
+	doc := `{"bomFormat":"CycloneDX","specVersion":"1.6",
+	"metadata":{"component":{"bom-ref":"app","type":"application","name":"app","version":"1.0.0","purl":"pkg:npm/app@1.0.0"}},
+	"components":[
+		{"bom-ref":"lodash","type":"library","name":"lodash","version":"4.17.21","purl":"pkg:npm/lodash@4.17.21"}
+	],"dependencies":[{"ref":"app","dependsOn":["lodash"]}]}`
+	components, _, err := Parse([]byte(doc))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(components) != 1 || components[0].Name != "lodash" {
+		t.Errorf("components = %+v, want only lodash", components)
+	}
+}
+
 func TestParseSkipsMixedCaseMainModule(t *testing.T) {
 	// syft keeps the module path's case in mainModule, and so does the
 	// package URL.

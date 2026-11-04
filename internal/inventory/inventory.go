@@ -88,18 +88,18 @@ const unknownVersion = "UNKNOWN"
 // type the proxy doesn't serve, without a version, or conda packages without
 // a channel are counted in skipped.
 // So are the project's own packages: Go modules its binaries were built from,
-// and the root of a lock file.
+// and the roots sbom finds for the dependency graph.
 func Parse(data []byte) (components []Component, skipped int, err error) {
 	doc, err := sbom.Parse(data)
 	if err != nil {
 		return nil, 0, err
 	}
 	ownModules := mainModules(doc.Packages)
-	lockRoots := lockFileRoots(doc)
+	roots := projectRoots(doc)
 	seen := make(map[[2]string]bool, len(doc.Packages))
 	for _, pkg := range doc.Packages {
 		c, ok := componentOf(pkg)
-		if !ok || lockRoots[pkg.ID] || (c.Ecosystem == "golang" && ownModules[c.Name]) {
+		if !ok || roots[pkg.ID] || (c.Ecosystem == "golang" && ownModules[c.Name]) {
 			skipped++
 			continue
 		}
@@ -133,31 +133,34 @@ func componentOf(pkg sbom.Package) (Component, bool) {
 	return c, true
 }
 
-// lockFileRoots returns the IDs of packages read from a lock file that depend
-// on others while nothing depends on them: the project's own entry, such as
-// the root of package-lock.json, which carries the version from package.json.
-func lockFileRoots(doc *sbom.SBOM) map[string]bool {
-	dependents := map[string]bool{}
-	dependencies := map[string]bool{}
-	for _, r := range doc.Relationships {
-		if r.Type != sbom.RelDependsOn {
-			continue
-		}
-		dependencies[r.SourceID] = true
-		dependents[r.TargetID] = true
+// projectRoots returns the IDs of the roots sbom finds that are the
+// project: all of them when the document declares them, otherwise only those
+// read from a lock file. An image's packages that nothing depends on, such as
+// busybox, are roots of the graph but not the project.
+func projectRoots(doc *sbom.SBOM) map[string]bool {
+	ids, declared := doc.Roots()
+	roots := make(map[string]bool, len(ids))
+	for _, id := range ids {
+		roots[id] = declared
 	}
-	roots := map[string]bool{}
+	if declared {
+		return roots
+	}
 	for _, pkg := range doc.Packages {
-		if pkg.ID == "" || !dependencies[pkg.ID] || dependents[pkg.ID] {
-			continue
-		}
-		for _, prop := range pkg.Properties {
-			if prop.Name == syftMetadataType && strings.Contains(prop.Value, "lock") {
-				roots[pkg.ID] = true
-			}
+		if _, ok := roots[pkg.ID]; ok && readFromLockFile(pkg) {
+			roots[pkg.ID] = true
 		}
 	}
 	return roots
+}
+
+func readFromLockFile(pkg sbom.Package) bool {
+	for _, prop := range pkg.Properties {
+		if prop.Name == syftMetadataType && strings.Contains(prop.Value, "lock") {
+			return true
+		}
+	}
+	return false
 }
 
 // mainModules returns the Go modules the SBOM's binaries were built from,
