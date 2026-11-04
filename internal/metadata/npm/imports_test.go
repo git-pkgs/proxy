@@ -23,6 +23,7 @@ func TestPortableImports(t *testing.T) {
 		"github.com/Masterminds/semver/v3",
 		"github.com/git-pkgs/cooldown",
 		"github.com/git-pkgs/proxy/internal/jsonscan",
+		"github.com/git-pkgs/proxy/internal/jsonstream",
 		"github.com/git-pkgs/proxy/internal/metadata/npm",
 		"github.com/git-pkgs/proxy/internal/packageurl",
 		"github.com/git-pkgs/purl",

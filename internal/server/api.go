@@ -1,9 +1,12 @@
 package server
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
 	"net/http"
 	"strings"
+	"time"
 
 	shared "github.com/git-pkgs/enrichment"
 	"github.com/git-pkgs/proxy/internal/database"
@@ -20,9 +23,20 @@ const (
 
 // APIHandler provides REST endpoints for package enrichment data.
 type APIHandler struct {
-	enrichment *enrichment.Service
+	enrichment enricher
 	ecosystems *shared.EcosystemsClient
 	db         DBSearcher
+	// cooldown is nil with cooldown off.
+	cooldown *cooldownView
+}
+
+// enricher is the part of enrichment.Service the API uses.
+type enricher interface {
+	EnrichPackage(ctx context.Context, ecosystem, name string) (*enrichment.PackageInfo, error)
+	EnrichFull(ctx context.Context, ecosystem, name, version string) (*enrichment.EnrichmentResult, error)
+	CheckVulnerabilities(ctx context.Context, ecosystem, name, version string) ([]enrichment.VulnInfo, error)
+	GetLatestVersion(ctx context.Context, ecosystem, name string) (string, error)
+	BulkEnrichPackages(ctx context.Context, packages []struct{ Ecosystem, Name string }) map[string]*enrichment.PackageInfo
 }
 
 // DBSearcher defines the interface for database search operations.
@@ -46,6 +60,12 @@ func NewAPIHandler(svc *enrichment.Service, db DBSearcher) *APIHandler {
 	return h
 }
 
+func (s *Server) newAPIHandler(svc *enrichment.Service) *APIHandler {
+	h := NewAPIHandler(svc, s.db)
+	h.cooldown = s.cooldown
+	return h
+}
+
 // PackageResponse contains enriched package metadata.
 type PackageResponse struct {
 	Ecosystem       string `json:"ecosystem"`
@@ -57,6 +77,9 @@ type PackageResponse struct {
 	Homepage        string `json:"homepage,omitempty"`
 	Repository      string `json:"repository,omitempty"`
 	RegistryURL     string `json:"registry_url,omitempty"`
+	// Cooldown is the cooldown that applies to the package, in the
+	// configuration's syntax ("3d", "0").
+	Cooldown string `json:"cooldown,omitempty"`
 }
 
 // VersionResponse contains enriched version metadata.
@@ -66,10 +89,14 @@ type VersionResponse struct {
 	Version     string `json:"version"`
 	License     string `json:"license,omitempty"`
 	PublishedAt string `json:"published_at,omitempty"`
+	// AvailableAt is when a version held back by cooldown leaves it.
+	AvailableAt string `json:"available_at,omitempty"`
 	Integrity   string `json:"integrity,omitempty"`
 	Yanked      bool   `json:"yanked"`
 	IsOutdated  bool   `json:"is_outdated"`
 }
+
+const apiTimeFormat = "2006-01-02T15:04:05Z"
 
 // VulnResponse contains vulnerability information.
 type VulnResponse struct {
@@ -179,6 +206,7 @@ func (h *APIHandler) HandlePackagePath(w http.ResponseWriter, r *http.Request) {
 			Homepage:        info.Homepage,
 			Repository:      info.Repository,
 			RegistryURL:     info.RegistryURL,
+			Cooldown:        h.packageCooldown(ecosystem, fullName),
 		}
 		writeJSON(w, resp)
 		return
@@ -212,6 +240,7 @@ func (h *APIHandler) getPackage(w http.ResponseWriter, r *http.Request, ecosyste
 		Homepage:        info.Homepage,
 		Repository:      info.Repository,
 		RegistryURL:     info.RegistryURL,
+		Cooldown:        h.packageCooldown(ecosystem, name),
 	}
 
 	writeJSON(w, resp)
@@ -219,6 +248,10 @@ func (h *APIHandler) getPackage(w http.ResponseWriter, r *http.Request, ecosyste
 
 func (h *APIHandler) getVersion(w http.ResponseWriter, r *http.Request, ecosystem, name, version string) {
 	result, err := h.enrichment.EnrichFull(r.Context(), ecosystem, name, version)
+	if errors.Is(err, shared.ErrUnsupportedVulnerabilityIdentity) {
+		badRequest(w, "package identity is not supported for vulnerability lookups")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, ErrCodeUpstream, "failed to enrich version")
 		return
@@ -240,6 +273,7 @@ func (h *APIHandler) getVersion(w http.ResponseWriter, r *http.Request, ecosyste
 			Homepage:        result.Package.Homepage,
 			Repository:      result.Package.Repository,
 			RegistryURL:     result.Package.RegistryURL,
+			Cooldown:        h.packageCooldown(ecosystem, name),
 		}
 	}
 
@@ -253,8 +287,11 @@ func (h *APIHandler) getVersion(w http.ResponseWriter, r *http.Request, ecosyste
 			Yanked:     result.Version.Yanked,
 			IsOutdated: result.IsOutdated,
 		}
-		if !result.Version.PublishedAt.IsZero() {
-			resp.Version.PublishedAt = result.Version.PublishedAt.Format("2006-01-02T15:04:05Z")
+		if published := result.Version.PublishedAt; !published.IsZero() {
+			resp.Version.PublishedAt = published.UTC().Format(apiTimeFormat)
+			if at := h.cooldown.availableAt(ecosystem, name, published, time.Now()); !at.IsZero() {
+				resp.Version.AvailableAt = at.UTC().Format(apiTimeFormat)
+			}
 		}
 	}
 
@@ -270,6 +307,19 @@ func (h *APIHandler) getVersion(w http.ResponseWriter, r *http.Request, ecosyste
 	}
 
 	writeJSON(w, resp)
+}
+
+// packageCooldown returns the cooldown for a package in the configuration's
+// syntax, or "" with cooldown off or not applied to the ecosystem.
+func (h *APIHandler) packageCooldown(ecosystem, name string) string {
+	c := h.cooldown.forPackage(ecosystem, name)
+	switch {
+	case c == nil:
+		return ""
+	case c.Duration == cooldownOff:
+		return "0"
+	}
+	return c.Duration
 }
 
 // HandleVulnsPath dispatches /api/vulns/{ecosystem}/* to the vulns handler.
@@ -303,6 +353,10 @@ func (h *APIHandler) HandleVulnsPath(w http.ResponseWriter, r *http.Request) {
 	}
 
 	vulns, err := h.enrichment.CheckVulnerabilities(r.Context(), ecosystem, name, version)
+	if errors.Is(err, shared.ErrUnsupportedVulnerabilityIdentity) {
+		badRequest(w, "package identity is not supported for vulnerability lookups")
+		return
+	}
 	if err != nil {
 		writeError(w, http.StatusBadGateway, ErrCodeUpstream, "failed to check vulnerabilities")
 		return

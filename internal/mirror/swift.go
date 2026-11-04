@@ -19,7 +19,7 @@ func (m *Mirror) mirrorSwift(ctx context.Context, pv PackageVersion, tracker *pr
 	}
 	h := handler.NewSwiftHandler(m.proxy, "", upstream)
 	var scope, name string
-	if source := swiftSourceURL(pv.Name); source != "" {
+	if source := handler.SwiftSourceURL(pv.Name); source != "" {
 		scope, name, err = h.ResolveIdentity(ctx, source)
 	} else {
 		scope, name, err = swiftScopeAndName(pv.Name)
@@ -43,16 +43,6 @@ func (m *Mirror) registryURL(purlType, name string) (string, error) {
 		return r.URL(purlType, name)
 	}
 	return "", nil
-}
-
-// swiftSourceURL returns the repository URL of a pkg:swift name whose
-// namespace starts with a host, as in pkg:swift/github.com/apple/swift-nio,
-// or "" for a name whose namespace is a registry scope.
-func swiftSourceURL(name string) string {
-	if host, _, ok := strings.Cut(name, "/"); ok && strings.Contains(host, ".") {
-		return "https://" + name
-	}
-	return ""
 }
 
 // swiftScopeAndName splits the name of a pkg:swift PURL whose namespace is

@@ -121,37 +121,67 @@ func swiftLinkHasRel(params, rel string) bool {
 	return false
 }
 
-// ResolveIdentity returns the registry scope and name the upstream lists for
-// the source repository at sourceURL. The answer is cached as the identifiers
-// route caches it.
+// SwiftIdentity is a package's identity in a Swift registry, scope.name.
+type SwiftIdentity struct {
+	Scope, Name string
+}
+
+// ResolveIdentity returns the first registry identity the upstream lists for
+// the source repository at sourceURL, the one a download uses.
 func (h *SwiftHandler) ResolveIdentity(ctx context.Context, sourceURL string) (scope, name string, _ error) {
+	ids, err := h.ResolveIdentities(ctx, sourceURL)
+	if err != nil {
+		return "", "", err
+	}
+	return ids[0].Scope, ids[0].Name, nil
+}
+
+// ResolveIdentities returns every registry identity the upstream lists for
+// the source repository at sourceURL; the registry protocol allows several.
+// The answer is cached as the identifiers route caches it.
+func (h *SwiftHandler) ResolveIdentities(ctx context.Context, sourceURL string) ([]SwiftIdentity, error) {
 	query := url.Values{"url": {sourceURL}}.Encode()
 	body, _, err := h.proxy.FetchOrCacheMetadata(ctx, "swift", swiftMetadataCacheKey("identifiers", query),
 		h.upstreamURL+"/identifiers?"+query, swiftAcceptJSON)
 	if errors.Is(err, ErrUpstreamNotFound) {
-		return "", "", fmt.Errorf("the Swift registry has no package for %s", sourceURL)
+		return nil, fmt.Errorf("the Swift registry has no package for %s", sourceURL)
 	}
 	if err != nil {
-		return "", "", err
+		return nil, err
 	}
-	return SwiftIdentityOf(body, sourceURL)
+	return SwiftIdentitiesOf(body, sourceURL)
 }
 
 // SwiftIdentityOf returns the scope and name of the first identity in body,
 // a registry's answer to an identifiers lookup for sourceURL.
 func SwiftIdentityOf(body []byte, sourceURL string) (scope, name string, _ error) {
+	ids, err := SwiftIdentitiesOf(body, sourceURL)
+	if err != nil {
+		return "", "", err
+	}
+	return ids[0].Scope, ids[0].Name, nil
+}
+
+// SwiftIdentitiesOf returns every identity in body, a registry's answer to
+// an identifiers lookup for sourceURL. One invalid identity fails the whole
+// answer, so a policy never covers only some of them.
+func SwiftIdentitiesOf(body []byte, sourceURL string) ([]SwiftIdentity, error) {
 	var answer struct {
 		Identifiers []string `json:"identifiers"`
 	}
 	if err := json.Unmarshal(body, &answer); err != nil {
-		return "", "", fmt.Errorf("parsing the Swift registry's identifiers for %s: %w", sourceURL, err)
+		return nil, fmt.Errorf("parsing the Swift registry's identifiers for %s: %w", sourceURL, err)
 	}
 	if len(answer.Identifiers) == 0 {
-		return "", "", fmt.Errorf("the Swift registry has no package for %s", sourceURL)
+		return nil, fmt.Errorf("the Swift registry has no package for %s", sourceURL)
 	}
-	scope, name, ok := strings.Cut(answer.Identifiers[0], ".")
-	if !ok || scope == "" || name == "" {
-		return "", "", fmt.Errorf("the Swift registry answered %s with the invalid identity %q", sourceURL, answer.Identifiers[0])
+	ids := make([]SwiftIdentity, 0, len(answer.Identifiers))
+	for _, identifier := range answer.Identifiers {
+		scope, name, ok := strings.Cut(identifier, ".")
+		if !ok || scope == "" || name == "" {
+			return nil, fmt.Errorf("the Swift registry answered %s with the invalid identity %q", sourceURL, identifier)
+		}
+		ids = append(ids, SwiftIdentity{Scope: scope, Name: name})
 	}
-	return scope, name, nil
+	return ids, nil
 }

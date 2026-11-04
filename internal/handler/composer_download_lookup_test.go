@@ -11,23 +11,25 @@ import (
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	registryclient "github.com/git-pkgs/registries/client"
 	"github.com/git-pkgs/registries/fetch"
 )
 
 // composerLookupUpstream serves v/p's metadata listing versions and the
 // archives they point at, counts metadata and archive requests, and fails
-// every request while down is set. A version listed in published carries that
-// publish time.
+// every request while down is set, with downStatus or 503. A version listed in
+// published carries that publish time.
 type composerLookupUpstream struct {
-	h         http.Handler
-	handler   *ComposerHandler
-	proxy     *Proxy
-	versions  atomic.Value // []string
-	published map[string]time.Time
-	down      atomic.Bool
-	metadata  atomic.Int32
-	archives  atomic.Int32
-	routeURL  string
+	h          http.Handler
+	handler    *ComposerHandler
+	proxy      *Proxy
+	versions   atomic.Value // []string
+	published  map[string]time.Time
+	down       atomic.Bool
+	downStatus atomic.Int32
+	metadata   atomic.Int32
+	archives   atomic.Int32
+	routeURL   string
 }
 
 func setupComposerLookup(t *testing.T, cacheMetadata bool, versions ...string) *composerLookupUpstream {
@@ -37,7 +39,12 @@ func setupComposerLookup(t *testing.T, cacheMetadata bool, versions ...string) *
 	var srv *httptest.Server
 	srv = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if u.down.Load() {
-			http.Error(w, "down", http.StatusServiceUnavailable)
+			status := int(u.downStatus.Load())
+			if status == 0 {
+				status = http.StatusServiceUnavailable
+			}
+			w.Header().Set("Retry-After", "30")
+			http.Error(w, "down", status)
 			return
 		}
 		switch {
@@ -144,6 +151,42 @@ func TestComposerDownloadWithoutMetadataCache(t *testing.T) {
 	if n := u.metadata.Load(); n != 1 {
 		t.Errorf("upstream metadata requests = %d, want 1", n)
 	}
+}
+
+// TestComposerDownloadLookupUpstreamError checks that a download whose
+// metadata lookup fails upstream answers 502, or 503 while upstream holds
+// requests, and not 404: Composer treats 404 as the version being gone.
+func TestComposerDownloadLookupUpstreamError(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusServiceUnavailable} {
+		t.Run(http.StatusText(status), func(t *testing.T) {
+			u := setupComposerLookup(t, false, "1.0.0")
+			u.downStatus.Store(int32(status))
+			u.down.Store(true)
+			if w := u.get(t, "/files/v/p/1.0.0/1.0.0.zip"); w.Code != http.StatusBadGateway {
+				t.Errorf("status = %d, want 502", w.Code)
+			}
+		})
+	}
+
+	t.Run("rate limited", func(t *testing.T) {
+		u := setupComposerLookup(t, false, "1.0.0")
+		gate := registryclient.NewRateLimitGate(http.DefaultTransport)
+		u.proxy.HTTPClient = &http.Client{Transport: gate}
+		u.proxy.RateLimits = gate
+		u.downStatus.Store(http.StatusTooManyRequests)
+		u.down.Store(true)
+		w := u.get(t, "/files/v/p/1.0.0/1.0.0.zip")
+		if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" {
+			t.Errorf("status = %d, Retry-After %q; want 503 with Retry-After", w.Code, w.Header().Get("Retry-After"))
+		}
+	})
+
+	t.Run("not listed", func(t *testing.T) {
+		u := setupComposerLookup(t, false, "1.0.0")
+		if w := u.get(t, "/files/v/p/2.0.0/2.0.0.zip"); w.Code != http.StatusNotFound {
+			t.Errorf("status = %d, want 404", w.Code)
+		}
+	})
 }
 
 // storedPublishTime returns the publish time recorded for v/p at version.

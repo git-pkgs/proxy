@@ -633,13 +633,6 @@ func TestSwiftCachedVersionPURLUsesStoredPackagePURL(t *testing.T) {
 	}
 }
 
-func min(a, b int) int {
-	if a < b {
-		return a
-	}
-	return b
-}
-
 func TestNPMPackageMetadata(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
@@ -1097,6 +1090,11 @@ func TestVersionShowPage_PlusInVersion(t *testing.T) {
 		PURL: versionPURL, PackagePURL: pkg.PURL,
 	}); err != nil {
 		t.Fatalf("failed to upsert version: %v", err)
+	}
+	if err := ts.db.UpsertArtifact(&database.Artifact{
+		VersionPURL: versionPURL, Filename: "nmap.deb", UpstreamURL: "https://example.com/nmap.deb",
+	}); err != nil {
+		t.Fatalf("failed to upsert artifact: %v", err)
 	}
 
 	// The package page must link to and display the decoded version.

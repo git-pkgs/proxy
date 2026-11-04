@@ -1062,6 +1062,10 @@ const docTemplate = `{
         "server.PackageResponse": {
             "type": "object",
             "properties": {
+                "cooldown": {
+                    "description": "Cooldown is the cooldown that applies to the package, in the\nconfiguration's syntax (\"3d\", \"0\").",
+                    "type": "string"
+                },
                 "description": {
                     "type": "string"
                 },

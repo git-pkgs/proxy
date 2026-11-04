@@ -785,6 +785,29 @@ func TestParseMetadataMaxSize(t *testing.T) {
 	}
 }
 
+func TestParseMetadataStreamMaxSize(t *testing.T) {
+	cfg := Default()
+	if got := cfg.ParseMetadataStreamMaxSize(); got != defaultMetadataStreamMaxSize {
+		t.Errorf("unset: %d, want %d", got, defaultMetadataStreamMaxSize)
+	}
+	cfg.MetadataStreamMaxSize = "2GB"
+	if got := cfg.ParseMetadataStreamMaxSize(); got != 2<<30 {
+		t.Errorf("2GB: %d", got)
+	}
+	t.Setenv("PROXY_METADATA_STREAM_MAX_SIZE", "300MB")
+	cfg = Default()
+	cfg.LoadFromEnv()
+	if got := cfg.ParseMetadataStreamMaxSize(); got != 300<<20 {
+		t.Errorf("from env: %d", got)
+	}
+	for _, bad := range []string{"0", "lots"} {
+		cfg.MetadataStreamMaxSize = bad
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("metadata_stream_max_size %q validated", bad)
+		}
+	}
+}
+
 func TestValidateMetadataMaxSize(t *testing.T) {
 	cfg := Default()
 	cfg.MetadataMaxSize = "not-a-size"
@@ -1138,6 +1161,17 @@ func TestLoadMetadataTTLFromEnv(t *testing.T) {
 
 	if cfg.MetadataTTL != "10m" {
 		t.Errorf("MetadataTTL = %q, want %q", cfg.MetadataTTL, "10m")
+	}
+}
+
+func TestLoadChangeFeedsFromEnv(t *testing.T) {
+	cfg := Default()
+	t.Setenv("PROXY_UPSTREAM_NPM_CHANGE_FEED", "true")
+	t.Setenv("PROXY_UPSTREAM_COMPOSER_CHANGE_FEED", "true")
+	cfg.LoadFromEnv()
+
+	if !cfg.Upstream.NPMChangeFeed || !cfg.Upstream.ComposerChangeFeed {
+		t.Errorf("change feeds = npm %t, composer %t, want both on", cfg.Upstream.NPMChangeFeed, cfg.Upstream.ComposerChangeFeed)
 	}
 }
 
@@ -1729,6 +1763,30 @@ func TestValidateGoSumDBs(t *testing.T) {
 				cfg.Upstream.GoSumDBsOffline = true
 			},
 		},
+		{
+			name: "npm change feed requires metadata caching",
+			modify: func(cfg *Config) {
+				cfg.CacheMetadata = false
+				cfg.Upstream.NPMChangeFeed = true
+			},
+			wantErr: true,
+		},
+		{
+			name: "Composer change feed requires metadata caching",
+			modify: func(cfg *Config) {
+				cfg.CacheMetadata = false
+				cfg.Upstream.ComposerChangeFeed = true
+			},
+			wantErr: true,
+		},
+		{
+			name: "change feeds with metadata caching",
+			modify: func(cfg *Config) {
+				cfg.CacheMetadata = true
+				cfg.Upstream.NPMChangeFeed = true
+				cfg.Upstream.ComposerChangeFeed = true
+			},
+		},
 	}
 
 	for _, tt := range tests {
@@ -2054,6 +2112,41 @@ upstream:
 	}
 	if got := cfg.Upstream.GenericPaths["github-api"]; len(got) != 1 || got[0] != "repos/*/*/releases/**" {
 		t.Errorf("generic_paths = %v", cfg.Upstream.GenericPaths)
+	}
+}
+
+func TestAPKSnapshots(t *testing.T) {
+	cfg := Default()
+	if got := cfg.ParseAPKSnapshots(); got != 0 {
+		t.Errorf("default ParseAPKSnapshots = %v, want 0", got)
+	}
+
+	for value, want := range map[string]time.Duration{
+		"90d": 90 * 24 * time.Hour,
+		"12h": 12 * time.Hour,
+		"0":   0,
+	} {
+		cfg.Upstream.APKSnapshots = value
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate(%q): %v", value, err)
+		}
+		if got := cfg.ParseAPKSnapshots(); got != want {
+			t.Errorf("ParseAPKSnapshots(%q) = %v, want %v", value, got, want)
+		}
+	}
+
+	for _, value := range []string{"forever", "-1d"} {
+		cfg.Upstream.APKSnapshots = value
+		if err := cfg.Validate(); err == nil {
+			t.Errorf("Validate(%q) succeeded, want an error", value)
+		}
+	}
+
+	cfg = Default()
+	t.Setenv("PROXY_UPSTREAM_APK_SNAPSHOTS", "30d")
+	cfg.LoadFromEnv()
+	if cfg.Upstream.APKSnapshots != "30d" {
+		t.Errorf("APKSnapshots from env = %q, want 30d", cfg.Upstream.APKSnapshots)
 	}
 }
 

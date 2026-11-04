@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/proxy/internal/packageurl"
 )
 
 // A rewrite made with cooldown on stays right until a version it held back
@@ -127,6 +128,7 @@ type recordingCooldown struct {
 }
 
 func (r recordingCooldown) IsAllowed(ecosystem, packagePURL string, publishedAt time.Time) bool {
+	packagePURL = packageurl.PolicyPackageKey(packagePURL)
 	if r.p.Cooldown.IsAllowed(ecosystem, packagePURL, publishedAt) {
 		return true
 	}
@@ -135,6 +137,7 @@ func (r recordingCooldown) IsAllowed(ecosystem, packagePURL string, publishedAt 
 }
 
 func (r recordingCooldown) Evaluate(ecosystem, packagePURL string, publishedAt, evaluatedAt time.Time) cooldown.Decision {
+	packagePURL = packageurl.PolicyPackageKey(packagePURL)
 	d := r.p.Cooldown.Evaluate(ecosystem, packagePURL, publishedAt, evaluatedAt)
 	if !d.Allowed {
 		r.p.withheld(d.AvailableAt)
@@ -143,7 +146,7 @@ func (r recordingCooldown) Evaluate(ecosystem, packagePURL string, publishedAt, 
 }
 
 func (r recordingCooldown) For(ecosystem, packagePURL string) time.Duration {
-	return r.p.Cooldown.For(ecosystem, packagePURL)
+	return r.p.Cooldown.For(ecosystem, packageurl.PolicyPackageKey(packagePURL))
 }
 
 func (r recordingCooldown) Enabled() bool {
@@ -156,7 +159,7 @@ func (r recordingCooldown) availableAt(ecosystem, packagePURL string, publishedA
 	if publishedAt.IsZero() {
 		return time.Time{}
 	}
-	d := r.p.Cooldown.For(ecosystem, packagePURL)
+	d := r.For(ecosystem, packagePURL)
 	if d <= 0 {
 		return time.Time{}
 	}

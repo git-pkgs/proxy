@@ -18,6 +18,15 @@ func MakeString(ecosystem, name, version string) string {
 	return purl.MakePURLString(ecosystem, name, version)
 }
 
+// PolicyPackageKey maps a canonical versionless PURL to its policy key.
+// Go policies match module names case-insensitively for compatibility.
+func PolicyPackageKey(packagePURL string) string {
+	if strings.HasPrefix(packagePURL, "pkg:golang/") {
+		return strings.ToLower(packagePURL)
+	}
+	return packagePURL
+}
+
 // WithVersionString returns a package PURL with its version replaced. It
 // returns an empty string when packagePURL is invalid.
 func WithVersionString(packagePURL, version string) string {
@@ -29,25 +38,19 @@ func WithVersionString(packagePURL, version string) string {
 }
 
 // MakeCacheStrings returns package and version PURLs suitable for artifact
-// cache records. Swift registry identities use an explicit generic PURL until
-// their source repository has been resolved. The result is independent of the
-// configured upstream so cache entries survive an upstream.swift change,
-// matching every other ecosystem.
+// cache records. Swift registry identities keep their generic storage PURLs.
+// Cache keys are independent of the configured upstream.
 func MakeCacheStrings(ecosystem, name, version string) (packagePURL, versionPURL string) {
+	if purl.NormalizeEcosystem(ecosystem) == "swift" {
+		if identity, ok := swiftRegistryIdentity(name); ok {
+			pkg := purl.New("generic", "swift-registry", identity, "", nil)
+			return pkg.String(), pkg.WithVersion(version).String()
+		}
+	}
 	if pkg := Make(ecosystem, name, ""); pkg != nil {
 		return pkg.String(), pkg.WithVersion(version).String()
 	}
-	if purl.NormalizeEcosystem(ecosystem) != "swift" {
-		return "", ""
-	}
-
-	identity, ok := swiftRegistryIdentity(name)
-	if !ok {
-		return "", ""
-	}
-
-	pkg := purl.New("generic", "swift-registry", identity, "", nil)
-	return pkg.String(), pkg.WithVersion(version).String()
+	return "", ""
 }
 
 func swiftRegistryIdentity(name string) (string, bool) {

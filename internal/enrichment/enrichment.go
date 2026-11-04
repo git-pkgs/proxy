@@ -100,9 +100,6 @@ func (s *Service) BulkEnrichPackages(ctx context.Context, packages []struct{ Eco
 
 // CheckVulnerabilities queries for vulnerabilities affecting a package version.
 func (s *Service) CheckVulnerabilities(ctx context.Context, ecosystem, name, version string) ([]VulnInfo, error) {
-	if packageurl.Make(ecosystem, name, version) == nil {
-		return nil, nil
-	}
 	return s.vulns.Check(ctx, ecosystem, name, version)
 }
 
@@ -137,7 +134,8 @@ type EnrichmentResult struct {
 }
 
 // EnrichFull fetches package, version and vulnerability data for a package
-// version concurrently. Failed lookups are logged and left empty.
+// version concurrently. Unsupported vulnerability identities return an error;
+// other failed lookups are logged and left empty.
 func (s *Service) EnrichFull(ctx context.Context, ecosystem, name, version string) (*EnrichmentResult, error) {
 	result := &EnrichmentResult{}
 
@@ -147,6 +145,9 @@ func (s *Service) EnrichFull(ctx context.Context, ecosystem, name, version strin
 	wg.Go(func() { result.Version, verErr = s.EnrichVersion(ctx, ecosystem, name, version) })
 	wg.Go(func() { result.Vulnerabilities, vulnErr = s.CheckVulnerabilities(ctx, ecosystem, name, version) })
 	wg.Wait()
+	if errors.Is(vulnErr, shared.ErrUnsupportedVulnerabilityIdentity) {
+		return nil, vulnErr
+	}
 
 	if pkgErr != nil {
 		s.logger.Debug("failed to enrich package", "ecosystem", ecosystem, "name", name, "error", pkgErr)

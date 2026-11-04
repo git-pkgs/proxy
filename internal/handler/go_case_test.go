@@ -9,6 +9,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/registries/fetch"
 )
 
@@ -113,6 +114,74 @@ func TestGoZipFromAnotherUpstreamHostIsKept(t *testing.T) {
 	if n := counts[lowerLogrusPath].Load(); n != 0 {
 		t.Errorf("zip fetched %d times, want it served from the cache", n)
 	}
+}
+
+func TestGoLegacyCacheKeepsCaseDistinctModules(t *testing.T) {
+	upstream, counts := goCaseUpstream(t)
+	h, proxy := newGoCaseHandler(t, upstream)
+	seedGoZip(t, proxy, upstream.URL+lowerLogrusPath, "zip of "+lowerLogrusPath)
+	old := seedLegacyUpperGoZip(t, proxy, "https://old-proxy.example"+upperLogrusPath, "zip of "+upperLogrusPath)
+	upstream.Close()
+
+	for range 2 {
+		for _, path := range []string{upperLogrusPath, lowerLogrusPath} {
+			if w := getGo(h, path); w.Code != http.StatusOK || w.Body.String() != "zip of "+path {
+				t.Fatalf("GET %s: status = %d, body = %q", path, w.Code, w.Body)
+			}
+		}
+	}
+	current, err := proxy.DB.GetArtifact("pkg:golang/github.com/Sirupsen/logrus@v1.0.6", old.Filename)
+	if err != nil || current == nil {
+		t.Fatalf("moved artifact = %+v, %v", current, err)
+	}
+	if current.ID != old.ID || current.StoragePath != old.StoragePath || current.FetchedAt != old.FetchedAt || current.HitCount != old.HitCount+2 {
+		t.Errorf("artifact history changed: before=%+v, after=%+v", old, current)
+	}
+	legacy, err := proxy.DB.GetArtifact(old.VersionPURL, old.Filename)
+	if err != nil || legacy != nil {
+		t.Fatalf("legacy artifact = %+v, %v", legacy, err)
+	}
+	for path, count := range counts {
+		if count.Load() != 0 {
+			t.Errorf("unexpected upstream request: %s", path)
+		}
+	}
+}
+
+func TestGoLegacyCacheRequiresExactModuleOrigin(t *testing.T) {
+	for _, origin := range []string{"", "https://proxy.example" + lowerLogrusPath} {
+		t.Run(origin, func(t *testing.T) {
+			upstream, counts := goCaseUpstream(t)
+			h, proxy := newGoCaseHandler(t, upstream)
+			seedLegacyUpperGoZip(t, proxy, origin, "another module")
+			if w := getGo(h, upperLogrusPath); w.Code != http.StatusOK || w.Body.String() != "zip of "+upperLogrusPath {
+				t.Fatalf("status = %d, body = %q", w.Code, w.Body)
+			}
+			if counts[upperLogrusPath].Load() != 1 {
+				t.Fatal("archive with unproven identity was reused")
+			}
+		})
+	}
+}
+
+func seedLegacyUpperGoZip(t *testing.T, proxy *Proxy, upstreamURL, content string) *database.Artifact {
+	t.Helper()
+	const packagePURL = "pkg:golang/github.com/sirupsen/logrus"
+	const versionPURL = packagePURL + "@v1.0.6"
+	const storagePath = "golang/logrus/v1.0.6/legacy/upper.zip"
+	filename := goZipFilename("github.com/Sirupsen/logrus", "v1.0.6")
+	if _, _, err := proxy.Storage.Store(context.Background(), storagePath, strings.NewReader(content)); err != nil {
+		t.Fatal(err)
+	}
+	artifact := testArtifact(content, versionPURL, filename, "application/zip")
+	if err := proxy.updateCacheDB("golang", "github.com/Sirupsen/logrus", packagePURL, upstreamURL, storagePath, artifact, ""); err != nil {
+		t.Fatal(err)
+	}
+	old, err := proxy.DB.GetArtifact(versionPURL, filename)
+	if err != nil || old == nil {
+		t.Fatalf("seeded artifact = %+v, %v", old, err)
+	}
+	return old
 }
 
 // seedGoZip caches content as github.com/sirupsen/logrus v1.0.6 under the

@@ -14,6 +14,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/purl"
 )
 
@@ -41,11 +42,18 @@ type Spec struct {
 	// derived from Key that belong to this ecosystem.
 	ExtraDBEcosystems []string
 
-	// CanonicalPackage turns a package PURL from the config into the
-	// package PURL the handler stores in the cache, reporting false when the
+	// CanonicalPackage turns a package PURL from the config into a
+	// policy key, reporting false when the
 	// PURL does not belong to this ecosystem. Nil means the ecosystem accepts
 	// no package overrides.
 	CanonicalPackage func(p *purl.PURL) (string, bool)
+
+	// SourcePackage reports a package PURL that names the package by where
+	// its source lives, such as a Swift package by its repository. It has to
+	// be resolved through the upstream before it can be compared, so the
+	// config keeps it in Rules.Sources until then. Nil means the ecosystem
+	// has no such form.
+	SourcePackage func(p *purl.PURL) bool
 }
 
 // dbEcosystems returns every packages.ecosystem value that belongs to the
@@ -150,8 +158,7 @@ func (r *Registry) KeyForDBEcosystem(ecosystem string) (string, bool) {
 	return key, ok
 }
 
-// Canonical returns the stored package PURL a configured package PURL
-// stands for, asking the registered specs in key order.
+// Canonical returns the policy key for a configured package PURL.
 func (r *Registry) Canonical(p *purl.PURL) (string, bool) {
 	for _, key := range r.Keys() {
 		s, _ := r.Lookup(key)
@@ -165,6 +172,17 @@ func (r *Registry) Canonical(p *purl.PURL) (string, bool) {
 	return "", false
 }
 
+// Source returns the ecosystem key whose SourcePackage claims p.
+func (r *Registry) Source(p *purl.PURL) (string, bool) {
+	for _, key := range r.Keys() {
+		s, _ := r.Lookup(key)
+		if s.SourcePackage != nil && s.SourcePackage(p) {
+			return key, true
+		}
+	}
+	return "", false
+}
+
 // Rules are resolved retention durations. A duration of zero means an
 // artifact is never evicted by age.
 type Rules struct {
@@ -173,14 +191,49 @@ type Rules struct {
 	Default time.Duration
 	// Ecosystems holds rules keyed by registered ecosystem key.
 	Ecosystems map[string]time.Duration
-	// Packages holds rules keyed by the package PURL stored in the cache.
+	// Packages holds rules keyed by package PURL, with Go keys lowercased.
 	Packages map[string]time.Duration
+	// Sources holds package rules not resolved to a stored package PURL
+	// yet, by ecosystem key and then by the configured PURL (see
+	// Spec.SourcePackage). An ecosystem with any is not swept, since one of
+	// them may keep an artifact the sweep would otherwise clear.
+	Sources map[string]map[string]time.Duration
+}
+
+// Pending reports whether the ecosystem key has package rules still to be
+// resolved, and must not be swept.
+func (r Rules) Pending(key string) bool {
+	return len(r.Sources[key]) > 0
+}
+
+// Resolve moves the rule for source in ecosystem key to every stored package
+// PURL it resolved to. A different rule already set for any of them is a
+// conflict, and the source stays pending with none of them set.
+func (r Rules) Resolve(key, source string, canonical []string) error {
+	d, ok := r.Sources[key][source]
+	if !ok {
+		return nil
+	}
+	if len(canonical) == 0 {
+		return fmt.Errorf("%s resolves to no stored package", source)
+	}
+	for _, c := range canonical {
+		if prev, set := r.Packages[c]; set && prev != d {
+			return fmt.Errorf("%s resolves to %s, which another rule sets differently", source, c)
+		}
+	}
+	for _, c := range canonical {
+		r.Packages[c] = d
+	}
+	delete(r.Sources[key], source)
+	return nil
 }
 
 // For returns the retention for an artifact of the given ecosystem key and
 // stored package PURL: the package rule, else the ecosystem rule, else the
 // default. Generic artifacts require an explicit package or ecosystem rule.
 func (r Rules) For(key, packagePURL string) time.Duration {
+	packagePURL = packageurl.PolicyPackageKey(packagePURL)
 	if d, ok := r.Packages[packagePURL]; ok {
 		return d
 	}
@@ -209,6 +262,11 @@ func (r Rules) MinPositive() time.Duration {
 	}
 	for _, d := range r.Packages {
 		consider(d)
+	}
+	for _, sources := range r.Sources {
+		for _, d := range sources {
+			consider(d)
+		}
 	}
 	return minimum
 }

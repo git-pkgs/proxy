@@ -288,6 +288,12 @@ func TestDenylistMatchesEcosystemSpellings(t *testing.T) {
 		{"go case-escaped version", "pkg:golang/github.com/example/mod@v1.0.0-RC1", "/github.com/example/mod/@v/v1.0.0-!r!c1.zip",
 			"golang", "github.com/example/mod", "v1.0.0-!r!c1", "mod@v1.0.0-!r!c1.zip",
 			func(p *Proxy) http.Handler { return NewGoHandler(p, "http://proxy.test").Routes() }},
+		{"go lowercase rule", "pkg:golang/github.com/example/mod@v1.0.0", "/github.com/!example/mod/@v/v1.0.0.zip",
+			"golang", "github.com/Example/mod", "v1.0.0", goZipFilename("github.com/Example/mod", "v1.0.0"),
+			func(p *Proxy) http.Handler { return NewGoHandler(p, "http://proxy.test").Routes() }},
+		{"go mixed-case rule", "pkg:golang/github.com/Example/mod@v1.0.0", "/github.com/example/mod/@v/v1.0.0.zip",
+			"golang", "github.com/example/mod", "v1.0.0", "mod@v1.0.0.zip",
+			func(p *Proxy) http.Handler { return NewGoHandler(p, "http://proxy.test").Routes() }},
 		{"oci repository path", "pkg:oci/library/alpine@" + ociTestDigest, "/library/alpine/blobs/" + ociTestDigest,
 			"oci", "library/alpine", ociTestDigest, ociTestDigest,
 			func(p *Proxy) http.Handler {
