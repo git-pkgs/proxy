@@ -76,9 +76,6 @@ func FromPURL(s string) (Component, error) {
 // naming the module the binary was built from.
 const syftMainModule = "syft:metadata:mainModule"
 
-// syftMetadataType is the property naming where syft read a package from.
-const syftMetadataType = "syft:package:metadataType"
-
 // unknownVersion is what syft gives a package without a resolved version,
 // such as the project's own module in go.mod or the root of a lock file.
 const unknownVersion = "UNKNOWN"
@@ -95,7 +92,10 @@ func Parse(data []byte) (components []Component, skipped int, err error) {
 		return nil, 0, err
 	}
 	ownModules := mainModules(doc.Packages)
-	roots := projectRoots(doc)
+	roots := map[string]bool{}
+	for _, id := range doc.ProjectRoots() {
+		roots[id] = true
+	}
 	seen := make(map[[2]string]bool, len(doc.Packages))
 	for _, pkg := range doc.Packages {
 		c, ok := componentOf(pkg)
@@ -131,36 +131,6 @@ func componentOf(pkg sbom.Package) (Component, bool) {
 		return Component{}, false
 	}
 	return c, true
-}
-
-// projectRoots returns the IDs of the roots sbom finds that are the
-// project: all of them when the document declares them, otherwise only those
-// read from a lock file. An image's packages that nothing depends on, such as
-// busybox, are roots of the graph but not the project.
-func projectRoots(doc *sbom.SBOM) map[string]bool {
-	ids, declared := doc.Roots()
-	roots := make(map[string]bool, len(ids))
-	for _, id := range ids {
-		roots[id] = declared
-	}
-	if declared {
-		return roots
-	}
-	for _, pkg := range doc.Packages {
-		if _, ok := roots[pkg.ID]; ok && readFromLockFile(pkg) {
-			roots[pkg.ID] = true
-		}
-	}
-	return roots
-}
-
-func readFromLockFile(pkg sbom.Package) bool {
-	for _, prop := range pkg.Properties {
-		if prop.Name == syftMetadataType && strings.Contains(prop.Value, "lock") {
-			return true
-		}
-	}
-	return false
 }
 
 // mainModules returns the Go modules the SBOM's binaries were built from,

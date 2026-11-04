@@ -225,10 +225,10 @@ func TestParseSkipsTheProjectsOwnPackages(t *testing.T) {
 		{"bom-ref":"cobra","type":"library","name":"github.com/spf13/cobra","version":"v1.8.0","purl":"pkg:golang/github.com/spf13/cobra@v1.8.0",
 		 "properties":[{"name":"syft:metadata:mainModule","value":"github.com/acme/app"}]},
 		{"bom-ref":"root","type":"library","name":"app-frontend","version":"2.1.0","purl":"pkg:npm/app-frontend@2.1.0",
-		 "properties":[{"name":"syft:package:metadataType","value":"javascript-npm-package-lock-entry"}]},
+		 "properties":[{"name":"syft:package:metadataType","value":"javascript-npm-package-lock-entry"},{"name":"syft:location:0:path","value":"/package-lock.json"}]},
 		{"bom-ref":"nover","type":"library","name":"app-tools","purl":"pkg:npm/app-tools"},
 		{"bom-ref":"jsdom","type":"library","name":"jsdom","version":"30.1.3","purl":"pkg:npm/jsdom@30.1.3",
-		 "properties":[{"name":"syft:package:metadataType","value":"javascript-npm-package-lock-entry"}]}
+		 "properties":[{"name":"syft:package:metadataType","value":"javascript-npm-package-lock-entry"},{"name":"syft:location:0:path","value":"/package-lock.json"}]}
 	],"dependencies":[{"ref":"root","dependsOn":["jsdom"]}]}`
 	components, skipped, err := Parse([]byte(doc))
 	if err != nil {
