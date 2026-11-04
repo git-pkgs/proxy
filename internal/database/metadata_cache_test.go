@@ -2,7 +2,9 @@ package database
 
 import (
 	"database/sql"
+	"fmt"
 	"path/filepath"
+	"slices"
 	"testing"
 	"time"
 )
@@ -446,5 +448,93 @@ func TestRefreshMetadataCache(t *testing.T) {
 
 	if refreshed, err := db.RefreshMetadataCache(testEcosystemNPM, "missing", "sha256:aaaa", now); err != nil || refreshed {
 		t.Errorf("refresh of a missing row = %v, %v, want false", refreshed, err)
+	}
+}
+
+// TestExpireMetadataCache checks that expiring clears fetched_at only on the
+// named rows of the ecosystem fetched before the cutoff, and keeps their
+// documents and validators.
+func TestExpireMetadataCache(t *testing.T) {
+	db := setupMetadataCacheDB(t)
+	cutoff := time.Now().UTC().Truncate(time.Second)
+	rows := []struct {
+		ecosystem, name string
+		fetched         time.Time
+	}{
+		{"composer", "acme/lib", cutoff.Add(-time.Minute)},
+		{"composer", "acme/lib~dev", cutoff.Add(-time.Minute)},
+		{"composer", "acme/new", cutoff.Add(time.Second)},
+		{"composer", "acme/other", cutoff.Add(-time.Minute)},
+		{"composer", "routes/abc/acme/lib", cutoff.Add(-time.Minute)},
+		{testEcosystemNPM, "acme/lib", cutoff.Add(-time.Minute)},
+	}
+	for _, r := range rows {
+		err := db.UpsertMetadataCache(&MetadataCacheEntry{
+			Ecosystem:     r.ecosystem,
+			Name:          r.name,
+			StoragePath:   "_metadata/" + r.ecosystem + "/" + r.name,
+			ETag:          sql.NullString{String: `"abc"`, Valid: true},
+			ContentDigest: sql.NullString{String: "sha256:aaaa", Valid: true},
+			FetchedAt:     sql.NullTime{Time: r.fetched, Valid: true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	expired, err := db.ExpireMetadataCache("composer", []string{"acme/lib", "acme/lib~dev", "acme/new", "acme/missing"}, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	slices.Sort(expired)
+	if want := []string{"acme/lib", "acme/lib~dev"}; !slices.Equal(expired, want) {
+		t.Errorf("expired = %v, want %v", expired, want)
+	}
+	got, err := db.GetMetadataCache("composer", "acme/lib")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.FetchedAt.Valid || got.ETag.String != `"abc"` || got.ContentDigest.String != "sha256:aaaa" {
+		t.Errorf("expired row = %+v, want no fetched_at and the same validators", got)
+	}
+	for _, r := range []struct{ ecosystem, name string }{{"composer", "acme/new"}, {"composer", "acme/other"}, {testEcosystemNPM, "acme/lib"}} {
+		if got, _ := db.GetMetadataCache(r.ecosystem, r.name); !got.FetchedAt.Valid {
+			t.Errorf("%s %s expired, want it left alone", r.ecosystem, r.name)
+		}
+	}
+
+	expired, err = db.ExpireAllMetadataCache("composer", cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := []string{"acme/other"}; !slices.Equal(expired, want) {
+		t.Errorf("expired all = %v, want %v (routed and newer rows kept)", expired, want)
+	}
+}
+
+// TestExpireMetadataCacheBatches checks that more names than one statement
+// takes are all expired.
+func TestExpireMetadataCacheBatches(t *testing.T) {
+	db := setupMetadataCacheDB(t)
+	cutoff := time.Now().UTC()
+	names := make([]string, expireMetadataBatch+2)
+	for i := range names {
+		names[i] = fmt.Sprintf("pkg-%d", i)
+	}
+	for _, name := range []string{names[0], names[len(names)-1]} {
+		err := db.UpsertMetadataCache(&MetadataCacheEntry{
+			Ecosystem: testEcosystemNPM, Name: name, StoragePath: "_metadata/npm/" + name,
+			FetchedAt: sql.NullTime{Time: cutoff.Add(-time.Minute), Valid: true},
+		})
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	expired, err := db.ExpireMetadataCache(testEcosystemNPM, names, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(expired) != 2 {
+		t.Errorf("expired = %v, want both stored names", expired)
 	}
 }

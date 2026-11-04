@@ -56,7 +56,7 @@ func (u *gzipWhenAskedUpstream) sawAcceptEncoding() string {
 func serveGzip(proxy *Proxy, upstreamURL string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodGet, "/index.json", nil)
-	proxy.proxyCachedWithEncoding(w, r, upstreamURL, "gzip-test", "index", "gzip", "*/*")
+	proxy.proxyCachedWithEncoding(w, r, upstreamURL, "gzip-test", "index", "gzip", nil, "*/*")
 	return w
 }
 
@@ -187,7 +187,7 @@ func TestProxyCachedWithEncoding_UpsertFailureDiscardsBlob(t *testing.T) {
 	// Seed an identity row + plain blob, as every key has before the gzip rollout.
 	w := httptest.NewRecorder()
 	proxy.proxyCachedWithEncoding(w, httptest.NewRequest(http.MethodGet, "/index.json", nil),
-		upstream.URL+"/index.json", "gzip-test", "index", "identity", "*/*")
+		upstream.URL+"/index.json", "gzip-test", "index", "identity", nil, "*/*")
 	if w.Code != http.StatusOK {
 		t.Fatalf("seed status = %d, want 200", w.Code)
 	}
@@ -250,7 +250,7 @@ func TestProxyCachedWithEncoding_StaleFallbackRereadsRow(t *testing.T) {
 
 	w := httptest.NewRecorder()
 	proxy.proxyCachedWithEncoding(w, httptest.NewRequest(http.MethodGet, "/index.json", nil),
-		upstream.URL+"/index.json", "gzip-test", "index", "identity", "*/*")
+		upstream.URL+"/index.json", "gzip-test", "index", "identity", nil, "*/*")
 	if w.Code != http.StatusOK {
 		t.Fatalf("seed status = %d, want 200", w.Code)
 	}

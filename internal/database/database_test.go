@@ -613,7 +613,7 @@ func createTestPostgresDB(t *testing.T) *DB {
 	// Drop and recreate every table CreateSchema creates for clean test state;
 	// leftover migration records make the next CreateSchema fail on the
 	// migrations primary key.
-	tables := []string{"artifacts", "pending_deletes", "versions", "packages", "vulnerabilities", "metadata_cache", "metadata_dates", "job_runs", "fetch_leases", "upstream_holds", "projects", "project_components", "migrations", "schema_info"}
+	tables := []string{"artifacts", "pending_deletes", "versions", "packages", "vulnerabilities", "metadata_cache", "metadata_dates", "job_runs", "fetch_leases", "upstream_holds", "metadata_snapshots", "projects", "project_components", "migrations", "schema_info"}
 	for _, table := range tables {
 		_, _ = db.Exec("DROP TABLE IF EXISTS " + table + " CASCADE")
 	}
@@ -1161,6 +1161,46 @@ func TestVersionPublishedAtPreserved(t *testing.T) {
 		}
 		if !got.PublishedAt.Valid || !got.PublishedAt.Time.Equal(later) {
 			t.Fatalf("PublishedAt after valued upsert = %v, want %v", got.PublishedAt, later)
+		}
+	})
+}
+
+func TestGetFetchedVersionPURLs(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		const pkg = "pkg:npm/leftpad"
+		for _, v := range []string{"1.0.0", "2.0.0", "3.0.0"} {
+			if err := db.UpsertVersion(&Version{PURL: pkg + "@" + v, PackagePURL: pkg}); err != nil {
+				t.Fatalf("UpsertVersion: %v", err)
+			}
+		}
+		if err := db.UpsertVersion(&Version{PURL: "pkg:npm/other@1.0.0", PackagePURL: "pkg:npm/other"}); err != nil {
+			t.Fatalf("UpsertVersion: %v", err)
+		}
+		artifacts := []Artifact{
+			{VersionPURL: pkg + "@1.0.0", Filename: "leftpad-1.0.0.tgz", UpstreamURL: "https://example.com/1",
+				StoragePath: sql.NullString{String: "npm/leftpad-1.0.0.tgz", Valid: true}},
+			// Evicted: the row stays without a storage path.
+			{VersionPURL: pkg + "@2.0.0", Filename: "leftpad-2.0.0.tgz", UpstreamURL: "https://example.com/2"},
+			{VersionPURL: "pkg:npm/other@1.0.0", Filename: "other-1.0.0.tgz", UpstreamURL: "https://example.com/3"},
+		}
+		for i := range artifacts {
+			if err := db.UpsertArtifact(&artifacts[i]); err != nil {
+				t.Fatalf("UpsertArtifact: %v", err)
+			}
+		}
+
+		got, err := db.GetFetchedVersionPURLs(pkg)
+		if err != nil {
+			t.Fatalf("GetFetchedVersionPURLs: %v", err)
+		}
+		want := map[string]bool{pkg + "@1.0.0": true, pkg + "@2.0.0": true}
+		if len(got) != len(want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+		for purl := range want {
+			if !got[purl] {
+				t.Errorf("missing %s in %v", purl, got)
+			}
 		}
 	})
 }

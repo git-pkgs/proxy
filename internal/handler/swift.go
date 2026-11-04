@@ -31,10 +31,54 @@ const (
 // Source archives are stored under the registry identity,
 // pkg:generic/swift-registry/{scope}.{name}, lowercased. Package rules write
 // the scope as the namespace, pkg:swift/apple/swift-nio, or use the stored
-// form. A source repository URL such as pkg:swift/github.com/apple/swift-nio
-// doesn't name a registry identity and is refused.
+// form. A source repository such as pkg:swift/github.com/apple/swift-nio
+// names no registry identity; it is resolved through the upstream's
+// /identifiers before it applies.
 func init() {
-	retention.Default.Register(retention.Spec{Key: "swift", CanonicalPackage: swiftRetentionKey})
+	retention.Default.Register(retention.Spec{
+		Key:              "swift",
+		CanonicalPackage: swiftRetentionKey,
+		SourcePackage:    func(p *purl.PURL) bool { return SwiftSourcePURL(p) != "" },
+	})
+}
+
+// SwiftSourceURL returns the repository URL of a pkg:swift name whose
+// namespace starts with a host, as in github.com/apple/swift-nio, or "" for
+// a name whose namespace is a registry scope.
+func SwiftSourceURL(name string) string {
+	if host, _, ok := strings.Cut(name, "/"); ok && strings.Contains(host, ".") {
+		return "https://" + name
+	}
+	return ""
+}
+
+// SwiftSourcePURL returns the repository URL of a pkg:swift PURL that names
+// a package by its source repository, as SBOM tools and GHSA do, or "".
+func SwiftSourcePURL(p *purl.PURL) string {
+	if p == nil || p.Type != "swift" || p.Namespace == "" {
+		return ""
+	}
+	return SwiftSourceURL(p.Namespace + "/" + p.Name)
+}
+
+// ResolveSourcePURL returns p with a source repository namespace replaced by
+// each registry scope and name the upstream lists for it, and p itself when
+// it already names a registry identity. A policy for the repository applies
+// to all of them, since a client may use any.
+func (h *SwiftHandler) ResolveSourcePURL(ctx context.Context, p *purl.PURL) ([]*purl.PURL, error) {
+	source := SwiftSourcePURL(p)
+	if source == "" {
+		return []*purl.PURL{p}, nil
+	}
+	ids, err := h.ResolveIdentities(ctx, source)
+	if err != nil {
+		return nil, err
+	}
+	resolved := make([]*purl.PURL, 0, len(ids))
+	for _, id := range ids {
+		resolved = append(resolved, purl.New("swift", id.Scope, id.Name, p.Version, nil))
+	}
+	return resolved, nil
 }
 
 // swiftRetentionKey maps a package rule to the stored package PURL, refusing

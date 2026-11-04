@@ -193,7 +193,7 @@ func TestMigrateAddsProjects(t *testing.T) {
 				t.Fatalf("dropping %s: %v", table, err)
 			}
 		}
-		if _, err := db.Exec(db.Rebind("DELETE FROM migrations WHERE name = ?"), "020_add_projects"); err != nil {
+		if _, err := db.Exec(db.Rebind("DELETE FROM migrations WHERE name = ?"), "021_add_projects"); err != nil {
 			t.Fatalf("forgetting the migration: %v", err)
 		}
 		if err := db.MigrateSchema(); err != nil {

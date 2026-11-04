@@ -170,6 +170,24 @@ func TestRuntimeViewShowsMetadataEvictions(t *testing.T) {
 	}
 }
 
+func TestRuntimeViewShowsChangeFeedExpiries(t *testing.T) {
+	reg := prometheus.NewRegistry()
+	expired := prometheus.NewCounterVec(
+		prometheus.CounterOpts{Name: "proxy_metadata_expired_by_change_feed_total", Help: "t"}, []string{"ecosystem"})
+	reg.MustRegister(expired)
+	expired.WithLabelValues("packagist").Add(2)
+
+	snap, err := metrics.GatherFrom(reg)
+	if err != nil {
+		t.Fatalf("GatherFrom: %v", err)
+	}
+	v := runtimeView(snap, false)
+
+	if len(v.ChangeFeedExpired) != 1 || v.ChangeFeedExpired[0].Label != "packagist" || v.ChangeFeedExpired[0].Count != "2" {
+		t.Errorf("ChangeFeedExpired = %+v, want packagist = 2", v.ChangeFeedExpired)
+	}
+}
+
 // A counter sitting at zero carries no information and would bury the rows
 // that do, so it is left out.
 func TestRuntimeViewDropsZeroCounters(t *testing.T) {
