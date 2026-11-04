@@ -19,8 +19,9 @@ const apkIndexTTL = 5 * time.Minute
 
 var (
 	// apkDistroPattern takes the release from syft's distro qualifier, such
-	// as alpine-3.20.3 for v3.20.
-	apkDistroPattern = regexp.MustCompile(`^alpine-(\d+)\.(\d+)(?:[.-]|$)`)
+	// as alpine-3.20.3 for v3.20. Edge, as alpine-3.21.0_alpha20240807,
+	// isn't a release and doesn't match.
+	apkDistroPattern = regexp.MustCompile(`^alpine-(\d+)\.(\d+)(?:\.\d+)?$`)
 	apkArchPattern   = regexp.MustCompile(`^[a-z0-9_]+$`)
 	// apkComponents are the repositories of a release a package is looked
 	// up in, in order.
