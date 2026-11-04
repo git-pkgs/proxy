@@ -13,7 +13,9 @@ import (
 // ProjectsListData contains data for rendering the projects list page.
 type ProjectsListData struct {
 	Layout
-	Projects []ProjectRow
+	// Rows isn't called Projects, which would hide Layout.Projects from
+	// the header.
+	Rows []ProjectRow
 }
 
 // ProjectRow is a project in the UI.
@@ -79,9 +81,9 @@ func (s *Server) handleProjectsList(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "failed to list projects", http.StatusInternalServerError)
 		return
 	}
-	data := ProjectsListData{Layout: s.layoutFor(r), Projects: make([]ProjectRow, len(projects))}
+	data := ProjectsListData{Layout: s.layoutFor(r), Rows: make([]ProjectRow, len(projects))}
 	for i, p := range projects {
-		data.Projects[i] = projectRow(p)
+		data.Rows[i] = projectRow(p)
 	}
 	if err := s.templates.Render(w, "projects_list", data); err != nil {
 		s.logger.Error("failed to render projects list", "error", err)

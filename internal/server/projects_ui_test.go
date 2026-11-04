@@ -116,3 +116,10 @@ func TestProjectPageFailsWhenComponentsCannotBeRead(t *testing.T) {
 		t.Errorf("status = %d, want 500 rather than an empty project", rec.Code)
 	}
 }
+
+func TestProjectsPageLinksProjectsWhenEmpty(t *testing.T) {
+	ts := newProjectsTestServer(t)
+
+	page := ts.page(t, "/ui/projects")
+	assertContains(t, page, `href="/ui/projects"`, "0 projects")
+}
