@@ -120,6 +120,20 @@ func TestMirrorAPKPackagesAreServedFromCache(t *testing.T) {
 	}
 }
 
+func TestMirrorAPKReadsV2IndexBesideV3(t *testing.T) {
+	// A repository moving to apk v3 serves Packages.adb next to
+	// APKINDEX.tar.gz; the mirror reads the v2 index.
+	upstream := newAPKUpstream(t)
+	upstream.files["/v3.20/main/x86_64/Packages.adb"] = "ADB.v3-index"
+
+	progress, _ := mirrorWithConfig(t, apkMirrorConfig(upstream),
+		"pkg:apk/alpine/busybox@1.36.1-r29?arch=x86_64&distro=alpine-3.20.3")
+
+	if progress.Completed != 1 || progress.Failed != 0 {
+		t.Fatalf("completed = %d, failed = %d, errors = %v", progress.Completed, progress.Failed, progress.Errors)
+	}
+}
+
 func TestMirrorAPKRefusesIncompletePURLs(t *testing.T) {
 	upstream := newAPKUpstream(t)
 

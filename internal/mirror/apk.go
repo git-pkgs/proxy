@@ -121,7 +121,9 @@ func (m *Mirror) apkRegistry(dirURL string) (registries.Registry, error) { //nol
 		return idx.reg, nil
 	}
 	r, _ := m.Versions.(RegistryVersions)
-	reg, err := registries.New("apk", dirURL, r.client())
+	// Naming the v2 index reads it also where Packages.adb is served beside
+	// it, which the client would try first and refuse.
+	reg, err := registries.New("apk", dirURL+"/APKINDEX.tar.gz", r.client())
 	if err != nil {
 		return nil, err
 	}
