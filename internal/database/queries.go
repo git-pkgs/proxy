@@ -225,6 +225,25 @@ func (db *DB) SetVersionPublishedAt(versionPURL, packagePURL string, publishedAt
 	return nil
 }
 
+// GetFetchedVersionPURLs returns the versions of a package that have an
+// artifact row, cached now or evicted since. Versions without one were only
+// seen in metadata.
+func (db *DB) GetFetchedVersionPURLs(packagePURL string) (map[string]bool, error) {
+	var purls []string
+	query := db.Rebind(`
+		SELECT DISTINCT version_purl FROM artifacts
+		WHERE version_purl IN (SELECT purl FROM versions WHERE package_purl = ?)
+	`)
+	if err := db.Select(&purls, query, packagePURL); err != nil {
+		return nil, fmt.Errorf("listing fetched versions: %w", err)
+	}
+	fetched := make(map[string]bool, len(purls))
+	for _, p := range purls {
+		fetched[p] = true
+	}
+	return fetched, nil
+}
+
 // Artifact queries
 
 func (db *DB) GetArtifact(versionPURL, filename string) (*Artifact, error) {

@@ -1164,3 +1164,43 @@ func TestVersionPublishedAtPreserved(t *testing.T) {
 		}
 	})
 }
+
+func TestGetFetchedVersionPURLs(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		const pkg = "pkg:npm/leftpad"
+		for _, v := range []string{"1.0.0", "2.0.0", "3.0.0"} {
+			if err := db.UpsertVersion(&Version{PURL: pkg + "@" + v, PackagePURL: pkg}); err != nil {
+				t.Fatalf("UpsertVersion: %v", err)
+			}
+		}
+		if err := db.UpsertVersion(&Version{PURL: "pkg:npm/other@1.0.0", PackagePURL: "pkg:npm/other"}); err != nil {
+			t.Fatalf("UpsertVersion: %v", err)
+		}
+		artifacts := []Artifact{
+			{VersionPURL: pkg + "@1.0.0", Filename: "leftpad-1.0.0.tgz", UpstreamURL: "https://example.com/1",
+				StoragePath: sql.NullString{String: "npm/leftpad-1.0.0.tgz", Valid: true}},
+			// Evicted: the row stays without a storage path.
+			{VersionPURL: pkg + "@2.0.0", Filename: "leftpad-2.0.0.tgz", UpstreamURL: "https://example.com/2"},
+			{VersionPURL: "pkg:npm/other@1.0.0", Filename: "other-1.0.0.tgz", UpstreamURL: "https://example.com/3"},
+		}
+		for i := range artifacts {
+			if err := db.UpsertArtifact(&artifacts[i]); err != nil {
+				t.Fatalf("UpsertArtifact: %v", err)
+			}
+		}
+
+		got, err := db.GetFetchedVersionPURLs(pkg)
+		if err != nil {
+			t.Fatalf("GetFetchedVersionPURLs: %v", err)
+		}
+		want := map[string]bool{pkg + "@1.0.0": true, pkg + "@2.0.0": true}
+		if len(got) != len(want) {
+			t.Fatalf("got %v, want %v", got, want)
+		}
+		for purl := range want {
+			if !got[purl] {
+				t.Errorf("missing %s in %v", purl, got)
+			}
+		}
+	})
+}
