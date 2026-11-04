@@ -1726,6 +1726,8 @@ A Swift release is mirrored from `upstream.swift` with its source archive, check
 
 A CRAN version is mirrored as its source package from `upstream.cran`, for example `pkg:cran/glue@1.8.1`, and cached under the file name, so it is served for both `/cran/src/contrib/{file}` and `/cran/src/contrib/Archive/{name}/{file}`, where CRAN moves it once a newer version is published. The current version is fetched from `src/contrib` and checked against the MD5 sum in `src/contrib/PACKAGES.gz`; older versions are fetched unchecked from `src/contrib/Archive/{name}/`, as the CRAN handler fetches them. Binary packages aren't mirrored, and neither are the `PACKAGES` indexes, so `install.packages` needs the upstream or an index the proxy already cached; installing the tarball by URL works without either.
 
+An Alpine package is mirrored from the repository in `upstream.apk` named as the namespace, `alpine` by default, as syft writes it in image SBOMs: `pkg:apk/alpine/busybox@1.36.1-r29?arch=x86_64&distro=alpine-3.20.3`. The `distro` qualifier gives the release (`v3.20`) and `arch` the architecture; packages without either are refused. The package is looked up in the `main` and then the `community` `APKINDEX.tar.gz` of that release and cached under the path `/apk/{name}/{release}/{repo}/{arch}/{file}` serves it from. The file isn't checked by the proxy, as when serving, since the index checksum covers only the package's control section; apk checks it on install. The indexes aren't mirrored, so `apk add` needs the upstream or an index the proxy already cached. Give a version: Alpine repositories keep only the current one.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--sbom` | | Path to CycloneDX or SPDX SBOM file |

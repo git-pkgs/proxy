@@ -60,18 +60,31 @@ type APKHandler struct {
 // When repositories is empty, a single repository named "alpine" pointing at
 // the official Alpine mirror is used.
 func NewAPKHandler(proxy *Proxy, proxyURL string, repositories map[string]string) *APKHandler {
-	h := &APKHandler{
+	return &APKHandler{
 		proxy:        proxy,
 		proxyURL:     strings.TrimSuffix(proxyURL, "/"),
-		repositories: make(map[string]string, len(repositories)),
+		repositories: APKRepositories(repositories),
 	}
-	for name, repositoryURL := range repositories {
-		h.repositories[name] = strings.TrimSuffix(repositoryURL, "/")
+}
+
+// APKRepositories returns the upstream.apk repositories by name without
+// trailing slashes, or the official Alpine mirror as "alpine" when none are
+// configured.
+func APKRepositories(configured map[string]string) map[string]string {
+	repositories := make(map[string]string, len(configured))
+	for name, repositoryURL := range configured {
+		repositories[name] = strings.TrimSuffix(repositoryURL, "/")
 	}
-	if len(h.repositories) == 0 {
-		h.repositories[defaultAPKRepositoryName] = defaultAPKUpstream
+	if len(repositories) == 0 {
+		repositories[defaultAPKRepositoryName] = defaultAPKUpstream
 	}
-	return h
+	return repositories
+}
+
+// APKCacheFilename returns the filename a package at path
+// ({release}/{repo}/{arch}/{file}) of repository is cached under.
+func APKCacheFilename(repository, path string) string {
+	return repository + "/" + path
 }
 
 // Routes returns the HTTP handler for APK requests.
@@ -145,7 +158,7 @@ func (h *APKHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 	}
 
 	downloadURL := upstreamURL + "/" + path
-	cacheFilename := repository + "/" + path
+	cacheFilename := APKCacheFilename(repository, path)
 
 	h.proxy.Logger.Info("apk package download",
 		"repository", repository, "name", name, "version", version, "arch", arch)

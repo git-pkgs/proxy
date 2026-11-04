@@ -45,11 +45,16 @@ type Mirror struct {
 	// uses https://pkg.julialang.org.
 	JuliaUpstream string
 
+	// APKRepositories are the upstream.apk repositories by name. Nil uses
+	// the official Alpine mirror as "alpine".
+	APKRepositories map[string]string
+
 	// RefusePackages, when set, fails every item Images does not take with
 	// this reason instead of fetching it, so nothing is cached.
 	RefusePackages string
 
 	cran cranIndex
+	apk  apkIndexes
 }
 
 // New creates a new Mirror with the given dependencies.
@@ -268,6 +273,10 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 	}
 	if pv.Ecosystem == "cran" {
 		m.mirrorCRAN(ctx, pv, tracker)
+		return
+	}
+	if pv.Ecosystem == "alpine" {
+		m.mirrorAPK(ctx, pv, tracker)
 		return
 	}
 	result, err := m.proxy.GetOrFetchArtifact(ctx, pv.Ecosystem, pv.Name, pv.Version, "")
