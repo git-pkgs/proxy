@@ -304,6 +304,11 @@ HTTP protocol handlers for each registry type.
 - `handleIndex()` - Proxy sparse index
 - `handleDownload()` - Serve cached crate
 
+**DebianHandler:**
+- Serves `/debian` and `/debian/{name}` mirrors of APT archives (`upstream.debian_repositories`)
+- Routes `.deb` packages to the artifact cache, source-package files directly to upstream, `dists/…` to the metadata cache, and proxies all other paths
+- Keys the artifact cache on name, version, and architecture, scoped by repository for named archives
+
 **SwiftHandler:**
 - Proxies the Swift Package Registry v1 read endpoints
 - Rewrites release URLs and caches source archives
@@ -428,6 +433,10 @@ An object a record stops pointing at, because a refetch replaced it or its entry
 - Metadata is small, upstream fetch is fast
 - Set `cache_metadata: true` or use the mirror command to enable metadata caching for offline use via the `metadata_cache` table
 - OCI manifests and tag lists are exceptions: they are cached automatically so previously fetched images remain pullable and tag resolution works when the registry or token service is unavailable
+
+**Why are Debian source-package files streamed instead of cached?**
+- Source-package files (`.dsc`, source tarballs, `.buildinfo`, `.changes`) can be re-uploaded or re-signed in place under the same path, whereas the artifact cache keys entries by version and filename without an expected digest from the `Sources` index
+- Streaming them avoids serving stale bytes when an upstream file is replaced or caching them under the `dists/` metadata TTL in flat repositories
 
 **Why stream artifacts?**
 - Memory efficient - don't load large files into RAM

@@ -108,11 +108,13 @@ func (h *DebianHandler) Routes() http.Handler {
 			}
 		}
 
-		// Route based on path type
+		// Route by filename rather than path prefix because flat repositories
+		// place pools under dists/<suite>/pool/....
 		switch {
-		case strings.HasPrefix(rest, "pool/"):
-			// Package downloads - cache these
+		case isDebPackageFile(rest):
 			h.handlePackageDownload(w, r, repository, upstreamURL, rest)
+		case isSourcePackageFile(rest):
+			h.proxyFile(w, r, upstreamURL, rest)
 		case strings.HasPrefix(rest, "dists/"):
 			// Repository metadata - served through the metadata cache
 			h.handleMetadata(w, r, repository, upstreamURL, rest)
@@ -121,6 +123,26 @@ func (h *DebianHandler) Routes() http.Handler {
 			h.proxyFile(w, r, upstreamURL, rest)
 		}
 	}))
+}
+
+func isDebPackageFile(path string) bool {
+	return strings.HasSuffix(path, ".deb")
+}
+
+// isSourcePackageFile reports whether path is a Debian source-package artifact.
+// Source files can be re-uploaded or re-signed in place under the same filename,
+// so they must be streamed rather than cached without digest verification.
+func isSourcePackageFile(path string) bool {
+	switch {
+	case strings.HasSuffix(path, ".dsc"),
+		strings.HasSuffix(path, ".buildinfo"),
+		strings.HasSuffix(path, ".changes"):
+		return true
+	}
+	// Match Debian source tarballs without matching suite tarballs (e.g. installer netboot.tar.gz).
+	return strings.Contains(path, ".orig.tar.") ||
+		strings.Contains(path, ".orig-") ||
+		strings.Contains(path, ".debian.tar.")
 }
 
 // repositoryNotFound answers a request addressed to a repository that is not
