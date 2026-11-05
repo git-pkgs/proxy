@@ -16,6 +16,9 @@ type PackageVersion struct {
 	Ecosystem string
 	Name      string
 	Version   string
+	// Namespace is the PURL namespace of apk packages, which Name leaves
+	// out. It picks the upstream.apk repository.
+	Namespace string
 	// Qualifiers are the PURL qualifiers. Images use repository_url, tag and
 	// arch; PyPI uses file_name, and conda subdir, build and type, to select
 	// which files of the version are mirrored. Julia uses uuid to identify
@@ -61,11 +64,15 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 		}
 
 		ecosystem, name, qualifiers := mirrorTarget(p)
+		var namespace string
+		if ecosystem == "alpine" {
+			namespace = p.Namespace
+		}
 
 		// Images are never expanded to all tags, and conda packages without
 		// a channel aren't listed; both fail when they are mirrored.
 		if p.Version != "" || isImageEcosystem(ecosystem) || (ecosystem == "conda" && !strings.Contains(name, "/")) {
-			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: p.Version, Qualifiers: qualifiers}
+			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: p.Version, Namespace: namespace, Qualifiers: qualifiers}
 			if isImageEcosystem(ecosystem) {
 				pv.Qualifiers = p.Qualifiers.Map()
 			}
@@ -84,7 +91,7 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 			return fmt.Errorf("fetching versions for %s/%s: %w", ecosystem, name, err)
 		}
 		for _, v := range listed {
-			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: v, Qualifiers: qualifiers}
+			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: v, Namespace: namespace, Qualifiers: qualifiers}
 			if takesPlatforms(ecosystem) {
 				pv.Platforms = s.Platforms
 			}

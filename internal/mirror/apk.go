@@ -47,9 +47,9 @@ type apkIndex struct {
 // and community indexes of that release.
 func (m *Mirror) mirrorAPK(ctx context.Context, pv PackageVersion, tracker *progressTracker) {
 	fail := func(err error) { m.recordFailure(tracker, pv, err) }
-	repository, name, ok := strings.Cut(pv.Name, "/")
-	if !ok {
-		repository, name = "alpine", pv.Name
+	repository, name := pv.Namespace, pv.Name
+	if repository == "" {
+		repository = "alpine"
 	}
 	repositoryURL, ok := handler.APKRepositories(m.APKRepositories)[repository]
 	if !ok {
