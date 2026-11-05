@@ -488,6 +488,43 @@ func TestMirrorImageCountsNoCacheHits(t *testing.T) {
 	}
 }
 
+// A scheduled image that no client pulls keeps its blobs: a mirror run that
+// finds them cached holds them back from retention, though not from LRU
+// eviction, which TestMirrorImageCountsNoCacheHits covers.
+func TestMirrorImageKeepsCachedBlobsFromRetention(t *testing.T) {
+	registry, _ := newFakeImageRegistry(t)
+	proxy := newMirrorTestProxy(t, registry)
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example", registry.server.URL)
+	ref := ImageRef{Name: "team/app", References: []string{"multi"}}
+
+	if _, err := h.MirrorImage(context.Background(), ref, nil); err != nil {
+		t.Fatalf("first MirrorImage: %v", err)
+	}
+	old := time.Now().Add(-30 * 24 * time.Hour).UTC()
+	if _, err := proxy.DB.Exec(proxy.DB.Rebind("UPDATE artifacts SET fetched_at = ?, last_accessed_at = ?"), old, old); err != nil {
+		t.Fatal(err)
+	}
+	cutoff := time.Now().Add(-14 * 24 * time.Hour)
+	maxID, err := proxy.DB.MaxArtifactID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if candidates, err := proxy.DB.GetRetentionCandidates(0, maxID, cutoff); err != nil || len(candidates) == 0 {
+		t.Fatalf("before the second run: %d candidates, err %v; want the aged blobs", len(candidates), err)
+	}
+
+	if _, err := h.MirrorImage(context.Background(), ref, nil); err != nil {
+		t.Fatalf("second MirrorImage: %v", err)
+	}
+	candidates, err := proxy.DB.GetRetentionCandidates(0, maxID, cutoff)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(candidates) != 0 {
+		t.Errorf("after the second run %d blobs are retention candidates, want none", len(candidates))
+	}
+}
+
 func TestMirrorImageRefetchesBlobMissingFromStorage(t *testing.T) {
 	registry, image := newFakeImageRegistry(t)
 	proxy := newMirrorTestProxy(t, registry)
