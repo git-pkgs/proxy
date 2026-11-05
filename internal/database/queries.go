@@ -4,7 +4,9 @@ import (
 	"database/sql"
 	"errors"
 	"fmt"
+	"slices"
 	"sort"
+	"strings"
 	"time"
 
 	"github.com/git-pkgs/artifacts"
@@ -221,6 +223,25 @@ func (db *DB) SetVersionPublishedAt(versionPURL, packagePURL string, publishedAt
 		return fmt.Errorf("setting version publish time: %w", err)
 	}
 	return nil
+}
+
+// GetFetchedVersionPURLs returns the versions of a package that have an
+// artifact row, cached now or evicted since. Versions without one were only
+// seen in metadata.
+func (db *DB) GetFetchedVersionPURLs(packagePURL string) (map[string]bool, error) {
+	var purls []string
+	query := db.Rebind(`
+		SELECT DISTINCT version_purl FROM artifacts
+		WHERE version_purl IN (SELECT purl FROM versions WHERE package_purl = ?)
+	`)
+	if err := db.Select(&purls, query, packagePURL); err != nil {
+		return nil, fmt.Errorf("listing fetched versions: %w", err)
+	}
+	fetched := make(map[string]bool, len(purls))
+	for _, p := range purls {
+		fetched[p] = true
+	}
+	return fetched, nil
 }
 
 // Artifact queries
@@ -645,6 +666,7 @@ func (db *DB) GetDuePendingDeletes(cutoff time.Time, limit int) ([]string, error
 		WHERE queued_at < ?
 		  AND NOT EXISTS (SELECT 1 FROM artifacts WHERE artifacts.storage_path = pending_deletes.path)
 		  AND NOT EXISTS (SELECT 1 FROM metadata_cache WHERE metadata_cache.storage_path = pending_deletes.path)
+		  AND NOT EXISTS (SELECT 1 FROM metadata_snapshots WHERE metadata_snapshots.storage_path = pending_deletes.path)
 		ORDER BY queued_at
 		LIMIT ?
 	`)
@@ -1385,6 +1407,50 @@ func (db *DB) ForgetMetadataDocument(ecosystem, name, from, to string) error {
 	return err
 }
 
+// expireMetadataBatch is how many names one ExpireMetadataCache statement
+// covers, well below the bind parameter limits of SQLite and Postgres.
+const expireMetadataBatch = 500
+
+// ExpireMetadataCache clears fetched_at on the metadata cache rows for
+// ecosystem and names that were fetched before cutoff, and returns the names
+// of the rows it changed. The rows keep their documents and validators, so
+// the next lookup of each revalidates it upstream instead of serving it as
+// fresh. It is for an upstream that reports which documents changed.
+func (db *DB) ExpireMetadataCache(ecosystem string, names []string, cutoff time.Time) ([]string, error) {
+	var expired []string
+	for batch := range slices.Chunk(names, expireMetadataBatch) {
+		args := []any{time.Now(), ecosystem, cutoff.UTC()}
+		for _, name := range batch {
+			args = append(args, name)
+		}
+		var got []string
+		err := db.DB.Select(&got, db.Rebind(`
+			UPDATE metadata_cache SET fetched_at = NULL, updated_at = ?
+			WHERE ecosystem = ? AND fetched_at < ?
+			  AND name IN (`+strings.TrimSuffix(strings.Repeat("?, ", len(batch)), ", ")+`)
+			RETURNING name
+		`), args...)
+		if err != nil {
+			return expired, err
+		}
+		expired = append(expired, got...)
+	}
+	return expired, nil
+}
+
+// ExpireAllMetadataCache is ExpireMetadataCache for every row of ecosystem,
+// except those of packages routed to another registry (named "routes/..."),
+// for an upstream that can't say which of its documents changed.
+func (db *DB) ExpireAllMetadataCache(ecosystem string, cutoff time.Time) ([]string, error) {
+	var expired []string
+	err := db.DB.Select(&expired, db.Rebind(`
+		UPDATE metadata_cache SET fetched_at = NULL, updated_at = ?
+		WHERE ecosystem = ? AND fetched_at < ? AND name NOT LIKE 'routes/%'
+		RETURNING name
+	`), time.Now(), ecosystem, cutoff.UTC())
+	return expired, err
+}
+
 // UpsertMetadataCache writes entry and marks it accessed now, since a
 // document is stored because a request asked for it.
 func (db *DB) UpsertMetadataCache(entry *MetadataCacheEntry) error {
@@ -1488,15 +1554,18 @@ func (db *DB) GetEcosystemStats() ([]EcosystemStats, error) {
 		return nil, err
 	}
 
-	// Left joined and bucketed for the same reason as artifacts below: a version
-	// whose package row is missing would otherwise vanish here while still
-	// counting in GetCacheStats' COUNT(*), leaving the two unable to reconcile.
+	// Left joined for the same reason as artifacts below: a version whose
+	// package row is missing would otherwise vanish here while still counting
+	// in GetCacheStats' COUNT(*), leaving the two unable to reconcile. Such
+	// versions are mostly publish times cooldown stored for versions nobody
+	// downloaded, so they count under the type of their package PURL, and
+	// only a PURL that can't be parsed is unattributed.
 	if err := db.eachCount(`
-		SELECT COALESCE(p.ecosystem, '`+unattributedEcosystem+`'), COUNT(*)
+		SELECT COALESCE(p.ecosystem, '`+orphanVersionPrefix+`' || v.package_purl), COUNT(*)
 		FROM versions v
 		LEFT JOIN packages p ON p.purl = v.package_purl
-		GROUP BY COALESCE(p.ecosystem, '`+unattributedEcosystem+`')
-	`, func(ecosystem string, n int64) { get(ecosystem).Versions = n }); err != nil {
+		GROUP BY COALESCE(p.ecosystem, '`+orphanVersionPrefix+`' || v.package_purl)
+	`, func(key string, n int64) { get(versionEcosystem(key)).Versions += n }); err != nil {
 		return nil, err
 	}
 
@@ -1578,6 +1647,26 @@ func mergeAliasedEcosystems(stats []EcosystemStats) []EcosystemStats {
 // GetTotalCacheSize — two numbers that sit side by side in the UI and in
 // Grafana. Bucketing them keeps the two reconcilable.
 const unattributedEcosystem = "unattributed"
+
+// orphanVersionPrefix marks the package PURL of a version without a package
+// row in GetEcosystemStats. No ecosystem name starts with it.
+const orphanVersionPrefix = "~"
+
+// versionEcosystem returns the ecosystem a GetEcosystemStats version count
+// is for: the package row's, or the type of the package PURL of a version
+// without one. The ecosystems that store publish times are named like their
+// PURL types.
+func versionEcosystem(key string) string {
+	packagePURL, orphan := strings.CutPrefix(key, orphanVersionPrefix)
+	if !orphan {
+		return key
+	}
+	p, err := purl.Parse(packagePURL)
+	if err != nil {
+		return unattributedEcosystem
+	}
+	return p.Type
+}
 
 func (db *DB) eachArtifactStat(get func(string) *EcosystemStats) error {
 	rows, err := db.Query(`

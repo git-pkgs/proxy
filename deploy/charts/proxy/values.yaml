@@ -79,6 +79,12 @@ extraInitContainers: []
 #    image: busybox:1.37
 #    command: ["sh", "-c", "until nc -z postgres 5432; do sleep 2; done"]
 
+# With SQLite, the database file needs a local disk or block-backed volume,
+# even with one replica. ReadWriteOnce doesn't guarantee that: pick a
+# storageClass that isn't NFS or another network filesystem. If only network
+# filesystem storage is available, set config.data.database to Postgres.
+# Artifact storage can stay on NFS on a separate volume (extraVolumes and
+# extraVolumeMounts, with config.data.storage.url pointing at it).
 persistence:
   enabled: true
   # Keep this aligned with config.data.storage.url and config.data.database.path

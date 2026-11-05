@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"regexp"
 	"strings"
+	"time"
 
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
@@ -51,24 +52,39 @@ type APKHandler struct {
 	proxy        *Proxy
 	proxyURL     string
 	repositories map[string]string
+	// snapshots: see WithSnapshots.
+	snapshots time.Duration
 }
 
 // NewAPKHandler creates an Alpine APK repository protocol handler.
 // When repositories is empty, a single repository named "alpine" pointing at
 // the official Alpine mirror is used.
 func NewAPKHandler(proxy *Proxy, proxyURL string, repositories map[string]string) *APKHandler {
-	h := &APKHandler{
+	return &APKHandler{
 		proxy:        proxy,
 		proxyURL:     strings.TrimSuffix(proxyURL, "/"),
-		repositories: make(map[string]string, len(repositories)),
+		repositories: APKRepositories(repositories),
 	}
-	for name, repositoryURL := range repositories {
-		h.repositories[name] = strings.TrimSuffix(repositoryURL, "/")
+}
+
+// APKRepositories returns the upstream.apk repositories by name without
+// trailing slashes, or the official Alpine mirror as "alpine" when none are
+// configured.
+func APKRepositories(configured map[string]string) map[string]string {
+	repositories := make(map[string]string, len(configured))
+	for name, repositoryURL := range configured {
+		repositories[name] = strings.TrimSuffix(repositoryURL, "/")
 	}
-	if len(h.repositories) == 0 {
-		h.repositories[defaultAPKRepositoryName] = defaultAPKUpstream
+	if len(repositories) == 0 {
+		repositories[defaultAPKRepositoryName] = defaultAPKUpstream
 	}
-	return h
+	return repositories
+}
+
+// APKCacheFilename returns the filename a package at path
+// ({release}/{repo}/{arch}/{file}) of repository is cached under.
+func APKCacheFilename(repository, path string) string {
+	return repository + "/" + path
 }
 
 // Routes returns the HTTP handler for APK requests.
@@ -87,14 +103,18 @@ func (h *APKHandler) Routes() http.Handler {
 			return
 		}
 
-		repository, rest, ok := strings.Cut(path, "/")
-		upstreamURL, found := h.repositories[repository]
+		segment, rest, ok := strings.Cut(path, "/")
+		repository, upstreamURL, day, snapshot, found := h.resolveRepository(segment)
 		if !ok || rest == "" || !found {
 			http.NotFound(w, r)
 			return
 		}
 
 		switch {
+		case snapshot && (isAPKIndex(rest) || isAPKSignature(rest)):
+			// A dated snapshot serves the kept version of the index; packages
+			// and other files below are the same as under the plain path.
+			h.serveSnapshot(w, r, repository, upstreamURL, rest, day)
 		case isAPKIndex(rest) || isAPKSignature(rest):
 			// Indexes and detached signatures are signed upstream metadata.
 			// Cache them with the metadata TTL and serve the stored bytes
@@ -138,7 +158,7 @@ func (h *APKHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 	}
 
 	downloadURL := upstreamURL + "/" + path
-	cacheFilename := repository + "/" + path
+	cacheFilename := APKCacheFilename(repository, path)
 
 	h.proxy.Logger.Info("apk package download",
 		"repository", repository, "name", name, "version", version, "arch", arch)
@@ -160,8 +180,12 @@ func (h *APKHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 // metadata cache. Stored bytes are re-served verbatim, which keeps embedded
 // and detached signatures valid.
 func (h *APKHandler) handleMetadata(w http.ResponseWriter, r *http.Request, repository, upstreamURL, path string) {
-	h.proxy.ProxyCached(w, r, upstreamURL+"/"+path, apkEcosystem,
-		h.metadataCacheKey(repository, upstreamURL, path), "*/*")
+	cacheKey := h.metadataCacheKey(repository, upstreamURL, path)
+	if h.snapshotsEnabled() {
+		h.serveMetadataWithSnapshot(w, r, upstreamURL+"/"+path, cacheKey)
+		return
+	}
+	h.proxy.ProxyCached(w, r, upstreamURL+"/"+path, apkEcosystem, cacheKey, "*/*")
 }
 
 // metadataCacheKey derives the metadata cache key from the repository name,

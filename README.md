@@ -87,7 +87,11 @@ Cooldown requires publish timestamps in metadata. Registries without a "Yes" in 
 brew install git-pkgs/git-pkgs/proxy
 ```
 
-Or download a binary from the [releases page](https://github.com/git-pkgs/proxy/releases).
+Or download a binary from the [releases page](https://github.com/git-pkgs/proxy/releases), or run the container image:
+
+```bash
+docker run -p 8080:8080 -v proxy-data:/data ghcr.io/git-pkgs/proxy:latest
+```
 
 ### Helm
 
@@ -103,6 +107,12 @@ The default chart deploys one replica backed by a 10 GiB persistent volume,
 using SQLite and filesystem artifact storage under `/data`. See
 [`deploy/charts/proxy/values.yaml`](deploy/charts/proxy/values.yaml) for ingress,
 external database and object-storage configuration options.
+
+The SQLite database needs a local disk or a block-backed volume, even with one
+replica; `ReadWriteOnce` alone doesn't guarantee that, since the storage class
+can still be NFS. If the cluster only offers network filesystem storage, use
+Postgres. Artifact storage can stay on NFS, separately from the database. See
+[SQLite](docs/configuration.md#sqlite).
 
 To trust a private CA, for example when upstreams sit behind a TLS-intercepting
 corporate proxy or are internal registries signed by an in-house CA, mount the
@@ -192,7 +202,7 @@ the proxy, which fetches them from the package's registry and caches them;
 attestations of versions held back by cooldown or blocked by the denylist are
 not served.
 
-To serve private packages through the same registry URL, see [Private package routes](docs/configuration.md#private-package-routes).
+To serve private packages through the same registry URL, see [Private package routes](docs/configuration.md#private-package-routes). To see new releases before `metadata_ttl` runs out, see [Change feeds](docs/configuration.md#change-feeds).
 
 ### Cargo
 
@@ -399,7 +409,16 @@ Or set globally:
 composer config -g repositories.proxy composer http://localhost:8080/composer
 ```
 
-To serve private packages through the same URL, see [Private package routes](docs/configuration.md#private-package-routes).
+`composer audit`, `audit.block-insecure` and Packagist's malware filter list
+work through the proxy when `upstream.composer_repository` offers them in its
+`packages.json`, as repo.packagist.org does. The proxy advertises them in its
+own `packages.json` and passes the advisories and filter list requests through
+to the upstream uncached. Names of packages in `upstream.composer_routes` or
+`hosted.composer_vendors` are removed from advisories requests before they are
+sent. Versions withheld by [cooldown](#version-cooldown) are not excluded from
+the report.
+
+To serve private packages through the same URL, see [Private package routes](docs/configuration.md#private-package-routes). To see new releases before `metadata_ttl` runs out, see [Change feeds](docs/configuration.md#change-feeds).
 
 ### Conan (C/C++)
 
@@ -734,6 +753,11 @@ signature verification keeps working. Indexes use the metadata cache
 (`metadata_ttl`, stale fallback); `.apk` packages are stored in the shared
 artifact cache and remain available when the upstream is unreachable.
 
+Set `upstream.apk_snapshots` (e.g. `"90d"`) to keep replaced indexes and serve
+them by date at `/apk/alpine@2026-10-01/v3.22/main`, so pinned package versions
+stay installable after the mirror moves on. See
+[Alpine APK snapshots](docs/configuration.md#alpine-apk-snapshots).
+
 To proxy other mirrors or private repositories, configure named upstreams
 under `upstream.apk` (this replaces the built-in default; re-add `alpine` if
 you still want it):
@@ -1048,7 +1072,7 @@ Run with config file:
 
 ### PostgreSQL
 
-SQLite is the default and works well for single-node deployments. For multi-node setups or if you prefer a managed database, switch to Postgres:
+SQLite is the default and works well for single-node deployments, with the database file on a local disk or block-backed volume. For multi-node setups, when only network filesystem storage such as NFS is available, or if you prefer a managed database, switch to Postgres:
 
 ```yaml
 database:
@@ -1280,6 +1304,8 @@ Recently cached:
 | `GET /maven/*` | Maven repository protocol |
 | `GET /nuget/*` | NuGet V3 API |
 | `GET /composer/*` | Composer/Packagist protocol |
+| `GET`, `POST /composer/api/security-advisories/` | Composer security advisories, passed through to upstream without private package names |
+| `GET /composer/lists/summary.json` | Composer filter list summary, passed through to upstream uncached |
 | `GET /conan/*` | Conan C/C++ protocol |
 | `GET /chef/*` | Chef Supermarket protocol (universe, cookbook API and downloads) |
 | `GET /conda/*` | Conda/Anaconda protocol |
@@ -1538,6 +1564,7 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 | `proxy_metadata_cache_entries` | gauge | `ecosystem` | Number of cached metadata documents per ecosystem. |
 | `proxy_artifacts_evicted_total` | counter | `reason`, `ecosystem` | Artifacts evicted by the size limit (`lru`) or by age (`retention`) |
 | `proxy_metadata_evicted_total` | counter | `ecosystem` | Cached metadata documents evicted by the size limit |
+| `proxy_metadata_expired_by_change_feed_total` | counter | `ecosystem` | Cached metadata documents set to revalidate because an upstream [change feed](docs/configuration.md#change-feeds) listed them |
 | `proxy_fetch_lease_waits_total` | counter | `kind` | Cache misses (`artifact` or `metadata`) that waited for another instance sharing the database to fetch them |
 | `proxy_upstream_fetch_duration_seconds` | histogram | `ecosystem` | Time spent fetching from upstream |
 | `proxy_upstream_errors_total` | counter | `ecosystem`, `error_type` | Upstream fetch failures |
@@ -1608,7 +1635,7 @@ The `kind` label on `proxy_cache_hits_total` and `proxy_cache_misses_total` keep
 
 `ecosystem` means three slightly different things across `/metrics`, and queries that join across them need to know which.
 
-**From the package record, normalized.** The six `proxy_ecosystem_*` gauges, `proxy_cache_hits_total`, `proxy_cache_misses_total`, the three `proxy_metadata_cache_*` metrics, `proxy_artifacts_evicted_total`, `proxy_metadata_evicted_total`, `proxy_integrity_failures_total` and the scan metrics. Aliases collapse here: `gem` reads as `rubygems`, `composer` as `packagist`, `go` as `golang`.
+**From the package record, normalized.** The six `proxy_ecosystem_*` gauges, `proxy_cache_hits_total`, `proxy_cache_misses_total`, the three `proxy_metadata_cache_*` metrics, `proxy_artifacts_evicted_total`, `proxy_metadata_evicted_total`, `proxy_metadata_expired_by_change_feed_total`, `proxy_integrity_failures_total` and the scan metrics. Aliases collapse here: `gem` reads as `rubygems`, `composer` as `packagist`, `go` as `golang`.
 
 **From the request path.** `proxy_requests_total`, `proxy_request_duration_seconds` and `proxy_response_bytes_total`. The names mostly coincide with the normalized ones -- these also report `rubygems`, `packagist` and `golang` -- but the Debian route reports `debian` where the package record says `deb`, and any path that is not a package endpoint reports `other`, which corresponds to no ecosystem at all.
 
@@ -1715,12 +1742,20 @@ sudo systemctl start proxy
 
 ### Docker
 
-A Dockerfile is included in the repo. Build and run:
+Images for linux/amd64 and linux/arm64 are published to `ghcr.io/git-pkgs/proxy` for each release, tagged with the version and `latest`:
+
+```bash
+docker run -p 8080:8080 -v proxy-data:/data ghcr.io/git-pkgs/proxy:latest
+```
+
+To build the image from the repo instead:
 
 ```bash
 docker build -t proxy .
 docker run -p 8080:8080 -v proxy-data:/data proxy
 ```
+
+The image has a health check that requests `/health` on port 8080. It checks the database and storage, so a container reports unhealthy when either fails. If you change the port with `PROXY_LISTEN`, override it with `--health-cmd`.
 
 With `--read-only`, also pass `--tmpfs /tmp`: the proxy writes some uploads to a temporary file before reading them.
 

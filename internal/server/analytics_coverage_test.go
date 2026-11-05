@@ -34,25 +34,26 @@ var metricSurface = map[string]string{
 	"proxy_client_response_bytes_total": "Runtime: Request sources -- By client",
 
 	// Registry-derived, shown in the Runtime card.
-	"proxy_requests_total":                     "Runtime: Requests + Responses by status",
-	"proxy_request_duration_seconds":           "Runtime: Mean latency",
-	"proxy_active_requests":                    "Runtime: In flight",
-	"proxy_cache_hits_total":                   "Runtime: Artifact and metadata cache lookups + artifact hit rate",
-	"proxy_cache_misses_total":                 "Runtime: Artifact and metadata cache lookups + artifact hit rate",
-	"proxy_metadata_cache_served_bytes_total":  "Runtime: Metadata cache lookups -- served from cache",
-	"proxy_upstream_fetch_duration_seconds":    "Runtime: Upstream fetches + mean fetch",
-	"proxy_upstream_errors_total":              "Runtime: Upstream errors",
-	"proxy_storage_operation_duration_seconds": "Runtime: Storage operations",
-	"proxy_storage_errors_total":               "Runtime: Storage errors",
-	"proxy_integrity_failures_total":           "Runtime: Integrity failures",
-	"proxy_health_probe_failures_total":        "Runtime: Health probe failures",
-	"proxy_circuit_breaker_state":              "Runtime: Circuit breakers",
-	"proxy_circuit_breaker_trips_total":        "Runtime: Circuit breaker trips",
-	"proxy_artifacts_evicted_total":            "Runtime: Evicted artifacts",
-	"proxy_metadata_evicted_total":             "Runtime: Evicted metadata",
-	"proxy_scan_duration_seconds":              "Runtime: Pre-cache scanning -- Scans",
-	"proxy_scan_blocked_total":                 "Runtime: Pre-cache scanning -- Artifacts blocked",
-	"proxy_scan_errors_total":                  "Runtime: Pre-cache scanning -- Scan errors",
+	"proxy_requests_total":                        "Runtime: Requests + Responses by status",
+	"proxy_request_duration_seconds":              "Runtime: Mean latency",
+	"proxy_active_requests":                       "Runtime: In flight",
+	"proxy_cache_hits_total":                      "Runtime: Artifact and metadata cache lookups + artifact hit rate",
+	"proxy_cache_misses_total":                    "Runtime: Artifact and metadata cache lookups + artifact hit rate",
+	"proxy_metadata_cache_served_bytes_total":     "Runtime: Metadata cache lookups -- served from cache",
+	"proxy_upstream_fetch_duration_seconds":       "Runtime: Upstream fetches + mean fetch",
+	"proxy_upstream_errors_total":                 "Runtime: Upstream errors",
+	"proxy_storage_operation_duration_seconds":    "Runtime: Storage operations",
+	"proxy_storage_errors_total":                  "Runtime: Storage errors",
+	"proxy_integrity_failures_total":              "Runtime: Integrity failures",
+	"proxy_health_probe_failures_total":           "Runtime: Health probe failures",
+	"proxy_circuit_breaker_state":                 "Runtime: Circuit breakers",
+	"proxy_circuit_breaker_trips_total":           "Runtime: Circuit breaker trips",
+	"proxy_artifacts_evicted_total":               "Runtime: Evicted artifacts",
+	"proxy_metadata_evicted_total":                "Runtime: Evicted metadata",
+	"proxy_metadata_expired_by_change_feed_total": "Runtime: Metadata changed upstream",
+	"proxy_scan_duration_seconds":                 "Runtime: Pre-cache scanning -- Scans",
+	"proxy_scan_blocked_total":                    "Runtime: Pre-cache scanning -- Artifacts blocked",
+	"proxy_scan_errors_total":                     "Runtime: Pre-cache scanning -- Scan errors",
 }
 
 // TestEveryMetricIsSurfaced fails when a metric is registered but has no home
@@ -80,6 +81,7 @@ func TestEveryMetricIsSurfaced(t *testing.T) {
 	metrics.UpdateCacheStats(1, 1)
 	metrics.RecordArtifactEvicted("retention", "npm")
 	metrics.RecordMetadataEvicted("npm")
+	metrics.RecordMetadataExpiredByChangeFeed("npm", 1)
 	metrics.UpdateEcosystemStats([]metrics.EcosystemStats{{Ecosystem: "npm", DownloadedBytes: 1}})
 	metrics.UpdateMetadataCacheStats([]metrics.MetadataCacheStats{{Ecosystem: "npm", Entries: 1, Size: 1}})
 

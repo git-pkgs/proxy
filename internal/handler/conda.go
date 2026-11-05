@@ -409,7 +409,8 @@ func (h *CondaHandler) rememberRepodata(cacheKey, digest string, filter *repodat
 	h.repodataStates[cacheKey] = repodataState{digest: digest, etag: etag, until: filter.until}
 }
 
-// countingWriter records whether anything has reached the response yet.
+// countingWriter counts the bytes written through it, such as whether
+// anything has reached the response yet.
 type countingWriter struct {
 	w io.Writer
 	n int64
@@ -540,7 +541,7 @@ func (h *CondaHandler) proxyCached(w http.ResponseWriter, r *http.Request) {
 	if strings.HasSuffix(r.URL.Path, ".json") {
 		acceptEncoding = "gzip"
 	}
-	h.proxy.proxyCachedWithEncoding(w, r, h.upstreamURL+r.URL.Path, "conda", cacheKey, acceptEncoding, "*/*")
+	h.proxy.proxyCachedWithEncoding(w, r, h.upstreamURL+r.URL.Path, "conda", cacheKey, acceptEncoding, nil, "*/*")
 }
 
 // proxyUpstream forwards a request to Anaconda without caching.

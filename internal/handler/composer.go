@@ -55,6 +55,7 @@ type ComposerHandler struct {
 	repoURL     string
 	proxyURL    string
 	routes      packageRoutes
+	indexCache  composerIndexCache
 }
 
 // NewComposerHandler creates a new Composer protocol handler.
@@ -100,18 +101,29 @@ func (h *ComposerHandler) Routes() http.Handler {
 	mux.HandleFunc("GET /search.json", h.proxyUpstream)
 	mux.HandleFunc("GET /packages/list.json", h.proxyUpstream)
 
+	// Security advisories and filter lists, as the default repository offers them
+	mux.HandleFunc("GET "+composerAdvisoriesPath, h.handleSecurityAdvisories)
+	mux.HandleFunc("POST "+composerAdvisoriesPath, h.handleSecurityAdvisories)
+	mux.HandleFunc("GET "+composerFilterSummaryPath, h.handleFilterSummary)
+
 	return mux
 }
 
-// handleServiceIndex returns the Composer repository service index.
+// handleServiceIndex returns the Composer repository service index. It
+// carries the security advisories and filter list entries of the default
+// repository's own index when that has them, kept in memory for the metadata
+// TTL; if the repository has not been reached, the index goes out without
+// them.
 func (h *ComposerHandler) handleServiceIndex(w http.ResponseWriter, r *http.Request) {
-	// Return a minimal service index pointing to our proxy
 	index := map[string]any{
 		"packages":           map[string]any{},
 		"metadata-url":       h.proxyURL + "/composer/p2/%package%.json",
 		"notify-batch":       h.upstreamURL + "/downloads/",
 		"search":             h.proxyURL + "/composer/search.json?q=%query%&type=%type%",
 		"providers-lazy-url": h.proxyURL + "/composer/p2/%package%.json",
+	}
+	if upstream, ok := h.upstreamIndex(r.Context()); ok {
+		upstream.advertise(index, h.proxyURL)
 	}
 
 	w.Header().Set(headerContentType, "application/json")
@@ -905,9 +917,9 @@ type composerDist struct {
 }
 
 // findDownloadURLFromMetadata fetches a metadata document and returns the dist
-// of the given version, with an empty URL if the version is not present. An
-// error is returned only on transport failure; a missing document (non-200)
-// or a missing version both yield an empty URL so the caller can fall back.
+// of the given version, with an empty URL if the version is not present. A
+// missing document (404 or 410) or a missing version both yield an empty URL
+// so the caller can fall back; any other failure is an error.
 func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaURL, packageName, version string) (composerDist, error) {
 	h.proxy.Logger.Debug("fetching upstream metadata for download lookup",
 		"url", metaURL, "package", packageName, "version", version)
@@ -926,8 +938,16 @@ func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaU
 	h.proxy.Logger.Debug("upstream metadata response",
 		"url", metaURL, "status", resp.StatusCode)
 
-	if resp.StatusCode != http.StatusOK {
+	switch {
+	case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:
 		return composerDist{}, nil
+	case resp.StatusCode == http.StatusTooManyRequests && h.proxy.RateLimits != nil:
+		if err := h.proxy.RateLimits.Held(metaURL); err != nil {
+			return composerDist{}, err
+		}
+	}
+	if resp.StatusCode != http.StatusOK {
+		return composerDist{}, fmt.Errorf("upstream metadata returned %d", resp.StatusCode)
 	}
 
 	body, err := h.proxy.ReadMetadata(resp.Body)

@@ -66,7 +66,7 @@ type RegistryConfig struct {
 type PackageShowData struct {
 	Layout
 	Package         *database.Package
-	Versions        []database.Version
+	Versions        []PackageVersion
 	Vulnerabilities []database.Vulnerability
 	LicenseCategory string
 	// Cooldown is nil with cooldown off.
