@@ -254,7 +254,7 @@ func rpmIndexFiles(ctx context.Context, m *Mirror, indexURL string, body []byte,
 }
 
 // readIndex streams an index from upstream through parse, decompressed as
-// its name says. It is read directly rather than through the metadata
+// its name says and limited to maxIndexBytes. It is read directly rather than through the metadata
 // cache, since it can be far larger than a metadata document may be.
 func (m *Mirror) readIndex(ctx context.Context, indexURL string, parse func(io.Reader) ([]indexFile, error)) ([]indexFile, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
@@ -274,7 +274,31 @@ func (m *Mirror) readIndex(ctx context.Context, indexURL string, parse func(io.R
 		return nil, err
 	}
 	defer func() { _ = r.Close() }()
-	return parse(r)
+	return parse(&indexLimitReader{r: r, url: indexURL, remaining: maxIndexBytes})
+}
+
+// maxIndexBytes bounds an index once decompressed. Debian's largest
+// Packages files are under 100 MB and Fedora's primary.xml under 200 MB.
+var maxIndexBytes int64 = 512 << 20
+
+// indexLimitReader fails once more than maxIndexBytes have been read, so an
+// oversized index fails rather than looking complete.
+type indexLimitReader struct {
+	r         io.Reader
+	url       string
+	remaining int64
+}
+
+func (l *indexLimitReader) Read(p []byte) (int, error) {
+	if int64(len(p)) > l.remaining+1 {
+		p = p[:l.remaining+1]
+	}
+	n, err := l.r.Read(p)
+	if int64(n) > l.remaining {
+		return int(l.remaining), fmt.Errorf("%s: index larger than %d bytes", l.url, maxIndexBytes)
+	}
+	l.remaining -= int64(n)
+	return n, err
 }
 
 // urlDir returns a URL without its last path segment. path.Dir would fold

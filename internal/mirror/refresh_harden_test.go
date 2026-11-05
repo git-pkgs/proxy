@@ -4,6 +4,7 @@ import (
 	"context"
 	"reflect"
 	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -255,5 +256,30 @@ func TestRefreshSkipsIndexPathsOutsideTheRepository(t *testing.T) {
 				t.Errorf("progress = %+v, fetched %v; want nothing", progress, fetcher.fetched())
 			}
 		})
+	}
+}
+
+// TestRefreshRefusesIndexesOverTheSizeLimit checks that an index that
+// decompresses to more than maxIndexBytes fails instead of being parsed in
+// full.
+func TestRefreshRefusesIndexesOverTheSizeLimit(t *testing.T) {
+	limit := maxIndexBytes
+	maxIndexBytes = 4 << 10
+	t.Cleanup(func() { maxIndexBytes = limit })
+
+	m, fetcher, idx := setupIndexRefresh(t)
+	idx.set("/debian/dists/bookworm/InRelease", []byte("SHA256:\n 0000 1 main/binary-amd64/Packages.gz\n"))
+	idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", debCurlPackages(t, "7.88.1-10"))
+	clientFetchesCurl(t, m, "debian", idx.URL+"/debian/dists/bookworm/InRelease",
+		"deb", "7.88.1-10", "curl_7.88.1-10_amd64.deb", idx.URL+"/debian/pool/main/c/curl/curl_7.88.1-10_amd64.deb")
+
+	padding := strings.Repeat("Package: filler\nVersion: 1\nArchitecture: amd64\nFilename: pool/main/f/filler/filler_1_amd64.deb\n\n", 100)
+	idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", gzipped(t,
+		"Package: curl\nVersion: 7.88.1-10+deb12u8\nArchitecture: amd64\nFilename: pool/main/c/curl/curl_7.88.1-10+deb12u8_amd64.deb\n\n"+padding))
+	fetcher.reset()
+
+	progress := refreshOnce(t, m)
+	if progress.Failed != 1 || len(progress.Errors) != 1 || !strings.Contains(progress.Errors[0].Error, "larger than") || len(fetcher.fetched()) != 0 {
+		t.Errorf("progress = %+v, fetched %v; want the index failing for its size", progress, fetcher.fetched())
 	}
 }
