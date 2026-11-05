@@ -148,8 +148,11 @@ func mirrorTarget(p *purl.PURL) (ecosystem, name string, qualifiers map[string]s
 		name = p.Namespace + "/" + p.Name
 	}
 	qualifiers = fileQualifiers(ecosystem, p.Qualifiers.Map())
-	if ecosystem == "julia" {
+	switch ecosystem {
+	case "julia":
 		qualifiers = map[string]string{"uuid": p.Qualifier("uuid")}
+	case "alpine":
+		qualifiers = map[string]string{"arch": p.Qualifier("arch"), "distro": p.Qualifier("distro")}
 	}
 	return ecosystem, name, qualifiers
 }

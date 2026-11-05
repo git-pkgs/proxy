@@ -64,6 +64,7 @@ func mirrorWithVersions(t *testing.T, cfg *config.Config, versions mirror.Versio
 	m.Charts = handler.NewHelmHandler(proxy, cfg.BaseURL, cfg.Upstream.Helm)
 	m.Versions = versions
 	m.JuliaUpstream = cfg.Upstream.Julia
+	m.APKRepositories = cfg.Upstream.APK
 	if versions == nil {
 		m.Versions = NewMirrorVersions(cfg.Upstream, proxy.HTTPClient)
 	}
