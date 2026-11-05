@@ -197,11 +197,17 @@ func (h *CargoHandler) publishTime(r *http.Request, name, version string) (time.
 		return time.Time{}, false, err
 	}
 	for line := range bytes.SplitSeq(body, []byte("\n")) {
-		if vers, _, _ := lookupJSONString(line, "vers"); vers != version {
+		if len(bytes.TrimSpace(line)) == 0 {
 			continue
 		}
-		pubtime, _, _ := lookupJSONString(line, "pubtime")
-		published, err := time.Parse(time.RFC3339, pubtime)
+		var entry crateIndexEntry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			return time.Time{}, false, err
+		}
+		if entry.Version != version {
+			continue
+		}
+		published, err := time.Parse(time.RFC3339, entry.PublishTime)
 		return published, err == nil, nil
 	}
 	return time.Time{}, false, nil
@@ -238,8 +244,8 @@ func (h *CargoHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	h.proxy.Logger.Debug("cargo download request",
 		"crate", name, "version", version, "filename", filename)
 
-	if h.proxy.withholdInCooldown(w, downloadVersion{
-		ecosystem: "cargo", policyName: name, storedName: name, version: version,
+	if h.proxy.withholdInCooldown(w, r, downloadVersion{
+		ecosystem: "cargo", policyName: name, storedName: name, version: version, cacheName: name, filename: filename,
 		lookup: func() (time.Time, bool, error) { return h.publishTime(r, name, version) },
 	}) {
 		return

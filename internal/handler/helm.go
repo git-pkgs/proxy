@@ -120,8 +120,22 @@ func (h *HelmHandler) handleChart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.withholdChart(w, r, repository, upstreamURL, digest) {
-		return
+	var charts *helmChartLookup
+	if h.proxy.cooldownEnabled() {
+		var err error
+		charts, err = h.downloadChartLookup(r, repository, upstreamURL)
+		if err != nil {
+			cached, cacheErr := h.proxy.GetCachedArtifact(r.Context(), helmMetadataEcosystem, repository, digest, filename)
+			if cacheErr == nil && cached != nil {
+				h.serveChart(w, r, repository, digest, filename, cached)
+			} else {
+				h.proxy.writeCooldownLookupError(w, helmMetadataEcosystem, repository, err)
+			}
+			return
+		}
+		if h.withholdChart(w, charts, digest, filename) {
+			return
+		}
 	}
 
 	cached, err := h.proxy.GetCachedArtifact(r.Context(), helmMetadataEcosystem, repository, digest, filename)
@@ -135,13 +149,17 @@ func (h *HelmHandler) handleChart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	index := h.fetchIndex(r.Context(), repository, upstreamURL)
-	if index.err != nil {
-		h.serveIndexError(w, index.err)
-		return
+	var downloadURL string
+	if charts == nil {
+		index := h.fetchIndex(r.Context(), repository, upstreamURL)
+		if index.err != nil {
+			h.serveIndexError(w, index.err)
+			return
+		}
+		downloadURL, err = h.findChartDownload(repository, upstreamURL, index, digest, filename)
+	} else {
+		downloadURL, err = h.findChartURL(charts, digest, filename)
 	}
-
-	downloadURL, err := h.findChartDownload(repository, upstreamURL, index, digest, filename)
 	if err != nil {
 		if errors.Is(err, errHelmChartNotFound) {
 			http.NotFound(w, r)
@@ -269,6 +287,10 @@ func (h *HelmHandler) findChartDownload(repository, upstreamURL string, index me
 	if err != nil {
 		return "", err
 	}
+	return h.findChartURL(charts, digest, filename)
+}
+
+func (h *HelmHandler) findChartURL(charts *helmChartLookup, digest, filename string) (string, error) {
 	for _, chart := range charts.byDigest[digest] {
 		if h.chartOnCooldown(chart.name, chart.created) {
 			continue
@@ -380,70 +402,35 @@ func (h *HelmHandler) buildChartLookup(upstreamURL string, body []byte) (*helmCh
 	return lookup, nil
 }
 
-// withholdChart checks a chart against the cooldown before it is served.
-// findChartDownload already leaves out charts in cooldown, but a cached chart
-// may have been fetched under an earlier policy. Charts are cached under the
-// repository and digest rather than the chart name the policy is keyed by, so
-// the name and publish time come from the index, indexed once per document
-// (see publishIndex).
-func (h *HelmHandler) withholdChart(w http.ResponseWriter, r *http.Request, repository, upstreamURL, digest string) bool {
-	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		return false
-	}
-	res := h.fetchIndex(r, repository, upstreamURL)
-	if res.err != nil {
-		h.proxy.Logger.Warn("cooldown: could not fetch Helm index for download check",
-			"repository", repository, "digest", digest, "error", res.err)
-		return false
-	}
-	index, err := publishIndex(h.proxy, "helm\x00"+h.indexCacheKey(repository, upstreamURL), res,
-		func(body []byte, _ string) (map[string]helmChartTime, error) {
-			return h.indexChartTimes(upstreamURL, body)
-		})
-	if err != nil {
-		h.proxy.Logger.Warn("cooldown: could not read Helm index for download check",
-			"repository", repository, "digest", digest, "error", err)
-		return false
-	}
-	chart, ok := index[digest]
-	if !ok {
-		return false
-	}
-	return h.proxy.withholdInCooldown(w, downloadVersion{
-		ecosystem: helmMetadataEcosystem, policyName: chart.name, version: digest,
-		lookup: func() (time.Time, bool, error) { return chart.created, !chart.created.IsZero(), nil },
+func (h *HelmHandler) downloadChartLookup(r *http.Request, repository, upstreamURL string) (*helmChartLookup, error) {
+	key := "helm\x00" + h.indexCacheKey(repository, upstreamURL)
+	return publishIndex(h.proxy, key, func() metadataResult {
+		return h.fetchIndex(r.Context(), repository, upstreamURL)
+	}, func(res metadataResult) (*helmChartLookup, error) {
+		if res.err != nil {
+			return nil, res.err
+		}
+		return h.chartLookup(repository, upstreamURL, res)
 	})
 }
 
-// helmChartTime is the chart a release digest belongs to and when it was
-// created.
-type helmChartTime struct {
-	name    string
-	created time.Time
-}
-
-// indexChartTimes maps each release digest in an index to its chart.
-func (h *HelmHandler) indexChartTimes(upstreamURL string, body []byte) (map[string]helmChartTime, error) {
-	_, entries, err := parseHelmIndex(body)
-	if err != nil {
-		return nil, err
-	}
-	index := make(map[string]helmChartTime)
-	for i := 0; i < len(entries.Content); i += 2 {
-		chartName := entries.Content[i].Value
-		releases := entries.Content[i+1]
-		if releases.Kind != yaml.SequenceNode {
-			continue
-		}
-		for _, release := range releases.Content {
-			chart, err := h.parseChartRelease(chartName, upstreamURL, release)
-			if err != nil {
+func (h *HelmHandler) withholdChart(w http.ResponseWriter, charts *helmChartLookup, digest, filename string) bool {
+	withheld := false
+	for _, chart := range charts.byDigest[digest] {
+		for _, download := range chart.downloads {
+			if download.filename != filename {
 				continue
 			}
-			index[chart.digest] = helmChartTime{name: chartName, created: chart.created}
+			if !h.chartOnCooldown(chart.name, chart.created) {
+				return false
+			}
+			withheld = true
 		}
 	}
-	return index, nil
+	if withheld {
+		http.Error(w, ErrVersionNotFound.Error(), http.StatusNotFound)
+	}
+	return withheld
 }
 
 func (h *HelmHandler) chartOnCooldown(chartName string, created time.Time) bool {

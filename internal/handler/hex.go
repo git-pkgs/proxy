@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"net/http"
-	"net/url"
 	"strings"
 	"time"
 
@@ -243,27 +242,8 @@ func parseHexReleases(body []byte) (publishTimes, error) {
 	return times, nil
 }
 
-// publishTime reads a release's inserted_at from the Hex HTTP API. The
-// download check caches the response, unlike fetchFilteredVersions, so each
-// download does not cost an upstream request.
 func (h *HexHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, error) {
-	apiURL := fmt.Sprintf("%s/api/packages/%s", h.apiURL, url.PathEscape(name))
-	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "hex", "api/packages/"+name, apiURL)
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	var pkg hexPackageAPI
-	if err := json.Unmarshal(body, &pkg); err != nil {
-		return time.Time{}, false, err
-	}
-	for _, release := range pkg.Releases {
-		if release.Version != version {
-			continue
-		}
-		insertedAt, err := time.Parse(time.RFC3339Nano, release.InsertedAt)
-		return insertedAt, err == nil, nil
-	}
-	return time.Time{}, false, nil
+	return h.proxy.lookupPublishTime(r.Context(), h.timedPackage(name), version)
 }
 
 // signedPayload decompresses a gzipped Signed message, with the metadata

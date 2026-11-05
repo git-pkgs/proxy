@@ -34,8 +34,8 @@ func (p *Proxy) handleFilenameDownload(w http.ResponseWriter, r *http.Request, d
 	p.Logger.Debug(d.ecosystem+" download request",
 		"name", name, "version", version, "filename", filename)
 
-	if p.withholdInCooldown(w, downloadVersion{
-		ecosystem: d.ecosystem, policyName: name, storedName: name, version: version,
+	if p.withholdInCooldown(w, r, downloadVersion{
+		ecosystem: d.ecosystem, policyName: name, storedName: name, version: version, cacheName: name, filename: filename,
 		lookup: func() (time.Time, bool, error) { return d.publishTime(r, name, version) },
 	}) {
 		return

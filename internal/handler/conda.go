@@ -141,18 +141,16 @@ func (h *CondaHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	// Builds and subdirs of one version each have their own timestamp, so
 	// the check is per file and keeps no time in the shared versions row.
-	if h.proxy.withholdInCooldown(w, downloadVersion{
-		ecosystem: "conda", policyName: name, version: version,
+	// Subdirs distinguish cached files with the same filename.
+	cacheFilename := arch + "/" + filename
+	if h.proxy.withholdInCooldown(w, r, downloadVersion{
+		ecosystem: "conda", policyName: name, version: version, cacheName: packageName, filename: cacheFilename,
 		lookup: func() (time.Time, bool, error) { return h.publishTime(r, channel, arch, filename) },
 	}) {
 		return
 	}
 
 	upstreamURL := h.upstreamURL + r.URL.Path
-	// The same filename can hold different bytes in each subdir, so the
-	// subdir is part of the cache key.
-	cacheFilename := arch + "/" + filename
-
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conda", packageName, version, cacheFilename, upstreamURL)
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to fetch package")
@@ -540,26 +538,21 @@ func (h *CondaHandler) metadataCacheKey(urlPath string) string {
 	return hashedCacheKey(h.upstreamURL, urlPath)
 }
 
-// publishTime reads a package file's timestamp from the subdir's
-// repodata.json, fetched with the cache key and encoding proxyCached uses.
-// The repodata is indexed once per document (see publishIndex), since a
-// subdir's index runs to hundreds of megabytes and an install downloads many
-// files from it. A compressed copy over metadata_max_size can't be cached,
-// so it is streamed from upstream for each check, as handleRepodata does.
+// publishTime streams compressed repodata when it exceeds metadata_max_size.
 func (h *CondaHandler) publishTime(r *http.Request, channel, arch, filename string) (time.Time, bool, error) {
 	repodataPath := "/" + channel + "/" + arch + "/repodata.json"
 	cacheKey := h.metadataCacheKey(repodataPath)
-	res := h.proxy.lookupMetadata(r.Context(), "conda", cacheKey, h.upstreamURL+repodataPath, "*/*", "gzip", nil)
-	var index map[string]time.Time
-	var err error
-	switch {
-	case errors.Is(res.err, ErrMetadataTooLarge):
-		index, err = h.streamRepodataIndex(r, h.upstreamURL+repodataPath)
-	case res.err != nil:
-		err = res.err
-	default:
-		index, err = publishIndex(h.proxy, "conda\x00"+cacheKey, res, h.indexRepodata)
-	}
+	index, err := publishIndex(h.proxy, "conda\x00"+cacheKey, func() metadataResult {
+		return h.proxy.lookupMetadata(r.Context(), "conda", cacheKey, h.upstreamURL+repodataPath, "*/*", "gzip", nil)
+	}, func(res metadataResult) (map[string]time.Time, error) {
+		if errors.Is(res.err, ErrMetadataTooLarge) {
+			return h.streamRepodataIndex(r, h.upstreamURL+repodataPath)
+		}
+		if res.err != nil {
+			return nil, res.err
+		}
+		return h.indexRepodata(res.body, res.contentEncoding)
+	})
 	if err != nil {
 		return time.Time{}, false, err
 	}

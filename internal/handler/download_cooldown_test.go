@@ -391,13 +391,14 @@ func TestCondaDownloadCooldownPerBuild(t *testing.T) {
 }
 
 // TestPublishIndexBuildsOncePerDocument checks that an index is reused for
-// the same document, rebuilt for a new one, and not kept without a digest.
+// the same document, rebuilt for a new one, and kept briefly without a digest.
 func TestPublishIndexBuildsOncePerDocument(t *testing.T) {
 	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
 	builds := 0
-	build := func(body []byte, _ string) (map[string]bool, error) {
+	build := func(res metadataResult) (map[string]bool, error) {
 		builds++
-		return map[string]bool{string(body): true}, nil
+		return map[string]bool{string(res.body): true}, nil
 	}
 	steps := []struct {
 		res        metadataResult
@@ -408,10 +409,10 @@ func TestPublishIndexBuildsOncePerDocument(t *testing.T) {
 		{metadataResult{body: []byte("ignored"), digest: "d1"}, "a", 1},
 		{metadataResult{body: []byte("b"), digest: "d2"}, "b", 2},
 		{metadataResult{body: []byte("c")}, "c", 3},
-		{metadataResult{body: []byte("c")}, "c", 4},
+		{metadataResult{body: []byte("c")}, "c", 3},
 	}
 	for i, step := range steps {
-		got, err := publishIndex(proxy, "key", step.res, build)
+		got, err := publishIndex(proxy, "key", func() metadataResult { return step.res }, build)
 		if err != nil || !got[step.want] || builds != step.wantBuilds {
 			t.Fatalf("step %d: publishIndex = %v, %v after %d builds, want %q after %d", i, got, err, builds, step.want, step.wantBuilds)
 		}

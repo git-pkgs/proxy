@@ -94,8 +94,9 @@ func (h *PubHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	h.proxy.Logger.Debug("pub download request",
 		"name", name, "version", version)
 
-	if h.proxy.withholdInCooldown(w, downloadVersion{
-		ecosystem: "pub", policyName: name, storedName: name, version: version,
+	h.discardVersionPage(name, version, filename)
+	if h.proxy.withholdInCooldown(w, r, downloadVersion{
+		ecosystem: "pub", policyName: name, storedName: name, version: version, cacheName: name, filename: filename,
 		lookup: func() (time.Time, bool, error) { return h.publishTime(r, name, version) },
 	}) {
 		return
@@ -103,7 +104,6 @@ func (h *PubHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	downloadURL := fmt.Sprintf("%s/packages/%s/versions/%s%s",
 		h.upstreamURL, url.PathEscape(name), url.PathEscape(version), pubArchiveExt)
-	h.discardVersionPage(name, version, filename)
 	result, err := h.proxy.GetOrFetchArtifactFromURL(
 		r.Context(), "pub", name, version, filename, downloadURL,
 	)

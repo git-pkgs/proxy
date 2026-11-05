@@ -16,6 +16,21 @@ import (
 // through.
 type publishTimes map[string]time.Time
 
+func (p *Proxy) lookupPublishTime(ctx context.Context, t timedMetadata, version string) (time.Time, bool, error) {
+	var times publishTimes
+	validate := func(body []byte) error {
+		var err error
+		times, err = t.parseTimes(body)
+		return err
+	}
+	res := p.lookupMetadata(ctx, t.ecosystem, t.timesKey, t.timesURL, t.timesAccept, "", validate)
+	if res.err != nil {
+		return time.Time{}, false, res.err
+	}
+	published, ok := times[version]
+	return published, ok && !published.IsZero(), nil
+}
+
 // timedMetadata describes metadata whose publish times live in a second
 // document, as with the RubyGems compact index and the versions API, or a
 // Hex package and the Hex HTTP API. Both are read through the metadata cache.
