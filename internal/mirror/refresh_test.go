@@ -291,12 +291,18 @@ func TestFileVariants(t *testing.T) {
 		ecosystem, cacheFilename, want string
 	}{
 		{"pypi", "demo-1.0.0-py3-none-any.whl", "py3-none-any"},
-		{"pypi", "demo-1.0.0-1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", "cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64"},
+		{"pypi", "demo-1.0.0-1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", "cp312-cp312-manylinux_x86_64"},
+		{"pypi", "demo-1.0.0-cp312-cp312-manylinux_2_17_x86_64.manylinux_2_17_aarch64.whl", "cp312-cp312-manylinux_aarch64.manylinux_x86_64"},
+		{"pypi", "demo-1.0.0-cp312-cp312-musllinux_1_2_x86_64.whl", "cp312-cp312-musllinux_x86_64"},
+		{"pypi", "demo-1.0.0-cp312-cp312-macosx_10_13_universal2.whl", "cp312-cp312-macosx_universal2"},
+		{"pypi", "demo-1.0.0-cp312-cp312-win_amd64.whl", "cp312-cp312-win_amd64"},
 		{"pypi", "demo-1.0.0.tar.gz", "sdist"},
 		{"pypi", "demo-1.0.0.zip", "sdist"},
 		{"conda", "linux-64/numpy-1.26.4-py312h8753938_0.conda", "linux-64/py312/conda"},
 		{"conda", "noarch/requests-2.32.3-pyhd8ed1ab_0.conda", "noarch/py/conda"},
 		{"conda", "osx-arm64/zlib-1.3.1-h8359307_2.tar.bz2", "osx-arm64//tar.bz2"},
+		{"conda", "linux-64/python-3.12.16-h5f976f7_0_cpython.conda", "linux-64/_cpython/conda"},
+		{"conda", "linux-64/python-3.12.16-h5f976f7_0_debug_cpython.conda", "linux-64/_debug_cpython/conda"},
 	}
 	for _, tt := range tests {
 		if got := fileEcosystems[tt.ecosystem].cachedVariant(tt.cacheFilename); got != tt.want {
@@ -319,5 +325,90 @@ func TestRefreshable(t *testing.T) {
 		if got := refreshable(ecosystem); got != want {
 			t.Errorf("refreshable(%s) = %v, want %v", ecosystem, got, want)
 		}
+	}
+}
+
+// refreshFetches caches files of an old version of name the way a client
+// would, lists newFiles for newVersion and returns what a refresh fetched.
+func refreshFetches(t *testing.T, ecosystem, name, oldVersion string, cached []string, newVersion string, newFiles []registries.Artifact) []string {
+	t.Helper()
+	m, fetcher := setupRefreshMirror(t, "file")
+	ctx := context.Background()
+	old := registries.Version{Number: oldVersion, PublishedAt: time.Now().Add(-60 * 24 * time.Hour)}
+	for _, f := range cached {
+		result, err := m.proxy.GetOrFetchArtifactFromURLWithDigest(ctx, ecosystem, name, oldVersion, f, "https://files.example/"+f, "")
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = result.Reader.Close()
+	}
+	for i := range newFiles {
+		newFiles[i].URL = "https://files.example/" + newFiles[i].Filename
+	}
+	m.Versions = stubReleases{ecosystem + "/" + name: {
+		old,
+		{Number: newVersion, PublishedAt: time.Now().Add(-30 * 24 * time.Hour), Artifacts: newFiles},
+	}}
+	fetcher.reset()
+
+	progress, err := m.Refresh(ctx, Refresh{Top: 10, Since: 24 * time.Hour})
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if progress.Failed != 0 {
+		t.Errorf("progress = %+v, want no failures", progress)
+	}
+	got := fetcher.fetched()
+	slices.Sort(got)
+	return got
+}
+
+func wheels(names ...string) []registries.Artifact {
+	files := make([]registries.Artifact, 0, len(names))
+	for _, n := range names {
+		files = append(files, registries.Artifact{Filename: n})
+	}
+	return files
+}
+
+// A new wheel built for a newer glibc or macOS still replaces the cached
+// one: platform tags match on OS and architecture.
+func TestRefreshMatchesWheelsAcrossPlatformMinimums(t *testing.T) {
+	got := refreshFetches(t, "pypi", "numpy", "2.2.6",
+		[]string{"numpy-2.2.6-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", "numpy-2.2.6-cp312-cp312-macosx_10_13_x86_64.whl"},
+		"2.3.0", wheels(
+			"numpy-2.3.0-cp312-cp312-manylinux_2_28_x86_64.whl",
+			"numpy-2.3.0-cp312-cp312-manylinux_2_28_aarch64.whl",
+			"numpy-2.3.0-cp312-cp312-musllinux_1_2_x86_64.whl",
+			"numpy-2.3.0-cp313-cp313-manylinux_2_28_x86_64.whl",
+			"numpy-2.3.0-cp312-cp312-macosx_11_0_x86_64.whl",
+			"numpy-2.3.0-cp312-cp312-macosx_11_0_arm64.whl",
+			"numpy-2.3.0-cp312-cp312-win_amd64.whl",
+		))
+	want := []string{
+		"https://files.example/numpy-2.3.0-cp312-cp312-macosx_11_0_x86_64.whl",
+		"https://files.example/numpy-2.3.0-cp312-cp312-manylinux_2_28_x86_64.whl",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("fetched %v, want %v", got, want)
+	}
+}
+
+// conda-forge's python builds carry the hash before a suffix; the suffix
+// stays part of the kind.
+func TestRefreshMatchesCondaBuildsWithHashInside(t *testing.T) {
+	conda := func(subdir, filename, build string) registries.Artifact {
+		return registries.Artifact{Filename: filename, Metadata: map[string]any{"subdir": subdir, "build": build}}
+	}
+	got := refreshFetches(t, "conda", "conda-forge/python", "3.12.15",
+		[]string{"linux-64/python-3.12.15-h5f976f7_0_cpython.conda"},
+		"3.12.16", []registries.Artifact{
+			conda("linux-64", "python-3.12.16-hab00c5b_1_cpython.conda", "hab00c5b_1_cpython"),
+			conda("linux-64", "python-3.12.16-hd12c33a_1_debug_cpython.conda", "hd12c33a_1_debug_cpython"),
+			conda("osx-arm64", "python-3.12.16-h99e199e_1_cpython.conda", "h99e199e_1_cpython"),
+		})
+	want := []string{"https://files.example/python-3.12.16-hab00c5b_1_cpython.conda"}
+	if !slices.Equal(got, want) {
+		t.Errorf("fetched %v, want %v", got, want)
 	}
 }

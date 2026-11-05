@@ -81,8 +81,8 @@ var fileEcosystems = map[string]fileEcosystem{
 	},
 }
 
-// pypiVariant names a wheel by its tags, python-abi-platform; every sdist
-// is one variant.
+// pypiVariant names a wheel by its python and ABI tags and the OS and
+// architecture of its platform tags; every sdist is one variant.
 func pypiVariant(filename string) string {
 	stem, wheel := strings.CutSuffix(filename, ".whl")
 	if !wheel {
@@ -92,22 +92,42 @@ func pypiVariant(filename string) string {
 	if len(parts) < 5 { //nolint:mnd // name, version and three tags
 		return stem
 	}
-	return strings.Join(parts[len(parts)-3:], "-")
+	tags := parts[len(parts)-3:]
+	return tags[0] + "-" + tags[1] + "-" + wheelPlatform(tags[2])
 }
 
-// condaBuildHash matches the hash and build number a conda build string
-// ends in, such as h8753938_0 in py312h8753938_0.
-var condaBuildHash = regexp.MustCompile(`h[0-9a-f]{7}_\d+$`)
+// wheelPlatformMinimum matches the glibc, musl or macOS minimum version in a
+// platform tag, such as the 2_17 in manylinux_2_17_x86_64 or the 2014 in
+// manylinux2014_x86_64.
+var wheelPlatformMinimum = regexp.MustCompile(`^(manylinux|musllinux|macosx)_?(?:\d+_\d+|1|2010|2014)_`)
 
-// condaVariant names a conda package file by its subdir, the part of its
-// build string before the hash, such as py312, and its type.
+// wheelPlatform reduces a platform tag, which may list several joined by
+// dots, to OS and architecture, so manylinux_2_17_x86_64 and
+// manylinux_2_28_x86_64 name the same platform.
+func wheelPlatform(tag string) string {
+	var platforms []string
+	for _, t := range strings.Split(tag, ".") {
+		t = wheelPlatformMinimum.ReplaceAllString(t, "${1}_")
+		if !slices.Contains(platforms, t) {
+			platforms = append(platforms, t)
+		}
+	}
+	slices.Sort(platforms)
+	return strings.Join(platforms, ".")
+}
+
+// condaBuildHash matches the hash and build number in a conda build string,
+// such as h8753938_0 in py312h8753938_0 or h5f976f7_0 in
+// h5f976f7_0_cpython.
+var condaBuildHash = regexp.MustCompile(`h[0-9a-f]{7}_\d+`)
+
+// condaVariant names a conda package file by its subdir, its build string
+// without the hash, such as py312 or _cpython, and its type.
 func condaVariant(subdir, filename string) string {
 	fileType := condaFileType(filename)
 	stem := strings.TrimSuffix(strings.TrimSuffix(filename, ".conda"), ".tar.bz2")
 	build := stem[strings.LastIndex(stem, "-")+1:]
-	if loc := condaBuildHash.FindStringIndex(build); loc != nil {
-		build = build[:loc[0]]
-	}
+	build = condaBuildHash.ReplaceAllString(build, "")
 	return subdir + "/" + build + "/" + fileType
 }
 
