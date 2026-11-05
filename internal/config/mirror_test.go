@@ -103,6 +103,7 @@ func TestMirrorRefreshValidate(t *testing.T) {
 		{name: "negative since", refresh: &MirrorRefresh{Interval: "1h", Since: "-1d"}, wantErr: true},
 		{name: "negative max_versions", refresh: &MirrorRefresh{Interval: "1h", MaxVersions: -1}, wantErr: true},
 		{name: "bad max_bytes", refresh: &MirrorRefresh{Interval: "1h", MaxBytes: "lots"}, wantErr: true},
+		{name: "negative max_bytes", refresh: &MirrorRefresh{Interval: "1h", MaxBytes: "-1GB"}, wantErr: true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {

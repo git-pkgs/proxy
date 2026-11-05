@@ -108,6 +108,9 @@ func (r *MirrorRefresh) validate() error {
 		if err != nil {
 			return fmt.Errorf("invalid mirror.refresh.max_bytes %q: %w", r.MaxBytes, err)
 		}
+		if n < 0 {
+			return fmt.Errorf("invalid mirror.refresh.max_bytes %q: must not be negative", r.MaxBytes)
+		}
 		r.maxBytes = n
 	}
 	return nil
