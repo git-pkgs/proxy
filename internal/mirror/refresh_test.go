@@ -292,7 +292,8 @@ func TestFileVariants(t *testing.T) {
 	}{
 		{"pypi", "demo-1.0.0-py3-none-any.whl", "py3-none-any"},
 		{"pypi", "demo-1.0.0-1-cp312-cp312-manylinux_2_17_x86_64.manylinux2014_x86_64.whl", "cp312-cp312-manylinux_x86_64"},
-		{"pypi", "demo-1.0.0-cp312-cp312-manylinux_2_17_x86_64.manylinux_2_17_aarch64.whl", "cp312-cp312-manylinux_aarch64.manylinux_x86_64"},
+		{"pypi", "demo-1.0.0-cp312-cp312-manylinux_2_17_x86_64.manylinux_2_17_aarch64.whl", "cp312-cp312-manylinux_x86_64 cp312-cp312-manylinux_aarch64"},
+		{"pypi", "demo-1.0.0-py2.py3-none-any.whl", "py2-none-any py3-none-any"},
 		{"pypi", "demo-1.0.0-cp312-cp312-musllinux_1_2_x86_64.whl", "cp312-cp312-musllinux_x86_64"},
 		{"pypi", "demo-1.0.0-cp312-cp312-macosx_10_13_universal2.whl", "cp312-cp312-macosx_universal2"},
 		{"pypi", "demo-1.0.0-cp312-cp312-win_amd64.whl", "cp312-cp312-win_amd64"},
@@ -305,7 +306,7 @@ func TestFileVariants(t *testing.T) {
 		{"conda", "linux-64/python-3.12.16-h5f976f7_0_debug_cpython.conda", "linux-64/_debug_cpython/conda"},
 	}
 	for _, tt := range tests {
-		if got := fileEcosystems[tt.ecosystem].cachedVariant(tt.cacheFilename); got != tt.want {
+		if got := strings.Join(fileEcosystems[tt.ecosystem].cachedVariants(tt.cacheFilename), " "); got != tt.want {
 			t.Errorf("%s variant of %q = %q, want %q", tt.ecosystem, tt.cacheFilename, got, tt.want)
 		}
 	}
@@ -408,6 +409,25 @@ func TestRefreshMatchesCondaBuildsWithHashInside(t *testing.T) {
 			conda("osx-arm64", "python-3.12.16-h99e199e_1_cpython.conda", "h99e199e_1_cpython"),
 		})
 	want := []string{"https://files.example/python-3.12.16-hab00c5b_1_cpython.conda"}
+	if !slices.Equal(got, want) {
+		t.Errorf("fetched %v, want %v", got, want)
+	}
+}
+
+// The dot-separated tags of a wheel are alternatives: a wheel matches a
+// cached one when any of its tags does.
+func TestRefreshMatchesWheelsOnAnyAlternativeTag(t *testing.T) {
+	got := refreshFetches(t, "pypi", "demo", "1.0.0",
+		[]string{"demo-1.0.0-cp312-cp312-manylinux_2_17_x86_64.whl", "demo-1.0.0-py2.py3-none-macosx_11_0_arm64.macosx_11_0_x86_64.whl"},
+		"1.1.0", wheels(
+			"demo-1.1.0-cp312-cp312-manylinux_2_17_x86_64.linux_x86_64.whl",
+			"demo-1.1.0-py3-none-macosx_11_0_x86_64.whl",
+			"demo-1.1.0-cp312-cp312-win_amd64.whl",
+		))
+	want := []string{
+		"https://files.example/demo-1.1.0-cp312-cp312-manylinux_2_17_x86_64.linux_x86_64.whl",
+		"https://files.example/demo-1.1.0-py3-none-macosx_11_0_x86_64.whl",
+	}
 	if !slices.Equal(got, want) {
 		t.Errorf("fetched %v, want %v", got, want)
 	}

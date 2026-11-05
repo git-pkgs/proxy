@@ -155,7 +155,9 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 		if eco, ok := fileEcosystems[ecosystem]; ok {
 			pv.variants = map[string]bool{}
 			for _, f := range pkg.Files {
-				pv.variants[eco.cachedVariant(f.Filename)] = true
+				for _, v := range eco.cachedVariants(f.Filename) {
+					pv.variants[v] = true
+				}
 			}
 		}
 		items = append(items, pv)

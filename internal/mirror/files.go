@@ -24,12 +24,12 @@ type fileEcosystem struct {
 	// check refuses a package the ecosystem can't mirror, before its files
 	// are listed.
 	check func(pv PackageVersion) error
-	// variant names the kind of a file, such as a wheel's tags or a conda
-	// package's platform, so a refresh mirrors the same kinds of files of a
-	// new version as were cached of an old one. cachedVariant names it for
-	// the filename cacheKey returns.
-	variant       func(file registries.Artifact) string
-	cachedVariant func(cacheFilename string) string
+	// variants name the kinds of a file, such as each tag combination of a
+	// wheel or a conda package's platform, so a refresh mirrors the same
+	// kinds of files of a new version as were cached of an old one.
+	// cachedVariants names them for the filename cacheKey returns.
+	variants       func(file registries.Artifact) []string
+	cachedVariants func(cacheFilename string) []string
 }
 
 var fileEcosystems = map[string]fileEcosystem{
@@ -45,8 +45,8 @@ var fileEcosystems = map[string]fileEcosystem{
 			}
 			return name, version, file.Filename, true
 		},
-		variant:       func(file registries.Artifact) string { return pypiVariant(file.Filename) },
-		cachedVariant: pypiVariant,
+		variants:       func(file registries.Artifact) []string { return pypiVariants(file.Filename) },
+		cachedVariants: pypiVariants,
 	},
 	"conda": {
 		qualifiers: []string{"subdir", "build", "type"},
@@ -70,30 +70,43 @@ var fileEcosystems = map[string]fileEcosystem{
 			}
 			return nil
 		},
-		variant: func(file registries.Artifact) string {
+		variants: func(file registries.Artifact) []string {
 			subdir, _ := file.Metadata["subdir"].(string)
-			return condaVariant(subdir, file.Filename)
+			return []string{condaVariant(subdir, file.Filename)}
 		},
-		cachedVariant: func(cacheFilename string) string {
+		cachedVariants: func(cacheFilename string) []string {
 			subdir, filename := path.Split(cacheFilename)
-			return condaVariant(strings.TrimSuffix(subdir, "/"), filename)
+			return []string{condaVariant(strings.TrimSuffix(subdir, "/"), filename)}
 		},
 	},
 }
 
-// pypiVariant names a wheel by its python and ABI tags and the OS and
-// architecture of its platform tags; every sdist is one variant.
-func pypiVariant(filename string) string {
+// pypiVariants names a wheel by each combination of its python, ABI and
+// platform tags, which are alternatives where a tag lists several joined by
+// dots, with the platform reduced to OS and architecture. Every sdist is
+// one variant.
+func pypiVariants(filename string) []string {
 	stem, wheel := strings.CutSuffix(filename, ".whl")
 	if !wheel {
-		return "sdist"
+		return []string{"sdist"}
 	}
 	parts := strings.Split(stem, "-")
 	if len(parts) < 5 { //nolint:mnd // name, version and three tags
-		return stem
+		return []string{stem}
 	}
 	tags := parts[len(parts)-3:]
-	return tags[0] + "-" + tags[1] + "-" + wheelPlatform(tags[2])
+	var variants []string
+	for _, python := range strings.Split(tags[0], ".") {
+		for _, abi := range strings.Split(tags[1], ".") {
+			for _, platform := range strings.Split(tags[2], ".") {
+				v := python + "-" + abi + "-" + wheelPlatform(platform)
+				if !slices.Contains(variants, v) {
+					variants = append(variants, v)
+				}
+			}
+		}
+	}
+	return variants
 }
 
 // wheelPlatformMinimum matches the glibc, musl or macOS minimum version in a
@@ -101,19 +114,10 @@ func pypiVariant(filename string) string {
 // manylinux2014_x86_64.
 var wheelPlatformMinimum = regexp.MustCompile(`^(manylinux|musllinux|macosx)_?(?:\d+_\d+|1|2010|2014)_`)
 
-// wheelPlatform reduces a platform tag, which may list several joined by
-// dots, to OS and architecture, so manylinux_2_17_x86_64 and
-// manylinux_2_28_x86_64 name the same platform.
+// wheelPlatform reduces a platform tag to OS and architecture, so
+// manylinux_2_17_x86_64 and manylinux_2_28_x86_64 name the same platform.
 func wheelPlatform(tag string) string {
-	var platforms []string
-	for _, t := range strings.Split(tag, ".") {
-		t = wheelPlatformMinimum.ReplaceAllString(t, "${1}_")
-		if !slices.Contains(platforms, t) {
-			platforms = append(platforms, t)
-		}
-	}
-	slices.Sort(platforms)
-	return strings.Join(platforms, ".")
+	return wheelPlatformMinimum.ReplaceAllString(tag, "${1}_")
 }
 
 // condaBuildHash matches the hash and build number in a conda build string,
@@ -160,7 +164,7 @@ func (e fileEcosystem) selection(pv PackageVersion) string {
 
 // selects reports whether file matches every selecting qualifier of pv.
 func (e fileEcosystem) selects(pv PackageVersion, file registries.Artifact) bool {
-	if pv.variants != nil && !pv.variants[e.variant(file)] {
+	if pv.variants != nil && !slices.ContainsFunc(e.variants(file), func(v string) bool { return pv.variants[v] }) {
 		return false
 	}
 	attrs := e.attrs(file)
