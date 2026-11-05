@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -16,19 +17,24 @@ import (
 // through.
 type publishTimes map[string]time.Time
 
-func (p *Proxy) lookupPublishTime(ctx context.Context, t timedMetadata, version string) (time.Time, bool, error) {
-	var times publishTimes
-	validate := func(body []byte) error {
+func (p *Proxy) lookupPublishTime(ctx context.Context, t timedMetadata, version string, listed func(metadataResult) ([]string, error)) (time.Time, bool, bool, error) {
+	var versions []string
+	docs, err := p.fetchTimedMetadata(ctx, t, func(doc metadataResult) ([]string, error) {
 		var err error
-		times, err = t.parseTimes(body)
-		return err
+		versions, err = listed(doc)
+		return versions, err
+	})
+	switch {
+	case docs.doc.err != nil:
+		return time.Time{}, false, false, docs.doc.err
+	case docs.times.err != nil:
+		return time.Time{}, false, false, docs.times.err
+	case err != nil:
+		return time.Time{}, false, false, err
 	}
-	res := p.lookupMetadata(ctx, t.ecosystem, t.timesKey, t.timesURL, t.timesAccept, "", validate)
-	if res.err != nil {
-		return time.Time{}, false, res.err
-	}
-	published, ok := times[version]
-	return published, ok && !published.IsZero(), nil
+	published, ok := docs.published[version]
+	withholdUnknown := !ok && docs.withholdUnknown && slices.Contains(versions, version)
+	return published, ok && !published.IsZero(), withholdUnknown, nil
 }
 
 // timedMetadata describes metadata whose publish times live in a second

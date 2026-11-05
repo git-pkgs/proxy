@@ -246,7 +246,10 @@ func (h *CargoHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	if h.proxy.withholdInCooldown(w, r, downloadVersion{
 		ecosystem: "cargo", policyName: name, storedName: name, version: version, cacheName: name, filename: filename,
-		lookup: func() (time.Time, bool, error) { return h.publishTime(r, name, version) },
+		lookup: func() (time.Time, bool, bool, error) {
+			published, ok, err := h.publishTime(r, name, version)
+			return published, ok, false, err
+		},
 	}) {
 		return
 	}

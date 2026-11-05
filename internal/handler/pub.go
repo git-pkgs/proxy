@@ -97,7 +97,10 @@ func (h *PubHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	h.discardVersionPage(name, version, filename)
 	if h.proxy.withholdInCooldown(w, r, downloadVersion{
 		ecosystem: "pub", policyName: name, storedName: name, version: version, cacheName: name, filename: filename,
-		lookup: func() (time.Time, bool, error) { return h.publishTime(r, name, version) },
+		lookup: func() (time.Time, bool, bool, error) {
+			published, ok, err := h.publishTime(r, name, version)
+			return published, ok, false, err
+		},
 	}) {
 		return
 	}

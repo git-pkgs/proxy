@@ -137,6 +137,13 @@ func cargoCooldownMetadata(w http.ResponseWriter, r *http.Request, times map[str
 }
 
 func gemCooldownMetadata(w http.ResponseWriter, r *http.Request, times map[string]time.Time) {
+	if r.URL.Path == "/info/demo" {
+		_, _ = fmt.Fprintln(w, "---")
+		for version := range times {
+			_, _ = fmt.Fprintf(w, "%s-x86_64-linux |checksum:a\n", version)
+		}
+		return
+	}
 	if r.URL.Path != "/api/v1/versions/demo.json" {
 		http.NotFound(w, r)
 		return
@@ -153,6 +160,14 @@ func gemCooldownMetadata(w http.ResponseWriter, r *http.Request, times map[strin
 }
 
 func hexCooldownMetadata(w http.ResponseWriter, r *http.Request, times map[string]time.Time) {
+	if r.URL.Path == "/packages/demo" {
+		var versions []string
+		for version := range times {
+			versions = append(versions, version)
+		}
+		_, _ = w.Write(buildHexSigned(buildHexPackage("demo", versions)))
+		return
+	}
 	if r.URL.Path != "/api/packages/demo" {
 		http.NotFound(w, r)
 		return

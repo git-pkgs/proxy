@@ -9,8 +9,9 @@ import (
 )
 
 // publishTimeLookup reads a version's publish time from upstream metadata. ok
-// is false when the metadata has no usable time for the version.
-type publishTimeLookup func() (published time.Time, ok bool, err error)
+// is false when the metadata has no usable time for the version. withholdUnknown
+// marks a listed version missing from stale publish-time metadata.
+type publishTimeLookup func() (published time.Time, ok, withholdUnknown bool, err error)
 
 // downloadVersion names the version an artifact download is for, so its
 // cooldown can be checked before the artifact is served.
@@ -62,12 +63,12 @@ func (p *Proxy) versionInCooldown(d downloadVersion) (bool, error) {
 		}
 	}
 
-	published, ok, err := d.lookup()
+	published, ok, withholdUnknown, err := d.lookup()
 	if err != nil {
 		return false, err
 	}
 	if !ok {
-		return false, nil
+		return withholdUnknown, nil
 	}
 
 	if versionPURL != "" {

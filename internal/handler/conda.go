@@ -145,7 +145,10 @@ func (h *CondaHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	cacheFilename := arch + "/" + filename
 	if h.proxy.withholdInCooldown(w, r, downloadVersion{
 		ecosystem: "conda", policyName: name, version: version, cacheName: packageName, filename: cacheFilename,
-		lookup: func() (time.Time, bool, error) { return h.publishTime(r, channel, arch, filename) },
+		lookup: func() (time.Time, bool, bool, error) {
+			published, ok, err := h.publishTime(r, channel, arch, filename)
+			return published, ok, false, err
+		},
 	}) {
 		return
 	}

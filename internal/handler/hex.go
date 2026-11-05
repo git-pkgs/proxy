@@ -242,8 +242,8 @@ func parseHexReleases(body []byte) (publishTimes, error) {
 	return times, nil
 }
 
-func (h *HexHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, error) {
-	return h.proxy.lookupPublishTime(r.Context(), h.timedPackage(name), version)
+func (h *HexHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, bool, error) {
+	return h.proxy.lookupPublishTime(r.Context(), h.timedPackage(name), version, h.packageVersions)
 }
 
 // signedPayload decompresses a gzipped Signed message, with the metadata

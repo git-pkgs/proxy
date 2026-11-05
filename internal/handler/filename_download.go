@@ -15,7 +15,7 @@ type filenameDownload struct {
 	parse       func(string) (name, version string)
 	// publishTime reads a version's publish time from upstream metadata for
 	// the download-time cooldown check.
-	publishTime func(r *http.Request, name, version string) (time.Time, bool, error)
+	publishTime func(r *http.Request, name, version string) (time.Time, bool, bool, error)
 }
 
 func (p *Proxy) handleFilenameDownload(w http.ResponseWriter, r *http.Request, d filenameDownload) {
@@ -36,7 +36,7 @@ func (p *Proxy) handleFilenameDownload(w http.ResponseWriter, r *http.Request, d
 
 	if p.withholdInCooldown(w, r, downloadVersion{
 		ecosystem: d.ecosystem, policyName: name, storedName: name, version: version, cacheName: name, filename: filename,
-		lookup: func() (time.Time, bool, error) { return d.publishTime(r, name, version) },
+		lookup: func() (time.Time, bool, bool, error) { return d.publishTime(r, name, version) },
 	}) {
 		return
 	}

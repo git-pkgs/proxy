@@ -305,8 +305,8 @@ func parseGemVersions(body []byte) (publishTimes, error) {
 	return times, nil
 }
 
-func (h *GemHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, error) {
-	return h.proxy.lookupPublishTime(r.Context(), h.timedIndex(name), version)
+func (h *GemHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, bool, error) {
+	return h.proxy.lookupPublishTime(r.Context(), h.timedIndex(name), version, h.indexVersions)
 }
 
 // proxyCached forwards a metadata request with caching.
