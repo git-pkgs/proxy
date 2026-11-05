@@ -43,8 +43,8 @@ var osIndexes = map[string]osIndex{
 		base: func(u string) (string, bool) {
 			return strings.CutSuffix(u, "/APKINDEX.tar.gz")
 		},
-		files: func(_ context.Context, _ *Mirror, _ string, body []byte, _ []cachedOSFile) ([]indexFile, error) {
-			return parseAPKIndex(bytes.NewReader(body))
+		files: func(_ context.Context, _ *Mirror, indexURL string, body []byte, _ []cachedOSFile) ([]indexFile, error) {
+			return parseAPKIndex(bytes.NewReader(body), indexURL)
 		},
 	},
 	"deb": {

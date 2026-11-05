@@ -36,7 +36,7 @@ func apkIndexArchive(t *testing.T, index string) []byte {
 
 func TestParseAPKIndex(t *testing.T) {
 	index := "C:Q1abc=\nP:curl\nV:8.9.1-r0\nA:aarch64\nS:100\n\nC:Q1def=\nP:busybox\nV:1.36.1-r29\nA:aarch64\n\n"
-	got, err := parseAPKIndex(bytes.NewReader(apkIndexArchive(t, index)))
+	got, err := parseAPKIndex(bytes.NewReader(apkIndexArchive(t, index)), "APKINDEX.tar.gz")
 	if err != nil {
 		t.Fatal(err)
 	}

@@ -283,3 +283,27 @@ func TestRefreshRefusesIndexesOverTheSizeLimit(t *testing.T) {
 		t.Errorf("progress = %+v, fetched %v; want the index failing for its size", progress, fetcher.fetched())
 	}
 }
+
+// TestRefreshRefusesAPKIndexesOverTheSizeLimit checks that the limit also
+// covers APKINDEX.tar.gz, which comes from the metadata cache rather than
+// readIndex.
+func TestRefreshRefusesAPKIndexesOverTheSizeLimit(t *testing.T) {
+	limit := maxIndexBytes
+	maxIndexBytes = 4 << 10
+	t.Cleanup(func() { maxIndexBytes = limit })
+
+	m, fetcher, idx := setupIndexRefresh(t)
+	dir := "/alpine/v3.20/main/aarch64"
+	idx.set(dir+"/APKINDEX.tar.gz", apkIndexArchive(t, "P:curl\nV:8.9.0-r0\nA:aarch64\n\n"))
+	clientFetchesCurl(t, m, "alpine", idx.URL+dir+"/APKINDEX.tar.gz",
+		"alpine", "8.9.0-r0", "edge/v3.20/main/aarch64/curl-8.9.0-r0.apk", idx.URL+dir+"/curl-8.9.0-r0.apk")
+
+	padding := strings.Repeat("P:filler\nV:1-r0\nA:aarch64\n\n", 400)
+	idx.set(dir+"/APKINDEX.tar.gz", apkIndexArchive(t, "P:curl\nV:8.9.1-r0\nA:aarch64\n\n"+padding))
+	fetcher.reset()
+
+	progress := refreshOnce(t, m)
+	if progress.Failed != 1 || len(progress.Errors) != 1 || !strings.Contains(progress.Errors[0].Error, "larger than") || len(fetcher.fetched()) != 0 {
+		t.Errorf("progress = %+v, fetched %v; want the index failing for its size", progress, fetcher.fetched())
+	}
+}

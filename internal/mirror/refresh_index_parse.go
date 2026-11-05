@@ -25,9 +25,10 @@ type indexFile struct {
 // maxIndexLine bounds one line of a Debian or Alpine index.
 const maxIndexLine = 1 << 20
 
-// parseAPKIndex reads the files an APKINDEX.tar.gz lists. Its checksums
-// cover only the control section of a package, so no digest is returned.
-func parseAPKIndex(r io.Reader) ([]indexFile, error) {
+// parseAPKIndex reads the files an APKINDEX.tar.gz lists, limited to
+// maxIndexBytes once decompressed. Its checksums cover only the control
+// section of a package, so no digest is returned.
+func parseAPKIndex(r io.Reader, indexURL string) ([]indexFile, error) {
 	gz, err := gzip.NewReader(r)
 	if err != nil {
 		return nil, err
@@ -35,7 +36,7 @@ func parseAPKIndex(r io.Reader) ([]indexFile, error) {
 	defer func() { _ = gz.Close() }()
 	// An APKINDEX.tar.gz may be several gzip streams: the signature, then the
 	// index. Reading on across them finds the index whichever comes first.
-	tr := tar.NewReader(gz)
+	tr := tar.NewReader(&indexLimitReader{r: gz, url: indexURL, remaining: maxIndexBytes})
 	for {
 		hdr, err := tr.Next()
 		if errors.Is(err, io.EOF) {
