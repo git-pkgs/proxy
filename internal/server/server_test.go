@@ -534,10 +534,6 @@ func TestStatsEndpoint(t *testing.T) {
 	if stats.CachedArtifacts != 0 {
 		t.Errorf("expected 0 cached artifacts, got %d", stats.CachedArtifacts)
 	}
-
-	if !strings.HasPrefix(stats.StorageURL, "file://") {
-		t.Errorf("expected storage_url to start with file://, got %q", stats.StorageURL)
-	}
 }
 
 func TestDashboard(t *testing.T) {
@@ -1673,28 +1669,6 @@ func TestNewServer_InvalidAccessLogFailsBeforeDatabaseInit(t *testing.T) {
 
 	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
 		t.Errorf("database initialized before access log validation: %v", err)
-	}
-}
-
-func TestStatsEndpoint_StorageURL(t *testing.T) {
-	ts := newTestServer(t)
-	defer ts.close()
-
-	req := httptest.NewRequest("GET", "/stats", nil)
-	w := httptest.NewRecorder()
-	ts.handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", w.Code)
-	}
-
-	// Verify the JSON response uses storage_url (not storage_path)
-	body := w.Body.String()
-	if !strings.Contains(body, `"storage_url"`) {
-		t.Errorf("expected JSON key storage_url in response, got: %s", body)
-	}
-	if strings.Contains(body, `"storage_path"`) {
-		t.Errorf("unexpected JSON key storage_path in response (should be storage_url)")
 	}
 }
 

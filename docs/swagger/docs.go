@@ -1461,9 +1461,6 @@ const docTemplate = `{
                 "cached_artifacts": {
                     "type": "integer"
                 },
-                "database_path": {
-                    "type": "string"
-                },
                 "downloaded": {
                     "type": "string"
                 },
@@ -1483,9 +1480,6 @@ const docTemplate = `{
                 "stats_unavailable": {
                     "description": "StatsUnavailable distinguishes a proxy that has served nothing from one\nwhose aggregation failed with no snapshot to fall back on. Without it\nboth report zeros and an empty array.",
                     "type": "boolean"
-                },
-                "storage_url": {
-                    "type": "string"
                 },
                 "total_size": {
                     "type": "string"
