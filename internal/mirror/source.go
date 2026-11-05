@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries"
 	"github.com/git-pkgs/sbom"
@@ -15,6 +16,9 @@ type PackageVersion struct {
 	Ecosystem string
 	Name      string
 	Version   string
+	// Namespace is the PURL namespace of apk packages, which Name leaves
+	// out. It picks the upstream.apk repository.
+	Namespace string
 	// Qualifiers are the PURL qualifiers. Images use repository_url, tag and
 	// arch; PyPI uses file_name, and conda subdir, build and type, to select
 	// which files of the version are mirrored. Julia uses uuid to identify
@@ -26,18 +30,6 @@ type PackageVersion struct {
 
 func (pv PackageVersion) String() string {
 	return fmt.Sprintf("pkg:%s/%s@%s", pv.Ecosystem, pv.Name, pv.Version)
-}
-
-// handlerEcosystem returns the ecosystem name the proxy's handlers store
-// packages of a PURL type under. purl names gem and composer after their
-// registries, rubygems and packagist; the handlers use the type.
-func handlerEcosystem(purlType string) string {
-	switch purlType {
-	case "gem", "composer":
-		return purlType
-	default:
-		return purl.PURLTypeToEcosystem(purlType)
-	}
 }
 
 // Source produces PackageVersion items for mirroring.
@@ -72,11 +64,15 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 		}
 
 		ecosystem, name, qualifiers := mirrorTarget(p)
+		var namespace string
+		if ecosystem == "alpine" {
+			namespace = p.Namespace
+		}
 
 		// Images are never expanded to all tags, and conda packages without
 		// a channel aren't listed; both fail when they are mirrored.
 		if p.Version != "" || isImageEcosystem(ecosystem) || (ecosystem == "conda" && !strings.Contains(name, "/")) {
-			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: p.Version, Qualifiers: qualifiers}
+			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: p.Version, Namespace: namespace, Qualifiers: qualifiers}
 			if isImageEcosystem(ecosystem) {
 				pv.Qualifiers = p.Qualifiers.Map()
 			}
@@ -95,7 +91,7 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 			return fmt.Errorf("fetching versions for %s/%s: %w", ecosystem, name, err)
 		}
 		for _, v := range listed {
-			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: v, Qualifiers: qualifiers}
+			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: v, Namespace: namespace, Qualifiers: qualifiers}
 			if takesPlatforms(ecosystem) {
 				pv.Platforms = s.Platforms
 			}
@@ -140,13 +136,7 @@ func (s *PURLSource) listVersions(ctx context.Context, versions VersionLister, e
 // mirrorTarget returns the ecosystem, name and file qualifiers a PURL is
 // mirrored under.
 func mirrorTarget(p *purl.PURL) (ecosystem, name string, qualifiers map[string]string) {
-	ecosystem = handlerEcosystem(p.Type)
-	name = p.Name
-	if ecosystem == "conda" {
-		name = condaName(p.Namespace, p.Name, p.Qualifier("channel"))
-	} else if p.Namespace != "" {
-		name = p.Namespace + "/" + p.Name
-	}
+	ecosystem, name = packageurl.HandlerPackage(p)
 	qualifiers = fileQualifiers(ecosystem, p.Qualifiers.Map())
 	switch ecosystem {
 	case "julia":
