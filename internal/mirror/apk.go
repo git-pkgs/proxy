@@ -72,7 +72,7 @@ func (m *Mirror) mirrorAPK(ctx context.Context, pv PackageVersion, tracker *prog
 		dir := release + "/" + component + "/" + arch
 		artifact, found, err := m.apkArtifact(ctx, repositoryURL+"/"+dir, name, pv.Version)
 		if err != nil {
-			fail(fmt.Errorf("reading %s/APKINDEX.tar.gz: %w", dir, err))
+			fail(fmt.Errorf("reading %s/APKINDEX.tar.gz: %w", repositoryURL+"/"+dir, err))
 			return
 		}
 		if !found {
@@ -87,7 +87,7 @@ func (m *Mirror) mirrorAPK(ctx context.Context, pv PackageVersion, tracker *prog
 		m.recordResult(tracker, pv, result)
 		return
 	}
-	fail(fmt.Errorf("%s %s isn't in %s of %s for %s", name, pv.Version, strings.Join(apkComponents, " or "), release, arch))
+	fail(fmt.Errorf("%s %s isn't in %s of %s %s for %s", name, pv.Version, strings.Join(apkComponents, " or "), repository, release, arch))
 }
 
 // apkArtifact returns the file of version of name that the index in dirURL

@@ -144,7 +144,7 @@ func TestMirrorAPKRefusesIncompletePURLs(t *testing.T) {
 		"pkg:apk/alpine/busybox@1.36.1-r29?arch=x86_64&distro=alpine-3.21.0_alpha20240807": "distro",
 		"pkg:apk/alpine/busybox@1.36.1-r29?arch=x86_64&distro=debian-12":                   "distro",
 		"pkg:apk/other/busybox@1.36.1-r29?arch=x86_64&distro=alpine-3.20.3":                "upstream.apk",
-		"pkg:apk/alpine/busybox@9.9.9-r0?arch=x86_64&distro=alpine-3.20.3":                 "9.9.9-r0",
+		"pkg:apk/alpine/busybox@9.9.9-r0?arch=x86_64&distro=alpine-3.20.3":                 "isn't in main or community of alpine v3.20",
 		"pkg:apk/alpine/busybox@1.36.1-r29?arch=../../etc&distro=alpine-3.20.3":            "arch",
 	}
 	for p, want := range tests {
