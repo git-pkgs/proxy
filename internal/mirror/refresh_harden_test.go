@@ -229,3 +229,31 @@ func TestRefreshDebianArchitectureAll(t *testing.T) {
 		t.Errorf("progress = %+v, fetched %v; want %v", progress, fetcher.fetched(), want)
 	}
 }
+
+// TestRefreshSkipsIndexPathsOutsideTheRepository checks that an index entry
+// whose path leaves the repository base is not fetched.
+func TestRefreshSkipsIndexPathsOutsideTheRepository(t *testing.T) {
+	for _, filename := range []string{
+		"../other/pool/main/c/curl/curl_7.88.1-10+deb12u8_amd64.deb",
+		"pool/main/../../../other/curl_7.88.1-10+deb12u8_amd64.deb",
+		"/other/curl_7.88.1-10+deb12u8_amd64.deb",
+	} {
+		t.Run(filename, func(t *testing.T) {
+			m, fetcher, idx := setupIndexRefresh(t)
+			release := []byte("SHA256:\n 0000 1 main/binary-amd64/Packages.gz\n")
+			pool := idx.URL + "/debian/pool/main/c/curl/"
+			idx.set("/debian/dists/bookworm/InRelease", release)
+			idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", debCurlPackages(t, "7.88.1-10"))
+			clientFetchesCurl(t, m, "debian", idx.URL+"/debian/dists/bookworm/InRelease",
+				"deb", "7.88.1-10", "curl_7.88.1-10_amd64.deb", pool+"curl_7.88.1-10_amd64.deb")
+
+			idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", gzipped(t,
+				"Package: curl\nVersion: 7.88.1-10+deb12u8\nArchitecture: amd64\nFilename: "+filename+"\n\n"))
+			fetcher.reset()
+
+			if progress := refreshOnce(t, m); progress.Completed != 0 || len(fetcher.fetched()) != 0 {
+				t.Errorf("progress = %+v, fetched %v; want nothing", progress, fetcher.fetched())
+			}
+		})
+	}
+}

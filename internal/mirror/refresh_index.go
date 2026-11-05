@@ -153,6 +153,9 @@ func (m *Mirror) newerIndexFiles(ix osIndex, base string, cached []cachedOSFile,
 	newest := map[string]candidate{}
 	var order []string
 	for _, f := range files {
+		if !confinedIndexPath(f.Path) {
+			continue
+		}
 		name, version, arch := handler.OSPackageIdentity(ix.ecosystem, f.Path)
 		key := name + "\x00" + arch
 		if name == "" || len(cachedByKey[key]) == 0 {
@@ -197,6 +200,12 @@ func (m *Mirror) newerIndexFiles(ix osIndex, base string, cached []cachedOSFile,
 		})
 	}
 	return items
+}
+
+// confinedIndexPath reports whether an index entry's path is relative and
+// stays below the repository base.
+func confinedIndexPath(p string) bool {
+	return p != "" && !path.IsAbs(p) && path.Clean(p) == p && p != ".." && !strings.HasPrefix(p, "../")
 }
 
 // debIndexFiles reads the Packages indexes an InRelease or Release file
