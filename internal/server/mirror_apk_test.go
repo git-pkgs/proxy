@@ -144,7 +144,7 @@ func TestMirrorAPKRefusesIncompletePURLs(t *testing.T) {
 		"pkg:apk/alpine/busybox@1.36.1-r29?arch=x86_64&distro=alpine-3.21.0_alpha20240807": "distro",
 		"pkg:apk/alpine/busybox@1.36.1-r29?arch=x86_64&distro=debian-12":                   "distro",
 		"pkg:apk/other/busybox@1.36.1-r29?arch=x86_64&distro=alpine-3.20.3":                "upstream.apk",
-		"pkg:apk/alpine/busybox@9.9.9-r0?arch=x86_64&distro=alpine-3.20.3":                 "9.9.9-r0",
+		"pkg:apk/alpine/busybox@9.9.9-r0?arch=x86_64&distro=alpine-3.20.3":                 "isn't in main or community of alpine v3.20",
 		"pkg:apk/alpine/busybox@1.36.1-r29?arch=../../etc&distro=alpine-3.20.3":            "arch",
 	}
 	for p, want := range tests {
@@ -154,5 +154,21 @@ func TestMirrorAPKRefusesIncompletePURLs(t *testing.T) {
 				t.Errorf("failed = %d, errors = %v; want one error mentioning %q", progress.Failed, progress.Errors, want)
 			}
 		})
+	}
+}
+
+func TestMirrorAPKIndexErrorsLeaveOutTheURL(t *testing.T) {
+	upstream := newAPKUpstream(t)
+	upstream.files[apkMainIndex] = "not an index"
+
+	progress, _ := mirrorWithConfig(t, apkMirrorConfig(upstream),
+		"pkg:apk/alpine/busybox@1.36.1-r29?arch=x86_64&distro=alpine-3.20.3")
+
+	if progress.Failed != 1 || len(progress.Errors) != 1 {
+		t.Fatalf("failed = %d, errors = %v; want one error", progress.Failed, progress.Errors)
+	}
+	msg := progress.Errors[0].Error
+	if !strings.Contains(msg, "alpine v3.20/main/x86_64") || strings.Contains(msg, upstream.URL) {
+		t.Errorf("error = %q; want the repository and directory without %s", msg, upstream.URL)
 	}
 }

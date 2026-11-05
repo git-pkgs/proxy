@@ -17,6 +17,8 @@ type Layout struct {
 	CanonicalPath string
 	// CacheDelete shows the controls for deleting cached artifacts.
 	CacheDelete bool
+	// Projects shows the project inventory pages.
+	Projects bool
 }
 
 func (s *Server) layoutFor(r *http.Request) Layout {
@@ -25,5 +27,6 @@ func (s *Server) layoutFor(r *http.Request) Layout {
 		UIBaseURL:     s.cfg.UIBaseURL,
 		CanonicalPath: r.URL.Path,
 		CacheDelete:   s.cfg.CacheDelete,
+		Projects:      s.cfg.Projects.Enabled,
 	}
 }
