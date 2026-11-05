@@ -72,7 +72,7 @@ func (m *Mirror) mirrorAPK(ctx context.Context, pv PackageVersion, tracker *prog
 		dir := release + "/" + component + "/" + arch
 		artifact, found, err := m.apkArtifact(ctx, repositoryURL+"/"+dir, name, pv.Version)
 		if err != nil {
-			fail(fmt.Errorf("reading %s/APKINDEX.tar.gz: %w", repositoryURL+"/"+dir, err))
+			fail(fmt.Errorf("reading %s %s/APKINDEX.tar.gz: %w", repository, dir, err))
 			return
 		}
 		if !found {
