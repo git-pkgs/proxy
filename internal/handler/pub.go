@@ -94,9 +94,19 @@ func (h *PubHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	h.proxy.Logger.Debug("pub download request",
 		"name", name, "version", version)
 
+	h.discardVersionPage(name, version, filename)
+	if h.proxy.withholdInCooldown(w, r, downloadVersion{
+		ecosystem: "pub", policyName: name, storedName: name, version: version, cacheName: name, filename: filename,
+		lookup: func() (time.Time, bool, bool, error) {
+			published, ok, err := h.publishTime(r, name, version)
+			return published, ok, false, err
+		},
+	}) {
+		return
+	}
+
 	downloadURL := fmt.Sprintf("%s/packages/%s/versions/%s%s",
 		h.upstreamURL, url.PathEscape(name), url.PathEscape(version), pubArchiveExt)
-	h.discardVersionPage(name, version, filename)
 	result, err := h.proxy.GetOrFetchArtifactFromURL(
 		r.Context(), "pub", name, version, filename, downloadURL,
 	)
@@ -132,6 +142,33 @@ func (h *PubHandler) discardVersionPage(name, version, filename string) {
 		h.proxy.Logger.Warn("failed to discard pub cache record",
 			"purl", versionPURL, "filename", filename, "error", err)
 	}
+}
+
+// publishTime reads a version's published time from the package metadata,
+// sharing the metadata cache with handlePackageMetadata.
+func (h *PubHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, error) {
+	upstreamURL := fmt.Sprintf("%s/api/packages/%s", h.upstreamURL, name)
+	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "pub", name, upstreamURL)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	var metadata struct {
+		Versions []struct {
+			Version   string `json:"version"`
+			Published string `json:"published"`
+		} `json:"versions"`
+	}
+	if err := json.Unmarshal(body, &metadata); err != nil {
+		return time.Time{}, false, err
+	}
+	for _, v := range metadata.Versions {
+		if v.Version != version {
+			continue
+		}
+		published, err := time.Parse(time.RFC3339, v.Published)
+		return published, err == nil, nil
+	}
+	return time.Time{}, false, nil
 }
 
 // handlePackageMetadata proxies package metadata and rewrites archive URLs.

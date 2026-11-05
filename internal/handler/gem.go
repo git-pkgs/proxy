@@ -82,6 +82,7 @@ func (h *GemHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		parseErr:    "could not parse gem filename",
 		fetchErr:    "failed to fetch gem",
 		parse:       h.parseGemFilename,
+		publishTime: h.publishTime,
 	})
 }
 
@@ -302,6 +303,10 @@ func parseGemVersions(body []byte) (publishTimes, error) {
 		times[versionStr] = createdAt
 	}
 	return times, nil
+}
+
+func (h *GemHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, bool, error) {
+	return h.proxy.lookupPublishTime(r.Context(), h.timedIndex(name), version, h.indexVersions)
 }
 
 // proxyCached forwards a metadata request with caching.
