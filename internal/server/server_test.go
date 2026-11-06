@@ -150,6 +150,95 @@ func (ts *testServer) close() {
 	_ = os.RemoveAll(ts.tempDir)
 }
 
+type storageWithURL struct {
+	storage.Storage
+	url string
+}
+
+func (s storageWithURL) URL() string { return s.url }
+
+func TestStartRedactsStoragePassword(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		url  string
+		want string
+	}{
+		{"password", "s3://user:secret@bucket?region=us-east-1", "s3://user:xxxxx@bucket?region=us-east-1"},
+		{"escaped password", "s3://user:secret%40word@bucket", "s3://user:xxxxx@bucket"},
+		{"no password", "s3://bucket?region=us-east-1", "s3://bucket?region=us-east-1"},
+		{"invalid URL", "s3://user:secret%zz@bucket", "[redacted]"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			output := startStorageLog(t, tc.url)
+			if strings.Contains(output, "secret") {
+				t.Errorf("startup log contains storage password: %s", output)
+			}
+			decoder := json.NewDecoder(strings.NewReader(output))
+			for decoder.More() {
+				var entry struct {
+					Message string `json:"msg"`
+					Storage string `json:"storage"`
+				}
+				if err := decoder.Decode(&entry); err != nil {
+					t.Fatal(err)
+				}
+				if entry.Message == "starting server" {
+					if entry.Storage != tc.want {
+						t.Errorf("logged storage = %q, want %q", entry.Storage, tc.want)
+					}
+					t.Logf("logged storage = %q", entry.Storage)
+					return
+				}
+			}
+			t.Fatal("startup log missing")
+		})
+	}
+}
+
+func startStorageLog(t *testing.T, storageURL string) string {
+	t.Helper()
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = listener.Close() })
+
+	cfg := config.Default()
+	cfg.Listen = listener.Addr().String()
+	cfg.BaseURL = "http://" + cfg.Listen
+	cfg.Database.Path = filepath.Join(t.TempDir(), "proxy.db")
+	cfg.Storage.URL = "file://" + filepath.Join(t.TempDir(), "artifacts")
+	var logs syncBuffer
+	srv, err := New(cfg, slog.New(slog.NewJSONHandler(&logs, nil)), BuildInfo{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv.storage = storageWithURL{Storage: srv.storage, url: storageURL}
+	done := make(chan error, 1)
+	go func() { done <- srv.Start(listener) }()
+	t.Cleanup(func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		if err := srv.Shutdown(ctx); err != nil {
+			t.Errorf("shutting down server: %v", err)
+		}
+		if err := <-done; !errors.Is(err, http.ErrServerClosed) {
+			t.Errorf("Start() = %v, want %v", err, http.ErrServerClosed)
+		}
+	})
+
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Get(cfg.BaseURL + "/health")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("health status = %d, want 200", resp.StatusCode)
+	}
+	return logs.String()
+}
+
 func TestUpstreamSafeHTTPOptions(t *testing.T) {
 	opts := upstreamSafeHTTPOptions(config.UpstreamConfig{
 		AllowPrivateHosts: []string{"registry.internal"},
@@ -533,10 +622,6 @@ func TestStatsEndpoint(t *testing.T) {
 
 	if stats.CachedArtifacts != 0 {
 		t.Errorf("expected 0 cached artifacts, got %d", stats.CachedArtifacts)
-	}
-
-	if !strings.HasPrefix(stats.StorageURL, "file://") {
-		t.Errorf("expected storage_url to start with file://, got %q", stats.StorageURL)
 	}
 }
 
@@ -1673,28 +1758,6 @@ func TestNewServer_InvalidAccessLogFailsBeforeDatabaseInit(t *testing.T) {
 
 	if _, err := os.Stat(dbPath); !os.IsNotExist(err) {
 		t.Errorf("database initialized before access log validation: %v", err)
-	}
-}
-
-func TestStatsEndpoint_StorageURL(t *testing.T) {
-	ts := newTestServer(t)
-	defer ts.close()
-
-	req := httptest.NewRequest("GET", "/stats", nil)
-	w := httptest.NewRecorder()
-	ts.handler.ServeHTTP(w, req)
-
-	if w.Code != http.StatusOK {
-		t.Fatalf("expected status 200, got %d", w.Code)
-	}
-
-	// Verify the JSON response uses storage_url (not storage_path)
-	body := w.Body.String()
-	if !strings.Contains(body, `"storage_url"`) {
-		t.Errorf("expected JSON key storage_url in response, got: %s", body)
-	}
-	if strings.Contains(body, `"storage_path"`) {
-		t.Errorf("unexpected JSON key storage_path in response (should be storage_url)")
 	}
 }
 

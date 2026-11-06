@@ -108,7 +108,7 @@ func TestStatsFlagsUnavailableFigures(t *testing.T) {
 	if len(stats.Ecosystems) != 0 {
 		t.Errorf("ecosystems = %v, want empty", stats.Ecosystems)
 	}
-	if stats.StorageURL == "" {
+	if stats.TotalSizeHuman == "" {
 		t.Error("the rest of the response must still be served")
 	}
 }
