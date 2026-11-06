@@ -1887,7 +1887,7 @@ proxy mirror pkg:git/github.com/git-pkgs/purl
 ```
 
 - The repository is served by the `upstream.git` host whose URL its host and path start with, the longest one if several do, and has to match that host's `repos`. Others fail.
-- The repository's branches and tags are cached, as a clone through the proxy caches them. A commit on none of them is fetched by ID and kept, like one a client fetches by ID, until a branch or tag includes it, or for seven days from the last mirror run that named it. Where `upstream.auth` has credentials for the host, commits aren't fetched by ID, and one on no branch or tag fails.
+- The repository's branches and tags are cached, as a clone through the proxy caches them. A commit on none of them is fetched by ID and kept, like one a client fetches by ID, until a branch or tag includes it, or for seven days from the last mirror run that named it. Where `upstream.auth` has credentials for the host, commits aren't fetched by ID, and one on no branch or tag that isn't cached yet fails.
 - Without a version the repository's branches and tags are mirrored. A tag or branch name as the version fails; give the commit ID.
 - The git cache is used by one process. While the server runs, the command can't open `git.cache_dir`, so `pkg:git` items fail and the rest are mirrored; use the mirror API instead.
 
