@@ -32,6 +32,9 @@ func (s *Server) newMirror(proxy *handler.Proxy, workers int) *mirror.Mirror {
 	m.Images = s.newContainerHandler(proxy)
 	m.Bottles = handler.NewHomebrewHandler(proxy, s.cfg.Upstream.HomebrewAPI)
 	m.Charts = handler.NewHelmHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm)
+	if s.git != nil {
+		m.Git = handler.NewGitHandler(proxy, s.git, s.cfg.Upstream)
+	}
 	UseMirrorUpstreams(m, s.cfg.Upstream, proxy.HTTPClient)
 	return m
 }

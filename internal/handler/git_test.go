@@ -131,7 +131,12 @@ func runGitCommand(t *testing.T, dir string, args ...string) string {
 type gitTestSetup struct {
 	work   string
 	server *httptest.Server
-	logs   *syncLog
+	// upstream serves the repository, at upstreamURL/repo, and handler is
+	// the GitHandler under test.
+	upstream    *httptest.Server
+	upstreamURL string
+	handler     *GitHandler
+	logs        *syncLog
 	// slow delays every upstream request by half a second.
 	slow atomic.Bool
 	// active counts the requests the handler is serving.
@@ -172,6 +177,7 @@ func newGitTestSetup(t *testing.T, readTimeout, writeStall time.Duration) *gitTe
 		backend.ServeHTTP(w, r)
 	}))
 	t.Cleanup(upstream.Close)
+	g.upstream, g.upstreamURL = upstream, upstream.URL
 
 	logger := slog.New(slog.NewTextHandler(g.logs, nil))
 	cache, err := gitcache.New(gitcache.Options{
@@ -190,6 +196,7 @@ func newGitTestSetup(t *testing.T, readTimeout, writeStall time.Duration) *gitTe
 	if writeStall > 0 {
 		h.writeStall = writeStall
 	}
+	g.handler = h
 	routes := http.StripPrefix("/git", h.Routes())
 	g.server = httptest.NewUnstartedServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		g.active.Add(1)

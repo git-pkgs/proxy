@@ -70,8 +70,9 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 		}
 
 		// Images are never expanded to all tags, and conda packages without
-		// a channel aren't listed; both fail when they are mirrored.
-		if p.Version != "" || isImageEcosystem(ecosystem) || (ecosystem == "conda" && !strings.Contains(name, "/")) {
+		// a channel aren't listed; both fail when they are mirrored. A Git
+		// repository without a commit is mirrored as a whole.
+		if p.Version != "" || isImageEcosystem(ecosystem) || ecosystem == "git" || (ecosystem == "conda" && !strings.Contains(name, "/")) {
 			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: p.Version, Namespace: namespace, Qualifiers: qualifiers}
 			if isImageEcosystem(ecosystem) {
 				pv.Qualifiers = p.Qualifiers.Map()
