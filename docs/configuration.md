@@ -1148,6 +1148,37 @@ Uploads are off by default, so a client that can reach the proxy cannot overwrit
 
 `max_age` and `max_size` are independent and can be combined. When both are set, age-based eviction runs first, then size-based eviction trims remaining entries oldest-first.
 
+## Cooldown profiles
+
+Set `cooldown.profiles` to offer several policies from one instance. Clients select a profile through their package manager's registry URL:
+
+```yaml
+cooldown:
+  default: "0"
+  profiles:
+    3d:
+      default: "3d"
+    7d:
+      default: "7d"
+      packages:
+        "pkg:npm/@example/tool": "0"
+```
+
+For the `3d` profile, use these paths after your proxy's base URL:
+
+| Client | Path |
+|--------|------|
+| npm registry | `/cooldown/3d/npm/` |
+| Go `GOPROXY` | `/cooldown/3d/go` |
+| Cargo registry | `sparse+https://your-proxy.example/cooldown/3d/cargo/` |
+| Bundler RubyGems mirror | `/cooldown/3d/gem` |
+
+The prefix works with all package protocol routes. Cooldown has an effect only for [registries with cooldown support](../README.md#supported-registries). Each profile defines its own `default`, `ecosystems`, `packages` and `package_patterns`; it does not inherit the global cooldown overrides. Existing unprefixed URLs, the UI, APIs and background mirror jobs use the global policy.
+
+Profile names contain lowercase letters, digits, hyphens and underscores, and start with a letter or digit. Profiles must be configured before startup; an unknown profile returns 404. Nested profiles are rejected. Profile paths expose package protocols only, so `/cooldown/3d/ui/` and `/cooldown/3d/api/` return 404.
+
+Database records, artifacts and upstream metadata are shared. Generated download URLs retain the profile prefix, and filtered metadata and its validators are separated by profile. Changing a registry URL does not rewrite artifact URLs already recorded in a lockfile; regenerate those URLs if the selected policy must cover the whole installation.
+
 ## Cooldown
 
 The cooldown feature hides package versions published too recently, giving the community time to spot malicious releases before they reach your projects. When a version is within its cooldown period, it's stripped from metadata responses so package managers won't install it.

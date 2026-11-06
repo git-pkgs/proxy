@@ -20,6 +20,8 @@ A 3-day cooldown means that when `lodash` publishes version `4.18.0`, your build
 
 Resolution order: package override, then ecosystem override, then global default. This lets you set a conservative default and carve out exceptions for packages where you need faster updates. See [docs/configuration.md](docs/configuration.md) for the full config reference.
 
+One instance can offer several cooldown policies through [named profiles](docs/configuration.md#cooldown-profiles). Configure `cooldown.profiles` and point clients at paths such as `/cooldown/3d/npm/` or `/cooldown/7d/cargo/`. Profiles share the package cache; existing URLs keep using the global policy.
+
 ## Artifact Scanning
 
 Cooldown only looks at a version's publish timestamp — it never inspects the actual bytes. Artifact scanning closes that gap: when enabled, every artifact is staged into storage and scanned by one or more external services (trivy, ClamAV, Wiz, or anything else that speaks a small HTTP/JSON contract) before it's committed to the cache and served to clients.

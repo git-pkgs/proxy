@@ -77,7 +77,6 @@ import (
 	"time"
 
 	"github.com/git-pkgs/archives"
-	"github.com/git-pkgs/cooldown"
 	shared "github.com/git-pkgs/enrichment"
 	swaggerdoc "github.com/git-pkgs/proxy/docs/swagger"
 	"github.com/git-pkgs/proxy/internal/accesslog"
@@ -286,16 +285,11 @@ func (s *Server) serve(listener net.Listener) error {
 	baseFetcher := fetch.NewFetcher(fetch.WithHTTPClient(artifactClient), fetch.WithMaxArtifactSize(s.cfg.ParseArtifactMaxSize()))
 	fetcher := fetch.NewCircuitBreakerFetcher(baseFetcher)
 	s.breakers = newBreakerMonitor(fetcher, s.logger)
-	cd := &cooldown.Config{
-		Default:    s.cfg.Cooldown.Default,
-		Ecosystems: s.cfg.Cooldown.Ecosystems,
-		Packages:   s.cfg.Cooldown.NormalizedPackages(),
-	}
 	proxy := handler.NewProxy(s.db, s.storage, fetcher, nil, s.logger)
 	configureMirrorResolvers(proxy, s.cfg.Upstream)
 	proxy.HTTPClient = metadataClient
 	proxy.RateLimits = s.rateLimits
-	cooldownPolicy, err := cooldown.NewPolicy(cd, s.cfg.Cooldown.PackagePatterns)
+	cooldownPolicy, err := s.cfg.Cooldown.Policy()
 	if err != nil {
 		return fmt.Errorf("configuring cooldown policy: %w", err)
 	}
@@ -348,6 +342,9 @@ func (s *Server) serve(listener net.Listener) error {
 
 	// Mount protocol handlers
 	s.mountProtocolHandlers(r, proxy)
+	if err := s.mountCooldownProfiles(r, proxy); err != nil {
+		return err
+	}
 
 	// Health, stats, and metrics endpoints
 	r.Get("/health", s.handleHealth)
@@ -466,71 +463,75 @@ func (s *Server) serve(listener net.Listener) error {
 // mountProtocolHandlers constructs every ecosystem handler and mounts it on
 // r under its protocol prefix.
 func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
-	npmHandler := handler.NewNPMHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.NPM).
+	s.mountProtocolHandlersAt(r, proxy, s.cfg.BaseURL)
+}
+
+func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, baseURL string) {
+	npmHandler := handler.NewNPMHandler(proxy, baseURL, s.cfg.Upstream.NPM).
 		WithPackageRoutes(s.cfg.Upstream.NPMRoutes)
 	cargoHandler := handler.NewCargoHandler(
 		proxy,
-		s.cfg.BaseURL,
+		baseURL,
 		s.cfg.Upstream.Cargo,
 		s.cfg.Upstream.CargoDownload,
 	)
-	gemHandler := handler.NewGemHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Gem)
-	goHandler := handler.NewGoHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Go)
+	gemHandler := handler.NewGemHandlerWithUpstream(proxy, baseURL, s.cfg.Upstream.Gem)
+	goHandler := handler.NewGoHandlerWithUpstream(proxy, baseURL, s.cfg.Upstream.Go)
 	goHandler.SetSumDBs(s.cfg.Upstream.GoSumDBs, s.cfg.Upstream.GoSumDBsOffline)
 	goHandler.SetVulnDB(s.cfg.Upstream.GoVulnDB)
 	hexHandler := handler.NewHexHandlerWithUpstreams(
 		proxy,
-		s.cfg.BaseURL,
+		baseURL,
 		s.cfg.Upstream.Hex,
 		s.cfg.Upstream.HexAPI,
 	)
-	pubHandler := handler.NewPubHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Pub)
+	pubHandler := handler.NewPubHandlerWithUpstream(proxy, baseURL, s.cfg.Upstream.Pub)
 	pypiHandler := handler.NewPyPIHandlerWithUpstreams(
 		proxy,
-		s.cfg.BaseURL,
+		baseURL,
 		s.cfg.Upstream.PyPI,
 		s.cfg.Upstream.PyPIDownload,
 	)
 	mavenHandler := handler.NewMavenHandler(
 		proxy,
-		s.cfg.BaseURL,
+		baseURL,
 		s.cfg.Upstream.Maven,
 		s.cfg.Upstream.GradlePluginPortal,
 	).WithRepositories(s.cfg.Upstream.MavenRepositories)
 	gradleHandler := handler.NewGradleBuildCacheHandler(proxy)
 	nugetHandler := handler.NewNuGetHandlerWithUpstreams(
 		proxy,
-		s.cfg.BaseURL,
+		baseURL,
 		s.cfg.Upstream.NuGet,
 		s.cfg.Upstream.NuGetSearch,
 	)
 	composerHandler := handler.NewComposerHandlerWithUpstreams(
 		proxy,
-		s.cfg.BaseURL,
+		baseURL,
 		s.cfg.Upstream.Composer,
 		s.cfg.Upstream.ComposerRepository,
 	).WithPackageRoutes(s.cfg.Upstream.ComposerRoutes)
-	conanHandler := handler.NewConanHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Conan)
-	chefHandler := handler.NewChefHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Chef)
-	condaHandler := handler.NewCondaHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.Conda)
-	cranHandler := handler.NewCRANHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.CRAN)
+	conanHandler := handler.NewConanHandlerWithUpstream(proxy, baseURL, s.cfg.Upstream.Conan)
+	chefHandler := handler.NewChefHandler(proxy, baseURL, s.cfg.Upstream.Chef)
+	condaHandler := handler.NewCondaHandlerWithUpstream(proxy, baseURL, s.cfg.Upstream.Conda)
+	cranHandler := handler.NewCRANHandlerWithUpstream(proxy, baseURL, s.cfg.Upstream.CRAN)
 	juliaHandler := handler.NewJuliaHandlerWithUpstream(proxy, s.cfg.Upstream.Julia)
-	swiftHandler := handler.NewSwiftHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Swift)
+	swiftHandler := handler.NewSwiftHandler(proxy, baseURL, s.cfg.Upstream.Swift)
 	homebrewHandler := handler.NewHomebrewHandler(proxy, s.cfg.Upstream.HomebrewAPI)
-	containerHandler := s.newContainerHandler(proxy)
+	containerHandler := s.newContainerHandlerAt(proxy, baseURL)
 	helmHandler := handler.NewHelmHandlerWithOCIRegistries(
-		proxy, s.cfg.BaseURL, s.cfg.Upstream.Helm, s.cfg.Upstream.OCIDefault, s.cfg.Upstream.OCI)
-	apkHandler := handler.NewAPKHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.APK).
+		proxy, baseURL, s.cfg.Upstream.Helm, s.cfg.Upstream.OCIDefault, s.cfg.Upstream.OCI)
+	apkHandler := handler.NewAPKHandler(proxy, baseURL, s.cfg.Upstream.APK).
 		WithSnapshots(s.cfg.ParseAPKSnapshots())
-	archHandler := handler.NewArchHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.Arch)
-	freebsdHandler := handler.NewFreeBSDHandler(proxy, s.cfg.BaseURL, s.cfg.Upstream.FreeBSD)
+	archHandler := handler.NewArchHandler(proxy, baseURL, s.cfg.Upstream.Arch)
+	freebsdHandler := handler.NewFreeBSDHandler(proxy, baseURL, s.cfg.Upstream.FreeBSD)
 	debianHandler := handler.NewDebianHandler(
 		proxy,
-		s.cfg.BaseURL,
+		baseURL,
 		s.cfg.Upstream.Debian,
 		s.cfg.Upstream.DebianRepositories,
 	)
-	rpmHandler := handler.NewRPMHandlerWithUpstream(proxy, s.cfg.BaseURL, s.cfg.Upstream.RPM)
+	rpmHandler := handler.NewRPMHandlerWithUpstream(proxy, baseURL, s.cfg.Upstream.RPM)
 	genericHandler := handler.NewGenericHandler(proxy, s.cfg.Upstream.Generic, s.cfg.Upstream.GenericArtifacts).
 		WithPaths(s.cfg.Upstream.GenericPaths)
 
@@ -562,7 +563,7 @@ func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 	r.Mount("/generic", http.StripPrefix("/generic", genericHandler.Routes()))
 	if s.git != nil {
-		gitHandler := handler.NewGitHandler(proxy, s.git, s.cfg.Upstream).WithBaseURL(s.cfg.BaseURL)
+		gitHandler := handler.NewGitHandler(proxy, s.git, s.cfg.Upstream).WithBaseURL(baseURL)
 		r.Mount("/git", http.StripPrefix("/git", gitHandler.Routes()))
 	}
 }
@@ -633,9 +634,13 @@ func NewMirrorProxy(cfg *config.Config, db *database.DB, store storage.Storage, 
 // newContainerHandler builds the OCI handler with the configured default
 // registry, named upstreams, mirrored registries and Homebrew routes.
 func (s *Server) newContainerHandler(proxy *handler.Proxy) *handler.ContainerHandler {
+	return s.newContainerHandlerAt(proxy, s.cfg.BaseURL)
+}
+
+func (s *Server) newContainerHandlerAt(proxy *handler.Proxy, baseURL string) *handler.ContainerHandler {
 	containerHandler := handler.NewContainerHandlerWithRegistry(
 		proxy,
-		s.cfg.BaseURL,
+		baseURL,
 		s.cfg.Upstream.OCIDefault,
 		s.cfg.Upstream.OCI,
 	)
