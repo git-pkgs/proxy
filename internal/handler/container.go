@@ -454,6 +454,13 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 		if writeUpstreamHeld(w, err) {
 			return
 		}
+		// A 403 from the upstream is a policy denial, not a proxy failure:
+		// report it the way an OCI registry reports a refused blob.
+		if status, _, ok := upstreamStatus(err); ok && status == http.StatusForbidden {
+			h.proxy.Logger.Warn("blob refused by upstream policy", "name", name, "digest", digest)
+			h.containerError(w, http.StatusForbidden, "DENIED", "blob refused by upstream policy")
+			return
+		}
 		h.proxy.Logger.Error("failed to fetch blob", "error", err)
 		h.containerError(w, http.StatusBadGateway, "INTERNAL_ERROR", "failed to fetch blob")
 		return
