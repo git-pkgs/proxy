@@ -436,11 +436,15 @@ func (s *Server) serve(listener net.Listener) error {
 		IdleTimeout:  serverIdleTimeout,
 	}
 
+	storageURL := "[redacted]"
+	if u, err := url.Parse(s.storage.URL()); err == nil {
+		storageURL = u.Redacted()
+	}
 	s.logger.Info("starting server",
 		"listen", s.cfg.Listen,
 		"base_url", s.cfg.BaseURL,
 		"ui_url", s.cfg.UIBaseURL,
-		"storage", s.storage.URL(),
+		"storage", storageURL,
 		"database", s.cfg.Database.String())
 	for _, warning := range s.cfg.EnvWarnings() {
 		s.logger.Warn(warning)
