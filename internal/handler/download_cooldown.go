@@ -103,7 +103,7 @@ type publishIndexEntry struct {
 
 // publishIndex reuses parsed documents by digest, or for a minute without one.
 func publishIndex[V any](p *Proxy, key string, load func() metadataResult, build func(metadataResult) (V, error)) (V, error) { //nolint:ireturn // Supports timestamp maps and Helm lookups.
-	c := &p.publishIndexes
+	c := &p.sharedProxy().publishIndexes
 	fresh := func() (V, bool) {
 		c.mu.Lock()
 		defer c.mu.Unlock()
