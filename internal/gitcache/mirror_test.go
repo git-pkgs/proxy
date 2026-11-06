@@ -3,6 +3,7 @@ package gitcache
 import (
 	"context"
 	"errors"
+	"os"
 	"path/filepath"
 	"slices"
 	"strconv"
@@ -184,4 +185,30 @@ func wantedRefTime(t *testing.T, ref, oid string) time.Time {
 		return time.Time{}
 	}
 	return time.Unix(unix, 0)
+}
+
+// TestMirrorReportsRefreshTooLarge checks a commit that is cached still
+// fails to mirror when the refresh doesn't fit in max_repo_size, since the
+// repository is dropped once released.
+func TestMirrorReportsRefreshTooLarge(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	runGit(t, upstream.bare(), "config", "uploadpack.allowAnySHA1InWant", "true")
+	pinned := upstream.pushPullRequest(work, 1, randomBytes(100<<10))
+	base := repoSize(t, upstream, "repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) { o.MaxRepoSize = base + 150<<10 })
+	if _, err := tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", pinned, true); err != nil {
+		t.Fatalf("Mirror: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(work, "grown.bin"), randomBytes(80<<10), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", "grown.bin")
+	upstream.commit(work, "grown")
+	runGit(t, work, "push", "--quiet", "origin", "main")
+
+	_, err := tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", pinned, true)
+	if !errors.Is(err, ErrTooLarge) {
+		t.Errorf("mirror with a refresh past max_repo_size = %v, want ErrTooLarge", err)
+	}
 }

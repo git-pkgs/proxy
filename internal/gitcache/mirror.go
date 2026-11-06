@@ -48,6 +48,11 @@ func (c *Cache) Mirror(ctx context.Context, key, repoURL, commit string, fetchWa
 		}
 	}
 
+	// A refresh past max_repo_size gets the repository dropped once it is
+	// released, commit and all.
+	if errors.Is(refreshErr, ErrTooLarge) {
+		return MirrorResult{}, refreshErr
+	}
 	if commit != "" {
 		if err := c.ensureCommit(ctx, rp, repoURL, commit, fetchWants); err != nil {
 			return MirrorResult{}, err
