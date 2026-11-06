@@ -77,7 +77,7 @@ The proxy never uploads artifact bytes to a scanner. Each scanner is notified wi
 
 Cooldown requires publish timestamps in metadata. Registries without a "Yes" in the cooldown column either don't expose timestamps or haven't been wired up yet.
 
-\* Hex cooldown requires disabling registry signature verification (`HEX_NO_VERIFY_REPO_ORIGIN=1`) since the proxy re-encodes the protobuf payload.
+\* Hex cooldown requires disabling registry signature verification (`HEX_UNSAFE_REGISTRY=1`) since the proxy re-encodes the protobuf payload. Origin verification can stay enabled.
 
 † Go cooldown uses the time in each version's `.info`, which is the commit time of the tagged revision, not when the tag was pushed.
 
@@ -288,10 +288,10 @@ The equivalent environment variables are `PROXY_UPSTREAM_HOMEBREW_API` and `PROX
 
 ### Hex (Elixir)
 
-Configure in `~/.hex/hex.config`:
+Configure the mirror:
 
-```erlang
-{default_url, <<"http://localhost:8080/hex">>}.
+```bash
+mix hex.config mirror_url http://localhost:8080/hex
 ```
 
 Or set the environment variable:
@@ -299,6 +299,14 @@ Or set the environment variable:
 ```bash
 export HEX_MIRROR=http://localhost:8080/hex
 ```
+
+When the proxy applies a cooldown, also set:
+
+```bash
+export HEX_UNSAFE_REGISTRY=1
+```
+
+Filtering releases removes the registry signature. The proxy preserves the package name and repository fields, so origin verification can stay enabled. Without a cooldown, leave signature verification enabled too.
 
 ### pub.dev (Dart/Flutter)
 
@@ -359,17 +367,15 @@ Configure in `settings.gradle.kts`:
 
 ```kotlin
 buildCache {
-  local {
-    enabled = false
-  }
   remote<HttpBuildCache> {
     url = uri("http://localhost:8080/gradle/")
-    isPush = System.getenv("CI") != null
   }
 }
 ```
 
-The proxy rejects uploads unless `gradle.build_cache.read_only` is set to `false`, see [docs/configuration.md](docs/configuration.md#gradle-build-cache).
+Enable build caching with `org.gradle.caching=true` in `gradle.properties`, or pass `--build-cache` when running Gradle. The local cache stays enabled and remote uploads are disabled by default.
+
+To upload from CI, set `gradle.build_cache.read_only` to `false` on the proxy and add `isPush = System.getenv("CI") != null` inside the client's `remote<HttpBuildCache>` block. See [docs/configuration.md](docs/configuration.md#gradle-build-cache).
 
 ### NuGet
 
@@ -459,8 +465,6 @@ Configure in `~/.condarc`:
 channels:
   - http://localhost:8080/conda/main
   - http://localhost:8080/conda/conda-forge
-default_channels:
-  - http://localhost:8080/conda/main
 ```
 
 Or set via command:
@@ -716,15 +720,13 @@ indexes unchanged. To keep APT from selecting a denied version, configure
 
 ### RPM / Yum / DNF
 
-Configure yum/dnf to use the proxy in `/etc/yum.repos.d/proxy.repo`:
+In the `[fedora]` section of your existing repository file under `/etc/yum.repos.d/`, replace the `metalink` or `mirrorlist` entry with:
 
 ```ini
-[proxy-fedora]
-name=Fedora via Proxy
 baseurl=http://localhost:8080/rpm/releases/$releasever/Everything/$basearch/os/
-enabled=1
-gpgcheck=0
 ```
+
+Keep the existing `gpgkey` and signature settings, including `gpgcheck=1`. The proxy serves RPM packages unchanged, so their signatures remain valid.
 
 Then:
 
