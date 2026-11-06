@@ -11,8 +11,8 @@ import (
 
 // Mirror caches the repository at location, a host and path such as
 // github.com/acme/widgets as a pkg:git PURL names it, from the upstream.git
-// host serving it, and with commit, a full commit ID, that commit too. It
-// is the copy clones through /git are then served.
+// host serving it, and with commit, a full commit ID, that commit too.
+// Clones through /git are then served from that copy.
 func (h *GitHandler) Mirror(ctx context.Context, location, commit string) (gitcache.MirrorResult, error) {
 	repo, err := h.mirrorRepository(location)
 	if err != nil {

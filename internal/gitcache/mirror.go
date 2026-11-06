@@ -4,6 +4,8 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
+	"time"
 )
 
 // MirrorResult is what Mirror did.
@@ -47,42 +49,65 @@ func (c *Cache) Mirror(ctx context.Context, key, repoURL, commit string, fetchWa
 	}
 
 	if commit != "" {
-		fetched, err := c.ensureCommit(ctx, rp, repoURL, commit, fetchWants)
-		if err != nil {
+		if err := c.ensureCommit(ctx, rp, repoURL, commit, fetchWants); err != nil {
 			return MirrorResult{}, err
 		}
-		cached = cached && !fetched
 	}
 	// A refresh that failed leaves the commit cached all the same.
 	if refreshErr != nil && commit == "" {
 		return MirrorResult{}, refreshErr
 	}
-	return MirrorResult{Cached: cached, Bytes: max(rp.size.Load()-before, 0)}, nil
+	grown := max(rp.size.Load()-before, 0)
+	return MirrorResult{Cached: cached && grown == 0, Bytes: grown}, nil
 }
 
 // ensureCommit makes sure the repository has commit, fetching it by ID when
-// it doesn't and fetchWants allows it, and reports whether it was fetched.
-func (c *Cache) ensureCommit(ctx context.Context, rp *repo, repoURL, commit string, fetchWants bool) (bool, error) {
+// it doesn't and fetchWants allows it. A commit on no branch or tag that is
+// cached already gets a new wanted ref, so it is kept for wantedMaxAge from
+// this run on.
+func (c *Cache) ensureCommit(ctx context.Context, rp *repo, repoURL, commit string, fetchWants bool) error {
 	missing, err := c.missingObjects(ctx, rp.dir, []string{commit})
-	if err != nil || len(missing) == 0 {
-		return false, err
+	if err != nil {
+		return err
+	}
+	if len(missing) == 0 {
+		return c.renewWanted(ctx, rp, commit)
 	}
 	if !fetchWants {
-		return false, fmt.Errorf("commit %s: %w", commit, ErrNotFound)
+		return fmt.Errorf("commit %s: %w", commit, ErrNotFound)
 	}
 	if err := c.fetchMissingWants(ctx, rp, repoURL, missing); err != nil {
 		if ctx.Err() != nil || errors.Is(err, ErrTooLarge) || errors.Is(err, ErrCacheFull) || errors.Is(err, errUpstreamUnanswered) {
-			return false, err
+			return err
 		}
 		// The upstream refuses a commit it doesn't have.
-		return false, fmt.Errorf("commit %s: %w: %w", commit, ErrNotFound, err)
+		return fmt.Errorf("commit %s: %w: %w", commit, ErrNotFound, err)
 	}
 	// fetchMissingWants skips a commit that failed moments ago.
 	if missing, err = c.missingObjects(ctx, rp.dir, missing); err != nil {
-		return false, err
+		return err
 	}
 	if len(missing) > 0 {
-		return false, fmt.Errorf("commit %s: %w", commit, ErrNotFound)
+		return fmt.Errorf("commit %s: %w", commit, ErrNotFound)
 	}
-	return true, nil
+	return nil
+}
+
+// renewWanted writes a new wanted ref for commit when no branch or tag
+// includes it.
+func (c *Cache) renewWanted(ctx context.Context, rp *repo, commit string) error {
+	unlock, err := rp.lockWrites(ctx)
+	if err != nil {
+		return err
+	}
+	defer unlock()
+	unmerged, err := c.unmergedCommits(ctx, rp.dir, []string{commit})
+	if err != nil || !unmerged[commit] {
+		return err
+	}
+	cmd := c.command(ctx, nil, "-C", rp.dir, "update-ref", wantedRef(commit, time.Now()), commit)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		return fmt.Errorf("renewing wanted ref: %w: %s", err, strings.TrimSpace(string(out)))
+	}
+	return nil
 }
