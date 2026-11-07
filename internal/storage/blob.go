@@ -35,8 +35,6 @@ const (
 	uploadBufferSize  = 5 << 20
 	uploadConcurrency = 2
 
-	s3Scheme = "s3://"
-
 	// attrsExt is fileblob's sidecar suffix, kept only to clear sidecars an
 	// earlier version wrote.
 	attrsExt = ".attrs"
@@ -48,13 +46,11 @@ type Blob struct {
 	bucket *blob.Bucket
 	url    string
 
-	// signBucket, when set, is used by SignedURL to sign S3 presigned URLs for
-	// a public endpoint rather than the internal storage endpoint.
-	signBucket *blob.Bucket
-
-	// signEndpoint, when set on non-S3 backends, replaces the scheme and host
-	// of presigned URLs returned by SignedURL.
-	signEndpoint string
+	// postSignRewriteEndpoint, when set, replaces the scheme and host of
+	// presigned URLs after signing for backends that do not include the host
+	// in their signature (e.g. Azure). S3 rewrites the host before signing via
+	// configureS3SignEndpoint so the SigV4 Host signature matches.
+	postSignRewriteEndpoint string
 
 	// fileRoot is the directory backing a file:// bucket, empty for cloud
 	// backends. Used only to clear sidecars an earlier version wrote.
@@ -101,7 +97,7 @@ func OpenBucket(ctx context.Context, urlStr string, opts ...Option) (Storage, er
 		if err != nil {
 			return nil, err
 		}
-		g.signEndpoint = o.signEndpoint
+		g.postSignRewriteEndpoint = o.signEndpoint
 		return g, nil
 	}
 
@@ -167,57 +163,50 @@ func OpenBucket(ctx context.Context, urlStr string, opts ...Option) (Storage, er
 	b := &Blob{bucket: bucket, url: urlStr, fileRoot: fileRoot}
 
 	if o.signEndpoint != "" {
-		if strings.HasPrefix(urlStr, s3Scheme) {
-			signBucket, err := openSignBucket(ctx, urlStr, o.signEndpoint)
-			if err != nil {
+		var s3Client *s3.Client
+		if bucket.As(&s3Client) {
+			if err := configureS3SignEndpoint(s3Client, o.signEndpoint); err != nil {
 				_ = bucket.Close()
 				return nil, err
 			}
-			b.signBucket = signBucket
 		} else {
-			b.signEndpoint = o.signEndpoint
+			b.postSignRewriteEndpoint = o.signEndpoint
 		}
 	}
 
 	return b, nil
 }
 
-// openSignBucket opens an S3 bucket that signs presigned URLs against the
-// scheme and host of signEndpoint while preserving the storage URL's
-// addressing mode and object path.
-func openSignBucket(ctx context.Context, urlStr, signEndpoint string) (*blob.Bucket, error) {
+// configureS3SignEndpoint registers a middleware on s3Client that rewrites
+// presigned request URLs to the scheme and host of signEndpoint before SigV4
+// signing, while leaving regular S3 operations and object paths unchanged.
+func configureS3SignEndpoint(s3Client *s3.Client, signEndpoint string) error {
 	sign, err := url.Parse(signEndpoint)
 	if err != nil || sign.Scheme == "" || sign.Host == "" {
-		return nil, fmt.Errorf("invalid sign endpoint %q: must be an absolute URL", signEndpoint)
+		return fmt.Errorf("invalid sign endpoint %q: must be an absolute URL", signEndpoint)
 	}
 
-	bucket, err := blob.OpenBucket(ctx, urlStr)
-	if err != nil {
-		return nil, fmt.Errorf("opening bucket at sign endpoint %s: %w", signEndpoint, err)
-	}
-
-	var s3Client *s3.Client
-	if bucket.As(&s3Client) {
-		*s3Client = *s3.New(s3Client.Options(), func(o *s3.Options) {
-			o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
-				return stack.Finalize.Insert(middleware.FinalizeMiddlewareFunc(
-					"signEndpointHost",
-					func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (
-						middleware.FinalizeOutput, middleware.Metadata, error,
-					) {
-						if req, ok := in.Request.(*smithyhttp.Request); ok {
-							req.URL.Scheme = sign.Scheme
-							req.URL.Host = sign.Host
-							req.Host = sign.Host
-						}
-						return next.HandleFinalize(ctx, in)
-					},
-				), "PresignHTTPRequest", middleware.Before)
-			})
+	*s3Client = *s3.New(s3Client.Options(), func(o *s3.Options) {
+		o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
+			if _, ok := stack.Finalize.Get("PresignHTTPRequest"); !ok {
+				return nil
+			}
+			return stack.Finalize.Insert(middleware.FinalizeMiddlewareFunc(
+				"signEndpointHost",
+				func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (
+					middleware.FinalizeOutput, middleware.Metadata, error,
+				) {
+					if req, ok := in.Request.(*smithyhttp.Request); ok {
+						req.URL.Scheme = sign.Scheme
+						req.URL.Host = sign.Host
+						req.Host = sign.Host
+					}
+					return next.HandleFinalize(ctx, in)
+				},
+			), "PresignHTTPRequest", middleware.Before)
 		})
-	}
-
-	return bucket, nil
+	})
+	return nil
 }
 
 // legacySidecarPath gives the ".attrs" path an earlier version wrote for key,
@@ -392,15 +381,8 @@ func (b *Blob) Delete(ctx context.Context, path string) error {
 }
 
 // SignedURL returns a presigned URL granting time-limited GET access to path.
-// When signBucket is configured (S3 with WithSignEndpoint), it signs against
-// the public endpoint; when signEndpoint is set on other backends (e.g. Azure),
-// it rewrites the signed URL's scheme and host.
 func (b *Blob) SignedURL(ctx context.Context, path string, expiry time.Duration) (string, error) {
-	bucket := b.bucket
-	if b.signBucket != nil {
-		bucket = b.signBucket
-	}
-	signed, err := bucket.SignedURL(ctx, path, &blob.SignedURLOptions{
+	signed, err := b.bucket.SignedURL(ctx, path, &blob.SignedURLOptions{
 		Method: http.MethodGet,
 		Expiry: expiry,
 	})
@@ -410,8 +392,8 @@ func (b *Blob) SignedURL(ctx context.Context, path string, expiry time.Duration)
 		}
 		return "", fmt.Errorf("signing URL: %w", err)
 	}
-	if b.signBucket == nil && b.signEndpoint != "" {
-		signed = rewriteSignedURLHost(signed, b.signEndpoint)
+	if b.postSignRewriteEndpoint != "" {
+		signed = rewriteSignedURLHost(signed, b.postSignRewriteEndpoint)
 	}
 	return signed, nil
 }
@@ -494,15 +476,8 @@ func (b *Blob) ListPrefix(ctx context.Context, prefix string) ([]ObjectInfo, err
 	return objects, nil
 }
 
-// Close closes the underlying storage bucket and any separate signing bucket.
 func (b *Blob) Close() error {
-	err := b.bucket.Close()
-	if b.signBucket != nil {
-		if signErr := b.signBucket.Close(); err == nil {
-			err = signErr
-		}
-	}
-	return err
+	return b.bucket.Close()
 }
 
 func (b *Blob) URL() string {

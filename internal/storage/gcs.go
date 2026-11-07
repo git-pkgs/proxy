@@ -13,9 +13,13 @@ import (
 
 // GCS adapts a Google Cloud Storage bucket to Storage.
 type GCS struct {
-	bucket       *gcstorage.Bucket
-	url          string
-	signEndpoint string
+	bucket *gcstorage.Bucket
+	url    string
+
+	// postSignRewriteEndpoint replaces the scheme and host of presigned URLs
+	// after signing (GCS signs against storage.googleapis.com and does not
+	// include the rewritten host in its V2 signature).
+	postSignRewriteEndpoint string
 }
 
 // OpenGCS opens a Google Cloud Storage bucket from a gs:// URL.
@@ -61,7 +65,7 @@ func (g *GCS) Size(ctx context.Context, path string) (int64, error) {
 }
 
 // SignedURL returns a presigned URL granting time-limited GET access to path,
-// rewriting the scheme and host to signEndpoint when configured.
+// rewriting the scheme and host to postSignRewriteEndpoint when configured.
 func (g *GCS) SignedURL(ctx context.Context, path string, expiry time.Duration) (string, error) {
 	u, err := g.bucket.SignedURL(ctx, path, expiry)
 	if errors.Is(err, gcstorage.ErrSignedURLUnsupported) {
@@ -70,7 +74,7 @@ func (g *GCS) SignedURL(ctx context.Context, path string, expiry time.Duration) 
 	if err != nil {
 		return "", err
 	}
-	return rewriteSignedURLHost(u, g.signEndpoint), nil
+	return rewriteSignedURLHost(u, g.postSignRewriteEndpoint), nil
 }
 
 func (g *GCS) UsedSpace(ctx context.Context) (int64, error) {
