@@ -262,6 +262,19 @@ func TestBlobSignedURLUnsupported(t *testing.T) {
 }
 
 func TestBlobSignedURLSignEndpoint(t *testing.T) {
+	awsDir := t.TempDir()
+	awsConfigFile := filepath.Join(awsDir, "config")
+	awsCredsFile := filepath.Join(awsDir, "credentials")
+	if err := os.WriteFile(awsConfigFile, nil, 0o600); err != nil {
+		t.Fatalf("writing empty AWS config file: %v", err)
+	}
+	if err := os.WriteFile(awsCredsFile, nil, 0o600); err != nil {
+		t.Fatalf("writing empty AWS credentials file: %v", err)
+	}
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_DEFAULT_PROFILE", "")
+	t.Setenv("AWS_CONFIG_FILE", awsConfigFile)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", awsCredsFile)
 	t.Setenv("AWS_ACCESS_KEY_ID", "test")
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
 
@@ -323,6 +336,7 @@ func TestBlobSignedURLSignEndpoint(t *testing.T) {
 }
 
 func TestAzureSignedURLSignEndpoint(t *testing.T) {
+	t.Setenv("AZURE_STORAGE_SAS_TOKEN", "")
 	t.Setenv("AZURE_STORAGE_ACCOUNT", "devstoreaccount1")
 	t.Setenv("AZURE_STORAGE_KEY", "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==")
 	t.Setenv("AZURE_STORAGE_PROTOCOL", "http")

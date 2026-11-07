@@ -286,6 +286,7 @@ func (b *Blob) clearLegacySidecar(key string) {
 	}
 }
 
+// Store writes the contents of r to path and returns the byte count and hex SHA-256 digest.
 func (b *Blob) Store(ctx context.Context, path string, r io.Reader) (int64, string, error) {
 	b.clearLegacySidecar(path)
 
@@ -322,6 +323,7 @@ func (b *Blob) Store(ctx context.Context, path string, r io.Reader) (int64, stri
 	return size, hash, nil
 }
 
+// Open returns a reader for the object stored at path.
 func (b *Blob) Open(ctx context.Context, path string) (io.ReadCloser, error) {
 	if localPath := b.localPath(path); localPath != "" {
 		r, err := os.Open(localPath)
@@ -349,6 +351,7 @@ func (b *Blob) Open(ctx context.Context, path string) (io.ReadCloser, error) {
 // otherwise.
 func (b *Blob) ReadsSeekable() bool { return true }
 
+// Exists reports whether an object exists at path.
 func (b *Blob) Exists(ctx context.Context, path string) (bool, error) {
 	exists, err := b.bucket.Exists(ctx, path)
 	if err != nil {
@@ -374,6 +377,10 @@ func (b *Blob) Delete(ctx context.Context, path string) error {
 	return nil
 }
 
+// SignedURL returns a presigned URL granting time-limited GET access to path.
+// When signBucket is configured (S3 with WithSignEndpoint), it signs against
+// the public endpoint; when signEndpoint is set on other backends (e.g. Azure),
+// it rewrites the signed URL's scheme and host.
 func (b *Blob) SignedURL(ctx context.Context, path string, expiry time.Duration) (string, error) {
 	bucket := b.bucket
 	if b.signBucket != nil {
@@ -415,6 +422,7 @@ func rewriteSignedURLHost(signed, baseURL string) string {
 	return s.String()
 }
 
+// Size returns the size in bytes of the object at path.
 func (b *Blob) Size(ctx context.Context, path string) (int64, error) {
 	attrs, err := b.bucket.Attributes(ctx, path)
 	if err != nil {
@@ -426,6 +434,7 @@ func (b *Blob) Size(ctx context.Context, path string) (int64, error) {
 	return attrs.Size, nil
 }
 
+// UsedSpace returns the total bytes stored across all objects in the bucket.
 func (b *Blob) UsedSpace(ctx context.Context) (int64, error) {
 	var total int64
 
@@ -473,6 +482,7 @@ func (b *Blob) ListPrefix(ctx context.Context, prefix string) ([]ObjectInfo, err
 	return objects, nil
 }
 
+// Close closes the underlying storage bucket and any separate signing bucket.
 func (b *Blob) Close() error {
 	err := b.bucket.Close()
 	if b.signBucket != nil {
@@ -483,6 +493,7 @@ func (b *Blob) Close() error {
 	return err
 }
 
+// URL returns the storage backend URL.
 func (b *Blob) URL() string {
 	return b.url
 }
