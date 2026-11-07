@@ -383,6 +383,9 @@ func (s *Server) serve(listener net.Listener) error {
 			ui.Delete("/api/cache/{ecosystem}/*", s.handleCacheDelete)
 		}
 		s.mountProjectUI(ui)
+		if s.git != nil {
+			ui.Get("/git", s.handleGitRepositories)
+		}
 	})
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
@@ -749,7 +752,11 @@ func (s *Server) updateCacheStats() {
 		s.logger.Warn("failed to get ecosystem stats for metrics", "error", err)
 		return
 	}
-	metrics.UpdateEcosystemStats(ecosystemMetrics(ecosystems))
+	published := ecosystemMetrics(ecosystems)
+	if s.git != nil {
+		published = append(published, gitEcosystemStats(s.git.Repositories()))
+	}
+	metrics.UpdateEcosystemStats(published)
 }
 
 // ecosystemMetrics converts database rows into the metrics package's own

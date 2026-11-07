@@ -53,6 +53,9 @@ func (c *Cache) Open(ctx context.Context, key, repoURL string, opts OpenOptions)
 	}
 	rp := c.acquire(key)
 	hit := rp.exists()
+	if opts.Refresh {
+		rp.requests.Add(1)
+	}
 	if opts.Refresh || !hit {
 		if err := c.ensureFresh(ctx, rp, repoURL); err != nil {
 			c.release(rp)

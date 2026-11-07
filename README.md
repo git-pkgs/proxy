@@ -1606,7 +1606,7 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 | `proxy_ecosystem_downloaded_bytes` | gauge | `ecosystem` | Accumulated bytes served from cache: cache hits multiplied by the artifact size they served. |
 | `proxy_ecosystem_artifact_downloads` | gauge | `ecosystem` | Accumulated artifact downloads served from cache. |
 | `proxy_ecosystem_cache_size_bytes` | gauge | `ecosystem` | Size of cached artifacts per ecosystem. |
-| `proxy_ecosystem_cached_artifacts` | gauge | `ecosystem` | Number of cached artifacts per ecosystem. |
+| `proxy_ecosystem_cached_artifacts` | gauge | `ecosystem` | Number of cached artifacts per ecosystem; for `git`, cached repositories. |
 | `proxy_ecosystem_packages` | gauge | `ecosystem` | Known packages per ecosystem. |
 | `proxy_ecosystem_versions` | gauge | `ecosystem` | Known package versions per ecosystem. |
 | `proxy_response_bytes_total` | counter | `ecosystem` | Response body bytes written to clients. Route-labelled, see the label caveat below. |

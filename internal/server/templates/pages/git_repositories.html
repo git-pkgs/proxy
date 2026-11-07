@@ -1,0 +1,40 @@
+{{define "title"}}Git repositories - git-pkgs proxy{{end}}
+
+{{define "content"}}
+<div class="mb-8">
+    <h1 class="text-3xl font-bold mb-2">Git repositories</h1>
+    <p class="text-gray-600 dark:text-gray-400">{{len .Rows}} repositories in the git cache, {{.TotalSize}}</p>
+</div>
+
+{{if .Rows}}
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
+    <div class="divide-y divide-gray-200 dark:divide-gray-800">
+        {{range .Rows}}
+        <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+            <div class="min-w-0">
+                <div class="font-medium break-all"><span class="text-gray-500 dark:text-gray-400">{{.Upstream}}</span> / {{.Repo}}</div>
+                <div class="text-sm text-gray-500 dark:text-gray-400 font-mono break-all">{{.CloneURL}}</div>
+                {{if .Commit}}
+                <div class="text-sm text-gray-600 dark:text-gray-300 break-all"><span class="font-mono">{{.Branch}}{{if .Branch}} @ {{end}}{{.Commit}}</span> {{.Subject}}{{if .CommitAge}} <span class="text-gray-500 dark:text-gray-400">· {{.CommitAge}}</span>{{end}}</div>
+                {{end}}
+                {{if .LastError}}
+                <div class="text-sm text-red-600 dark:text-red-400">Last refresh failed: {{.LastError}}{{if .LastErrorAt}}, {{.LastErrorAt}}{{end}}</div>
+                {{end}}
+            </div>
+            <div class="flex flex-wrap items-center gap-4 text-sm text-gray-500 dark:text-gray-400 shrink-0">
+                {{if .Refs}}<span class="tabular-nums">{{.Refs}}</span>{{end}}
+                <span class="tabular-nums">{{.Size}}</span>
+                <span class="tabular-nums">{{.Requests}}</span>
+                {{if .LastChecked}}<span title="Upstream last checked">checked {{.LastChecked}}</span>{{end}}
+                {{if .LastUsed}}<span title="Last read by a client">used {{.LastUsed}}</span>{{end}}
+            </div>
+        </div>
+        {{end}}
+    </div>
+</div>
+{{else}}
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-12 text-center">
+    <p class="text-gray-500 dark:text-gray-400">No repository is cached yet</p>
+</div>
+{{end}}
+{{end}}

@@ -136,6 +136,12 @@ type repo struct {
 	lastUsed    atomic.Int64
 	lastChecked atomic.Int64
 	usedWritten atomic.Int64
+	// requests counts clones and fetches, and lastError is the last failed
+	// refresh, nil once one succeeds. Neither is kept across restarts.
+	requests  atomic.Int64
+	lastError atomic.Pointer[refreshError]
+	// state is the last RepositoryState read.
+	state atomic.Pointer[cachedState]
 }
 
 var errLocked = errors.New("locked by another process")

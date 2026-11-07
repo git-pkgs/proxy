@@ -151,9 +151,13 @@ func (c *Cache) startRefresh(rp *repo, repoURL string) *refreshCall {
 		cancel()
 		metrics.RecordUpstreamFetch(ecosystem, time.Since(start))
 		// A refresh cut short by Close is not an upstream failure.
-		if call.err != nil && c.ctx.Err() == nil {
+		switch {
+		case call.err == nil:
+			rp.lastError.Store(nil)
+		case c.ctx.Err() == nil:
 			metrics.RecordUpstreamError(ecosystem, errorType(call.err), metrics.FailureDetail{URL: repoURL, Err: call.err})
 			c.logger.Warn("git cache: refresh failed", "repository", rp.key, "error", call.err)
+			rp.lastError.Store(&refreshError{kind: errorType(call.err), at: time.Now()})
 		}
 		c.mu.Lock()
 		rp.refreshing = nil

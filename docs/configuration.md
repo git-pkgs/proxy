@@ -946,6 +946,20 @@ those yourself. The proxy locks `cache_dir` while it runs, through a
 `.gitcache-lock` file in it, so a second process given the same directory,
 such as another replica on a shared volume, fails to start; give each its own.
 
+The web UI lists the cached repositories at `/ui/git`, linked as "Git" in the
+navigation: each one's upstream, clone URL, size, the newest commit of the
+branch HEAD names (ID, subject and age), how many branches and tags it has,
+when the upstream was last checked and a client last read it, how many clones and fetches it served,
+and, while the last refresh failed, the kind of error (such as
+`fetch_failed` or `too_large`). The request counts and errors are kept in
+memory and start over when the proxy restarts. Like the rest of the UI the
+page has no authentication, so it shows the names of repositories from
+upstreams with credentials to everyone who can reach it, as `/git` lets them
+clone those. The `proxy_ecosystem_cache_size_bytes` and
+`proxy_ecosystem_cached_artifacts` gauges report the git cache as
+`ecosystem="git"`, counting repositories as artifacts, and clones and
+fetches count as cache hits or misses there too.
+
 Git LFS objects are cached in the artifact cache, so they use the configured
 storage backend and retention rather than `cache_dir`. git-lfs finds the LFS
 API under the rewritten remote, at `/git/{name}/{repo}.git/info/lfs`, with no
