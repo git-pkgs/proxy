@@ -17,28 +17,33 @@ type RetentionCandidate struct {
 	Size           sql.NullInt64 `db:"size"`
 	FetchedAt      sql.NullTime  `db:"fetched_at"`
 	LastAccessedAt sql.NullTime  `db:"last_accessed_at"`
+	MirroredAt     sql.NullTime  `db:"mirrored_at"`
 	Ecosystem      string        `db:"ecosystem"`
 	PackagePURL    string        `db:"package_purl"`
 }
 
-// ExpiredBefore reports whether the artifact was neither fetched nor
-// accessed at or after cutoff. Both are checked: clearing a record keeps its
-// last access time, so a record fetched again after an eviction has a fresh
-// fetch time next to an old access time.
+// ExpiredBefore reports whether the artifact was neither fetched, accessed
+// nor found by a mirror run at or after cutoff. Fetch and access are both
+// checked: clearing a record keeps its last access time, so a record fetched
+// again after an eviction has a fresh fetch time next to an old access time.
 func (c RetentionCandidate) ExpiredBefore(cutoff time.Time) bool {
 	if !c.FetchedAt.Valid || !c.FetchedAt.Time.Before(cutoff) {
+		return false
+	}
+	if c.MirroredAt.Valid && !c.MirroredAt.Time.Before(cutoff) {
 		return false
 	}
 	return !c.LastAccessedAt.Valid || c.LastAccessedAt.Time.Before(cutoff)
 }
 
-// expiredCondition selects cached artifacts fetched before the cutoff and not
-// accessed since. It takes the cutoff twice.
+// expiredCondition selects cached artifacts fetched before the cutoff and
+// neither accessed nor mirrored since. It takes the cutoff three times.
 const expiredCondition = `
 	storage_path IS NOT NULL
 	AND source <> 'local'
 	AND fetched_at < ?
-	AND (last_accessed_at IS NULL OR last_accessed_at < ?)`
+	AND (last_accessed_at IS NULL OR last_accessed_at < ?)
+	AND (mirrored_at IS NULL OR mirrored_at < ?)`
 
 // MaxArtifactID returns the highest artifact id, or zero for an empty table.
 func (db *DB) MaxArtifactID() (int64, error) {
@@ -56,7 +61,7 @@ func (db *DB) GetRetentionCandidates(fromID, toID int64, cutoff time.Time) ([]Re
 	var candidates []RetentionCandidate
 	query := db.Rebind(`
 		SELECT a.id, a.version_purl, a.filename, a.storage_path, a.size,
-		       a.fetched_at, a.last_accessed_at, p.ecosystem, p.purl AS package_purl
+		       a.fetched_at, a.last_accessed_at, a.mirrored_at, p.ecosystem, p.purl AS package_purl
 		FROM (
 			SELECT * FROM artifacts
 			WHERE id > ? AND id <= ? AND` + expiredCondition + `
@@ -65,7 +70,7 @@ func (db *DB) GetRetentionCandidates(fromID, toID int64, cutoff time.Time) ([]Re
 		JOIN packages p ON p.purl = v.package_purl
 		ORDER BY a.id
 	`)
-	if err := db.Select(&candidates, query, fromID, toID, cutoff.UTC(), cutoff.UTC()); err != nil {
+	if err := db.Select(&candidates, query, fromID, toID, cutoff.UTC(), cutoff.UTC(), cutoff.UTC()); err != nil {
 		return nil, err
 	}
 	return candidates, nil
@@ -89,7 +94,7 @@ func (db *DB) ClearExpiredArtifact(versionPURL, filename, storagePath string, cu
 		SET storage_path = NULL, content_hash = NULL, size = NULL,
 		    content_type = NULL, fetched_at = NULL, updated_at = ?
 		WHERE version_purl = ? AND filename = ? AND storage_path = ? AND` + expiredCondition)
-	res, err := tx.Exec(query, time.Now(), versionPURL, filename, storagePath, cutoff.UTC(), cutoff.UTC())
+	res, err := tx.Exec(query, time.Now(), versionPURL, filename, storagePath, cutoff.UTC(), cutoff.UTC(), cutoff.UTC())
 	if err != nil {
 		return false, err
 	}
@@ -101,6 +106,16 @@ func (db *DB) ClearExpiredArtifact(versionPURL, filename, storagePath string, cu
 		return false, fmt.Errorf("queueing %s for deletion: %w", storagePath, err)
 	}
 	return true, tx.Commit()
+}
+
+// MarkArtifactMirrored records that a mirror run found the artifact cached,
+// which keeps it from retention without counting as a cache hit.
+func (db *DB) MarkArtifactMirrored(versionPURL, filename string) error {
+	_, err := db.Exec(db.Rebind(`
+		UPDATE artifacts SET mirrored_at = ?
+		WHERE version_purl = ? AND filename = ? AND storage_path IS NOT NULL
+	`), time.Now().UTC(), versionPURL, filename)
+	return err
 }
 
 // GetArtifactEcosystem returns the packages.ecosystem value of the package an

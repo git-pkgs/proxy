@@ -75,7 +75,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	created_at DATETIME,
 	updated_at DATETIME,
 	source TEXT NOT NULL DEFAULT 'upstream',
-	manifest TEXT
+	manifest TEXT,
+	mirrored_at DATETIME
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_version_filename ON artifacts(version_purl, filename);
 CREATE INDEX IF NOT EXISTS idx_artifacts_storage_path ON artifacts(storage_path);
@@ -252,7 +253,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	created_at TIMESTAMP,
 	updated_at TIMESTAMP,
 	source TEXT NOT NULL DEFAULT 'upstream',
-	manifest TEXT
+	manifest TEXT,
+	mirrored_at TIMESTAMP
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_version_filename ON artifacts(version_purl, filename);
 CREATE INDEX IF NOT EXISTS idx_artifacts_storage_path ON artifacts(storage_path);
@@ -388,7 +390,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	created_at DATETIME,
 	updated_at DATETIME,
 	source TEXT NOT NULL DEFAULT 'upstream',
-	manifest TEXT
+	manifest TEXT,
+	mirrored_at DATETIME
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_version_filename ON artifacts(version_purl, filename);
 CREATE INDEX IF NOT EXISTS idx_artifacts_storage_path ON artifacts(storage_path);
@@ -413,7 +416,8 @@ CREATE TABLE IF NOT EXISTS artifacts (
 	created_at TIMESTAMP,
 	updated_at TIMESTAMP,
 	source TEXT NOT NULL DEFAULT 'upstream',
-	manifest TEXT
+	manifest TEXT,
+	mirrored_at TIMESTAMP
 );
 CREATE UNIQUE INDEX IF NOT EXISTS idx_artifacts_version_filename ON artifacts(version_purl, filename);
 CREATE INDEX IF NOT EXISTS idx_artifacts_storage_path ON artifacts(storage_path);
@@ -538,6 +542,7 @@ var migrations = []migration{
 	{"019_add_artifact_filename_index", migrateAddArtifactFilenameIndex},
 	{"020_add_metadata_snapshots", migrateAddMetadataSnapshots},
 	{"021_add_projects", migrateAddProjects},
+	{"022_add_artifact_mirrored_at", migrateAddArtifactMirroredAt},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -1076,6 +1081,26 @@ func migrateAddArtifactSource(db *DB) error {
 	}
 	if _, err := db.Exec(`ALTER TABLE artifacts ADD COLUMN source TEXT NOT NULL DEFAULT 'upstream'`); err != nil {
 		return fmt.Errorf("adding column source to artifacts: %w", err)
+	}
+	return nil
+}
+
+// migrateAddArtifactMirroredAt records when a mirror run last found an
+// artifact cached, which retention counts as use and LRU eviction doesn't.
+func migrateAddArtifactMirroredAt(db *DB) error {
+	hasCol, err := db.HasColumn("artifacts", "mirrored_at")
+	if err != nil {
+		return fmt.Errorf("checking column mirrored_at: %w", err)
+	}
+	if hasCol {
+		return nil
+	}
+	ts := sqliteDatetime
+	if db.dialect == DialectPostgres {
+		ts = postgresTimestamp
+	}
+	if _, err := db.Exec(fmt.Sprintf("ALTER TABLE artifacts ADD COLUMN mirrored_at %s", ts)); err != nil {
+		return fmt.Errorf("adding column mirrored_at to artifacts: %w", err)
 	}
 	return nil
 }

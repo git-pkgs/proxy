@@ -456,6 +456,16 @@ func (p *Proxy) HasCachedArtifact(ctx context.Context, ecosystem, name, version,
 	return p.Storage.Exists(ctx, artifact.StoragePath)
 }
 
+// MarkMirrored records that a mirror run found an artifact cached, which
+// keeps it from retention without counting as a cache hit.
+func (p *Proxy) MarkMirrored(ecosystem, name, version, filename string) error {
+	_, versionPURL, err := packagePURLStrings(ecosystem, name, version)
+	if err != nil {
+		return err
+	}
+	return p.DB.MarkArtifactMirrored(versionPURL, filename)
+}
+
 // ClearCachedArtifact clears an artifact cache record after an external
 // integrity check fails, and queues its stored bytes for deletion.
 func (p *Proxy) ClearCachedArtifact(ecosystem, name, version, filename string) error {
