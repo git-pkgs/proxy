@@ -161,19 +161,10 @@ func (c *Cache) pruneWanted(ctx context.Context, dir string, wanted []string, fe
 	}
 	var mergedErr error
 	if fetched && len(keep) > 0 {
-		// rev-list prints what the wanted commits, read from stdin, reach
-		// and no branch or tag does, so a wanted commit it leaves out is
-		// merged.
-		cmd := c.command(ctx, nil, "-C", dir, "rev-list", "--stdin", "--not", "--branches", "--tags")
-		cmd.Stdin = strings.NewReader(strings.Join(slices.Sorted(maps.Keys(keep)), "\n") + "\n")
-		out, err := cmd.Output()
+		unmerged, err := c.unmergedCommits(ctx, dir, slices.Sorted(maps.Keys(keep)))
 		if err != nil {
 			mergedErr = fmt.Errorf("listing unmerged wanted commits: %w", err)
 		} else {
-			unmerged := make(map[string]bool)
-			for line := range strings.Lines(string(out)) {
-				unmerged[strings.TrimSpace(line)] = true
-			}
 			for oid, ref := range keep {
 				if !unmerged[oid] {
 					drop = append(drop, ref)
@@ -194,6 +185,24 @@ func (c *Cache) pruneWanted(ctx context.Context, dir string, wanted []string, fe
 		return fmt.Errorf("deleting wanted refs: %w: %s", err, strings.TrimSpace(string(out)))
 	}
 	return mergedErr
+}
+
+// unmergedCommits returns which of commits no cached branch or tag
+// includes.
+func (c *Cache) unmergedCommits(ctx context.Context, dir string, commits []string) (map[string]bool, error) {
+	// rev-list prints what the commits, read from stdin, reach and no
+	// branch or tag does, so a commit it leaves out is merged.
+	cmd := c.command(ctx, nil, "-C", dir, "rev-list", "--stdin", "--not", "--branches", "--tags")
+	cmd.Stdin = strings.NewReader(strings.Join(commits, "\n") + "\n")
+	out, err := cmd.Output()
+	if err != nil {
+		return nil, err
+	}
+	unmerged := make(map[string]bool)
+	for line := range strings.Lines(string(out)) {
+		unmerged[strings.TrimSpace(line)] = true
+	}
+	return unmerged, nil
 }
 
 // withoutFailedWants drops the object IDs a recent fetch for the

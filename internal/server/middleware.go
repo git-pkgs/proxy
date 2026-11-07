@@ -121,6 +121,10 @@ func (s *Server) LoggerMiddleware(next http.Handler) http.Handler {
 // "other" along with the UI, health and metrics paths, pooling a real
 // ecosystem's traffic with traffic that belongs to no ecosystem at all.
 func requestEcosystem(path string) string {
+	if rest, ok := strings.CutPrefix(path, "/cooldown/"); ok {
+		_, rest, _ = strings.Cut(rest, "/")
+		path = "/" + rest
+	}
 	segment, _, _ := strings.Cut(strings.TrimPrefix(path, "/"), "/")
 	switch segment {
 	case "npm", "cargo", "hex", "pub", "pypi", "maven", "gradle", "nuget",

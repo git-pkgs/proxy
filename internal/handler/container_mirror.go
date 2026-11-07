@@ -502,6 +502,11 @@ func (m *imageMirror) mirrorBlob(ctx context.Context, digest string) (int64, boo
 		return 0, false, fmt.Errorf("blob %s: %w", digest, err)
 	}
 	if cached {
+		// Not a cache hit, so LRU eviction still sees the image as unused,
+		// but retention keeps it while the schedule does.
+		if err := proxy.MarkMirrored("oci", m.cacheName, digest, digest); err != nil {
+			return 0, false, fmt.Errorf("blob %s: %w", digest, err)
+		}
 		return 0, false, nil
 	}
 	result, err := proxy.GetOrFetchArtifactFromURLWithDigest(ctx, "oci", m.cacheName, digest, digest,

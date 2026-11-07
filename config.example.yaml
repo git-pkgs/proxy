@@ -479,6 +479,13 @@ health:
 # to spot malicious releases before they're pulled into projects.
 # Supported durations: "7d" (days), "48h" (hours), "30m" (minutes), "0" (disabled)
 cooldown:
+  # Independent policies selected through /cooldown/{name}/{registry}/.
+  # profiles:
+  #   3d:
+  #     default: "3d"
+  #   7d:
+  #     default: "7d"
+
   # Global default cooldown for all ecosystems
   # default: "3d"
 

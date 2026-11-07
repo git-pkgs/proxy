@@ -341,18 +341,20 @@ func TestRetentionCandidateExpiredBefore(t *testing.T) {
 	recent := sql.NullTime{Time: now, Valid: true}
 
 	tests := []struct {
-		name              string
-		fetched, accessed sql.NullTime
-		want              bool
+		name                        string
+		fetched, accessed, mirrored sql.NullTime
+		want                        bool
 	}{
-		{"fetched and accessed before", old, old, true},
-		{"never served", old, sql.NullTime{}, true},
-		{"accessed since", old, recent, false},
-		{"fetched again since", recent, old, false},
-		{"not cached", sql.NullTime{}, old, false},
+		{"fetched and accessed before", old, old, sql.NullTime{}, true},
+		{"never served", old, sql.NullTime{}, sql.NullTime{}, true},
+		{"accessed since", old, recent, sql.NullTime{}, false},
+		{"fetched again since", recent, old, sql.NullTime{}, false},
+		{"not cached", sql.NullTime{}, old, sql.NullTime{}, false},
+		{"mirrored since", old, old, recent, false},
+		{"mirrored before", old, old, old, true},
 	}
 	for _, tt := range tests {
-		c := RetentionCandidate{FetchedAt: tt.fetched, LastAccessedAt: tt.accessed}
+		c := RetentionCandidate{FetchedAt: tt.fetched, LastAccessedAt: tt.accessed, MirroredAt: tt.mirrored}
 		if got := c.ExpiredBefore(cutoff); got != tt.want {
 			t.Errorf("%s: ExpiredBefore() = %v, want %v", tt.name, got, tt.want)
 		}

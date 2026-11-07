@@ -237,6 +237,9 @@ type Config struct {
 // CooldownConfig configures version cooldown periods.
 // Versions published more recently than the cooldown are hidden from metadata responses.
 type CooldownConfig struct {
+	// Profiles are independent policies exposed at /cooldown/{name}/.
+	Profiles map[string]CooldownConfig `json:"profiles,omitempty" yaml:"profiles,omitempty"`
+
 	// Default is the global default cooldown (e.g., "3d", "48h", "0" to disable).
 	Default string `json:"default" yaml:"default"`
 
@@ -1665,6 +1668,10 @@ func (c *Config) validateCacheArtifacts() error {
 }
 
 func (c *Config) validateComponents() error {
+	if err := c.Cooldown.ValidateProfiles(); err != nil {
+		return err
+	}
+
 	if err := validateMetadataRewriteCacheSize(c.MetadataRewriteCacheSize); err != nil {
 		return err
 	}
