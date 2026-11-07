@@ -322,6 +322,85 @@ func TestBlobSignedURLSignEndpoint(t *testing.T) {
 	}
 }
 
+func TestAzureSignedURLSignEndpoint(t *testing.T) {
+	t.Setenv("AZURE_STORAGE_ACCOUNT", "devstoreaccount1")
+	t.Setenv("AZURE_STORAGE_KEY", "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==")
+	t.Setenv("AZURE_STORAGE_PROTOCOL", "http")
+	t.Setenv("AZURE_STORAGE_IS_LOCAL_EMULATOR", "true")
+
+	ctx := context.Background()
+	b, err := OpenBucket(ctx, "azblob://bucket?domain=127.0.0.1:10000", WithSignEndpoint("https://cdn.example.com"))
+	if err != nil {
+		t.Fatalf("OpenBucket failed: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	signed, err := b.SignedURL(ctx, "npm/lodash/4.17.21/lodash-4.17.21.tgz", time.Minute)
+	if err != nil {
+		t.Fatalf("SignedURL failed: %v", err)
+	}
+
+	u, err := url.Parse(signed)
+	if err != nil {
+		t.Fatalf("parsing signed URL %q: %v", signed, err)
+	}
+	if u.Scheme != "https" || u.Host != "cdn.example.com" {
+		t.Errorf("signed URL = %q, want https://cdn.example.com", signed)
+	}
+	if u.Query().Get("sig") == "" {
+		t.Errorf("signed URL %q carries no SAS signature", signed)
+	}
+}
+
+func TestRewriteSignedURLHost(t *testing.T) {
+	tests := []struct {
+		name    string
+		signed  string
+		baseURL string
+		want    string
+	}{
+		{
+			"empty base url is no-op",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+			"",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+		},
+		{
+			"replaces scheme and host",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+			"https://cdn.example.com",
+			"https://cdn.example.com/bucket/key?sig=abc",
+		},
+		{
+			"preserves path and query",
+			"http://minio:9000/bucket/npm/lodash/4.17.21/lodash.tgz?X-Amz-Signature=abc&X-Amz-Date=20260101",
+			"https://files.example.com",
+			"https://files.example.com/bucket/npm/lodash/4.17.21/lodash.tgz?X-Amz-Signature=abc&X-Amz-Date=20260101",
+		},
+		{
+			"ignores base url path",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+			"https://cdn.example.com/ignored",
+			"https://cdn.example.com/bucket/key?sig=abc",
+		},
+		{
+			"invalid base url is no-op",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+			"://bad",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rewriteSignedURLHost(tt.signed, tt.baseURL)
+			if got != tt.want {
+				t.Errorf("rewriteSignedURLHost(%q, %q) = %q, want %q", tt.signed, tt.baseURL, got, tt.want)
+			}
+		})
+	}
+}
+
 func TestBlobOverwrite(t *testing.T) {
 	b := createTestBlob(t)
 	ctx := context.Background()

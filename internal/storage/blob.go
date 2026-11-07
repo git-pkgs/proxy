@@ -49,6 +49,10 @@ type Blob struct {
 	// a public endpoint rather than the internal storage endpoint.
 	signBucket *blob.Bucket
 
+	// signEndpoint, when set on non-S3 backends, replaces the scheme and host
+	// of presigned URLs returned by SignedURL.
+	signEndpoint string
+
 	// fileRoot is the directory backing a file:// bucket, empty for cloud
 	// backends. Used only to clear sidecars an earlier version wrote.
 	fileRoot string
@@ -61,9 +65,11 @@ type options struct {
 	signEndpoint string
 }
 
-// WithSignEndpoint configures S3 presigned URLs to be signed for the scheme and
-// host of signEndpoint (e.g. "https://storage.example.com") instead of the
-// storage endpoint, since SigV4 includes the Host header in the signature.
+// WithSignEndpoint configures presigned URLs to use the scheme and host of
+// signEndpoint (e.g. "https://storage.example.com") instead of the storage
+// endpoint. For S3, the URL is signed directly against signEndpoint so the
+// SigV4 Host signature matches; for other backends, the signed URL's scheme
+// and host are rewritten.
 func WithSignEndpoint(signEndpoint string) Option {
 	return func(o *options) { o.signEndpoint = signEndpoint }
 }
@@ -88,7 +94,12 @@ func OpenBucket(ctx context.Context, urlStr string, opts ...Option) (Storage, er
 	}
 
 	if strings.HasPrefix(urlStr, "gs://") {
-		return OpenGCS(ctx, urlStr)
+		g, err := OpenGCS(ctx, urlStr)
+		if err != nil {
+			return nil, err
+		}
+		g.signEndpoint = o.signEndpoint
+		return g, nil
 	}
 
 	var fileRoot string
@@ -152,13 +163,17 @@ func OpenBucket(ctx context.Context, urlStr string, opts ...Option) (Storage, er
 
 	b := &Blob{bucket: bucket, url: urlStr, fileRoot: fileRoot}
 
-	if o.signEndpoint != "" && strings.HasPrefix(urlStr, s3Scheme) {
-		signBucket, err := openSignBucket(ctx, urlStr, o.signEndpoint)
-		if err != nil {
-			_ = bucket.Close()
-			return nil, err
+	if o.signEndpoint != "" {
+		if strings.HasPrefix(urlStr, s3Scheme) {
+			signBucket, err := openSignBucket(ctx, urlStr, o.signEndpoint)
+			if err != nil {
+				_ = bucket.Close()
+				return nil, err
+			}
+			b.signBucket = signBucket
+		} else {
+			b.signEndpoint = o.signEndpoint
 		}
-		b.signBucket = signBucket
 	}
 
 	return b, nil
@@ -364,7 +379,7 @@ func (b *Blob) SignedURL(ctx context.Context, path string, expiry time.Duration)
 	if b.signBucket != nil {
 		bucket = b.signBucket
 	}
-	url, err := bucket.SignedURL(ctx, path, &blob.SignedURLOptions{
+	signed, err := bucket.SignedURL(ctx, path, &blob.SignedURLOptions{
 		Method: http.MethodGet,
 		Expiry: expiry,
 	})
@@ -374,7 +389,30 @@ func (b *Blob) SignedURL(ctx context.Context, path string, expiry time.Duration)
 		}
 		return "", fmt.Errorf("signing URL: %w", err)
 	}
-	return url, nil
+	if b.signBucket == nil && b.signEndpoint != "" {
+		signed = rewriteSignedURLHost(signed, b.signEndpoint)
+	}
+	return signed, nil
+}
+
+// rewriteSignedURLHost replaces the scheme and host of a signed URL with those
+// from baseURL, preserving the path and query (which carry the signature).
+// Returns signed unchanged if baseURL is empty or either URL fails to parse.
+func rewriteSignedURLHost(signed, baseURL string) string {
+	if baseURL == "" {
+		return signed
+	}
+	s, err := url.Parse(signed)
+	if err != nil {
+		return signed
+	}
+	b, err := url.Parse(baseURL)
+	if err != nil || b.Scheme == "" || b.Host == "" {
+		return signed
+	}
+	s.Scheme = b.Scheme
+	s.Host = b.Host
+	return s.String()
 }
 
 func (b *Blob) Size(ctx context.Context, path string) (int64, error) {

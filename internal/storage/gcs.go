@@ -13,8 +13,9 @@ import (
 
 // GCS adapts a Google Cloud Storage bucket to Storage.
 type GCS struct {
-	bucket *gcstorage.Bucket
-	url    string
+	bucket       *gcstorage.Bucket
+	url          string
+	signEndpoint string
 }
 
 // OpenGCS opens a Google Cloud Storage bucket from a gs:// URL.
@@ -64,7 +65,10 @@ func (g *GCS) SignedURL(ctx context.Context, path string, expiry time.Duration) 
 	if errors.Is(err, gcstorage.ErrSignedURLUnsupported) {
 		return "", ErrSignedURLUnsupported
 	}
-	return u, err
+	if err != nil {
+		return "", err
+	}
+	return rewriteSignedURLHost(u, g.signEndpoint), nil
 }
 
 func (g *GCS) UsedSpace(ctx context.Context) (int64, error) {
