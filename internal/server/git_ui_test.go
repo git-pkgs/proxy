@@ -33,7 +33,7 @@ func TestGitRepositoriesPage(t *testing.T) {
 	if status != http.StatusOK {
 		t.Fatalf("status %d", status)
 	}
-	for _, want := range []string{">up<", "team/repo", cfg.BaseURL + "/git/up/team/repo.git", "1 request", "main", "1 branch, 0 tags"} {
+	for _, want := range []string{"1 repository in the git cache", ">up<", "team/repo", cfg.BaseURL + "/git/up/team/repo.git", "1 request", "main", "1 branch, 0 tags"} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page lacks %q:\n%s", want, body)
 		}
@@ -60,12 +60,12 @@ func TestGitRepositoryRows(t *testing.T) {
 			CommitTime: time.Now().Add(-3 * time.Hour), Branches: 2, Tags: 1,
 		}, key == dir+"/acme/widgets.git"
 	}
-	rows := gitRepositoryRows("http://proxy.example", upstreams, []gitcache.RepositoryStats{
+	rows, size := gitRepositoryRows("http://proxy.example", upstreams, []gitcache.RepositoryStats{
 		{Key: dir + "/acme/widgets.git", Size: 3 << 20, Requests: 1, LastError: "fetch_failed", LastErrorAt: failed},
 		{Key: "gone-12345678/x.git"},
 	}, state)
-	if len(rows) != 1 {
-		t.Fatalf("rows %+v, want the configured upstream's one", rows)
+	if len(rows) != 1 || size != 3<<20 {
+		t.Fatalf("rows %+v, size %d; want the configured upstream's one and its size", rows, size)
 	}
 	r := rows[0]
 	if r.Upstream != "github" || r.Repo != "acme/widgets" || r.CloneURL != "http://proxy.example/git/github/acme/widgets.git" ||

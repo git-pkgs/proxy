@@ -87,15 +87,18 @@ const maxSubjectLength = 200
 // headFields are the commit ID, time and subject readState asks git log for.
 const headFields = 3
 
-// cachedState is a repository's state as read after the check at checked.
+// cachedState is a repository's state, or the error reading it failed
+// with, as read after the check at checked.
 type cachedState struct {
 	checked int64
 	state   RepositoryState
+	err     error
 }
 
 // RepositoryState reads the state of the repository cached under key. It is
 // read again only after the repository's next check of the upstream, so a
-// page listing many repositories runs git for those that changed.
+// page listing many repositories runs git for those that changed. A read
+// that failed is kept the same way.
 func (c *Cache) RepositoryState(ctx context.Context, key string) (RepositoryState, error) {
 	c.mu.Lock()
 	rp := c.repos[key]
@@ -105,14 +108,14 @@ func (c *Cache) RepositoryState(ctx context.Context, key string) (RepositoryStat
 	}
 	checked := rp.lastChecked.Load()
 	if cached := rp.state.Load(); cached != nil && cached.checked == checked {
-		return cached.state, nil
+		return cached.state, cached.err
 	}
 	state, err := c.readState(ctx, rp.dir)
-	if err != nil {
-		return RepositoryState{}, err
+	// A read the request gave up on says nothing about the repository.
+	if ctx.Err() == nil {
+		rp.state.Store(&cachedState{checked: checked, state: state, err: err})
 	}
-	rp.state.Store(&cachedState{checked: checked, state: state})
-	return state, nil
+	return state, err
 }
 
 func (c *Cache) readState(ctx context.Context, dir string) (RepositoryState, error) {

@@ -13,8 +13,9 @@ import (
 // GitRepositoriesData is the git page: the repositories in the git cache.
 type GitRepositoriesData struct {
 	Layout
-	Rows      []GitRepositoryRow
-	TotalSize string
+	Rows []GitRepositoryRow
+	// Summary counts the rows and their size.
+	Summary string
 }
 
 // GitRepositoryRow is one cached repository on the git page.
@@ -37,10 +38,11 @@ func (s *Server) handleGitRepositories(w http.ResponseWriter, r *http.Request) {
 		st, err := s.git.RepositoryState(r.Context(), key)
 		return st, err == nil
 	}
+	rows, size := gitRepositoryRows(s.cfg.BaseURL, s.cfg.Upstream.Git, repos, state)
 	data := GitRepositoriesData{
-		Layout:    s.layoutFor(r),
-		Rows:      gitRepositoryRows(s.cfg.BaseURL, s.cfg.Upstream.Git, repos, state),
-		TotalSize: formatSize(gitEcosystemStats(repos).CacheSize),
+		Layout:  s.layoutFor(r),
+		Rows:    rows,
+		Summary: plural(len(rows), "repository", "repositories") + " in the git cache, " + formatSize(size),
 	}
 	if err := s.templates.Render(w, "git_repositories", data); err != nil {
 		s.logger.Error("failed to render git repositories", "error", err)
@@ -50,14 +52,15 @@ func (s *Server) handleGitRepositories(w http.ResponseWriter, r *http.Request) {
 // gitRepositoryRows names each cached repository by its upstream and path,
 // and gives the URL it is cloned from through the proxy. Repositories of an
 // upstream no longer configured are left out. state reads what a repository
-// holds, reporting false when it can't.
+// holds, reporting false when it can't. It also returns the rows' total size.
 func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, repos []gitcache.RepositoryStats,
-	state func(key string) (gitcache.RepositoryState, bool)) []GitRepositoryRow {
+	state func(key string) (gitcache.RepositoryState, bool)) ([]GitRepositoryRow, int64) {
 	names := make(map[string]string, len(upstreams))
 	for name, u := range upstreams {
 		names[gitcache.UpstreamDir(name, u.URL)] = name
 	}
 	rows := make([]GitRepositoryRow, 0, len(repos))
+	var size int64
 	for _, repo := range repos {
 		dir, path, _ := strings.Cut(repo.Key, "/")
 		name, ok := names[dir]
@@ -85,8 +88,9 @@ func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, 
 			row.Refs = plural(st.Branches, "branch", "branches") + ", " + plural(st.Tags, "tag", "tags")
 		}
 		rows = append(rows, row)
+		size += repo.Size
 	}
-	return rows
+	return rows, size
 }
 
 // shortCommitLength is how much of a commit ID the git page shows.

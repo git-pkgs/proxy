@@ -94,3 +94,23 @@ func TestRepositoryState(t *testing.T) {
 		t.Errorf("state of an uncached repository: %v, want ErrNotFound", err)
 	}
 }
+
+// TestRepositoryStateKeepsAFailedRead checks a repository whose state can't
+// be read isn't read again until its next upstream check.
+func TestRepositoryStateKeepsAFailedRead(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	rp := tc.repo("up/repo.git")
+	rp.state.Store(&cachedState{checked: rp.lastChecked.Load(), err: errors.New("unreadable")})
+
+	if _, err := tc.RepositoryState(context.Background(), "up/repo.git"); err == nil || err.Error() != "unreadable" {
+		t.Errorf("state = %v, want the kept error", err)
+	}
+	rp.lastChecked.Add(1)
+	if _, err := tc.RepositoryState(context.Background(), "up/repo.git"); err != nil {
+		t.Errorf("state after a new check = %v, want it read again", err)
+	}
+}
