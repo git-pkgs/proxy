@@ -18,6 +18,8 @@ import (
 	registryclient "github.com/git-pkgs/registries/client"
 )
 
+// TestWithCooldownCopiesProxyFields verifies that WithCooldown copies all
+// non-isolated Proxy fields onto the returned view.
 func TestWithCooldownCopiesProxyFields(t *testing.T) {
 	p, _, _, _ := setupTestProxy(t)
 	p.RouteFor = func(string, string) *ArtifactRoute { return nil }
@@ -34,7 +36,6 @@ func TestWithCooldownCopiesProxyFields(t *testing.T) {
 	p.NPMFullMetadata = true
 	p.DirectServe = true
 	p.DirectServeTTL = time.Minute
-	p.DirectServeBaseURL = "https://storage.example.com"
 	p.RateLimits = registryclient.NewRateLimitGate(http.DefaultTransport)
 	p.HostedNPMScopes = []string{"@example"}
 	p.HostedComposerVendors = []string{"example"}
