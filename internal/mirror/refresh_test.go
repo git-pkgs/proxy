@@ -297,6 +297,7 @@ func TestFileVariants(t *testing.T) {
 		{"pypi", "demo-1.0.0-cp312-cp312-musllinux_1_2_x86_64.whl", "cp312-cp312-musllinux_x86_64"},
 		{"pypi", "demo-1.0.0-cp312-cp312-macosx_10_13_universal2.whl", "cp312-cp312-macosx_universal2"},
 		{"pypi", "demo-1.0.0-cp312-cp312-win_amd64.whl", "cp312-cp312-win_amd64"},
+		{"pypi", "demo-1.0.0-cp39-abi3-manylinux_2_28_x86_64.whl", "cp-abi3-manylinux_x86_64"},
 		{"pypi", "demo-1.0.0.tar.gz", "sdist"},
 		{"pypi", "demo-1.0.0.zip", "sdist"},
 		{"conda", "linux-64/numpy-1.26.4-py312h8753938_0.conda", "linux-64/py312/conda"},
@@ -427,6 +428,30 @@ func TestRefreshMatchesWheelsOnAnyAlternativeTag(t *testing.T) {
 	want := []string{
 		"https://files.example/demo-1.1.0-cp312-cp312-manylinux_2_17_x86_64.linux_x86_64.whl",
 		"https://files.example/demo-1.1.0-py3-none-macosx_11_0_x86_64.whl",
+	}
+	if !slices.Equal(got, want) {
+		t.Errorf("fetched %v, want %v", got, want)
+	}
+}
+
+// In an abi3 wheel the python tag is a minimum: cryptography 44.0.0 ships
+// cp37-abi3 and cp39-abi3 wheels, 46.0.0 cp38-abi3 and cp311-abi3 ones. A
+// refresh stays on the cached major line, so the newer tags are on 44.1.0
+// here.
+func TestRefreshMatchesAbi3WheelsAcrossPythonMinimums(t *testing.T) {
+	got := refreshFetches(t, "pypi", "cryptography", "44.0.0",
+		[]string{"cryptography-44.0.0-cp39-abi3-manylinux_2_28_x86_64.whl"},
+		"44.1.0", wheels(
+			"cryptography-44.1.0-cp38-abi3-manylinux_2_28_x86_64.whl",
+			"cryptography-44.1.0-cp311-abi3-manylinux_2_28_x86_64.whl",
+			"cryptography-44.1.0-cp311-abi3-manylinux_2_28_aarch64.whl",
+			"cryptography-44.1.0-cp311-abi3-macosx_10_9_universal2.whl",
+			"cryptography-44.1.0-cp311-abi3-win_amd64.whl",
+			"cryptography-44.1.0-cp314-cp314t-manylinux_2_28_x86_64.whl",
+		))
+	want := []string{
+		"https://files.example/cryptography-44.1.0-cp311-abi3-manylinux_2_28_x86_64.whl",
+		"https://files.example/cryptography-44.1.0-cp38-abi3-manylinux_2_28_x86_64.whl",
 	}
 	if !slices.Equal(got, want) {
 		t.Errorf("fetched %v, want %v", got, want)

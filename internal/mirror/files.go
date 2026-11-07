@@ -99,7 +99,7 @@ func pypiVariants(filename string) []string {
 	for _, python := range strings.Split(tags[0], ".") {
 		for _, abi := range strings.Split(tags[1], ".") {
 			for _, platform := range strings.Split(tags[2], ".") {
-				v := python + "-" + abi + "-" + wheelPlatform(platform)
+				v := wheelPython(python, abi) + "-" + abi + "-" + wheelPlatform(platform)
 				if !slices.Contains(variants, v) {
 					variants = append(variants, v)
 				}
@@ -107,6 +107,16 @@ func pypiVariants(filename string) []string {
 		}
 	}
 	return variants
+}
+
+// wheelPython reduces the python tag of an abi3 wheel, a minimum such as
+// cp39, to its interpreter, so cp38-abi3 and cp311-abi3 wheels are the same
+// kind.
+func wheelPython(python, abi string) string {
+	if abi != "abi3" {
+		return python
+	}
+	return strings.TrimRight(python, "0123456789")
 }
 
 // wheelPlatformMinimum matches the glibc, musl or macOS minimum version in a
