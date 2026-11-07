@@ -324,11 +324,11 @@ bundle config mirror.https://rubygems.org ` + baseURL + `/gem</code></pre>`),
 			Language: "Elixir",
 			Endpoint: "/hex/",
 			Instructions: template.HTML(`<p class="config-note">Configure Hex to use the proxy:</p>
-<pre><code># In ~/.hex/hex.config
-{default_url, &lt;&lt;"` + baseURL + `/hex"&gt;&gt;}.
+<pre><code>mix hex.config mirror_url ` + baseURL + `/hex
 
 # Or via environment variable
-export HEX_MIRROR=` + baseURL + `/hex</code></pre>`),
+export HEX_MIRROR=` + baseURL + `/hex</code></pre>
+<p class="config-note">When the proxy applies a cooldown, also set <code>HEX_UNSAFE_REGISTRY=1</code> to disable registry signature verification. Origin verification can stay enabled.</p>`),
 		},
 		{
 			ID:       "pub",
@@ -378,10 +378,10 @@ index-url = ` + baseURL + `/pypi/simple/</code></pre>`),
 buildCache {
   remote&lt;HttpBuildCache&gt; {
     url = uri("` + baseURL + `/gradle/")
-    isPush = System.getenv("CI") != null
   }
 }</code></pre>
-<p class="config-note">Uploads need <code>gradle.build_cache.read_only: false</code> on the proxy.</p>`),
+<p class="config-note">Enable build caching with <code>org.gradle.caching=true</code> in <code>gradle.properties</code>, or pass <code>--build-cache</code> when running Gradle. The local cache stays enabled and remote uploads are disabled by default.</p>
+<p class="config-note">To upload from CI, set <code>gradle.build_cache.read_only: false</code> on the proxy and add <code>isPush = System.getenv("CI") != null</code> inside the client's <code>remote&lt;HttpBuildCache&gt;</code> block.</p>`),
 		},
 		{
 			ID:       "nuget",
@@ -452,7 +452,9 @@ default_channels:
   - ` + baseURL + `/conda/main
 
 # Or via command
-conda config --add channels ` + baseURL + `/conda/main</code></pre>`),
+conda config --add channels ` + baseURL + `/conda/main
+conda config --add default_channels ` + baseURL + `/conda/main</code></pre>
+<p class="config-note"><code>default_channels</code> also routes requests for <code>defaults</code> through the proxy, including <code>-c defaults</code> and <code>environment.yml</code> files that name it.</p>`),
 		},
 		{
 			ID:       "cran",
@@ -520,23 +522,7 @@ deb ` + baseURL + `/debian stable main contrib
 # Then run:
 sudo apt update</code></pre>`),
 		},
-		{
-			ID:       "rpm",
-			Name:     "RPM/Yum",
-			Language: "Fedora/RHEL",
-			Endpoint: "/rpm/",
-			Instructions: template.HTML(`<p class="config-note">Configure yum/dnf to use the proxy:</p>
-<pre><code># In /etc/yum.repos.d/proxy.repo
-[proxy-fedora]
-name=Fedora via Proxy
-baseurl=` + baseURL + `/rpm/releases/$releasever/Everything/$basearch/os/
-enabled=1
-gpgcheck=0
-
-# Then run:
-sudo dnf clean all
-sudo dnf update</code></pre>`),
-		},
+		rpmRegistryConfig(baseURL),
 		{
 			ID:       "apk",
 			Name:     "Alpine APK",
@@ -563,6 +549,23 @@ Server = ` + baseURL + `/arch/archlinux/$repo/os/$arch
 pacman -Syu</code></pre>`),
 		},
 		freebsdRegistryConfig(baseURL),
+	}
+}
+
+func rpmRegistryConfig(baseURL string) RegistryConfig {
+	return RegistryConfig{
+		ID:       "rpm",
+		Name:     "RPM/Yum",
+		Language: "Fedora",
+		Endpoint: "/rpm/",
+		Instructions: template.HTML(`<p class="config-note">In the <code>[fedora]</code> section of your existing repository file under <code>/etc/yum.repos.d/</code>, replace the <code>metalink</code> or <code>mirrorlist</code> entry with:</p>
+<pre><code>baseurl=` + baseURL + `/rpm/releases/$releasever/Everything/$basearch/os/</code></pre>
+<p class="config-note">In the <code>[updates]</code> section of <code>fedora-updates.repo</code>, replace its <code>metalink</code> or <code>mirrorlist</code> entry with:</p>
+<pre><code>baseurl=` + baseURL + `/rpm/updates/$releasever/Everything/$basearch/</code></pre>
+<p class="config-note">Keep the existing <code>gpgkey</code> and signature settings, including <code>gpgcheck=1</code>. The proxy serves RPM packages unchanged.</p>
+<pre><code># Then run:
+sudo dnf clean all
+sudo dnf update</code></pre>`),
 	}
 }
 
