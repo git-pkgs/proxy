@@ -448,9 +448,13 @@ conan remote disable conancenter</code></pre>`),
 channels:
   - ` + baseURL + `/conda/main
   - ` + baseURL + `/conda/conda-forge
+default_channels:
+  - ` + baseURL + `/conda/main
 
 # Or via command
-conda config --add channels ` + baseURL + `/conda/main</code></pre>`),
+conda config --add channels ` + baseURL + `/conda/main
+conda config --add default_channels ` + baseURL + `/conda/main</code></pre>
+<p class="config-note"><code>default_channels</code> also routes requests for <code>defaults</code> through the proxy, including <code>-c defaults</code> and <code>environment.yml</code> files that name it.</p>`),
 		},
 		{
 			ID:       "cran",
@@ -518,18 +522,7 @@ deb ` + baseURL + `/debian stable main contrib
 # Then run:
 sudo apt update</code></pre>`),
 		},
-		{
-			ID:       "rpm",
-			Name:     "RPM/Yum",
-			Language: "Fedora",
-			Endpoint: "/rpm/",
-			Instructions: template.HTML(`<p class="config-note">In the <code>[fedora]</code> section of your existing repository file under <code>/etc/yum.repos.d/</code>, replace the <code>metalink</code> or <code>mirrorlist</code> entry with:</p>
-<pre><code>baseurl=` + baseURL + `/rpm/releases/$releasever/Everything/$basearch/os/</code></pre>
-<p class="config-note">Keep the existing <code>gpgkey</code> and signature settings, including <code>gpgcheck=1</code>. The proxy serves RPM packages unchanged.</p>
-<pre><code># Then run:
-sudo dnf clean all
-sudo dnf update</code></pre>`),
-		},
+		rpmRegistryConfig(baseURL),
 		{
 			ID:       "apk",
 			Name:     "Alpine APK",
@@ -556,6 +549,23 @@ Server = ` + baseURL + `/arch/archlinux/$repo/os/$arch
 pacman -Syu</code></pre>`),
 		},
 		freebsdRegistryConfig(baseURL),
+	}
+}
+
+func rpmRegistryConfig(baseURL string) RegistryConfig {
+	return RegistryConfig{
+		ID:       "rpm",
+		Name:     "RPM/Yum",
+		Language: "Fedora",
+		Endpoint: "/rpm/",
+		Instructions: template.HTML(`<p class="config-note">In the <code>[fedora]</code> section of your existing repository file under <code>/etc/yum.repos.d/</code>, replace the <code>metalink</code> or <code>mirrorlist</code> entry with:</p>
+<pre><code>baseurl=` + baseURL + `/rpm/releases/$releasever/Everything/$basearch/os/</code></pre>
+<p class="config-note">In the <code>[updates]</code> section of <code>fedora-updates.repo</code>, replace its <code>metalink</code> or <code>mirrorlist</code> entry with:</p>
+<pre><code>baseurl=` + baseURL + `/rpm/updates/$releasever/Everything/$basearch/</code></pre>
+<p class="config-note">Keep the existing <code>gpgkey</code> and signature settings, including <code>gpgcheck=1</code>. The proxy serves RPM packages unchanged.</p>
+<pre><code># Then run:
+sudo dnf clean all
+sudo dnf update</code></pre>`),
 	}
 }
 

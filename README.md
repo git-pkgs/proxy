@@ -465,12 +465,17 @@ Configure in `~/.condarc`:
 channels:
   - http://localhost:8080/conda/main
   - http://localhost:8080/conda/conda-forge
+default_channels:
+  - http://localhost:8080/conda/main
 ```
+
+`default_channels` also routes requests for `defaults` through the proxy, including `-c defaults` and `environment.yml` files that name it.
 
 Or set via command:
 
 ```bash
 conda config --add channels http://localhost:8080/conda/main
+conda config --add default_channels http://localhost:8080/conda/main
 ```
 
 pixi and other rattler-based clients use sharded repodata ([CEP 16](https://github.com/conda/ceps/blob/main/cep-0016.md)) where a channel offers it, as conda-forge does. Point them at the same channel URLs, for example `pixi init -c http://localhost:8080/conda/conda-forge`. The shard index and shards are cached as metadata when `cache_metadata` is on.
@@ -724,6 +729,12 @@ In the `[fedora]` section of your existing repository file under `/etc/yum.repos
 
 ```ini
 baseurl=http://localhost:8080/rpm/releases/$releasever/Everything/$basearch/os/
+```
+
+In the `[updates]` section of `fedora-updates.repo`, replace its `metalink` or `mirrorlist` entry with:
+
+```ini
+baseurl=http://localhost:8080/rpm/updates/$releasever/Everything/$basearch/
 ```
 
 Keep the existing `gpgkey` and signature settings, including `gpgcheck=1`. The proxy serves RPM packages unchanged, so their signatures remain valid.
