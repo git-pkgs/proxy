@@ -127,20 +127,23 @@ func (c *Cache) submodules(ctx context.Context, dir, commit string) ([]Submodule
 	if c.command(ctx, nil, "-C", dir, "cat-file", "-e", commit+":.gitmodules").Run() != nil {
 		return nil, nil
 	}
-	out, err := c.run(ctx, dir, "config", "-z", "--blob", commit+":.gitmodules", "--get-regexp", `^submodule\..*\.(path|url)$`)
+	// --list rather than --get-regexp, which fails when nothing matches.
+	out, err := c.run(ctx, dir, "config", "-z", "--blob", commit+":.gitmodules", "--list")
 	if err != nil {
 		return nil, fmt.Errorf("reading .gitmodules: %w", err)
 	}
 	paths, urls := map[string]string{}, map[string]string{}
 	for entry := range strings.SplitSeq(out, "\x00") {
 		key, value, ok := strings.Cut(entry, "\n")
-		name, field, dotted := cutLast(strings.TrimPrefix(key, "submodule."), ".")
-		if !ok || !dotted {
+		section, ok2 := strings.CutPrefix(key, "submodule.")
+		name, field, dotted := cutLast(section, ".")
+		if !ok || !ok2 || !dotted {
 			continue
 		}
-		if field == "path" {
+		switch field {
+		case "path":
 			paths[value] = name
-		} else {
+		case "url":
 			urls[name] = value
 		}
 	}

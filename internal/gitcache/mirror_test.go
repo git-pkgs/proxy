@@ -291,3 +291,27 @@ func TestMirrorListsSubmodules(t *testing.T) {
 		t.Errorf("unversioned mirror = %+v, %v, want no submodules", got, err)
 	}
 }
+
+// TestMirrorWithEmptyGitmodules checks a .gitmodules with no path or url,
+// for which git config --get-regexp finds nothing, lists no submodules.
+func TestMirrorWithEmptyGitmodules(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	for i, content := range []string{"", "[submodule \"x\"]\n\tbranch = main\n"} {
+		if err := os.WriteFile(filepath.Join(work, ".gitmodules"), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, work, "add", ".gitmodules")
+		runGit(t, work, "commit", "--quiet", "--allow-empty", "-m", "gitmodules "+strconv.Itoa(i))
+	}
+	runGit(t, work, "push", "--quiet", "origin", "main")
+	tc := newTestCache(t, upstream.server.URL, nil)
+
+	for _, rev := range []string{"HEAD~1", "HEAD"} {
+		commit := runGit(t, work, "rev-parse", rev)
+		got, err := tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", commit, true)
+		if err != nil || len(got.Submodules) != 0 {
+			t.Errorf("mirror of %s = %+v, %v, want no submodules", rev, got, err)
+		}
+	}
+}
