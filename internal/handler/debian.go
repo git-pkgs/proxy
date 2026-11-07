@@ -108,13 +108,11 @@ func (h *DebianHandler) Routes() http.Handler {
 			}
 		}
 
-		// Route by filename rather than path prefix because flat repositories
-		// place pools under dists/<suite>/pool/....
+		// Route by filename rather than path prefix because repositories such as
+		// Docker's nest the pool under dists/<suite>/.
 		switch {
 		case isDebPackageFile(rest):
 			h.handlePackageDownload(w, r, repository, upstreamURL, rest)
-		case isSourcePackageFile(rest):
-			h.proxyFile(w, r, upstreamURL, rest)
 		case strings.HasPrefix(rest, "dists/"):
 			// Repository metadata - served through the metadata cache
 			h.handleMetadata(w, r, repository, upstreamURL, rest)
@@ -127,22 +125,6 @@ func (h *DebianHandler) Routes() http.Handler {
 
 func isDebPackageFile(path string) bool {
 	return strings.HasSuffix(path, ".deb")
-}
-
-// isSourcePackageFile reports whether path is a Debian source-package artifact.
-// Source files can be re-uploaded or re-signed in place under the same filename,
-// so they must be streamed rather than cached without digest verification.
-func isSourcePackageFile(path string) bool {
-	switch {
-	case strings.HasSuffix(path, ".dsc"),
-		strings.HasSuffix(path, ".buildinfo"),
-		strings.HasSuffix(path, ".changes"):
-		return true
-	}
-	// Match Debian source tarballs without matching suite tarballs (e.g. installer netboot.tar.gz).
-	return strings.Contains(path, ".orig.tar.") ||
-		strings.Contains(path, ".orig-") ||
-		strings.Contains(path, ".debian.tar.")
 }
 
 // repositoryNotFound answers a request addressed to a repository that is not
@@ -248,12 +230,7 @@ var debPackagePattern = regexp.MustCompile(`^(.+)_([^_]+)_([^_]+)\.deb$`)
 // parsePoolPath extracts package info from a pool path.
 // Example: pool/main/n/nginx/nginx_1.18.0-6_amd64.deb
 func (h *DebianHandler) parsePoolPath(path string) (name, version, arch string) {
-	// Get the filename
-	idx := strings.LastIndex(path, "/")
-	if idx < 0 {
-		return "", "", ""
-	}
-	filename := path[idx+1:]
+	filename := path[strings.LastIndex(path, "/")+1:]
 
 	// Parse the filename
 	matches := debPackagePattern.FindStringSubmatch(filename)
