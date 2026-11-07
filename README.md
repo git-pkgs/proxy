@@ -1209,6 +1209,9 @@ proxy mirror --concurrency 8 pkg:npm/lodash@4.17.21
 
 # Mirror a container image for one platform
 proxy mirror --platform linux/amd64 pkg:docker/library/alpine@3.20
+
+# Mirror a commit of an upstream.git repository into the git cache
+proxy mirror pkg:git/github.com/git-pkgs/purl@0123456789abcdef0123456789abcdef01234567
 ```
 
 The mirror command accepts the same storage and database flags as `serve`. Already-cached artifacts are skipped. If any package version fails to mirror, the command lists the errors and exits with status 1, so a CI step that warms the cache fails on a partial mirror.

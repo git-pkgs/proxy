@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"log/slog"
 	"net"
@@ -18,6 +19,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/mirror"
 )
 
 func gitTestEnv(home string) []string {
@@ -75,11 +77,11 @@ func (b *syncBuffer) String() string {
 	return b.buf.String()
 }
 
-// TestGitRouteServesClonesWithUpstreamCredentials clones through the whole
-// server, with credentials from upstream.auth that only the proxy holds.
-func TestGitRouteServesClonesWithUpstreamCredentials(t *testing.T) {
-	root := t.TempDir()
-	bare := filepath.Join(root, "team", "repo.git")
+// newGitTestRepo creates the bare repository {root}/{path}.git with one
+// commit on main and returns the commit.
+func newGitTestRepo(t *testing.T, root, path string) string {
+	t.Helper()
+	bare := filepath.Join(root, filepath.FromSlash(path)+".git")
 	gitCommand(t, "", "init", "--quiet", "--bare", "--initial-branch=main", bare)
 	work := t.TempDir()
 	gitCommand(t, "", "clone", "--quiet", bare, work)
@@ -89,21 +91,22 @@ func TestGitRouteServesClonesWithUpstreamCredentials(t *testing.T) {
 	gitCommand(t, work, "add", "file.txt")
 	gitCommand(t, work, "commit", "--quiet", "-m", "first")
 	gitCommand(t, work, "push", "--quiet", "origin", "HEAD:main")
-	head := gitCommand(t, work, "rev-parse", "HEAD")
+	return gitCommand(t, work, "rev-parse", "HEAD")
+}
 
-	backend := &cgi.Handler{
+// gitBackend serves the repositories under root with git http-backend.
+func gitBackend(t *testing.T, root string) http.Handler {
+	t.Helper()
+	return &cgi.Handler{
 		Path: gitHTTPBackend(t),
 		Env:  append(gitTestEnv(t.TempDir()), "GIT_PROJECT_ROOT="+root, "GIT_HTTP_EXPORT_ALL=1"),
 	}
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.Header.Get("Authorization") != "Bearer git-secret" {
-			http.Error(w, "unauthorized", http.StatusUnauthorized)
-			return
-		}
-		backend.ServeHTTP(w, r)
-	}))
-	defer upstream.Close()
+}
 
+// startGitTestServer starts the whole server with the git cache, after
+// configure has set up cfg, and returns cfg and the server's log.
+func startGitTestServer(t *testing.T, configure func(*config.Config)) (*config.Config, *syncBuffer) {
+	t.Helper()
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -115,21 +118,20 @@ func TestGitRouteServesClonesWithUpstreamCredentials(t *testing.T) {
 	cfg.Database.Path = filepath.Join(tempDir, "proxy.db")
 	cfg.Storage.URL = "file://" + filepath.Join(tempDir, "artifacts")
 	cfg.Upstream.AllowLoopback = true
-	cfg.Upstream.Git = map[string]config.GitUpstream{"private": {URL: upstream.URL, Repos: []string{"team/*"}}}
-	cfg.Upstream.Auth = map[string]config.AuthConfig{upstream.URL: {Type: "bearer", Token: "git-secret"}}
 	cfg.Git.CacheDir = filepath.Join(tempDir, "git")
+	configure(cfg)
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("validating config: %v", err)
 	}
 
-	var logs syncBuffer
-	proxyServer, err := New(cfg, slog.New(slog.NewTextHandler(&logs, nil)), BuildInfo{Version: "test", Commit: "test"})
+	logs := &syncBuffer{}
+	proxyServer, err := New(cfg, slog.New(slog.NewTextHandler(logs, nil)), BuildInfo{Version: "test", Commit: "test"})
 	if err != nil {
 		t.Fatalf("creating server: %v", err)
 	}
 	startErr := make(chan error, 1)
 	go func() { startErr <- proxyServer.Start(listener) }()
-	defer func() {
+	t.Cleanup(func() {
 		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 		defer cancel()
 		if err := proxyServer.Shutdown(ctx); err != nil {
@@ -138,7 +140,29 @@ func TestGitRouteServesClonesWithUpstreamCredentials(t *testing.T) {
 		if err := <-startErr; !errors.Is(err, http.ErrServerClosed) {
 			t.Errorf("Start() error = %v, want %v", err, http.ErrServerClosed)
 		}
-	}()
+	})
+	return cfg, logs
+}
+
+// TestGitRouteServesClonesWithUpstreamCredentials clones through the whole
+// server, with credentials from upstream.auth that only the proxy holds.
+func TestGitRouteServesClonesWithUpstreamCredentials(t *testing.T) {
+	root := t.TempDir()
+	head := newGitTestRepo(t, root, "team/repo")
+	backend := gitBackend(t, root)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Authorization") != "Bearer git-secret" {
+			http.Error(w, "unauthorized", http.StatusUnauthorized)
+			return
+		}
+		backend.ServeHTTP(w, r)
+	}))
+	defer upstream.Close()
+
+	cfg, logs := startGitTestServer(t, func(cfg *config.Config) {
+		cfg.Upstream.Git = map[string]config.GitUpstream{"private": {URL: upstream.URL, Repos: []string{"team/*"}}}
+		cfg.Upstream.Auth = map[string]config.AuthConfig{upstream.URL: {Type: "bearer", Token: "git-secret"}}
+	})
 
 	clone := filepath.Join(t.TempDir(), "clone")
 	gitCommand(t, "", "clone", "--quiet", cfg.BaseURL+"/git/private/team/repo.git", clone)
@@ -156,5 +180,62 @@ func TestGitRouteServesClonesWithUpstreamCredentials(t *testing.T) {
 	_ = resp.Body.Close()
 	if resp.StatusCode != http.StatusNotFound {
 		t.Errorf("repository outside repos: status %d, want 404", resp.StatusCode)
+	}
+}
+
+// TestMirrorAPICachesGitCommit mirrors a pkg:git commit through the mirror
+// API, then clones it through /git while the upstream is down.
+func TestMirrorAPICachesGitCommit(t *testing.T) {
+	root := t.TempDir()
+	head := newGitTestRepo(t, root, "team/repo")
+	upstream := httptest.NewServer(gitBackend(t, root))
+	defer upstream.Close()
+	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
+		cfg.MirrorAPI = true
+		cfg.Upstream.Git = map[string]config.GitUpstream{"up": {URL: upstream.URL}}
+	})
+
+	location := strings.TrimPrefix(upstream.URL, "http://") + "/team/repo"
+	body, err := json.Marshal(map[string][]string{"purls": {"pkg:git/" + location + "@" + head}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.Post(cfg.BaseURL+"/api/mirror", "application/json", bytes.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var created struct{ ID string }
+	err = json.NewDecoder(resp.Body).Decode(&created)
+	_ = resp.Body.Close()
+	if err != nil || resp.StatusCode != http.StatusAccepted {
+		t.Fatalf("creating job: status %d, %v", resp.StatusCode, err)
+	}
+
+	var job mirror.Job
+	deadline := time.Now().Add(30 * time.Second)
+	for job.State != mirror.JobStateComplete && job.State != mirror.JobStateFailed && job.State != mirror.JobStateCanceled {
+		if time.Now().After(deadline) {
+			t.Fatalf("job did not finish: %+v", job)
+		}
+		time.Sleep(50 * time.Millisecond)
+		resp, err := http.Get(cfg.BaseURL + "/api/mirror/" + created.ID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		err = json.NewDecoder(resp.Body).Decode(&job)
+		_ = resp.Body.Close()
+		if err != nil {
+			t.Fatal(err)
+		}
+	}
+	if job.State != mirror.JobStateComplete || job.Progress.Completed != 1 {
+		t.Fatalf("job = %+v, want one repository mirrored", job)
+	}
+
+	upstream.Close()
+	clone := filepath.Join(t.TempDir(), "clone")
+	gitCommand(t, "", "clone", "--quiet", cfg.BaseURL+"/git/up/team/repo.git", clone)
+	if got := gitCommand(t, clone, "rev-parse", "HEAD"); got != head {
+		t.Errorf("HEAD = %s, want %s", got, head)
 	}
 }

@@ -631,6 +631,21 @@ func NewMirrorProxy(cfg *config.Config, db *database.DB, store storage.Storage, 
 	return proxy, s.newContainerHandler(proxy)
 }
 
+// NewMirrorGit opens the git cache for proxy mirror, with the upstream client
+// serve uses, and returns the handler that mirrors pkg:git items into it and
+// the function that closes it. Both are nil without upstream.git.
+func NewMirrorGit(cfg *config.Config, proxy *handler.Proxy, logger *slog.Logger) (*handler.GitHandler, func() error, error) {
+	if len(cfg.Upstream.Git) == 0 {
+		return nil, nil, nil
+	}
+	s := &Server{cfg: cfg, logger: logger, ecr: newECRTokens(logger)}
+	_, artifactClient := s.newUpstreamClients(0)
+	if err := s.configureGitCache(artifactClient); err != nil {
+		return nil, nil, err
+	}
+	return handler.NewGitHandler(proxy, s.git, cfg.Upstream), s.git.Close, nil
+}
+
 // newContainerHandler builds the OCI handler with the configured default
 // registry, named upstreams, mirrored registries and Homebrew routes.
 func (s *Server) newContainerHandler(proxy *handler.Proxy) *handler.ContainerHandler {
