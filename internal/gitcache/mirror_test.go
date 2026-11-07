@@ -212,3 +212,82 @@ func TestMirrorReportsRefreshTooLarge(t *testing.T) {
 		t.Errorf("mirror with a refresh past max_repo_size = %v, want ErrTooLarge", err)
 	}
 }
+
+func TestMirrorResolvesTag(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	tagged := runGit(t, work, "rev-parse", "v1^{commit}")
+	tc := newTestCache(t, upstream.server.URL, nil)
+
+	got, err := tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", "v1", true)
+	if err != nil {
+		t.Fatalf("Mirror: %v", err)
+	}
+	if got.Commit != tagged {
+		t.Errorf("commit %q, want %s the tag points at", got.Commit, tagged)
+	}
+}
+
+func TestMirrorReportsMissingTag(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+
+	for _, version := range []string{"v9", "main"} {
+		_, err := tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", version, true)
+		if !errors.Is(err, ErrNotFound) {
+			t.Errorf("mirror at %q = %v, want ErrNotFound", version, err)
+		}
+	}
+}
+
+func TestMirrorRefusesInvalidTag(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+
+	for _, version := range []string{"a..b", "v1^{tree}", "v1~1", "v 1", "v1:x"} {
+		_, err := tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", version, true)
+		if err == nil || errors.Is(err, ErrNotFound) {
+			t.Errorf("mirror at %q = %v, want an invalid version error", version, err)
+		}
+	}
+}
+
+func TestMirrorListsSubmodules(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	libWork := upstream.newRepo("lib")
+	libCommit := runGit(t, libWork, "rev-parse", "HEAD")
+	work := upstream.newRepo("repo")
+	gitmodules := "[submodule \"vendor/lib\"]\n\tpath = vendor/lib\n\turl = ../lib.git\n" +
+		"[submodule \"other\"]\n\tpath = third_party/other\n\turl = https://example.com/other.git\n"
+	if err := os.WriteFile(filepath.Join(work, ".gitmodules"), []byte(gitmodules), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	otherCommit := strings.Repeat("ab", 20)
+	runGit(t, work, "add", ".gitmodules")
+	runGit(t, work, "update-index", "--add", "--cacheinfo", "160000,"+libCommit+",vendor/lib")
+	runGit(t, work, "update-index", "--add", "--cacheinfo", "160000,"+otherCommit+",third_party/other")
+	runGit(t, work, "commit", "--quiet", "-m", "submodules")
+	runGit(t, work, "push", "--quiet", "origin", "main")
+	commit := runGit(t, work, "rev-parse", "HEAD")
+	tc := newTestCache(t, upstream.server.URL, nil)
+
+	got, err := tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", commit, true)
+	if err != nil {
+		t.Fatalf("Mirror: %v", err)
+	}
+	want := []Submodule{
+		{Path: "third_party/other", URL: "https://example.com/other.git", Commit: otherCommit},
+		{Path: "vendor/lib", URL: "../lib.git", Commit: libCommit},
+	}
+	if !slices.Equal(got.Submodules, want) {
+		t.Errorf("submodules %+v, want %+v", got.Submodules, want)
+	}
+
+	// Without a version, nothing names a commit to read submodules from.
+	got, err = tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", "", true)
+	if err != nil || len(got.Submodules) != 0 {
+		t.Errorf("unversioned mirror = %+v, %v, want no submodules", got, err)
+	}
+}

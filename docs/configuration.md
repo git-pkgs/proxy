@@ -1910,16 +1910,18 @@ proxy mirror --platform linux/arm64 pkg:brew/hello@2.12.3 pkg:brew/openssl%403
 
 ### Git repositories
 
-`pkg:git` PURLs mirror a repository of an [`upstream.git`](#git-repositories) host into the git cache, so a clone through `/git` is served from it, also when the upstream is unreachable. The PURL names the repository by host and path, and the version is a full commit ID:
+`pkg:git` PURLs mirror a repository of an [`upstream.git`](#git-repositories) host into the git cache, so a clone through `/git` is served from it, also when the upstream is unreachable. The PURL names the repository by host and path, and the version is a full commit ID or a tag:
 
 ```bash
 proxy mirror pkg:git/github.com/git-pkgs/purl@0123456789abcdef0123456789abcdef01234567
+proxy mirror pkg:git/github.com/git-pkgs/purl@v0.2.1
 proxy mirror pkg:git/github.com/git-pkgs/purl
 ```
 
 - The repository is served by the `upstream.git` host whose URL its host and path start with, the longest one if several do, and has to match that host's `repos`. Others fail.
 - The repository's branches and tags are cached, as a clone through the proxy caches them. A commit on none of them is fetched by ID and kept, like one a client fetches by ID, until a branch or tag includes it, or for seven days from the last mirror run that named it, as long as `git.max_size` doesn't evict the repository. Where `upstream.auth` has credentials for the host, commits aren't fetched by ID, and one on no branch or tag that isn't cached yet fails.
-- Without a version the repository's branches and tags are mirrored. A tag or branch name as the version fails; give the commit ID.
+- Without a version the repository's branches and tags are mirrored. A tag as the version has to be one of them, so a tag the upstream doesn't have fails. A branch name as the version fails too; give the commit ID.
+- With a version, the submodules that commit records are mirrored at the commits it pins, with their submodules in turn. A relative submodule URL is resolved against the repository's, and an `ssh://`, `git://` or `git@host:path` URL names the repository by its host and path. A submodule no `upstream.git` host serves is skipped with a warning in the log.
 - The git cache is used by one process. While the server runs, the command can't open `git.cache_dir`, so `pkg:git` items fail and the rest are mirrored; use the mirror API instead.
 
 ### Scheduled refresh

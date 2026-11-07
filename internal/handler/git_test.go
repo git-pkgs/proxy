@@ -129,7 +129,9 @@ func runGitCommand(t *testing.T, dir string, args ...string) string {
 // gitTestSetup is a GitHandler in front of a cache of one upstream
 // repository, "repo", served by git http-backend.
 type gitTestSetup struct {
-	work   string
+	work string
+	// root holds the upstream's bare repositories.
+	root   string
 	server *httptest.Server
 	// upstream serves the repository, at upstreamURL/repo, and handler is
 	// the GitHandler under test.
@@ -161,7 +163,7 @@ func newGitTestSetup(t *testing.T, readTimeout, writeStall time.Duration) *gitTe
 	bare := filepath.Join(root, "repo.git")
 	runGitCommand(t, "", "init", "--quiet", "--bare", "--initial-branch=main", bare)
 	runGitCommand(t, bare, "config", "uploadpack.allowAnySHA1InWant", "true")
-	g := &gitTestSetup{work: t.TempDir(), logs: &syncLog{}}
+	g := &gitTestSetup{work: t.TempDir(), root: root, logs: &syncLog{}}
 	runGitCommand(t, "", "clone", "--quiet", bare, g.work)
 	runGitCommand(t, g.work, "commit", "--quiet", "--allow-empty", "-m", "first")
 	runGitCommand(t, g.work, "push", "--quiet", "origin", "HEAD:main")
