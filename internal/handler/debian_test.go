@@ -251,6 +251,45 @@ func TestDebianHandler_PackageCacheScopedPerRepository(t *testing.T) {
 	}
 }
 
+// TestDebianHandler_FlatArchivePackageIsCached verifies that .deb packages
+// served under dists/<suite>/pool/ (as used by flat repositories like Docker's)
+// are cached as artifacts rather than treated as uncached/TTL metadata.
+func TestDebianHandler_FlatArchivePackageIsCached(t *testing.T) {
+	const (
+		flatPath = "/docker/dists/trixie/pool/stable/amd64/docker-ce_5.0.1-1~debian.13~trixie_amd64.deb"
+		pkgBody  = "docker-ce package bytes"
+	)
+
+	var upstreamHits int
+
+	archive := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		_, _ = fmt.Fprint(w, pkgBody)
+	}))
+	defer archive.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(archive.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+
+	h := NewDebianHandler(proxy, "http://proxy.example", "https://archive.test", map[string]string{
+		"docker": archive.URL,
+	})
+
+	for attempt := 1; attempt <= 2; attempt++ {
+		w := serveDebianRequest(h, flatPath)
+		if w.Code != http.StatusOK || w.Body.String() != pkgBody {
+			t.Fatalf("request %d: status = %d, body = %q, want 200 %q",
+				attempt, w.Code, w.Body.String(), pkgBody)
+		}
+	}
+
+	if upstreamHits != 1 {
+		t.Errorf("upstream fetched %d times for two requests, want 1: the package is not cached", upstreamHits)
+	}
+}
+
 func serveDebianRequest(h *DebianHandler, target string) *httptest.ResponseRecorder {
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, target, nil))
@@ -283,5 +322,78 @@ func TestDebRetentionKey(t *testing.T) {
 	}
 	if _, ok := debRetentionKey(nil); ok {
 		t.Error("debRetentionKey(nil) accepted")
+	}
+}
+
+func TestDebianHandler_ClassifiesFilesByExtension(t *testing.T) {
+	tests := []struct {
+		path   string
+		pkg    bool
+		source bool
+		why    string
+	}{
+		{"pool/main/h/hello/hello_2.10-3_amd64.deb", true, false, "canonical pool"},
+		{"dists/trixie/pool/stable/amd64/docker-ce_5.0.1-1~debian.13~trixie_amd64.deb", true, false, "flat archive"},
+		{"pool/main/h/hello/hello_2.10-3.udeb", false, false, "udeb not matched by debPackagePattern"},
+		{"pool/main/h/hello/hello_2.10-3_amd64.ddeb", false, false, "ddeb not matched by debPackagePattern"},
+		{"pool/main/h/hello/hello_2.10-3.dsc", false, true, "source control file"},
+		{"pool/main/h/hello/hello_2.10.orig.tar.xz", false, true, "source tarball"},
+		{"pool/main/h/hello/hello_2.10.orig-tex.tar.gz", false, true, "component tarball"},
+		{"pool/main/h/hello/hello_2.10-3.debian.tar.xz", false, true, "debian tarball"},
+		{"pool/main/h/hello/hello_2.10-3_amd64.buildinfo", false, true, "buildinfo"},
+		{"pool/main/h/hello/hello_2.10-3_amd64.changes", false, true, "changes"},
+		{"dists/trixie/pool/stable/amd64/docker-ce_5.0.1-1.dsc", false, true, "flat archive source file"},
+		{"dists/trixie/InRelease", false, false, "metadata"},
+		{"dists/trixie/main/binary-amd64/Packages.gz", false, false, "metadata"},
+		{"dists/trixie/main/installer-amd64/current/images/netboot/netboot.tar.gz", false, false, "suite tarball"},
+	}
+	for _, tt := range tests {
+		if got := isDebPackageFile(tt.path); got != tt.pkg {
+			t.Errorf("isDebPackageFile(%q) = %v, want %v (%s)", tt.path, got, tt.pkg, tt.why)
+		}
+		if got := isSourcePackageFile(tt.path); got != tt.source {
+			t.Errorf("isSourcePackageFile(%q) = %v, want %v (%s)", tt.path, got, tt.source, tt.why)
+		}
+	}
+}
+
+func TestDebianHandler_SourcePackageFilesAreNotCached(t *testing.T) {
+	const dscBody = "hello source control bytes"
+
+	var upstreamHits int
+
+	archive := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		_, _ = fmt.Fprint(w, dscBody)
+	}))
+	defer archive.Close()
+
+	proxy, _, store, _ := setupTestProxy(t)
+	proxy.HTTPClient = archive.Client()
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+
+	h := NewDebianHandler(proxy, "http://proxy.example", archive.URL, map[string]string{
+		"docker": archive.URL,
+	})
+
+	for _, target := range []string{
+		"/pool/main/h/hello/hello_2.10-3.dsc",
+		"/docker/dists/trixie/pool/stable/amd64/docker-ce_5.0.1-1.dsc",
+	} {
+		for attempt := 1; attempt <= 2; attempt++ {
+			w := serveDebianRequest(h, target)
+			if w.Code != http.StatusOK || w.Body.String() != dscBody {
+				t.Fatalf("%s request %d: status = %d, body = %q, want 200 %q",
+					target, attempt, w.Code, w.Body.String(), dscBody)
+			}
+		}
+	}
+
+	if upstreamHits != 4 {
+		t.Errorf("upstream fetched %d times for four requests, want 4: source-package files must not be cached", upstreamHits)
+	}
+	if store.stores != 0 {
+		t.Errorf("storage wrote %d object(s), want 0: a source-package file must not be stored", store.stores)
 	}
 }

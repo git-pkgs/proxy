@@ -805,6 +805,10 @@ and `dists` are refused at config load for that reason, and other root paths
 an archive may serve (`indices`, `project`, `doc`, `tools`) are not, so avoid
 those names unless the shadowing is intended.
 
+Binary packages (`.deb`) are cached; source-package files (`.dsc`, source
+tarballs, `.buildinfo`, `.changes`) are streamed directly from upstream because
+their contents can be replaced in place under the same path.
+
 This field has no environment variable, as with the other named upstream maps.
 `PROXY_UPSTREAM_DEBIAN` still sets `upstream.debian`.
 
