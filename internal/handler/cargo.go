@@ -2,6 +2,7 @@ package handler
 
 import (
 	"bufio"
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -186,6 +187,32 @@ func (h *CargoHandler) applyCooldownFiltering(downstreamResponse http.ResponseWr
 	}
 }
 
+// publishTime reads a crate version's pubtime from the sparse index, sharing
+// the index cache with handleIndex. Entries published before crates.io
+// recorded pubtime have none.
+func (h *CargoHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, error) {
+	upstreamURL := fmt.Sprintf("%s/%s", h.indexURL, h.buildIndexPath(name))
+	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "cargo", name, upstreamURL, "text/plain")
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	for line := range bytes.SplitSeq(body, []byte("\n")) {
+		if len(bytes.TrimSpace(line)) == 0 {
+			continue
+		}
+		var entry crateIndexEntry
+		if err := json.Unmarshal(line, &entry); err != nil {
+			return time.Time{}, false, err
+		}
+		if entry.Version != version {
+			continue
+		}
+		published, err := time.Parse(time.RFC3339, entry.PublishTime)
+		return published, err == nil, nil
+	}
+	return time.Time{}, false, nil
+}
+
 // buildIndexPath builds the sparse index path for a crate name.
 func (h *CargoHandler) buildIndexPath(name string) string {
 	name = strings.ToLower(name)
@@ -216,6 +243,16 @@ func (h *CargoHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 
 	h.proxy.Logger.Debug("cargo download request",
 		"crate", name, "version", version, "filename", filename)
+
+	if h.proxy.withholdInCooldown(w, r, downloadVersion{
+		ecosystem: "cargo", policyName: name, storedName: name, version: version, cacheName: name, filename: filename,
+		lookup: func() (time.Time, bool, bool, error) {
+			published, ok, err := h.publishTime(r, name, version)
+			return published, ok, false, err
+		},
+	}) {
+		return
+	}
 
 	downloadURL := fmt.Sprintf(
 		"%s/%s/%s",

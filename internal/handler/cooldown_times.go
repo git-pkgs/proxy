@@ -7,6 +7,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 )
@@ -15,6 +16,26 @@ import (
 // time. A version whose time didn't parse maps to the zero time and is let
 // through.
 type publishTimes map[string]time.Time
+
+func (p *Proxy) lookupPublishTime(ctx context.Context, t timedMetadata, version string, listed func(metadataResult) ([]string, error)) (time.Time, bool, bool, error) {
+	var versions []string
+	docs, err := p.fetchTimedMetadata(ctx, t, func(doc metadataResult) ([]string, error) {
+		var err error
+		versions, err = listed(doc)
+		return versions, err
+	})
+	switch {
+	case docs.doc.err != nil:
+		return time.Time{}, false, false, docs.doc.err
+	case docs.times.err != nil:
+		return time.Time{}, false, false, docs.times.err
+	case err != nil:
+		return time.Time{}, false, false, err
+	}
+	published, ok := docs.published[version]
+	withholdUnknown := !ok && docs.withholdUnknown && slices.Contains(versions, version)
+	return published, ok && !published.IsZero(), withholdUnknown, nil
+}
 
 // timedMetadata describes metadata whose publish times live in a second
 // document, as with the RubyGems compact index and the versions API, or a

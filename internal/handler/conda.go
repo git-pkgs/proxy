@@ -139,11 +139,21 @@ func (h *CondaHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	h.proxy.Logger.Debug("conda download request",
 		"channel", channel, "arch", arch, "name", name, "version", version)
 
-	upstreamURL := h.upstreamURL + r.URL.Path
-	// The same filename can hold different bytes in each subdir, so the
-	// subdir is part of the cache key.
+	// Builds and subdirs of one version each have their own timestamp, so
+	// the check is per file and keeps no time in the shared versions row.
+	// Subdirs distinguish cached files with the same filename.
 	cacheFilename := arch + "/" + filename
+	if h.proxy.withholdInCooldown(w, r, downloadVersion{
+		ecosystem: "conda", policyName: name, version: version, cacheName: packageName, filename: cacheFilename,
+		lookup: func() (time.Time, bool, bool, error) {
+			published, ok, err := h.publishTime(r, channel, arch, filename)
+			return published, ok, false, err
+		},
+	}) {
+		return
+	}
 
+	upstreamURL := h.upstreamURL + r.URL.Path
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conda", packageName, version, cacheFilename, upstreamURL)
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to fetch package")
@@ -529,6 +539,96 @@ func (h *CondaHandler) recordInCooldown(filename, name, version string, timestam
 // metadataCacheKey is the metadata cache key of a request path.
 func (h *CondaHandler) metadataCacheKey(urlPath string) string {
 	return hashedCacheKey(h.upstreamURL, urlPath)
+}
+
+// publishTime streams compressed repodata when it exceeds metadata_max_size.
+func (h *CondaHandler) publishTime(r *http.Request, channel, arch, filename string) (time.Time, bool, error) {
+	repodataPath := "/" + channel + "/" + arch + "/repodata.json"
+	cacheKey := h.metadataCacheKey(repodataPath)
+	index, err := publishIndex(h.proxy, "conda\x00"+cacheKey, func() metadataResult {
+		return h.proxy.lookupMetadata(r.Context(), "conda", cacheKey, h.upstreamURL+repodataPath, "*/*", "gzip", nil)
+	}, func(res metadataResult) (map[string]time.Time, error) {
+		if errors.Is(res.err, ErrMetadataTooLarge) {
+			return h.streamRepodataIndex(r, h.upstreamURL+repodataPath)
+		}
+		if res.err != nil {
+			return nil, res.err
+		}
+		return h.indexRepodata(res.body, res.contentEncoding)
+	})
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	published, ok := index[filename]
+	return published, ok, nil
+}
+
+// indexRepodata indexes a cached repodata.json body.
+func (h *CondaHandler) indexRepodata(body []byte, encoding string) (map[string]time.Time, error) {
+	var reader io.Reader = bytes.NewReader(body)
+	if strings.EqualFold(strings.TrimSpace(encoding), "gzip") {
+		decoded, err := gzip.NewReader(reader)
+		if err != nil {
+			return nil, err
+		}
+		reader = decoded
+	}
+	return readRepodataIndex(reader)
+}
+
+// streamRepodataIndex indexes repodata.json as it streams from upstream.
+func (h *CondaHandler) streamRepodataIndex(r *http.Request, upstreamURL string) (map[string]time.Time, error) {
+	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set(headerAcceptEncoding, "gzip")
+	resp, err := h.proxy.HTTPClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = resp.Body.Close() }()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("repodata returned %d", resp.StatusCode)
+	}
+	var reader io.Reader = resp.Body
+	if strings.EqualFold(strings.TrimSpace(resp.Header.Get(headerContentEncoding)), "gzip") {
+		decoded, err := gzip.NewReader(resp.Body)
+		if err != nil {
+			return nil, err
+		}
+		defer func() { _ = decoded.Close() }()
+		reader = decoded
+	}
+	return readRepodataIndex(reader)
+}
+
+// readRepodataIndex maps each package file in a repodata.json to its
+// timestamp, leaving out files without one. It reads the document as it
+// streams, under the same bound as filterRepodata, so the decompressed size
+// is not limited by metadata_max_size.
+func readRepodataIndex(r io.Reader) (map[string]time.Time, error) {
+	index := make(map[string]time.Time)
+	err := jsonstream.CopyObject(json.NewDecoder(io.LimitReader(r, maxRepodataSize)), io.Discard, func(m *jsonstream.Member) error {
+		if m.Key != "packages" && m.Key != "packages.conda" {
+			return m.Copy()
+		}
+		return m.Object(func(entry *jsonstream.Member) error {
+			raw, err := entry.Raw()
+			if err != nil {
+				return err
+			}
+			var e repodataEntry
+			if json.Unmarshal(raw, &e) == nil && e.Timestamp != 0 {
+				index[entry.Key] = time.Unix(int64(e.Timestamp)/condaTimestampDivisor, 0)
+			}
+			return nil
+		})
+	})
+	if err != nil {
+		return nil, err
+	}
+	return index, nil
 }
 
 // proxyCached forwards a metadata request with caching.

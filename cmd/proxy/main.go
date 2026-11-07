@@ -595,7 +595,9 @@ func runMirror() {
 		return
 	}
 
+	closeGit := useCommandGit(cfg, proxy, m, logger)
 	progress, err := m.Run(ctx, source)
+	closeGit()
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "error: %v\n", err)
 		os.Exit(1)
@@ -632,6 +634,27 @@ func newCommandMirror(cfg *config.Config, proxy *handler.Proxy, images *handler.
 		refuseUnscannedMirroring(m)
 	}
 	return m
+}
+
+// useCommandGit opens the git cache for the pkg:git items of proxy mirror,
+// when upstream.git is configured, and returns the function that closes it.
+// Where it can't be opened, such as while the running server holds
+// git.cache_dir, those items fail with the reason and the rest are mirrored.
+func useCommandGit(cfg *config.Config, proxy *handler.Proxy, m *mirror.Mirror, logger *slog.Logger) func() {
+	git, closeGit, err := server.NewMirrorGit(cfg, proxy, logger)
+	if err != nil {
+		m.Git = mirror.UnavailableGit{Reason: fmt.Sprintf("this command can't open the git cache (%v); while the server runs, use its mirror API", err)}
+		return func() {}
+	}
+	if git == nil {
+		return func() {}
+	}
+	m.Git = git
+	return func() {
+		if err := closeGit(); err != nil {
+			logger.Warn("closing the git cache", "error", err)
+		}
+	}
 }
 
 // mirrorExitCode returns the exit status for a finished mirror run: 1 when any

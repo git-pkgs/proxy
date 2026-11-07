@@ -20,7 +20,7 @@ func TestMigrationAddsMetadataUpstreamURL(t *testing.T) {
 	if _, err := sqlDB.Exec(`ALTER TABLE metadata_cache DROP COLUMN upstream_url`); err != nil {
 		t.Fatalf("drop upstream_url column: %v", err)
 	}
-	if _, err := sqlDB.Exec(`DELETE FROM migrations WHERE name = '022_add_metadata_upstream_url'`); err != nil {
+	if _, err := sqlDB.Exec(`DELETE FROM migrations WHERE name = '023_add_metadata_upstream_url'`); err != nil {
 		t.Fatalf("forget migration: %v", err)
 	}
 	if err := sqlDB.Close(); err != nil {

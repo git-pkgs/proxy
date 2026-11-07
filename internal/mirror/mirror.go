@@ -32,6 +32,10 @@ type Mirror struct {
 	// Charts mirrors helm charts. Without it they fail.
 	Charts ChartMirrorer
 
+	// Git mirrors pkg:git repositories into the upstream.git cache. Without
+	// it they fail.
+	Git GitMirrorer
+
 	// Bottles resolves Homebrew formula versions to the images their
 	// bottles are published under, which Images mirrors. Without it brew
 	// PURLs fail.
@@ -286,6 +290,10 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 	}
 	if pv.Ecosystem == "alpine" {
 		m.mirrorAPK(ctx, pv, tracker)
+		return
+	}
+	if pv.Ecosystem == "git" {
+		m.mirrorGit(ctx, pv, tracker)
 		return
 	}
 	result, err := m.proxy.GetOrFetchArtifact(ctx, pv.Ecosystem, pv.Name, pv.Version, "")

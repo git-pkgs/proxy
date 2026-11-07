@@ -111,7 +111,7 @@ storage:
     sweep_interval: "10m"
 ```
 
-Each cached file ages on its own, counted from the last time the proxy served it, or from when it was fetched if it has not been served since. A newer release of the same package does not shorten the life of older versions. Durations take a `d` suffix for days, and `"0"` or an empty value means never evict by age. With no retention configured, artifacts stay until `max_size` evicts them. `sweep_interval` must be at least `1m`.
+Each cached file ages on its own, counted from the last time the proxy served it, or from when it was fetched if it has not been served since. The blobs of an image that `mirror.schedules` keeps current also count from the last run that found them cached, so the schedule keeps them; for `max_size` eviction such a run doesn't count as use. A newer release of the same package does not shorten the life of older versions. Durations take a `d` suffix for days, and `"0"` or an empty value means never evict by age. With no retention configured, artifacts stay until `max_size` evicts them. `sweep_interval` must be at least `1m`.
 
 A package rule wins over an ecosystem rule, which wins over `default`. Package rules are keyed by package PURL without a version, written in one of the forms the table below lists for the ecosystem. The ecosystems and package rules can only name ecosystems that support retention in the running version; anything else, including a typo, stops the proxy at startup with an error naming the setting. `default` applies only to supported ecosystems, except `generic`, which requires an explicit rule. Support is added one ecosystem at a time, so a later release can make an existing `default` cover more ecosystems. On startup the proxy logs which ecosystems retention supports (`covered`) and which ones `default` does not reach (`default_not_applied`), including `generic`.
 
@@ -1148,6 +1148,37 @@ Uploads are off by default, so a client that can reach the proxy cannot overwrit
 
 `max_age` and `max_size` are independent and can be combined. When both are set, age-based eviction runs first, then size-based eviction trims remaining entries oldest-first.
 
+## Cooldown profiles
+
+Set `cooldown.profiles` to offer several policies from one instance. Clients select a profile through their package manager's registry URL:
+
+```yaml
+cooldown:
+  default: "0"
+  profiles:
+    3d:
+      default: "3d"
+    7d:
+      default: "7d"
+      packages:
+        "pkg:npm/@example/tool": "0"
+```
+
+For the `3d` profile, use these paths after your proxy's base URL:
+
+| Client | Path |
+|--------|------|
+| npm registry | `/cooldown/3d/npm/` |
+| Go `GOPROXY` | `/cooldown/3d/go` |
+| Cargo registry | `sparse+https://your-proxy.example/cooldown/3d/cargo/` |
+| Bundler RubyGems mirror | `/cooldown/3d/gem` |
+
+The prefix works with all package protocol routes. Cooldown has an effect only for [registries with cooldown support](../README.md#supported-registries). Each profile defines its own `default`, `ecosystems`, `packages` and `package_patterns`; it does not inherit the global cooldown overrides. Existing unprefixed URLs, the UI, APIs and background mirror jobs use the global policy.
+
+Profile names contain lowercase letters, digits, hyphens and underscores, and start with a letter or digit. Profiles must be configured before startup; an unknown profile returns 404. Nested profiles are rejected. Profile paths expose package protocols only, so `/cooldown/3d/ui/` and `/cooldown/3d/api/` return 404.
+
+Database records, artifacts and upstream metadata are shared. Generated download URLs retain the profile prefix, and filtered metadata and its validators are separated by profile. Changing a registry URL does not rewrite artifact URLs already recorded in a lockfile; regenerate those URLs if the selected policy must cover the whole installation.
+
 ## Cooldown
 
 The cooldown feature hides package versions published too recently, giving the community time to spot malicious releases before they reach your projects. When a version is within its cooldown period, it's stripped from metadata responses so package managers won't install it.
@@ -1201,6 +1232,10 @@ Maven caveats:
 
 Helm uses each release's `created` time from the repository's `index.yaml`. Releases in cooldown are left out of the index the proxy serves, and their archives aren't served; a release without `created` is let through. Charts pulled over OCI have no publish time and aren't held back.
 
+Cargo, RubyGems, Hex, pub.dev, Conda and Helm check artifact downloads against cooldown, including files cached before the policy changed. When a publish-time lookup fails, an already-cached file is still served; an uncached download fails with 502, or 503 with `Retry-After` when the rate-limit gate holds the request. Conda checks timestamps per file because builds of one version can have different publish times.
+
+Conda repodata and Helm indexes are parsed once per cached document for download checks. With `cache_metadata` off, the parsed index is kept for one minute, including the fetch, so an install can reuse it across files. Conda streams repodata when its compressed copy exceeds `metadata_max_size`, under the same decompressed size bound as the metadata filter.
+
 RubyGems, Hex and PyPI keep their publish times outside the metadata clients read: the RubyGems versions API, the Hex HTTP API (`upstream.hex_api`) and the PyPI JSON API. The proxy fetches them alongside each compact index, package or simple page it filters, and for PyPI downloads. Cooldown fails closed: when it applies to a package and those times can't be fetched or parsed, or the metadata can't be rewritten, the request fails with 502, or with 503 and `Retry-After` while the upstream is rate limiting the proxy, instead of serving the metadata unfiltered. The same goes for npm, Composer and pub.dev metadata that can't be rewritten, and for npm tarball downloads whose publish time can't be read. A PyPI file or npm tarball that is already cached is still served when its publish time can't be read; only a download that would have to be fetched fails. A PyPI release's time is the upload time of its newest file. The proxy stores it when a download looks it up, and serves files of that release that are already cached against the stored time without reading the JSON API again. A file that isn't cached yet is always looked up, since it may have been added to the release since, and the newer time is stored. Packages exempted with a duration of `0` are served as before and don't need the times. A PyPI package the JSON API returns 404 for has no times to go by and is served unfiltered.
 
 For RubyGems and Hex, both documents go through the metadata cache. With [`cache_metadata`](#metadata-caching) they are served from it within `metadata_ttl` without asking the upstream, revalidated with their ETags after it, and filtered from the last cached copies, marked stale, while the upstream is down; without it they are still fetched once for concurrent requests. Each document has its own TTL, so the compact index or Hex package can be newer than the cached times and list a version they don't have. The times are then fetched again before filtering, and if that fails, such versions are left out until the times can be read. The filtered index or package carries an ETag of its own, so Bundler and Mix revalidate it with `304 Not Modified`. Publish times are compared with the current time on each request, and the filtered result is kept until the first version it held back leaves cooldown (see [rewritten metadata cache](#rewritten-metadata-cache)); a newly published version shows up within `metadata_ttl`, as with other cached metadata. Upstream errors are answered as for other cached metadata (404, or 502) rather than relayed.
@@ -1209,7 +1244,7 @@ With cooldown on, the proxy asks npm for full packuments, since the abbreviated 
 
 Conda cooldown covers `repodata.json`, `current_repodata.json`, `repodata_from_packages.json` and sharded repodata (CEP 16). Other forms of the repodata, such as `repodata.json.zst`, `repodata.json.bz2` and `repodata.jlap` patches, would list versions still in cooldown, so with cooldown on they are answered 404 and conda and mamba fall back to `repodata.json`. With `cache_metadata`, `repodata.json` is read through the metadata cache as it is without cooldown: within `metadata_ttl` the stored copy is filtered as it is read from storage, after it the upstream is asked with its ETag, and while the upstream is down the stale copy is filtered. Once a document has been filtered, the proxy remembers the ETag of the result until the first entry it left out leaves cooldown, so a client revalidating with `If-None-Match` gets `304 Not Modified` without the document being filtered or sent again. The first response for each document has no ETag, as it is sent while it is filtered. Without `cache_metadata`, `repodata.json` is fetched and filtered on every request. Clients cache shards by the hash in the shard index, so with cooldown on the proxy serves a rewritten index whose shard hashes change every hour and filters each shard as it is fetched. Versions leaving cooldown show up within the hour, and clients fetch the shards they need again once an hour. If a channel's shard index points packages or shards somewhere the proxy doesn't route, the proxy answers 404 for it and clients fall back to `repodata.json`.
 
-Note: Hex cooldown requires disabling registry signature verification since the proxy re-encodes the protobuf payload without the original signature. Set `HEX_NO_VERIFY_REPO_ORIGIN=1` or configure your repo with `no_verify: true`.
+Hex cooldown requires `HEX_UNSAFE_REGISTRY=1` because filtering releases re-encodes the protobuf payload without the original signature. The proxy preserves the package name and repository fields, so origin verification can stay enabled. `HEX_NO_VERIFY_REPO_ORIGIN` controls origin verification and does not disable signature verification. Without a cooldown, leave signature verification enabled too.
 
 ## Version denylist
 
@@ -1872,6 +1907,20 @@ proxy mirror --platform linux/arm64 pkg:brew/hello@2.12.3 pkg:brew/openssl%403
 - `--platform` selects bottles like image platforms: `linux/arm64`, `linux/amd64`, or `darwin/arm64` for every macOS release's arm64 bottle. Without it every bottle of the version is mirrored.
 - Dependencies aren't mirrored with a formula; list them too. brew also needs the JSON API, which the proxy keeps with `cache_metadata`.
 - Casks, source archives and taps other than homebrew/core aren't mirrored.
+
+### Git repositories
+
+`pkg:git` PURLs mirror a repository of an [`upstream.git`](#git-repositories) host into the git cache, so a clone through `/git` is served from it, also when the upstream is unreachable. The PURL names the repository by host and path, and the version is a full commit ID:
+
+```bash
+proxy mirror pkg:git/github.com/git-pkgs/purl@0123456789abcdef0123456789abcdef01234567
+proxy mirror pkg:git/github.com/git-pkgs/purl
+```
+
+- The repository is served by the `upstream.git` host whose URL its host and path start with, the longest one if several do, and has to match that host's `repos`. Others fail.
+- The repository's branches and tags are cached, as a clone through the proxy caches them. A commit on none of them is fetched by ID and kept, like one a client fetches by ID, until a branch or tag includes it, or for seven days from the last mirror run that named it, as long as `git.max_size` doesn't evict the repository. Where `upstream.auth` has credentials for the host, commits aren't fetched by ID, and one on no branch or tag that isn't cached yet fails.
+- Without a version the repository's branches and tags are mirrored. A tag or branch name as the version fails; give the commit ID.
+- The git cache is used by one process. While the server runs, the command can't open `git.cache_dir`, so `pkg:git` items fail and the rest are mirrored; use the mirror API instead.
 
 ### Scheduled refresh
 

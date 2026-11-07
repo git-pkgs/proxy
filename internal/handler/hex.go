@@ -78,6 +78,7 @@ func (h *HexHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		parseErr:    "could not parse tarball filename",
 		fetchErr:    "failed to fetch package",
 		parse:       h.parseTarballFilename,
+		publishTime: h.publishTime,
 	})
 }
 
@@ -239,6 +240,10 @@ func parseHexReleases(body []byte) (publishTimes, error) {
 		times[release.Version] = insertedAt
 	}
 	return times, nil
+}
+
+func (h *HexHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, bool, error) {
+	return h.proxy.lookupPublishTime(r.Context(), h.timedPackage(name), version, h.packageVersions)
 }
 
 // signedPayload decompresses a gzipped Signed message, with the metadata

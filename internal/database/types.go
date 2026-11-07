@@ -151,6 +151,9 @@ type Artifact struct {
 	UpdatedAt      time.Time      `db:"updated_at" json:"updated_at"`
 	Source         string         `db:"source" json:"source"`
 	Manifest       sql.NullString `db:"manifest" json:"manifest,omitempty"`
+	// MirroredAt is when a mirror run last found the artifact cached. It
+	// keeps the artifact from retention but not from LRU eviction.
+	MirroredAt sql.NullTime `db:"mirrored_at" json:"-"`
 }
 
 func (a *Artifact) sourceOrUpstream() string {

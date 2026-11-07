@@ -292,6 +292,10 @@ type Proxy struct {
 	// Nil leaves every request to rewrite its own copy.
 	rewrites *rewriteCache
 
+	// publishIndexes keeps publish times read out of large metadata
+	// documents for the download cooldown check; see publishIndex.
+	publishIndexes publishIndexCache
+
 	// now is the clock rewritten metadata is dated by, and started the time
 	// the process started; see metadataDate.
 	now     func() time.Time
@@ -300,6 +304,7 @@ type Proxy struct {
 	// cooldownWatch holds the rewrites recording which versions cooldown
 	// holds back; see cooldown_expiry.go.
 	cooldownWatch cooldownWatch
+	shared        *Proxy
 }
 
 // cooldownEcosystems are the ecosystems whose handlers apply cooldown. Others
@@ -449,6 +454,16 @@ func (p *Proxy) HasCachedArtifact(ctx context.Context, ecosystem, name, version,
 		return false, nil
 	}
 	return p.Storage.Exists(ctx, artifact.StoragePath)
+}
+
+// MarkMirrored records that a mirror run found an artifact cached, which
+// keeps it from retention without counting as a cache hit.
+func (p *Proxy) MarkMirrored(ecosystem, name, version, filename string) error {
+	_, versionPURL, err := packagePURLStrings(ecosystem, name, version)
+	if err != nil {
+		return err
+	}
+	return p.DB.MarkArtifactMirrored(versionPURL, filename)
 }
 
 // ClearCachedArtifact clears an artifact cache record after an external
@@ -942,18 +957,19 @@ type inflightFetch struct {
 // proxy_cache_misses_total and upstream fetch observations is what coalescing
 // saved.
 func (p *Proxy) coalesceFetch(ctx context.Context, key string, recheck func() (artifacts.Artifact, string, bool), commit func(context.Context) (artifacts.Artifact, string, error)) (*CacheResult, error) {
-	p.fetchMu.Lock()
-	if p.inFlight == nil {
-		p.inFlight = make(map[string]*inflightFetch)
+	shared := p.sharedProxy()
+	shared.fetchMu.Lock()
+	if shared.inFlight == nil {
+		shared.inFlight = make(map[string]*inflightFetch)
 	}
-	f, joined := p.inFlight[key]
+	f, joined := shared.inFlight[key]
 	if joined {
 		f.waiters++
 	} else {
 		f = &inflightFetch{done: make(chan struct{})}
-		p.inFlight[key] = f
+		shared.inFlight[key] = f
 	}
-	p.fetchMu.Unlock()
+	shared.fetchMu.Unlock()
 
 	if !joined {
 		if streamsCacheMiss(ctx) {
@@ -981,28 +997,30 @@ func (p *Proxy) coalesceFetch(ctx context.Context, key string, recheck func() (a
 // leaveFetch withdraws a waiter that gave up. Once the fetch has finished the
 // waiter was counted as holding any unrecorded object, so it releases it.
 func (p *Proxy) leaveFetch(f *inflightFetch) {
-	p.fetchMu.Lock()
+	shared := p.sharedProxy()
+	shared.fetchMu.Lock()
 	select {
 	case <-f.done:
-		p.fetchMu.Unlock()
+		shared.fetchMu.Unlock()
 		if f.unrecorded != nil {
 			f.unrecorded.release()
 		}
 	default:
 		f.waiters--
-		p.fetchMu.Unlock()
+		shared.fetchMu.Unlock()
 	}
 }
 
 // runSharedFetch performs the fetch that joined callers are waiting on. It is
 // never abandoned early, and always releases the key and wakes the waiters.
 func (p *Proxy) runSharedFetch(ctx context.Context, key string, f *inflightFetch, recheck func() (artifacts.Artifact, string, bool), commit func(context.Context) (artifacts.Artifact, string, error)) (*CacheResult, error) {
+	shared := p.sharedProxy()
 	// Set before running so a panicking commit leaves waiters with an error
 	// rather than a zero-valued artifact.
 	f.err = errSharedFetchAbandoned
 	defer func() {
-		p.fetchMu.Lock()
-		delete(p.inFlight, key)
+		shared.fetchMu.Lock()
+		delete(shared.inFlight, key)
 		if f.unrecorded != nil {
 			// Hand each waiter a hold, then drop the one kept while the
 			// waiters were still unknown.
@@ -1010,7 +1028,7 @@ func (p *Proxy) runSharedFetch(ctx context.Context, key string, f *inflightFetch
 			defer f.unrecorded.release()
 		}
 		close(f.done)
-		p.fetchMu.Unlock()
+		shared.fetchMu.Unlock()
 	}()
 
 	// A caller checks the cache before reaching here, so a fetch that finished
@@ -1158,12 +1176,13 @@ func upstreamFetchDetached(ctx context.Context) bool {
 const maxDetachedFetches = 64
 
 func (p *Proxy) acquireDetachSlot() bool {
-	p.fetchMu.Lock()
-	if p.detachSlots == nil {
-		p.detachSlots = make(chan struct{}, maxDetachedFetches)
+	shared := p.sharedProxy()
+	shared.fetchMu.Lock()
+	if shared.detachSlots == nil {
+		shared.detachSlots = make(chan struct{}, maxDetachedFetches)
 	}
-	slots := p.detachSlots
-	p.fetchMu.Unlock()
+	slots := shared.detachSlots
+	shared.fetchMu.Unlock()
 
 	select {
 	case slots <- struct{}{}:
@@ -1174,7 +1193,8 @@ func (p *Proxy) acquireDetachSlot() bool {
 }
 
 func (p *Proxy) releaseDetachSlot() {
-	<-p.detachSlots
+	shared := p.sharedProxy()
+	<-shared.detachSlots
 }
 
 // fetchedArtifact is what a shared fetch hands its callers: metadata and a
@@ -1873,18 +1893,19 @@ func metadataCoalesceKey(ecosystem, cacheKey, upstreamURL, accept, acceptEncodin
 // fail when the first of them disconnects. It stays bounded by the HTTP
 // client's timeout. Waiters still leave when their own context ends.
 func (p *Proxy) coalesceMetadata(ctx context.Context, key string, fetch func(context.Context) metadataResult) (metadataResult, bool) {
-	p.metaMu.Lock()
-	if p.inFlightMeta == nil {
-		p.inFlightMeta = make(map[string]*inflightMetadata)
+	shared := p.sharedProxy()
+	shared.metaMu.Lock()
+	if shared.inFlightMeta == nil {
+		shared.inFlightMeta = make(map[string]*inflightMetadata)
 	}
-	f, joined := p.inFlightMeta[key]
+	f, joined := shared.inFlightMeta[key]
 	if joined {
 		f.waiters++
 	} else {
 		f = &inflightMetadata{done: make(chan struct{})}
-		p.inFlightMeta[key] = f
+		shared.inFlightMeta[key] = f
 	}
-	p.metaMu.Unlock()
+	shared.metaMu.Unlock()
 
 	if joined {
 		select {
@@ -1899,9 +1920,9 @@ func (p *Proxy) coalesceMetadata(ctx context.Context, key string, fetch func(con
 	// rather than an empty body.
 	f.res = metadataResult{err: errSharedFetchAbandoned}
 	defer func() {
-		p.metaMu.Lock()
-		delete(p.inFlightMeta, key)
-		p.metaMu.Unlock()
+		shared.metaMu.Lock()
+		delete(shared.inFlightMeta, key)
+		shared.metaMu.Unlock()
 		close(f.done)
 	}()
 	f.res = fetch(context.WithoutCancel(ctx))
