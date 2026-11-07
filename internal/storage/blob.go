@@ -14,6 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/aws/smithy-go/middleware"
+	smithyhttp "github.com/aws/smithy-go/transport/http"
 	"gocloud.dev/blob"
 	_ "gocloud.dev/blob/azureblob"
 	_ "gocloud.dev/blob/fileblob"
@@ -179,27 +182,41 @@ func OpenBucket(ctx context.Context, urlStr string, opts ...Option) (Storage, er
 	return b, nil
 }
 
-// openSignBucket opens an S3 bucket with the endpoint overridden to signEndpoint
-// while preserving all other storage URL parameters (region, use_path_style, etc.).
+// openSignBucket opens an S3 bucket that signs presigned URLs against the
+// scheme and host of signEndpoint while preserving the storage URL's
+// addressing mode and object path.
 func openSignBucket(ctx context.Context, urlStr, signEndpoint string) (*blob.Bucket, error) {
 	sign, err := url.Parse(signEndpoint)
 	if err != nil || sign.Scheme == "" || sign.Host == "" {
 		return nil, fmt.Errorf("invalid sign endpoint %q: must be an absolute URL", signEndpoint)
 	}
 
-	u, err := url.Parse(urlStr)
+	bucket, err := blob.OpenBucket(ctx, urlStr)
 	if err != nil {
-		return nil, fmt.Errorf("parsing storage URL: %w", err)
+		return nil, fmt.Errorf("opening bucket at sign endpoint %s: %w", signEndpoint, err)
 	}
-	endpoint := sign.Scheme + "://" + sign.Host
-	q := u.Query()
-	q.Set("endpoint", endpoint)
-	u.RawQuery = q.Encode()
 
-	bucket, err := blob.OpenBucket(ctx, u.String())
-	if err != nil {
-		return nil, fmt.Errorf("opening bucket at sign endpoint %s: %w", endpoint, err)
+	var s3Client *s3.Client
+	if bucket.As(&s3Client) {
+		*s3Client = *s3.New(s3Client.Options(), func(o *s3.Options) {
+			o.APIOptions = append(o.APIOptions, func(stack *middleware.Stack) error {
+				return stack.Finalize.Insert(middleware.FinalizeMiddlewareFunc(
+					"signEndpointHost",
+					func(ctx context.Context, in middleware.FinalizeInput, next middleware.FinalizeHandler) (
+						middleware.FinalizeOutput, middleware.Metadata, error,
+					) {
+						if req, ok := in.Request.(*smithyhttp.Request); ok {
+							req.URL.Scheme = sign.Scheme
+							req.URL.Host = sign.Host
+							req.Host = sign.Host
+						}
+						return next.HandleFinalize(ctx, in)
+					},
+				), "PresignHTTPRequest", middleware.Before)
+			})
+		})
 	}
+
 	return bucket, nil
 }
 

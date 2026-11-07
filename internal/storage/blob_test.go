@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"io/fs"
+	"net/http"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -17,6 +18,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awssigv4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"gocloud.dev/blob"
 )
 
@@ -279,25 +282,39 @@ func TestBlobSignedURLSignEndpoint(t *testing.T) {
 	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
 
 	const (
-		storageURL   = "s3://bucket?region=us-1&endpoint=http://127.0.0.1:9000&use_path_style=true"
+		pathStyleURL = "s3://bucket?region=us-1&endpoint=http://127.0.0.1:9000&use_path_style=true"
+		vhostURL     = "s3://bucket?region=us-1&endpoint=http://127.0.0.1:9000"
 		signEndpoint = "https://cdn.example.com"
 		artifactPath = "npm/lodash/4.17.21/lodash-4.17.21.tgz"
 	)
 
 	tests := []struct {
-		name string
-		opts []Option
-		host string
+		name       string
+		storageURL string
+		opts       []Option
+		host       string
+		path       string
 	}{
 		{
 			"storage endpoint without a sign endpoint",
+			pathStyleURL,
 			nil,
 			"127.0.0.1:9000",
+			"/bucket/" + artifactPath,
 		},
 		{
 			"configured sign endpoint, reached over another host",
+			pathStyleURL,
 			[]Option{WithSignEndpoint(signEndpoint)},
 			"cdn.example.com",
+			"/bucket/" + artifactPath,
+		},
+		{
+			"configured sign endpoint with virtual-hosted storage URL",
+			vhostURL,
+			[]Option{WithSignEndpoint(signEndpoint)},
+			"cdn.example.com",
+			"/" + artifactPath,
 		},
 	}
 
@@ -305,7 +322,7 @@ func TestBlobSignedURLSignEndpoint(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			ctx := context.Background()
 
-			b, err := OpenBucket(ctx, storageURL, tt.opts...)
+			b, err := OpenBucket(ctx, tt.storageURL, tt.opts...)
 			if err != nil {
 				t.Fatalf("OpenBucket failed: %v", err)
 			}
@@ -325,13 +342,40 @@ func TestBlobSignedURLSignEndpoint(t *testing.T) {
 			}
 			// The bucket and key stay where the storage URL puts them, so the
 			// request the client makes still names the object.
-			if want := "/bucket/" + artifactPath; u.Path != want {
-				t.Errorf("signed URL path = %q, want %q", u.Path, want)
+			if u.Path != tt.path {
+				t.Errorf("signed URL path = %q, want %q", u.Path, tt.path)
 			}
-			if u.Query().Get("X-Amz-Signature") == "" {
-				t.Errorf("signed URL %q carries no signature", signed)
-			}
+			assertSigV4Signature(t, u, "us-1", aws.Credentials{AccessKeyID: "test", SecretAccessKey: "test"})
 		})
+	}
+}
+
+func assertSigV4Signature(t *testing.T, u *url.URL, region string, creds aws.Credentials) {
+	t.Helper()
+
+	q := u.Query()
+	signTime, err := time.Parse("20060102T150405Z", q.Get("X-Amz-Date"))
+	if err != nil {
+		t.Fatalf("parsing X-Amz-Date from %q: %v", u, err)
+	}
+	q.Del("X-Amz-Signature")
+	unsigned := &url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawQuery: q.Encode()}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, unsigned.String(), nil)
+	if err != nil {
+		t.Fatalf("creating request: %v", err)
+	}
+	wantSigned, _, err := awssigv4.NewSigner(func(o *awssigv4.SignerOptions) {
+		o.DisableURIPathEscaping = true
+	}).PresignHTTP(context.Background(), creds, req, "UNSIGNED-PAYLOAD", "s3", region, signTime)
+	if err != nil {
+		t.Fatalf("PresignHTTP failed: %v", err)
+	}
+	wantURL, err := url.Parse(wantSigned)
+	if err != nil {
+		t.Fatalf("parsing expected signed URL %q: %v", wantSigned, err)
+	}
+	if gotSig, wantSig := u.Query().Get("X-Amz-Signature"), wantURL.Query().Get("X-Amz-Signature"); gotSig != wantSig {
+		t.Errorf("X-Amz-Signature = %q, want %q (for host %q)", gotSig, wantSig, u.Host)
 	}
 }
 
