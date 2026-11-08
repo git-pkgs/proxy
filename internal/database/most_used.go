@@ -25,7 +25,8 @@ type UsedFile struct {
 // MostUsedPackages returns, for each ecosystem, the top packages with the most
 // downloads among the cached files downloaded since cutoff, ordered by
 // ecosystem and then by hits. Each lists every file cached for it. Files
-// from local sources, which have no upstream, are left out.
+// from local sources, which have no upstream, are left out, and so are
+// files a mirror run fetched that no client has downloaded since.
 func (db *DB) MostUsedPackages(cutoff time.Time, top int) ([]UsedPackage, error) {
 	var rows []struct {
 		Ecosystem string `db:"ecosystem"`
@@ -41,12 +42,13 @@ func (db *DB) MostUsedPackages(cutoff time.Time, top int) ([]UsedPackage, error)
 			JOIN versions v ON v.purl = a.version_purl
 			JOIN packages p ON p.purl = v.package_purl
 			WHERE a.storage_path IS NOT NULL AND a.source = ?
-			  AND COALESCE(a.last_accessed_at, a.fetched_at) >= ?
+			  AND (a.last_accessed_at >= ? OR (a.last_accessed_at IS NULL AND a.fetched_at >= ?
+			       AND (a.mirrored_at IS NULL OR a.mirrored_at < a.fetched_at)))
 			GROUP BY p.ecosystem, p.name, p.purl
 		) ranked
 		WHERE rank <= ?
 		ORDER BY ecosystem, hits DESC, name
-	`), SourceUpstream, cutoff.UTC(), top)
+	`), SourceUpstream, cutoff.UTC(), cutoff.UTC(), top)
 	if err != nil {
 		return nil, err
 	}

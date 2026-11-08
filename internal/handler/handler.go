@@ -797,6 +797,10 @@ func (p *Proxy) storeArtifact(ctx context.Context, ecosystem, name, version, fil
 				"path", storagePath, "error", qErr)
 			return sharedArtifact, storagePath, errUnrecorded
 		}
+	} else if mirrorFetch(ctx) {
+		if err := p.DB.MarkArtifactMirrored(versionPURL, filename); err != nil {
+			p.Logger.Warn("failed to record mirrored artifact", "error", err)
+		}
 	}
 
 	return sharedArtifact, storagePath, nil
@@ -1147,6 +1151,20 @@ func servingHead(ctx context.Context) bool {
 func readsSeekable(store storage.Storage) bool {
 	s, ok := store.(storage.SeekableReads)
 	return ok && s.ReadsSeekable()
+}
+
+type mirrorFetchKey struct{}
+
+// MirrorFetch marks ctx as a mirror run's rather than a client's. An
+// artifact fetched under it is recorded as mirrored, so it doesn't count as
+// downloaded by a client.
+func MirrorFetch(ctx context.Context) context.Context {
+	return context.WithValue(ctx, mirrorFetchKey{}, true)
+}
+
+func mirrorFetch(ctx context.Context) bool {
+	mirror, _ := ctx.Value(mirrorFetchKey{}).(bool)
+	return mirror
 }
 
 type detachUpstreamFetchKey struct{}

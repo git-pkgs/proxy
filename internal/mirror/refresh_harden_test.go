@@ -330,3 +330,26 @@ func TestRefreshDebianSecurityPool(t *testing.T) {
 		t.Errorf("progress = %+v, fetched %v; want %v", progress, fetcher.fetched(), want)
 	}
 }
+
+// TestRefreshDownloadsDoNotCountAsUse checks that a package nobody fetched
+// within since drops out even though the refresh itself downloaded it.
+func TestRefreshDownloadsDoNotCountAsUse(t *testing.T) {
+	m, _ := setupRefreshMirror(t, "tarball")
+	cacheNPM(t, m, "lodash", "4.17.20")
+	m.Versions = stubReleases{"npm/lodash": oldReleases("4.17.20", "4.17.21")}
+	if progress := refreshOnce(t, m); progress.Completed != 1 {
+		t.Fatalf("progress = %+v, want 4.17.21 mirrored", progress)
+	}
+	old := time.Now().Add(-48 * time.Hour).UTC()
+	if _, err := m.db.Exec(m.db.Rebind("UPDATE artifacts SET fetched_at = ? WHERE filename = ?"), old, "lodash-4.17.20.tgz"); err != nil {
+		t.Fatal(err)
+	}
+
+	used, err := m.db.MostUsedPackages(time.Now().Add(-24*time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(used) != 0 {
+		t.Errorf("MostUsedPackages = %+v, want none: only the refresh fetched lodash within since", used)
+	}
+}

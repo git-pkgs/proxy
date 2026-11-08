@@ -92,3 +92,27 @@ func TestMostUsedPackagesSkipsLocalArtifacts(t *testing.T) {
 		}
 	})
 }
+
+func TestMostUsedPackagesSkipsMirroredArtifactsNotDownloaded(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now()
+		seedUsedArtifact(t, db, "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz", 0, now)
+		if _, err := db.Exec(db.Rebind("UPDATE artifacts SET last_accessed_at = NULL, mirrored_at = ?"), time.Now().UTC()); err != nil {
+			t.Fatal(err)
+		}
+		got, err := db.MostUsedPackages(now.Add(-time.Hour), 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 0 {
+			t.Errorf("MostUsedPackages = %+v, want none: a mirror fetched it and no client has since", got)
+		}
+
+		if err := db.RecordArtifactHit("pkg:npm/lodash@4.17.21", "lodash-4.17.21.tgz"); err != nil {
+			t.Fatal(err)
+		}
+		if got, err = db.MostUsedPackages(now.Add(-time.Hour), 10); err != nil || len(got) != 1 {
+			t.Errorf("MostUsedPackages = %+v, %v; want lodash once a client downloaded it", got, err)
+		}
+	})
+}

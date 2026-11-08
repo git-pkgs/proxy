@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries"
 )
@@ -56,6 +57,7 @@ func (m *Mirror) releaseLister() ReleaseLister { //nolint:ireturn // any lister 
 // it: releases within cooldown or on the denylist are left out. Packages it
 // can't list are counted as failed.
 func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
+	ctx = handler.MirrorFetch(ctx)
 	cutoff := time.Now().Add(-r.Since)
 	packages, err := m.db.MostUsedPackages(cutoff, r.Top)
 	if err != nil {
