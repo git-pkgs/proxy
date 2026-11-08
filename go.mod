@@ -1,8 +1,6 @@
 module github.com/git-pkgs/proxy
 
-go 1.26.7
-
-toolchain go1.27.3
+go 1.27.3
 
 require (
 	github.com/BurntSushi/toml v1.6.0

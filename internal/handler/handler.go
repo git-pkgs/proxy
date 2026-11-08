@@ -1836,7 +1836,7 @@ func (p *Proxy) staleMetadata(ctx context.Context, ecosystem, cacheKey string, v
 
 	p.Logger.Info("serving metadata from cache",
 		"ecosystem", ecosystem, "key", cacheKey)
-	res := metadataResult{body: data, contentType: ct, contentEncoding: entry.ContentEncoding.String, stale: true}
+	res := metadataResult{body: data, contentType: ct, contentEncoding: entry.ContentEncoding.String, stale: true, upstreamErr: err}
 	if !matchesEntryDigest(entry, data) {
 		// Replaced since the row was read; the row's validators are not
 		// this blob's.
@@ -1860,8 +1860,9 @@ type metadataResult struct {
 	etag         string
 	lastModified time.Time
 	// stale is set when the body is the cached copy served because upstream
-	// failed.
-	stale bool
+	// failed, and upstreamErr is that failure.
+	stale       bool
+	upstreamErr error
 	// fromCache is set when the body is a stored copy within its TTL, read
 	// without asking upstream.
 	fromCache bool

@@ -409,16 +409,24 @@ func (h *NPMHandler) writeFetchError(w http.ResponseWriter, err error) {
 // document can't be read as a stream.
 var errInMemory = errors.New("npm packument needs the in-memory path")
 
-// storedPackument returns the cache row of the packument stored for cacheKey,
-// fetching it into storage first when needed. It returns errInMemory when
+// storedPackument returns the lookup of the packument stored for cacheKey,
+// fetching it into storage first when needed. Its err is errInMemory when
 // metadata isn't cached in storage, and ErrUpstreamNotFound and upstream
 // errors as they come.
-func (h *NPMHandler) storedPackument(ctx context.Context, packumentURL, accept, cacheKey string) (*database.MetadataCacheEntry, error) {
-	entry, err := h.proxy.storedMetadataDocument(ctx, "npm", cacheKey, packumentURL, accept, h.packumentStreamValidator())
-	if errors.Is(err, errMetadataNotStored) {
-		return nil, errInMemory
+// With refresh, a stored copy within its TTL is fetched again rather than
+// served.
+func (h *NPMHandler) storedPackument(ctx context.Context, packumentURL, accept, cacheKey string, refresh bool) metadataResult {
+	var gone string
+	if refresh && h.proxy.DB != nil {
+		if row, _ := h.proxy.DB.GetMetadataCache("npm", cacheKey); usableStoredMetadata(row) {
+			gone = row.ContentDigest.String
+		}
 	}
-	return entry, err
+	res := h.proxy.storedMetadata(ctx, "npm", cacheKey, packumentURL, accept, h.packumentStreamValidator(), gone)
+	if errors.Is(res.err, errMetadataNotStored) {
+		res.err = errInMemory
+	}
+	return res
 }
 
 // readStoredPackument reads the packument stored for cacheKey with read,
@@ -427,22 +435,30 @@ func (h *NPMHandler) storedPackument(ctx context.Context, packumentURL, accept, 
 // again and read once more. fetchErr is what storedPackument returned when the packument
 // couldn't be fetched, and err is what read returned.
 func (h *NPMHandler) readStoredPackument(ctx context.Context, packumentURL, accept, cacheKey string, read func(*database.MetadataCacheEntry) error) (err, fetchErr error) {
-	entry, fetchErr := h.storedPackument(ctx, packumentURL, accept, cacheKey)
-	if fetchErr != nil {
-		return nil, fetchErr
+	fetched, err := h.lookupStoredPackument(ctx, packumentURL, accept, cacheKey, false, read)
+	return err, fetched.err
+}
+
+// lookupStoredPackument implements readStoredPackument. fetched is the
+// lookup of the packument read, whose err is set when it couldn't be
+// fetched.
+func (h *NPMHandler) lookupStoredPackument(ctx context.Context, packumentURL, accept, cacheKey string, refresh bool, read func(*database.MetadataCacheEntry) error) (fetched metadataResult, err error) {
+	fetched = h.storedPackument(ctx, packumentURL, accept, cacheKey, refresh)
+	if fetched.err != nil {
+		return fetched, nil
 	}
-	if err = read(entry); !errors.Is(err, storage.ErrNotFound) && !errors.Is(err, errStoredMetadataChanged) {
-		return err, nil
+	if err = read(fetched.entry); !errors.Is(err, storage.ErrNotFound) && !errors.Is(err, errStoredMetadataChanged) {
+		return fetched, err
 	}
 	h.proxy.Logger.Warn("stored npm metadata is missing or changed, fetching it again", "url", packumentURL, "error", err)
-	entry, fetchErr = h.proxy.restoreStoredMetadata(ctx, "npm", cacheKey, packumentURL, accept, h.packumentStreamValidator(), entry)
-	if errors.Is(fetchErr, errMetadataNotStored) {
-		return nil, errInMemory
+	fetched = h.proxy.storedMetadata(ctx, "npm", cacheKey, packumentURL, accept, h.packumentStreamValidator(), fetched.entry.ContentDigest.String)
+	if errors.Is(fetched.err, errMetadataNotStored) {
+		fetched.err = errInMemory
 	}
-	if fetchErr != nil {
-		return nil, fetchErr
+	if fetched.err != nil {
+		return fetched, nil
 	}
-	return read(entry), nil
+	return fetched, read(fetched.entry)
 }
 
 // packumentStreamValidator is packumentValidator for a packument read from
@@ -776,7 +792,7 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	}
 	registryURL, cacheKey := h.sourceFor(packageName)
 	metadata := sync.OnceValues(func() (npmVersionData, error) {
-		return h.versionData(r.Context(), registryURL+"/"+url.PathEscape(packageName), cacheKey, version)
+		return h.versionData(r.Context(), packageName, registryURL+"/"+url.PathEscape(packageName), cacheKey, version)
 	})
 	inCooldown, err := h.versionInCooldown(packageName, version, metadata)
 	if err != nil {
@@ -883,34 +899,70 @@ type npmVersionData struct {
 // versionData reads what a tarball download needs about version from the
 // packument: from storage in one pass when metadata is cached there, and
 // otherwise from the packument read into memory.
-func (h *NPMHandler) versionData(ctx context.Context, packumentURL, cacheKey, version string) (npmVersionData, error) {
+//
+// A packument cached within its TTL can predate the version. Under cooldown a
+// missing entry would let the version through with no publish time, so the
+// packument is fetched again and the version decided on what upstream lists
+// now, as the Composer handler does.
+func (h *NPMHandler) versionData(ctx context.Context, packageName, packumentURL, cacheKey, version string) (npmVersionData, error) {
+	data, fromCache, err := h.readVersionData(ctx, packumentURL, cacheKey, version, false)
+	if err == nil && data.entry == nil && fromCache && h.proxy.cooldownApplies("npm", packageName) {
+		h.proxy.Logger.Info("cooldown: cached npm metadata lacks version, fetching it again",
+			"package", packageName, "version", version)
+		data, _, err = h.readVersionData(ctx, packumentURL, cacheKey, version, true)
+	}
+	return data, err
+}
+
+// readVersionData implements versionData. fromCache reports whether the
+// packument was a cached copy, within its TTL or served stale; refresh
+// fetches it from upstream.
+func (h *NPMHandler) readVersionData(ctx context.Context, packumentURL, cacheKey, version string, refresh bool) (data npmVersionData, fromCache bool, err error) {
 	accept := h.packumentAccept()
 	var found npm.VersionEntry
-	err, fetchErr := h.readStoredPackument(ctx, packumentURL, accept, cacheKey, func(entry *database.MetadataCacheEntry) error {
+	fetched, err := h.lookupStoredPackument(ctx, packumentURL, accept, cacheKey, refresh, func(entry *database.MetadataCacheEntry) error {
 		return readStored(func() (io.ReadCloser, error) { return h.proxy.openStoredMetadata(ctx, entry) }, func(in io.Reader) (err error) {
 			found, err = npm.LookupVersion(in, version)
 			return err
 		})
 	})
+	fetchErr := fetched.err
 	switch {
 	case fetchErr == nil && err == nil && (!found.Abbreviated || h.packumentValidator() == nil):
-		return npmVersionData{entry: found.Entry, published: found.Published}, nil
+		if refresh && fetched.stale {
+			return npmVersionData{}, false, errRefetchFailed(fetched)
+		}
+		return npmVersionData{entry: found.Entry, published: found.Published}, fetched.fromCache || fetched.stale, nil
 	case fetchErr == nil && err != nil:
 		h.proxy.Logger.Warn("failed to read stored npm metadata, reading it in memory", "url", packumentURL, "error", err)
 	case fetchErr != nil && !errors.Is(fetchErr, errInMemory):
-		return npmVersionData{}, fetchErr
+		return npmVersionData{}, false, fetchErr
 	}
 
-	body, _, err := h.proxy.fetchOrCacheMetadata(ctx, "npm", cacheKey, packumentURL, "", h.packumentValidator(), accept)
-	if err != nil {
-		return npmVersionData{}, err
+	var res metadataResult
+	if refresh {
+		res = h.proxy.refreshMetadata(ctx, "npm", cacheKey, packumentURL, accept, "", h.packumentValidator())
+	} else {
+		res = h.proxy.fetchMetadataDocument(ctx, "npm", cacheKey, packumentURL, accept, h.packumentValidator())
 	}
-	entry, _ := jsonscan.Lookup(body, "versions", version)
-	published, _, err := jsonscan.LookupString(body, "time", version)
-	if err != nil {
-		return npmVersionData{}, fmt.Errorf("parsing npm metadata: %w", err)
+	if res.err != nil {
+		return npmVersionData{}, false, res.err
 	}
-	return npmVersionData{entry: entry, published: published}, nil
+	if refresh && res.stale {
+		return npmVersionData{}, false, errRefetchFailed(res)
+	}
+	entry, _ := jsonscan.Lookup(res.body, "versions", version)
+	published, _, err := jsonscan.LookupString(res.body, "time", version)
+	if err != nil {
+		return npmVersionData{}, false, fmt.Errorf("parsing npm metadata: %w", err)
+	}
+	return npmVersionData{entry: entry, published: published}, res.fromCache || res.stale, nil
+}
+
+// errRefetchFailed is the error for a refetch that got only the stale copy
+// back. That copy is what lacked the version, so it can't decide it.
+func errRefetchFailed(res metadataResult) error {
+	return fmt.Errorf("npm metadata could not be fetched again: %w", res.upstreamErr)
 }
 
 func validateTarballURL(raw, registryURL string) (string, error) {

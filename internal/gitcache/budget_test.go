@@ -1,10 +1,15 @@
 package gitcache
 
 import (
+	"bytes"
 	"context"
 	"crypto/rand"
 	"errors"
+	"io"
 	"net/http"
+	"net/http/httptest"
+	"net/http/httputil"
+	"net/url"
 	"os"
 	"path/filepath"
 	"sync"
@@ -214,5 +219,93 @@ func TestConcurrentClonesStayWithinMaxSize(t *testing.T) {
 	}
 	if entries, _ := os.ReadDir(tc.tmpDir()); len(entries) != 0 {
 		t.Errorf("left %d entries in the temporary directory", len(entries))
+	}
+}
+
+// TestCoverAfterReleaseReservesNothing has a relayed read arrive after the
+// fetch gave back its reservation, as one from an orphaned git helper would.
+func TestCoverAfterReleaseReservesNothing(t *testing.T) {
+	tc := newTestCache(t, "", func(o *Options) { o.MaxSize = 100 })
+	res := tc.newReservation()
+	if err := res.cover(t.Context(), 10); err != nil {
+		t.Fatal(err)
+	}
+	res.release()
+	ctx, cancel := context.WithCancel(t.Context())
+	cancel()
+	_ = res.cover(ctx, 20)
+	if reserved, _ := tc.budget(); reserved != 0 {
+		t.Errorf("reserved %d after release", reserved)
+	}
+}
+
+// TestCancelledFetchStopsRelaying cancels a fetch while the upstream is
+// midway through sending the pack: the upstream connection is closed, and
+// nothing stays reserved when the rest arrives.
+func TestCancelledFetchStopsRelaying(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	upstreamURL, err := url.Parse(upstream.server.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	arrived := make(chan struct{})
+	release := make(chan struct{})
+	result := make(chan string, 1)
+	forward := httputil.NewSingleHostReverseProxy(upstreamURL)
+	front := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, _ := io.ReadAll(r.Body)
+		r.Body = io.NopCloser(bytes.NewReader(body))
+		if r.Method != http.MethodPost || !bytes.Contains(body, []byte("command=fetch")) {
+			forward.ServeHTTP(w, r)
+			return
+		}
+		rec := httptest.NewRecorder()
+		forward.ServeHTTP(rec, r.Clone(context.Background()))
+		pack := rec.Body.Bytes()
+		w.Header().Set("Content-Type", rec.Header().Get("Content-Type"))
+		_, _ = w.Write(pack[:len(pack)/2])
+		w.(http.Flusher).Flush()
+		close(arrived)
+		select {
+		case <-r.Context().Done():
+			result <- "closed"
+		case <-release:
+			_, _ = w.Write(pack[len(pack)/2:])
+			w.(http.Flusher).Flush()
+			result <- "sent"
+		}
+	}))
+	defer front.Close()
+	defer close(release)
+	tc := newTestCache(t, front.URL, func(o *Options) { o.MaxSize = 1 << 30 })
+
+	dir := t.TempDir()
+	if _, err := tc.run(t.Context(), dir, "init", "--quiet", "--bare"); err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(t.Context())
+	res := tc.newReservation()
+	done := make(chan error, 1)
+	go func() { done <- tc.fetch(ctx, dir, front.URL+"/repo", 0, res, nil, branchesAndTags...) }()
+	<-arrived
+	waitFor(t, func() bool { reserved, _ := tc.budget(); return reserved > 0 })
+	cancel()
+	if err := <-done; err == nil {
+		t.Error("cancelled fetch succeeded")
+	}
+	res.release()
+
+	select {
+	case <-result:
+	case <-time.After(10 * time.Second):
+		t.Error("upstream connection still open after the fetch was cancelled")
+		release <- struct{}{}
+		<-result
+	}
+	// Give a relay still running the time to read what the upstream sent.
+	time.Sleep(200 * time.Millisecond)
+	if reserved, _ := tc.budget(); reserved != 0 {
+		t.Errorf("reserved %d after the fetch ended", reserved)
 	}
 }

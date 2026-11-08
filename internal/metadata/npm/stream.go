@@ -3,6 +3,7 @@ package npm
 import (
 	"bytes"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -44,11 +45,11 @@ func (s *Scan) Abbreviated() bool {
 // time and dropped.
 func ScanPackument(r io.Reader) (*Scan, error) {
 	s := &Scan{occurrences: map[string]int{}}
-	dec := json.NewDecoder(r)
+	dec := newDecoder(r)
 	if err := expectDelim(dec, '{'); err != nil {
 		return nil, err
 	}
-	for dec.More() {
+	for dec.PeekKind() != '}' {
 		key, err := objectKey(dec)
 		if err != nil {
 			return nil, err
@@ -60,16 +61,16 @@ func ScanPackument(r io.Reader) (*Scan, error) {
 		case "time":
 			s.occurrences[key]++
 			s.time = nil
-			err = dec.Decode(&s.time)
+			err = decodeValue(dec, &s.time)
 		case "dist-tags":
 			s.occurrences[key]++
 			s.distTags = nil
-			err = dec.Decode(&s.distTags)
+			err = decodeValue(dec, &s.distTags)
 		default:
 			if key == "modified" {
 				s.hasModified = true
 			}
-			err = skipValue(dec)
+			err = dec.SkipValue()
 		}
 		if err != nil {
 			return nil, err
@@ -78,13 +79,7 @@ func ScanPackument(r io.Reader) (*Scan, error) {
 	if err := expectDelim(dec, '}'); err != nil {
 		return nil, err
 	}
-	if _, err := dec.Token(); err != io.EOF {
-		if err == nil {
-			err = errors.New("unexpected data after the top-level object")
-		}
-		return nil, err
-	}
-	return s, nil
+	return s, expectEnd(dec)
 }
 
 // RewriteStream is Rewrite for a packument too large to hold in memory. scan
@@ -230,62 +225,82 @@ func (s *Scan) objectValue(metadata map[string]any, name string, value any) map[
 	return object
 }
 
-func expectDelim(dec *json.Decoder, want json.Delim) error {
-	tok, err := dec.Token()
+// newDecoder reads JSON as encoding/json does: of repeated names the last
+// counts, and invalid UTF-8 in strings is replaced rather than refused.
+func newDecoder(r io.Reader) *jsontext.Decoder {
+	return jsontext.NewDecoder(r, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
+}
+
+func expectDelim(dec *jsontext.Decoder, want jsontext.Kind) error {
+	tok, err := dec.ReadToken()
 	if err != nil {
 		return err
 	}
-	if tok != want {
-		return fmt.Errorf("npm metadata: expected %v, got %v", want, tok)
+	if tok.Kind() != want {
+		return fmt.Errorf("npm metadata: expected %v, got %v", want, tok.Kind())
 	}
 	return nil
 }
 
-func objectKey(dec *json.Decoder) (string, error) {
-	tok, err := dec.Token()
+// expectEnd checks nothing follows the top-level object.
+func expectEnd(dec *jsontext.Decoder) error {
+	_, err := dec.ReadToken()
+	switch err {
+	case io.EOF:
+		return nil
+	case nil:
+		return errors.New("unexpected data after the top-level object")
+	}
+	return err
+}
+
+func objectKey(dec *jsontext.Decoder) (string, error) {
+	tok, err := dec.ReadToken()
 	if err != nil {
 		return "", err
 	}
-	key, ok := tok.(string)
-	if !ok {
-		return "", fmt.Errorf("npm metadata: object key is %T, not a string", tok)
+	if tok.Kind() != '"' {
+		return "", fmt.Errorf("npm metadata: object key is %v, not a string", tok.Kind())
 	}
-	return key, nil
+	return tok.String(), nil
 }
 
-// objectKeys reads a value and returns its keys when it is an object.
-func objectKeys(dec *json.Decoder) ([]string, bool, error) {
-	tok, err := dec.Token()
+// decodeValue reads the next value into v, as encoding/json decodes it.
+func decodeValue(dec *jsontext.Decoder, v any) error {
+	raw, err := dec.ReadValue()
 	if err != nil {
+		return err
+	}
+	return json.Unmarshal(raw, v)
+}
+
+// objectKeys reads a value and returns its keys when it is an object. The
+// members' values are skipped without being kept.
+func objectKeys(dec *jsontext.Decoder) ([]string, bool, error) {
+	kind := dec.PeekKind()
+	if kind != '{' && kind != '[' {
+		return nil, false, dec.SkipValue()
+	}
+	if _, err := dec.ReadToken(); err != nil {
 		return nil, false, err
 	}
-	delim, ok := tok.(json.Delim)
-	if !ok {
-		return nil, false, nil // a scalar, read whole by Token
-	}
 	var keys []string
-	for dec.More() {
-		if delim == '{' {
+	for next := dec.PeekKind(); next != '}' && next != ']'; next = dec.PeekKind() {
+		if kind == '{' {
 			key, err := objectKey(dec)
 			if err != nil {
 				return nil, false, err
 			}
 			keys = append(keys, key)
 		}
-		if err := skipValue(dec); err != nil {
+		if err := dec.SkipValue(); err != nil {
 			return nil, false, err
 		}
 	}
-	if _, err := dec.Token(); err != nil {
+	if _, err := dec.ReadToken(); err != nil {
 		return nil, false, err
 	}
-	return keys, delim == '{', nil
-}
-
-// skipValue reads the next value without keeping it.
-func skipValue(dec *json.Decoder) error {
-	var raw json.RawMessage
-	return dec.Decode(&raw)
+	return keys, kind == '{', nil
 }
 
 // VersionStream is Version for a packument too large to hold in memory. scan
@@ -337,11 +352,11 @@ type VersionEntry struct {
 func LookupVersion(r io.Reader, version string) (VersionEntry, error) {
 	var e VersionEntry
 	var hasTime, hasModified bool
-	dec := json.NewDecoder(r)
+	dec := newDecoder(r)
 	if err := expectDelim(dec, '{'); err != nil {
 		return e, err
 	}
-	for dec.More() {
+	for dec.PeekKind() != '}' {
 		key, err := objectKey(dec)
 		if err != nil {
 			return e, err
@@ -359,7 +374,7 @@ func LookupVersion(r io.Reader, version string) (VersionEntry, error) {
 			}
 		default:
 			hasModified = hasModified || key == "modified"
-			err = skipValue(dec)
+			err = dec.SkipValue()
 		}
 		if err != nil {
 			return e, err
@@ -368,10 +383,7 @@ func LookupVersion(r io.Reader, version string) (VersionEntry, error) {
 	if err := expectDelim(dec, '}'); err != nil {
 		return e, err
 	}
-	if _, err := dec.Token(); err != io.EOF {
-		if err == nil {
-			err = errors.New("unexpected data after the top-level object")
-		}
+	if err := expectEnd(dec); err != nil {
 		return e, err
 	}
 	e.Abbreviated = hasModified && !hasTime
@@ -379,33 +391,39 @@ func LookupVersion(r io.Reader, version string) (VersionEntry, error) {
 }
 
 // objectMember reads a value and returns its member key when it is an object
-// that has one, the last if repeated, or nil.
-func objectMember(dec *json.Decoder, key string) (json.RawMessage, error) {
-	tok, err := dec.Token()
-	if err != nil {
+// that has one, the last if repeated, or nil. Other members are skipped
+// without being kept.
+func objectMember(dec *jsontext.Decoder, key string) (json.RawMessage, error) {
+	kind := dec.PeekKind()
+	if kind != '{' && kind != '[' {
+		return nil, dec.SkipValue()
+	}
+	if _, err := dec.ReadToken(); err != nil {
 		return nil, err
 	}
-	delim, ok := tok.(json.Delim)
-	if !ok {
-		return nil, nil
-	}
 	var found json.RawMessage
-	for dec.More() {
-		var k string
-		if delim == '{' {
+	for next := dec.PeekKind(); next != '}' && next != ']'; next = dec.PeekKind() {
+		k := ""
+		if kind == '{' {
+			var err error
 			if k, err = objectKey(dec); err != nil {
 				return nil, err
 			}
 		}
-		var raw json.RawMessage
-		if err := dec.Decode(&raw); err != nil {
+		if kind == '{' && k == key {
+			raw, err := dec.ReadValue()
+			if err != nil {
+				return nil, err
+			}
+			// ReadValue's bytes are only valid until the next read.
+			found = bytes.Clone(raw)
+			continue
+		}
+		if err := dec.SkipValue(); err != nil {
 			return nil, err
 		}
-		if delim == '{' && k == key {
-			found = raw
-		}
 	}
-	if _, err := dec.Token(); err != nil {
+	if _, err := dec.ReadToken(); err != nil {
 		return nil, err
 	}
 	return found, nil
