@@ -67,7 +67,11 @@ func NewGroup(cfg config.ScanningConfig, logger *slog.Logger) (*Group, error) {
 		if len(sc.Ecosystems) > 0 {
 			ecosystems = make(map[string]struct{}, len(sc.Ecosystems))
 			for _, eco := range sc.Ecosystems {
-				ecosystems[config.NormalizeScannerEcosystem(eco)] = struct{}{}
+				key, err := config.ScannerEcosystemKey(eco)
+				if err != nil {
+					return nil, fmt.Errorf("scanner %q: %w", sc.Name, err)
+				}
+				ecosystems[key] = struct{}{}
 			}
 		}
 
@@ -112,6 +116,8 @@ func (g *Group) Timeout() time.Duration {
 }
 
 func (g *Group) applicable(ecosystem string) []entry {
+	// Callers may pass an alias such as go from a PURL type.
+	ecosystem = config.NormalizeScannerEcosystem(ecosystem)
 	var out []entry
 	for _, e := range g.entries {
 		if len(e.ecosystems) == 0 {

@@ -439,9 +439,9 @@ func (s *ScannerConfig) Validate() error {
 		return fmt.Errorf("invalid mode %q (must be block or monitor)", s.Mode)
 	}
 	for i, eco := range s.Ecosystems {
-		key := NormalizeScannerEcosystem(eco)
-		if !slices.Contains(scannerEcosystems, key) {
-			return fmt.Errorf("unknown ecosystem %q (valid: %s)", eco, strings.Join(scannerEcosystems, ", "))
+		key, err := ScannerEcosystemKey(eco)
+		if err != nil {
+			return err
 		}
 		s.Ecosystems[i] = key
 	}
@@ -475,6 +475,16 @@ func NormalizeScannerEcosystem(eco string) string {
 		return key
 	}
 	return eco
+}
+
+// ScannerEcosystemKey is NormalizeScannerEcosystem that also rejects
+// names no handler uses.
+func ScannerEcosystemKey(eco string) (string, error) {
+	key := NormalizeScannerEcosystem(eco)
+	if !slices.Contains(scannerEcosystems, key) {
+		return "", fmt.Errorf("unknown ecosystem %q (valid: %s)", eco, strings.Join(scannerEcosystems, ", "))
+	}
+	return key, nil
 }
 
 // StorageConfig configures artifact storage.

@@ -306,9 +306,22 @@ func TestGroup_NormalisesEcosystemAliases(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewGroup() error: %v", err)
 	}
-	for _, ecosystem := range []string{"golang", "oci", "gem"} {
+	for _, ecosystem := range []string{"golang", "oci", "gem", "go", "Docker", "rubygems"} {
 		if !g.Blocks(ecosystem) {
 			t.Errorf("Blocks(%s) = false, want true", ecosystem)
 		}
+	}
+}
+
+func TestNewGroup_RejectsUnknownEcosystem(t *testing.T) {
+	_, err := NewGroup(config.ScanningConfig{
+		Enabled:    true,
+		SigningKey: "test-signing-key",
+		Scanners: []config.ScannerConfig{
+			{Name: "clamav", URL: "http://clamav.invalid", Ecosystems: []string{"npm", "pypy"}},
+		},
+	}, discardLogger())
+	if err == nil || !strings.Contains(err.Error(), "pypy") {
+		t.Errorf("NewGroup() error = %v, want unknown ecosystem pypy", err)
 	}
 }
