@@ -11,7 +11,8 @@ import (
 // newestPerCachedLine returns, for each major line a cached version is on,
 // the newest release of that line that allowed accepts, when it is newer
 // than every cached version of the line. A line is the major version, or
-// 0.minor below 1.0, as caret ranges read them. Prereleases and yanked,
+// 0.minor below 1.0, as caret ranges read them, and calendar versions are
+// one line. Prereleases and yanked,
 // retracted or deprecated releases are skipped.
 func newestPerCachedLine(ecosystem string, cached []string, releases []registries.Version, allowed func(registries.Version) bool) []string {
 	scheme := purl.EcosystemToPURLType(ecosystem)
@@ -54,11 +55,19 @@ func newestPerCachedLine(ecosystem string, cached []string, releases []registrie
 	return out
 }
 
-// versionLine returns the major line of a version.
+// firstCalendarYear is the smallest first number read as a year.
+const firstCalendarYear = 1000
+
+// versionLine returns the major line of a version. Calendar versions, whose
+// first number is a year, are all one line, so a new year's release follows
+// the last one's.
 func versionLine(v string) (string, bool) {
 	info, err := vers.ParseVersion(v)
 	if err != nil {
 		return "", false
+	}
+	if info.Major >= firstCalendarYear {
+		return "calendar", true
 	}
 	if info.Major == 0 {
 		return "0." + strconv.Itoa(info.Minor), true

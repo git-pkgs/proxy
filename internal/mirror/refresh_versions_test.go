@@ -77,3 +77,16 @@ func TestNewestPerCachedLineUsesEcosystemOrdering(t *testing.T) {
 		t.Errorf("gem: got %v, want nothing", got)
 	}
 }
+
+func TestNewestPerCachedLineCalendarVersions(t *testing.T) {
+	allowAll := func(registries.Version) bool { return true }
+	// certifi and tzdata number releases by year: 2025.1.31 follows 2024.12.14.
+	got := newestPerCachedLine("pypi", []string{"2024.8.30"}, releases("2024.8.30", "2024.12.14", "2025.1.31"), allowAll)
+	if !reflect.DeepEqual(got, []string{"2025.1.31"}) {
+		t.Errorf("certifi: got %v, want [2025.1.31]", got)
+	}
+	got = newestPerCachedLine("pypi", []string{"2024.2"}, releases("2024.2", "2025.1"), allowAll)
+	if !reflect.DeepEqual(got, []string{"2025.1"}) {
+		t.Errorf("tzdata: got %v, want [2025.1]", got)
+	}
+}
