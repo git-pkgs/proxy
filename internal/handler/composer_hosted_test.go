@@ -243,3 +243,22 @@ func TestComposerDownloadOfPushedArchiveWhileStreamingArtifacts(t *testing.T) {
 		t.Error("a pushed archive was fetched upstream while streaming artifacts")
 	}
 }
+
+func TestComposerPushedVersionsDisableDefaultNotification(t *testing.T) {
+	f := newComposerHostedFixture(t, map[string]string{"/p2/monolog/monolog.json": monologMetadata})
+	f.proxy.HostedComposerVendors = []string{"acme"}
+	f.push(t, "monolog/monolog", "3.6.0", `{"name":"monolog/monolog"}`)
+	f.push(t, "acme/private", "1.0.0", `{"name":"acme/private"}`)
+	f.push(t, "other/private", "1.0.0", `{"name":"other/private"}`)
+
+	for _, tc := range []struct{ path, name, version string }{
+		{"/p2/monolog/monolog.json", "monolog/monolog", "3.6.0"},
+		{"/p2/acme/private.json", "acme/private", "1.0.0"},
+		{"/p2/other/private.json", "other/private", "1.0.0"},
+	} {
+		v := f.versions(t, tc.path, tc.name)[tc.version]
+		if got, ok := v["notification-url"]; !ok || got != "" {
+			t.Errorf("%s %s notification-url = %v (set %v), want empty", tc.name, tc.version, got, ok)
+		}
+	}
+}
