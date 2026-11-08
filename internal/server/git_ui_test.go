@@ -80,6 +80,21 @@ func TestGitRepositoryRows(t *testing.T) {
 	}
 }
 
+// TestGitRepositoryRowsEscapeCloneURL checks path segments such as Azure
+// DevOps project names, which may hold spaces, '#' or '%', are escaped.
+func TestGitRepositoryRowsEscapeCloneURL(t *testing.T) {
+	upstreams := map[string]config.GitUpstream{"azure": {URL: "https://dev.azure.com"}}
+	dir := gitcache.UpstreamDir("azure", "https://dev.azure.com")
+	none := func(string) (gitcache.RepositoryState, bool) { return gitcache.RepositoryState{}, false }
+	rows, _ := gitRepositoryRows("http://proxy.example/", upstreams, []gitcache.RepositoryStats{
+		{Key: dir + "/org/My Project/_git/My Repo#1?x%.git"},
+	}, none)
+	want := "http://proxy.example/git/azure/org/My%20Project/_git/My%20Repo%231%3Fx%25.git"
+	if len(rows) != 1 || rows[0].CloneURL != want {
+		t.Errorf("rows %+v, want clone URL %s", rows, want)
+	}
+}
+
 // TestGitCacheGauges checks the git cache has gauges of its own, published
 // even when the database can't be read.
 func TestGitCacheGauges(t *testing.T) {

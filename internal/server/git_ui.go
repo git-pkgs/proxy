@@ -3,6 +3,7 @@ package server
 import (
 	"fmt"
 	"net/http"
+	"net/url"
 	"strings"
 
 	"github.com/git-pkgs/proxy/internal/config"
@@ -67,16 +68,12 @@ func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, 
 		if !ok {
 			continue
 		}
-		requests := fmt.Sprintf("%d requests", repo.Requests)
-		if repo.Requests == 1 {
-			requests = "1 request"
-		}
 		row := GitRepositoryRow{
 			Upstream:    name,
 			Repo:        strings.TrimSuffix(path, ".git"),
-			CloneURL:    strings.TrimSuffix(baseURL, "/") + "/git/" + name + "/" + path,
+			CloneURL:    strings.TrimSuffix(baseURL, "/") + "/git/" + escapePath(name+"/"+path),
 			Size:        formatSize(repo.Size),
-			Requests:    requests,
+			Requests:    plural(int(repo.Requests), "request", "requests"),
 			LastChecked: formatTimeAgo(repo.LastChecked),
 			LastUsed:    formatTimeAgo(repo.LastUsed),
 			LastError:   repo.LastError,
@@ -91,6 +88,15 @@ func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, 
 		size += repo.Size
 	}
 	return rows, size
+}
+
+// escapePath escapes each segment of a slash-separated path.
+func escapePath(path string) string {
+	segments := strings.Split(path, "/")
+	for i, s := range segments {
+		segments[i] = url.PathEscape(s)
+	}
+	return strings.Join(segments, "/")
 }
 
 // shortCommitLength is how much of a commit ID the git page shows.
