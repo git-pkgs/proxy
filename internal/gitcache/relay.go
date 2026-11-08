@@ -53,6 +53,9 @@ type relayRoute struct {
 	// answered records that the upstream answered a git-upload-pack
 	// request, so a failed fetch was not an outage.
 	answered atomic.Bool
+	// redirected records the status of a redirect the upstream answered
+	// with, 0 for none.
+	redirected atomic.Int32
 }
 
 func newRelay(client *http.Client, logger *slog.Logger) (*relay, error) {
@@ -151,6 +154,7 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = resp.Body.Close() }()
 	// A redirect passed on would send git to the Location itself.
 	if resp.StatusCode >= http.StatusMultipleChoices && resp.StatusCode < http.StatusBadRequest {
+		route.redirected.Store(int32(resp.StatusCode))
 		http.Error(w, "upstream redirect not followed", http.StatusBadGateway)
 		return
 	}

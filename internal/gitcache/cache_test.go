@@ -964,3 +964,23 @@ func TestHugeStaleMaxAgeUploadPackChecksNothing(t *testing.T) {
 		t.Errorf("ls-refs made %d upstream requests, want 0", got)
 	}
 }
+
+// TestFetchRedirectRefusesRepository has the upstream list the refs but
+// redirect the fetch that follows: the repository is refused, as when the
+// ref listing is redirected.
+func TestFetchRedirectRefusesRepository(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.clone(t, "repo")
+
+	upstream.commit(work, "second")
+	runGit(t, work, "push", "--quiet", "origin", "main")
+	upstream.fetchStatus.Store(http.StatusFound)
+	if out, err := tryGit(t, "", "ls-remote", tc.url("repo")); err == nil {
+		t.Errorf("served the cached copy after the fetch was redirected:\n%s", out)
+	}
+	if status := tc.lsRefs(t); status == http.StatusOK {
+		t.Errorf("ls-refs served after the fetch was redirected")
+	}
+}

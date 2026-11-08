@@ -326,6 +326,9 @@ func (c *Cache) fetch(ctx context.Context, dir, repoURL string, limit int64, res
 	if route.full.Load() {
 		return ErrCacheFull
 	}
+	if status := route.redirected.Load(); status != 0 {
+		return upstreamStatusError(int(status))
+	}
 	if err != nil && !route.answered.Load() {
 		return fmt.Errorf("%w: %w", errUpstreamUnanswered, err)
 	}
