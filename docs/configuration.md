@@ -901,8 +901,14 @@ commits, the request waits for their fetch, so a clone right after a push gets
 them; if the fetch fails or stalls, the cached copy is served. A
 `stale_max_age` of `0` never serves a copy the upstream has not just
 confirmed. A repository the upstream reports missing (404), refuses (401, 403)
-or redirects is not served from the cache. Redirects are never followed, so
-point the upstream at a repository's current location.
+or redirects is not served from the cache, also to requests that skip the ref
+listing and go straight to `git-upload-pack`, until a later check succeeds.
+Redirects are never followed, so point the upstream at a repository's current
+location. A `git-upload-pack` request does not check the upstream itself
+unless the upstream refused the repository at the last check or the copy was
+last checked more than a minute past `stale_max_age` ago, so the requests of a
+clone that follow its ref listing check nothing again; otherwise the
+repository is checked first, as for a ref listing.
 
 The proxy runs `git` 2.31 or newer, which must be installed (the Docker image includes it).
 The `git` processes never reach the network themselves: their fetches go

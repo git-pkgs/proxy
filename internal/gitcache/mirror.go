@@ -26,7 +26,7 @@ func (c *Cache) Mirror(ctx context.Context, key, repoURL, commit string, fetchWa
 	if commit != "" && !isObjectID(commit) {
 		return MirrorResult{}, fmt.Errorf("%q is not a full commit ID", commit)
 	}
-	lease, err := c.Open(ctx, key, repoURL, OpenOptions{FetchWants: fetchWants})
+	lease, err := c.Open(ctx, key, repoURL, OpenOptions{FetchWants: fetchWants, NoCheck: true})
 	if err != nil {
 		return MirrorResult{}, err
 	}
