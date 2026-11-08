@@ -1643,7 +1643,7 @@ Pushed versions are listed in the package metadata clients resolve against, with
 - Pushed versions are added next to the upstream ones and are never held back by cooldown. npm `dist-tags` stay as the upstream has them, also in `npm dist-tag ls`.
 - A package the upstream doesn't know is served from its pushed versions alone. Its npm `latest` tag is the highest pushed version.
 - Pushed Composer dev versions (`dev-*`, `*-dev`) are listed in the `~dev` metadata file.
-- Pushed Composer versions carry an empty `notification-url`, as routed packages do, so Composer does not report their installs to the default upstream's `notify-batch` endpoint.
+- Pushed Composer versions carry an empty `notification-url`, as routed packages do, so Composer does not report their installs to the default upstream's `notify-batch` endpoint. A pushed `composer.json` that sets its own `notification-url` keeps it, and Composer then reports installs there.
 - npm entries carry the archive's sha512 as `dist.integrity`. Composer entries carry its sha256 as `dist.reference` and leave `shasum` empty.
 
 Metadata of packages with pushed versions is rewritten on every request instead of being cached, so a push or delete shows up on the next request.

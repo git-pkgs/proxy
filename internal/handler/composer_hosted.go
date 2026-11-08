@@ -45,7 +45,8 @@ func (h *ComposerHandler) composerLocalEntries(packageName string, dev bool) ([]
 		manifest["time"] = lv.PushedAt.Format(time.RFC3339)
 		// As for routed packages, keep Composer from reporting installs of
 		// a private version to the default repository's notify-batch.
-		if _, ok := manifest["notification-url"]; !ok {
+		// Composer reads a null notification-url as absent too.
+		if url, ok := manifest["notification-url"]; !ok || url == nil {
 			manifest["notification-url"] = ""
 		}
 		manifest["dist"] = map[string]string{

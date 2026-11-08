@@ -250,11 +250,14 @@ func TestComposerPushedVersionsDisableDefaultNotification(t *testing.T) {
 	f.push(t, "monolog/monolog", "3.6.0", `{"name":"monolog/monolog"}`)
 	f.push(t, "acme/private", "1.0.0", `{"name":"acme/private"}`)
 	f.push(t, "other/private", "1.0.0", `{"name":"other/private"}`)
+	// Composer reads a null notification-url as absent.
+	f.push(t, "acme/nulled", "1.0.0", `{"name":"acme/nulled","notification-url":null}`)
 
 	for _, tc := range []struct{ path, name, version string }{
 		{"/p2/monolog/monolog.json", "monolog/monolog", "3.6.0"},
 		{"/p2/acme/private.json", "acme/private", "1.0.0"},
 		{"/p2/other/private.json", "other/private", "1.0.0"},
+		{"/p2/acme/nulled.json", "acme/nulled", "1.0.0"},
 	} {
 		v := f.versions(t, tc.path, tc.name)[tc.version]
 		if got, ok := v["notification-url"]; !ok || got != "" {
