@@ -321,8 +321,15 @@ func (h *MavenHandler) isArtifactFile(filename string) bool {
 // artifact and version of its directory, {artifact}-{version}..., as Maven
 // names every file it publishes, whatever the extension. A SNAPSHOT's
 // files carry a timestamp in place of "SNAPSHOT".
+//
+// The group isn't checked, so a file under a group directory outside the
+// Maven layout still goes to handleDownload, which answers 404.
 func (h *MavenHandler) isCoordinateFile(urlPath string) bool {
-	_, artifact, version, filename := h.parsePath(urlPath)
+	parts := strings.Split(urlPath, "/")
+	if len(parts) < minMavenParts {
+		return false
+	}
+	filename, version, artifact := parts[len(parts)-1], parts[len(parts)-2], parts[len(parts)-3]
 	if artifact == "" || version == "" {
 		return false
 	}
