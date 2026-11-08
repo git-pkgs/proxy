@@ -1826,23 +1826,25 @@ func (p *Proxy) staleMetadata(ctx context.Context, ecosystem, cacheKey string, v
 
 	// Re-read the row so the encoding describes the blob as it is now: a
 	// concurrent refetch may have replaced both since entry was read above
-	// (an identity blob swapped for a gzip one during rollout).
-	entry = p.currentMetadataEntry(ecosystem, cacheKey, entry)
-
-	data, ct, readErr := p.readCachedMetadata(ctx, entry, validate)
-	if readErr != nil {
-		return metadataResult{err: fmt.Errorf("upstream failed and cached metadata unusable (%v): %w", readErr, err)}
+	// (an identity blob swapped for a gzip one during rollout). Bytes that
+	// don't match the row were replaced after it was read, so the row is
+	// read once more; if they still don't match, no row describes them.
+	for attempt := 0; ; attempt++ {
+		entry = p.currentMetadataEntry(ecosystem, cacheKey, entry)
+		data, ct, readErr := p.readCachedMetadata(ctx, entry, validate)
+		if readErr == nil && !matchesEntryDigest(entry, data) {
+			if attempt == 0 {
+				continue
+			}
+			readErr = errors.New("replaced while being read")
+		}
+		if readErr != nil {
+			return metadataResult{err: fmt.Errorf("upstream failed and cached metadata unusable (%v): %w", readErr, err)}
+		}
+		p.Logger.Info("serving metadata from cache",
+			"ecosystem", ecosystem, "key", cacheKey)
+		return metadataResult{body: data, contentType: ct, contentEncoding: entry.ContentEncoding.String, stale: true, upstreamErr: err}.describedBy(entry)
 	}
-
-	p.Logger.Info("serving metadata from cache",
-		"ecosystem", ecosystem, "key", cacheKey)
-	res := metadataResult{body: data, contentType: ct, contentEncoding: entry.ContentEncoding.String, stale: true, upstreamErr: err}
-	if !matchesEntryDigest(entry, data) {
-		// Replaced since the row was read; the row's validators are not
-		// this blob's.
-		return res
-	}
-	return res.describedBy(entry)
 }
 
 // metadataResult is what a metadata lookup hands back. A shared fetch gives

@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"database/sql"
 	"errors"
@@ -268,8 +270,55 @@ func TestStaleMetadataChecksStoredBytes(t *testing.T) {
 		store.mu.Unlock()
 	}}
 
+	// No row describes v2 yet, so its encoding is unknown: nothing is served.
 	w := proxyCachedRequest(proxy, upstream.URL, http.Header{"If-None-Match": {`"v1"`}})
-	if w.Code == http.StatusNotModified || w.Header().Get(headerETag) == `"v1"` {
-		t.Errorf("response = %d ETag %q for v2's bytes, want no v1 validators", w.Code, w.Header().Get(headerETag))
+	if w.Code < http.StatusInternalServerError || w.Header().Get(headerETag) == `"v1"` {
+		t.Errorf("response = %d ETag %q for v2's bytes, want an error without v1 validators", w.Code, w.Header().Get(headerETag))
+	}
+}
+
+// TestStaleMetadataRereadsReplacedRow checks that when the stored bytes no
+// longer match the row, the stale fallback reads the row again and serves
+// the blob with the encoding and validators of the row that describes it.
+func TestStaleMetadataRereadsReplacedRow(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, db, store, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = 0
+	proxy.HTTPClient = upstream.Client()
+	path := seedMetadataRow(t, db, store)
+	var gz bytes.Buffer
+	zw := gzip.NewWriter(&gz)
+	_, _ = zw.Write([]byte(`{"v":2}`))
+	_ = zw.Close()
+	v2 := gz.Bytes()
+	proxy.Storage = &openHookStorage{mockStorage: store, onOpen: func() {
+		// The other instance stores v2 gzipped, then its row.
+		store.mu.Lock()
+		store.files[path] = v2
+		store.mu.Unlock()
+		if err := db.UpsertMetadataCache(&database.MetadataCacheEntry{
+			Ecosystem:       "test",
+			Name:            "pkg",
+			StoragePath:     path,
+			ETag:            sql.NullString{String: `"v2"`, Valid: true},
+			ContentType:     sql.NullString{String: contentTypeJSON, Valid: true},
+			ContentEncoding: sql.NullString{String: "gzip", Valid: true},
+			ContentDigest:   sql.NullString{String: "sha256:" + sha256Hex(string(v2)), Valid: true},
+			Size:            sql.NullInt64{Int64: int64(len(v2)), Valid: true},
+			FetchedAt:       sql.NullTime{Time: time.Now().Add(-time.Hour), Valid: true},
+		}); err != nil {
+			t.Error(err)
+		}
+	}}
+
+	w := proxyCachedRequest(proxy, upstream.URL, http.Header{"Accept-Encoding": {"gzip"}})
+	if w.Code != http.StatusOK || w.Header().Get("Content-Encoding") != "gzip" ||
+		w.Header().Get(headerETag) != `"v2"` || !bytes.Equal(w.Body.Bytes(), v2) {
+		t.Errorf("response = %d, Content-Encoding %q, ETag %q; want v2 gzipped under its own row",
+			w.Code, w.Header().Get("Content-Encoding"), w.Header().Get(headerETag))
 	}
 }
