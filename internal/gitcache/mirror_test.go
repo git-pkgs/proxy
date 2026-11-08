@@ -270,7 +270,8 @@ func TestMirrorListsSubmodules(t *testing.T) {
 	runGit(t, work, "add", ".gitmodules")
 	runGit(t, work, "update-index", "--add", "--cacheinfo", "160000,"+libCommit+",vendor/lib")
 	runGit(t, work, "update-index", "--add", "--cacheinfo", "160000,"+otherCommit+",third_party/other")
-	runGit(t, work, "update-index", "--add", "--cacheinfo", "160000,"+libCommit+",:colon")
+	// Git for Windows refuses ':' in paths unless NTFS protection is off.
+	runGit(t, work, "-c", "core.protectNTFS=false", "update-index", "--add", "--cacheinfo", "160000,"+libCommit+",:colon")
 	runGit(t, work, "commit", "--quiet", "-m", "submodules")
 	runGit(t, work, "push", "--quiet", "origin", "main")
 	commit := runGit(t, work, "rev-parse", "HEAD")
