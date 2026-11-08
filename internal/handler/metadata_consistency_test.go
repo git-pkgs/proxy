@@ -4,8 +4,10 @@ import (
 	"context"
 	"database/sql"
 	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -232,3 +234,40 @@ func TestNotModifiedRejectedBodyNotRefreshed(t *testing.T) {
 	}
 }
 
+// openHookStorage runs onOpen before the first Open.
+type openHookStorage struct {
+	*mockStorage
+	once   sync.Once
+	onOpen func()
+}
+
+func (s *openHookStorage) Open(ctx context.Context, path string) (io.ReadCloser, error) {
+	s.once.Do(s.onOpen)
+	return s.mockStorage.Open(ctx, path)
+}
+
+// TestStaleMetadataChecksStoredBytes checks that the stale fallback does not
+// serve a blob another instance replaced after the row was read under that
+// row's ETag.
+func TestStaleMetadataChecksStoredBytes(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusBadGateway)
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, db, store, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = 0
+	proxy.HTTPClient = upstream.Client()
+	path := seedMetadataRow(t, db, store, `{"v":1}`, `"v1"`)
+	proxy.Storage = &openHookStorage{mockStorage: store, onOpen: func() {
+		// The other instance has written v2 but not yet its row.
+		store.mu.Lock()
+		store.files[path] = []byte(`{"v":2}`)
+		store.mu.Unlock()
+	}}
+
+	w := proxyCachedRequest(proxy, upstream.URL, http.Header{"If-None-Match": {`"v1"`}})
+	if w.Code == http.StatusNotModified || w.Header().Get(headerETag) == `"v1"` {
+		t.Errorf("response = %d ETag %q for v2's bytes, want no v1 validators", w.Code, w.Header().Get(headerETag))
+	}
+}

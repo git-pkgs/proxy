@@ -1836,7 +1836,13 @@ func (p *Proxy) staleMetadata(ctx context.Context, ecosystem, cacheKey string, v
 
 	p.Logger.Info("serving metadata from cache",
 		"ecosystem", ecosystem, "key", cacheKey)
-	return metadataResult{body: data, contentType: ct, contentEncoding: entry.ContentEncoding.String, stale: true}.describedBy(entry)
+	res := metadataResult{body: data, contentType: ct, contentEncoding: entry.ContentEncoding.String, stale: true}
+	if !matchesEntryDigest(entry, data) {
+		// Replaced since the row was read; the row's validators are not
+		// this blob's.
+		return res
+	}
+	return res.describedBy(entry)
 }
 
 // metadataResult is what a metadata lookup hands back. A shared fetch gives
