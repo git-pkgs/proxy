@@ -3,6 +3,9 @@ package gitcache
 import (
 	"context"
 	"errors"
+	"os"
+	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -95,22 +98,46 @@ func TestRepositoryState(t *testing.T) {
 	}
 }
 
-// TestRepositoryStateKeepsAFailedRead checks a repository whose state can't
-// be read isn't read again until its next upstream check.
-func TestRepositoryStateKeepsAFailedRead(t *testing.T) {
+// TestRepositoryStateRetriesAFailedRead checks a read that fails, here on
+// a branch whose commit is missing, is reported as an error and read again
+// a while later even if the upstream isn't checked in between.
+func TestRepositoryStateRetriesAFailedRead(t *testing.T) {
 	upstream := newFakeUpstream(t)
 	upstream.newRepo("repo")
 	tc := newTestCache(t, upstream.server.URL, nil)
 	tc.clone(t, "repo")
 	waitIdle(t, tc.Cache)
 	rp := tc.repo("up/repo.git")
-	rp.state.Store(&cachedState{checked: rp.lastChecked.Load(), err: errors.New("unreadable")})
-
-	if _, err := tc.RepositoryState(context.Background(), "up/repo.git"); err == nil || err.Error() != "unreadable" {
-		t.Errorf("state = %v, want the kept error", err)
+	ref := filepath.Join(rp.dir, "refs", "heads", "main")
+	head := runGit(t, rp.dir, "rev-parse", "main")
+	if err := os.WriteFile(ref, []byte(strings.Repeat("1", len(head))+"\n"), 0o600); err != nil {
+		t.Fatal(err)
 	}
-	rp.lastChecked.Add(1)
-	if _, err := tc.RepositoryState(context.Background(), "up/repo.git"); err != nil {
-		t.Errorf("state after a new check = %v, want it read again", err)
+
+	if st, err := tc.RepositoryState(context.Background(), "up/repo.git"); err == nil {
+		t.Fatalf("state %+v of a branch with no commit, want an error", st)
+	}
+	if err := os.WriteFile(ref, []byte(head+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := tc.RepositoryState(context.Background(), "up/repo.git"); err == nil {
+		t.Error("failed read not kept for a while")
+	}
+	rp.state.Load().retryAt = time.Now().Add(-time.Second)
+	if st, err := tc.RepositoryState(context.Background(), "up/repo.git"); err != nil || st.Commit != head {
+		t.Errorf("state after the retry delay = %+v, %v; want %s", st, err, head)
+	}
+}
+
+// TestReadStateOfAnEmptyRepository checks a repository with no commits has
+// a state, not an error.
+func TestReadStateOfAnEmptyRepository(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	tc := newTestCache(t, upstream.server.URL, nil)
+	dir := filepath.Join(t.TempDir(), "empty.git")
+	runGit(t, "", "init", "--quiet", "--bare", "--initial-branch=main", dir)
+	st, err := tc.readState(context.Background(), dir)
+	if err != nil || st.Branch != "main" || st.Commit != "" || st.Branches != 0 {
+		t.Errorf("state %+v, %v; want main with no commit", st, err)
 	}
 }
