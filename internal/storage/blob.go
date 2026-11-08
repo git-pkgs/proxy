@@ -291,11 +291,28 @@ func (b *Blob) Delete(ctx context.Context, path string) error {
 		return fmt.Errorf("deleting object: %w", err)
 	}
 	if p := b.localPath(path); p != "" {
-		if dir := filepath.Dir(p); dir != b.fileRoot && isFetchDir(filepath.Base(dir)) {
-			_ = os.Remove(dir) // fails, harmlessly, while the directory holds anything
-		}
+		b.removeEmptyFetchDirs(filepath.Dir(p))
 	}
 	return nil
+}
+
+// removeEmptyFetchDirs removes dir and its parents while they are empty, up
+// to and including the fetch directory they are in, for an object whose
+// filename has directories of its own. Outside a fetch directory, as in the
+// layout before them, nothing is removed.
+func (b *Blob) removeEmptyFetchDirs(dir string) {
+	var dirs []string
+	for d := dir; d != b.fileRoot && d != filepath.Dir(d); d = filepath.Dir(d) {
+		dirs = append(dirs, d)
+		if isFetchDir(filepath.Base(d)) {
+			for _, d := range dirs {
+				if os.Remove(d) != nil {
+					return // fails, harmlessly, while the directory holds anything
+				}
+			}
+			return
+		}
+	}
 }
 
 func (b *Blob) SignedURL(ctx context.Context, path string, expiry time.Duration) (string, error) {
