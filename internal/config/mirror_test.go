@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -167,5 +168,21 @@ mirror:
 		r.MaxVersionsPerRun() != 200 || r.MaxBytesPerRun() != 1<<30 {
 		t.Errorf("got interval %v top %d since %v max_versions %d max_bytes %d",
 			r.IntervalDuration(), r.TopPackages(), r.SinceDuration(), r.MaxVersionsPerRun(), r.MaxBytesPerRun())
+	}
+}
+
+func TestWarningsMirrorRefreshWithoutCacheMetadata(t *testing.T) {
+	cfg := Default()
+	cfg.Mirror.Refresh = &MirrorRefresh{Interval: "24h"}
+	cfg.CacheMetadata = false
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v, want mirror.refresh accepted for the other ecosystems", err)
+	}
+	if got := cfg.Warnings(); len(got) != 1 || !strings.Contains(got[0], "cache_metadata") {
+		t.Errorf("Warnings() = %q, want one about cache_metadata", got)
+	}
+	cfg.CacheMetadata = true
+	if got := cfg.Warnings(); len(got) != 0 {
+		t.Errorf("Warnings() with cache_metadata = %q, want none", got)
 	}
 }

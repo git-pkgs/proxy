@@ -137,6 +137,16 @@ func (s *MirrorSchedule) IntervalDuration() time.Duration {
 	return s.interval
 }
 
+// Warnings returns settings that are valid but do less than they may be
+// expected to. The server logs them at startup.
+func (c *Config) Warnings() []string {
+	var warnings []string
+	if c.Mirror.Refresh != nil && !c.CacheMetadata {
+		warnings = append(warnings, "mirror.refresh without cache_metadata does not refresh Debian, Alpine or RPM packages: their indexes are found through the metadata cache")
+	}
+	return warnings
+}
+
 // Validate checks every schedule.
 func (m *MirrorConfig) Validate() error {
 	for i := range m.Schedules {
