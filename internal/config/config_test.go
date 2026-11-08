@@ -467,8 +467,9 @@ func TestLoadGradleBuildCacheReadOnlyFromEnv(t *testing.T) {
 		{" FALSE ", true, false, 0},
 		{"True", false, true, 0},
 		{"1", false, true, 0},
-		{"yes", false, true, 1},
-		{"off", false, true, 1},
+		{"yes", false, true, 0},
+		{"off", true, false, 0},
+		{"maybe", false, true, 1},
 		{"", false, false, 0},
 	}
 	for _, tt := range tests {
@@ -2172,6 +2173,16 @@ func TestCooldownShortest(t *testing.T) {
 }
 
 func TestLoadBoolsFromEnvParseStrictly(t *testing.T) {
+	t.Run("no turns off a setting from the config file", func(t *testing.T) {
+		t.Setenv("PROXY_TRUST_FORWARDED_FOR", "no")
+		cfg := Default()
+		cfg.TrustForwardedFor = true
+		cfg.LoadFromEnv()
+		if cfg.TrustForwardedFor {
+			t.Error("TrustForwardedFor = true, want false")
+		}
+	})
+
 	tests := []struct {
 		value    string
 		start    bool
@@ -2185,8 +2196,11 @@ func TestLoadBoolsFromEnvParseStrictly(t *testing.T) {
 		{"false", true, false, 0},
 		{"FALSE", true, false, 0},
 		{"0", true, false, 0},
-		{"yes", true, true, 1},
-		{"on", false, false, 1},
+		{"yes", false, true, 0},
+		{" On ", false, true, 0},
+		{"no", true, false, 0},
+		{"OFF", true, false, 0},
+		{"maybe", false, false, 1},
 		{"ture", true, true, 1},
 	}
 	for _, tt := range tests {

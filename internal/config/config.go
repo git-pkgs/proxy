@@ -1428,16 +1428,29 @@ func setEnvString(dst *string, key string) {
 	}
 }
 
-// setEnvBool is setEnvString for boolean fields. It accepts what
-// strconv.ParseBool does; any other value leaves *dst unchanged and is
-// reported via EnvWarnings.
+// parseEnvBool accepts what strconv.ParseBool does plus yes/no/on/off,
+// ignoring case and surrounding space.
+func parseEnvBool(v string) (bool, bool) {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "yes", "on":
+		return true, true
+	case "no", "off":
+		return false, true
+	}
+	b, err := strconv.ParseBool(v)
+	return b, err == nil
+}
+
+// setEnvBool is setEnvString for boolean fields, parsed via parseEnvBool.
+// Any other value leaves *dst unchanged and is reported via EnvWarnings.
 func (c *Config) setEnvBool(dst *bool, key string) {
 	v := os.Getenv(key)
 	if v == "" {
 		return
 	}
-	b, err := strconv.ParseBool(strings.TrimSpace(v))
-	if err != nil {
+	b, ok := parseEnvBool(v)
+	if !ok {
 		c.envWarnings = append(c.envWarnings, fmt.Sprintf("ignoring %s=%q: not a boolean, keeping %t", key, v, *dst))
 		return
 	}
@@ -1452,8 +1465,8 @@ func (c *Config) setGradleReadOnlyFromEnv() {
 	if v == "" {
 		return
 	}
-	readOnly, err := strconv.ParseBool(strings.TrimSpace(v))
-	if err != nil {
+	readOnly, ok := parseEnvBool(v)
+	if !ok {
 		c.Gradle.BuildCache.ReadOnly = true
 		c.envWarnings = append(c.envWarnings, fmt.Sprintf("ignoring %s=%q: not a boolean, keeping the Gradle build cache read-only", key, v))
 		return

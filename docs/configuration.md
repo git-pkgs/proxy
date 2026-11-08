@@ -2,7 +2,7 @@
 
 The proxy can be configured via command line flags, environment variables, or a configuration file. Command line flags take precedence over environment variables, which take precedence over the configuration file.
 
-Boolean environment variables accept `true`, `True`, `TRUE`, `t`, `T` or `1`, and `false`, `False`, `FALSE`, `f`, `F` or `0`. Any other value, such as `yes` or a typo, is ignored: the setting keeps its value from the configuration file or default, and the proxy logs a warning at startup.
+Boolean environment variables accept `true`, `t`, `1`, `yes` or `on`, and `false`, `f`, `0`, `no` or `off`, in any case. Any other value, such as a typo, is ignored: the setting keeps its value from the configuration file or default, and the proxy logs a warning at startup.
 
 ## Configuration File
 
