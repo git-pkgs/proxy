@@ -161,7 +161,7 @@ func (c *Cache) submodules(ctx context.Context, key, dir, commit string) ([]Subm
 	for entry := range strings.SplitSeq(out, "\x00") {
 		key, value, ok := strings.Cut(entry, "\n")
 		section, ok2 := strings.CutPrefix(key, "submodule.")
-		name, field, dotted := cutLast(section, ".")
+		name, field, dotted := strings.CutLast(section, ".")
 		if !ok || !ok2 || !dotted {
 			continue
 		}
@@ -199,14 +199,6 @@ func (c *Cache) submodules(ctx context.Context, key, dir, commit string) ([]Subm
 	}
 	slices.SortFunc(submodules, func(a, b Submodule) int { return strings.Compare(a.Path, b.Path) })
 	return submodules, nil
-}
-
-func cutLast(s, sep string) (before, after string, found bool) {
-	i := strings.LastIndex(s, sep)
-	if i < 0 {
-		return s, "", false
-	}
-	return s[:i], s[i+len(sep):], true
 }
 
 // ensureCommit makes sure the repository has commit, fetching it by ID when
