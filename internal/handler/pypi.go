@@ -1085,35 +1085,7 @@ func (r *replacingReader) Read(p []byte) (int, error) {
 			}
 		}
 		scan := max(len(r.in)-keep, 0)
-		var out []byte
-		done := 0
-		// at holds each replacement's next match at or after done, or -1.
-		// Only a match the last replacement consumed is searched for again,
-		// so each pass over r.in stays linear.
-		at := make([]int, len(r.replacements))
-		for i := range at {
-			at[i] = indexFrom(r.in, r.replacements[i].from, 0)
-		}
-		for {
-			k := -1
-			for i, j := range at {
-				if j >= 0 && (k < 0 || j < at[k]) {
-					k = i
-				}
-			}
-			if k < 0 || at[k] >= scan {
-				break
-			}
-			rep := &r.replacements[k]
-			out = append(out, r.in[done:at[k]]...)
-			out = append(out, rep.to...)
-			done = at[k] + len(rep.from)
-			for i, j := range at {
-				if j >= 0 && j < done {
-					at[i] = indexFrom(r.in, r.replacements[i].from, done)
-				}
-			}
-		}
+		out, done := r.replace(scan)
 		if done < scan {
 			out = append(out, r.in[done:scan]...)
 			done = scan
@@ -1124,6 +1096,39 @@ func (r *replacingReader) Read(p []byte) (int, error) {
 	n := copy(p, r.out)
 	r.out = r.out[n:]
 	return n, nil
+}
+
+// replace makes the replacements that start before scan in r.in, returning
+// the output and how much of r.in it covers.
+func (r *replacingReader) replace(scan int) (out []byte, done int) {
+	// at holds each replacement's next match at or after done, or -1.
+	// Only a match the last replacement consumed is searched for again,
+	// so each pass over r.in stays linear.
+	at := make([]int, len(r.replacements))
+	for i := range at {
+		at[i] = indexFrom(r.in, r.replacements[i].from, 0)
+	}
+	for {
+		k := -1
+		for i, j := range at {
+			if j >= 0 && (k < 0 || j < at[k]) {
+				k = i
+			}
+		}
+		if k < 0 || at[k] >= scan {
+			break
+		}
+		rep := &r.replacements[k]
+		out = append(out, r.in[done:at[k]]...)
+		out = append(out, rep.to...)
+		done = at[k] + len(rep.from)
+		for i, j := range at {
+			if j >= 0 && j < done {
+				at[i] = indexFrom(r.in, r.replacements[i].from, done)
+			}
+		}
+	}
+	return out, done
 }
 
 func (r *replacingReader) Close() error { return r.src.Close() }
