@@ -76,7 +76,7 @@ func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
 				return false
 			}
 			tracker.total.Add(1)
-			m.mirrorOne(ctx, item, tracker)
+			m.mirrorRecovered(ctx, item, tracker)
 		}
 		return true
 	}

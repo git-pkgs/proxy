@@ -2,6 +2,7 @@ package mirror
 
 import (
 	"context"
+	"net/http"
 	"reflect"
 	"slices"
 	"strings"
@@ -10,6 +11,7 @@ import (
 
 	"github.com/git-pkgs/proxy/internal/denylist"
 	"github.com/git-pkgs/registries"
+	"github.com/git-pkgs/registries/fetch"
 )
 
 // debCurlPackages returns a Packages index listing curl at version.
@@ -376,5 +378,40 @@ func TestRefreshIndexReadIsNotAClientAccess(t *testing.T) {
 	}
 	if len(docs) != 0 {
 		t.Errorf("recent indexes = %+v, want none: only the refresh read the index", docs)
+	}
+}
+
+// panickingFetcher serves files like servingFetcher but panics on URLs
+// containing panicOn.
+type panickingFetcher struct {
+	*servingFetcher
+	panicOn string
+}
+
+func (f *panickingFetcher) Fetch(ctx context.Context, url string) (*fetch.Artifact, error) {
+	return f.FetchWithHeaders(ctx, url, nil)
+}
+
+func (f *panickingFetcher) FetchWithHeaders(ctx context.Context, url string, h http.Header) (*fetch.Artifact, error) {
+	if strings.Contains(url, f.panicOn) {
+		panic("fetcher bug")
+	}
+	return f.servingFetcher.FetchWithHeaders(ctx, url, h)
+}
+
+func TestRefreshRecoversFromPanic(t *testing.T) {
+	m, fetcher := setupRefreshMirror(t, "tarball")
+	cacheNPM(t, m, "lodash", "4.17.20")
+	cacheNPM(t, m, "react", "18.3.0")
+	m.Versions = stubReleases{
+		"npm/lodash": oldReleases("4.17.20", "4.17.21"),
+		"npm/react":  oldReleases("18.3.0", "18.3.1"),
+	}
+	m.proxy.Fetcher = &panickingFetcher{servingFetcher: fetcher, panicOn: "lodash-4.17.21"}
+	fetcher.reset()
+
+	progress := refreshOnce(t, m)
+	if progress.Failed != 1 || progress.Completed != 1 || len(fetchedMatching(fetcher.fetched(), "react-18.3.1.tgz")) != 1 {
+		t.Errorf("progress = %+v, fetched %v; want lodash failed and react mirrored", progress, fetcher.fetched())
 	}
 }
