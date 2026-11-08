@@ -2211,13 +2211,13 @@ func TestScannerEcosystems(t *testing.T) {
 		SigningKey: "s3cret",
 		Scanners: []ScannerConfig{{
 			Name: "clamav", URL: "http://scanner.invalid/scan",
-			Ecosystems: []string{"go", "Docker", "rubygems", "npm", "arch"},
+			Ecosystems: []string{"go", "Docker", "rubygems", "npm", "arch", "git"},
 		}},
 	}
 	if err := cfg.Validate(); err != nil {
 		t.Fatalf("Validate() error: %v", err)
 	}
-	want := []string{"golang", "oci", "gem", "npm", "arch"}
+	want := []string{"golang", "oci", "gem", "npm", "arch", "git"}
 	if got := cfg.Scanners[0].Ecosystems; !slices.Equal(got, want) {
 		t.Errorf("Ecosystems = %v, want %v", got, want)
 	}

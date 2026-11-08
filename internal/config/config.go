@@ -449,9 +449,10 @@ func (s *ScannerConfig) Validate() error {
 }
 
 // scannerEcosystems are the ecosystem keys handlers pass to scanners: the
-// retention keys plus the handlers retention does not cover.
+// retention keys plus the handlers retention does not cover, and git for
+// Git LFS objects.
 var scannerEcosystems = func() []string {
-	keys := append(slices.Clone(retention.KnownKeys), "arch", "chef")
+	keys := append(slices.Clone(retention.KnownKeys), "arch", "chef", "git")
 	slices.Sort(keys)
 	return keys
 }()
