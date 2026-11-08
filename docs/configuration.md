@@ -2,6 +2,8 @@
 
 The proxy can be configured via command line flags, environment variables, or a configuration file. Command line flags take precedence over environment variables, which take precedence over the configuration file.
 
+Boolean environment variables accept `true`, `t`, `1`, `yes` or `on`, and `false`, `f`, `0`, `no` or `off`, in any case. Any other value, such as a typo, is ignored: the setting keeps its value from the configuration file or default, and the proxy logs a warning at startup.
+
 ## Configuration File
 
 Create a YAML or JSON file and pass it with `-config`:
@@ -65,7 +67,7 @@ storage:
 |--------|-------------|------|-------------|
 | `storage.url` | `PROXY_STORAGE_URL` | `-storage-url` | Storage URL (file:// or s3://) |
 | `storage.path` | `PROXY_STORAGE_PATH` | `-storage-path` | Local path (deprecated, use url) |
-| `storage.max_size` | `PROXY_STORAGE_MAX_SIZE` | - | Max cache size (e.g., "10GB") |
+| `storage.max_size` | `PROXY_STORAGE_MAX_SIZE` | - | Max cache size (e.g., "10GB"). Negative or out-of-range sizes are rejected at startup |
 | `storage.cache_artifacts` | `PROXY_STORAGE_CACHE_ARTIFACTS` | - | Store fetched artifacts (default: true); `false` streams them from upstream |
 | `storage.retention.default` | `PROXY_STORAGE_RETENTION_DEFAULT` | - | Evict artifacts not served for this long (e.g. "30d"); see [Retention](#retention) |
 | `storage.retention.sweep_interval` | `PROXY_STORAGE_RETENTION_SWEEP_INTERVAL` | - | How often expired artifacts are looked for (default: "10m", at least "1m") |
@@ -1398,7 +1400,7 @@ scanning:
 | `scanning.scanners[].name` | - | Identifies this scanner in logs and metrics |
 | `scanning.scanners[].url` | - | Endpoint the proxy POSTs scan notifications to |
 | `scanning.scanners[].mode` | - | `block` (default) or `monitor` |
-| `scanning.scanners[].ecosystems` | - | Restricts this scanner to specific ecosystems (e.g. `npm`, `pypi`). Empty means all ecosystems |
+| `scanning.scanners[].ecosystems` | - | Restricts this scanner to specific ecosystems (e.g. `npm`, `pypi`). Empty means all ecosystems. Valid names: `alpine`, `arch`, `cargo`, `chef`, `composer`, `conan`, `conda`, `cran`, `deb`, `freebsd`, `gem`, `generic`, `git` (Git LFS objects), `golang`, `helm`, `hex`, `julia`, `maven`, `npm`, `nuget`, `oci`, `pub`, `pypi`, `rpm`, `swift`. The aliases `go`, `docker`, `rubygems`, `packagist`, `debian` and `apk` are accepted too; any other name stops the proxy at startup |
 | `scanning.scanners[].headers` | - | Extra HTTP headers sent with every scan request (e.g. for authenticating to the scanner service). Values support `${VAR_NAME}` expansion |
 
 ### How caching defers to a scan verdict
