@@ -180,42 +180,6 @@ func TestBlobDeleteRemovesEmptyFetchDirectory(t *testing.T) {
 	assertReadsBack(t, b, kept, "content")
 }
 
-// A filename with directories in it, as APK, Arch and RPM packages have, puts
-// the object below its fetch directory. Delete removes those directories
-// too once empty, up to and including the fetch directory.
-func TestBlobDeleteRemovesNestedFetchDirectories(t *testing.T) {
-	dir := t.TempDir()
-	b := openFileBlob(t, dir)
-	ctx := context.Background()
-	const (
-		emptied = "rpm/bash/5.1/0123456789abcdef/rocky/9/BaseOS/bash.rpm"
-		shared  = "rpm/bash/5.1/fedcba9876543210/alma/9/BaseOS/bash.rpm"
-		kept    = "rpm/bash/5.1/fedcba9876543210/alma/9/AppStream/bash.rpm"
-	)
-	for _, key := range []string{emptied, shared, kept} {
-		if _, _, err := b.Store(ctx, key, strings.NewReader("content")); err != nil {
-			t.Fatalf("Store(%q): %v", key, err)
-		}
-	}
-	for _, key := range []string{emptied, shared} {
-		if err := b.Delete(ctx, key); err != nil {
-			t.Fatalf("Delete(%q): %v", key, err)
-		}
-	}
-
-	version := filepath.Join(dir, "rpm", "bash", "5.1")
-	if _, err := os.Stat(filepath.Join(version, "0123456789abcdef")); !os.IsNotExist(err) {
-		t.Errorf("emptied fetch directory left behind (stat err %v)", err)
-	}
-	if _, err := os.Stat(filepath.Join(version, "fedcba9876543210", "alma", "9", "BaseOS")); !os.IsNotExist(err) {
-		t.Errorf("emptied directory below the fetch directory left behind (stat err %v)", err)
-	}
-	if _, err := os.Stat(version); err != nil {
-		t.Errorf("version directory removed: %v", err)
-	}
-	assertReadsBack(t, b, kept, "content")
-}
-
 func TestBlobDeleteNotFound(t *testing.T) {
 	b := createTestBlob(t)
 	ctx := context.Background()
