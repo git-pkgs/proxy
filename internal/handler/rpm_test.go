@@ -1,9 +1,14 @@
 package handler
 
 import (
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"sync/atomic"
 	"testing"
 
 	"github.com/git-pkgs/purl"
+	"github.com/git-pkgs/registries/fetch"
 )
 
 func TestRPMHandler_parseRPMPath(t *testing.T) {
@@ -50,5 +55,50 @@ func TestRPMRetentionKey(t *testing.T) {
 	}
 	if _, ok := rpmRetentionKey(nil); ok {
 		t.Error("rpmRetentionKey(nil) accepted")
+	}
+}
+
+// TestRPMHandler_PackageDownloadCachesPerRepository checks that two
+// repositories under one upstream that ship the same filename with different
+// bytes are cached apart, as on a mirror root serving several distributions.
+func TestRPMHandler_PackageDownloadCachesPerRepository(t *testing.T) {
+	packages := map[string]string{
+		"/rocky/9/BaseOS/x86_64/os/Packages/b/bash-5.1.8-9.el9.x86_64.rpm":     "rocky bash",
+		"/almalinux/9/BaseOS/x86_64/os/Packages/b/bash-5.1.8-9.el9.x86_64.rpm": "alma bash",
+	}
+
+	var available atomic.Bool
+	available.Store(true)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		data, ok := packages[r.URL.Path]
+		if !available.Load() || !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = w.Write([]byte(data))
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+	srv := httptest.NewServer(NewRPMHandlerWithUpstream(proxy, testProxyURL, upstream.URL).Routes())
+	defer srv.Close()
+
+	for round := range 2 {
+		for path, want := range packages {
+			resp, err := http.Get(srv.URL + path)
+			if err != nil {
+				t.Fatal(err)
+			}
+			body, _ := io.ReadAll(resp.Body)
+			_ = resp.Body.Close()
+			if resp.StatusCode != http.StatusOK || string(body) != want {
+				t.Errorf("round %d %s: %d %q, want 200 %q", round, path, resp.StatusCode, body, want)
+			}
+		}
+		// The second round must come from the cache.
+		available.Store(false)
 	}
 }

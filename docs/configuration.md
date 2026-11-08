@@ -1820,7 +1820,7 @@ curl -X DELETE http://localhost:8080/api/cache/maven/com.google.guava:guava/32.1
 curl -X DELETE 'http://localhost:8080/api/cache/maven/com.google.guava:guava/32.1.3-jre?filename=guava-32.1.3-jre.jar'
 ```
 
-The name is the package name the UI shows, for example `group:artifact` for Maven. The response lists the deleted files. The next request for a deleted file fetches it from the upstream again. The stored bytes are removed after the same delay as a replaced artifact, so downloads already in progress can finish.
+The name is the package name the UI shows, for example `group:artifact` for Maven. An RPM package's `filename` is its path under `upstream.rpm` (`updates/40/Everything/x86_64/Packages/c/curl-8.6.0-10.fc40.x86_64.rpm`), since repositories under one upstream can ship different files under one name. The response lists the deleted files. The next request for a deleted file fetches it from the upstream again. The stored bytes are removed after the same delay as a replaced artifact, so downloads already in progress can finish.
 
 Pushed archives are not touched: a whole-version delete skips them, and naming one answers 409. Delete those through the [hosted API](#hosted-packages).
 
