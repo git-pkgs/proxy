@@ -102,3 +102,45 @@ func TestRPMHandler_PackageDownloadCachesPerRepository(t *testing.T) {
 		available.Store(false)
 	}
 }
+
+// TestRPMHandler_PackageDownloadCleansPath checks that spellings of one
+// path with empty or "." segments share one cache entry.
+func TestRPMHandler_PackageDownloadCleansPath(t *testing.T) {
+	const want = "bash"
+	var hits atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/rocky/9/BaseOS/x86_64/os/Packages/b/bash-5.1.8-9.el9.x86_64.rpm" {
+			http.NotFound(w, r)
+			return
+		}
+		hits.Add(1)
+		_, _ = w.Write([]byte(want))
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+	srv := httptest.NewServer(NewRPMHandlerWithUpstream(proxy, testProxyURL, upstream.URL).Routes())
+	defer srv.Close()
+
+	for _, path := range []string{
+		"/rocky/9/BaseOS/x86_64/os/Packages/b/bash-5.1.8-9.el9.x86_64.rpm",
+		"/rocky//9/BaseOS/x86_64/os/Packages/b/bash-5.1.8-9.el9.x86_64.rpm",
+		"/rocky/./9/BaseOS/x86_64/os/Packages/b/bash-5.1.8-9.el9.x86_64.rpm",
+	} {
+		resp, err := http.Get(srv.URL + path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		body, _ := io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		if resp.StatusCode != http.StatusOK || string(body) != want {
+			t.Errorf("%s: %d %q, want 200 %q", path, resp.StatusCode, body, want)
+		}
+	}
+	if n := hits.Load(); n != 1 {
+		t.Errorf("upstream fetched %d times, want 1", n)
+	}
+}

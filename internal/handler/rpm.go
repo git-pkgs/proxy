@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	pathpkg "path"
 	"regexp"
 	"strings"
 
@@ -78,7 +79,7 @@ func (h *RPMHandler) Routes() http.Handler {
 		switch {
 		case strings.HasSuffix(path, ".rpm"):
 			// Package downloads - cache these
-			h.handlePackageDownload(w, r, path)
+			h.handlePackageDownload(w, r, cleanRPMPath(path))
 		case strings.Contains(path, "/repodata/"):
 			// Repository metadata
 			h.handleMetadata(w, r, path)
@@ -87,6 +88,12 @@ func (h *RPMHandler) Routes() http.Handler {
 			h.proxyFile(w, r, path)
 		}
 	}))
+}
+
+// cleanRPMPath drops empty and "." segments from a relative path, so each
+// package has one cache key. ".." segments are rejected before this.
+func cleanRPMPath(p string) string {
+	return strings.TrimPrefix(pathpkg.Clean("/"+p), "/")
 }
 
 // handlePackageDownload fetches and caches .rpm packages.
