@@ -279,11 +279,15 @@ func (h *MavenHandler) parsePath(urlPath string) (group, artifact, version, file
 	groupParts := parts[:len(parts)-3]
 	// The Maven layout splits a group at its dots, so a group directory
 	// never holds a dot or is empty. Such a path would spell the same group
-	// as another and share its cache entries, so it is not parsed.
+	// as another and share its cache entries, so it is not parsed. Nor is a
+	// colon in the group or artifact, which are cached as group:artifact.
 	for _, part := range groupParts {
-		if part == "" || strings.Contains(part, ".") {
+		if part == "" || strings.ContainsAny(part, ".:") {
 			return "", "", "", ""
 		}
+	}
+	if strings.Contains(artifact, ":") {
+		return "", "", "", ""
 	}
 	group = strings.Join(groupParts, ".")
 
