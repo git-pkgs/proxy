@@ -341,18 +341,21 @@ func (h *MavenHandler) isChecksumFile(filename string) bool {
 	return false
 }
 
+// mavenForwardHeaders lets clients resume artifacts proxied without caching.
+var mavenForwardHeaders = []string{"Range", "If-Range"}
+
 // proxyUpstream forwards a request to the source's upstream without caching.
 func (h *MavenHandler) proxyUpstream(w http.ResponseWriter, r *http.Request, source mavenSource, urlPath string) {
 	if source.fallbackURL == "" {
-		h.proxy.ProxyUpstream(w, r, source.upstreamURL+"/"+urlPath, nil)
+		h.proxy.ProxyUpstream(w, r, source.upstreamURL+"/"+urlPath, mavenForwardHeaders)
 		return
 	}
 	// As for cached files, a file the primary upstream lacks is looked for
 	// on the Gradle Plugin Portal.
-	resp, err := h.proxy.upstreamRequest(r, source.upstreamURL+"/"+urlPath)
+	resp, err := h.proxy.upstreamRequest(r, source.upstreamURL+"/"+urlPath, mavenForwardHeaders)
 	if err == nil && resp.StatusCode == http.StatusNotFound {
 		_ = resp.Body.Close()
-		resp, err = h.proxy.upstreamRequest(r, source.fallbackURL+"/"+urlPath)
+		resp, err = h.proxy.upstreamRequest(r, source.fallbackURL+"/"+urlPath, mavenForwardHeaders)
 	}
 	if err != nil {
 		if writeUpstreamHeld(w, err) {

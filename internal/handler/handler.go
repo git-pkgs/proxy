@@ -1477,36 +1477,29 @@ func copyArtifactBody(w http.ResponseWriter, reader io.Reader, expectedSize int6
 	}
 }
 
-// ProxyUpstream forwards a request to an upstream URL without caching.
-// It copies the request, forwards specified headers, and streams the response back.
-// forwardHeaders controls the request headers sent upstream. End-to-end response
-// headers and trailers are relayed independently of that list.
-// upstreamRequest sends r's method to upstreamURL with no request headers.
-func (p *Proxy) upstreamRequest(r *http.Request, upstreamURL string) (*http.Response, error) {
+// upstreamRequest sends r's method to upstreamURL, copying only the
+// forwardHeaders that r sets.
+func (p *Proxy) upstreamRequest(r *http.Request, upstreamURL string, forwardHeaders []string) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
 	if err != nil {
 		return nil, err
 	}
-	return p.HTTPClient.Do(req)
-}
-
-func (p *Proxy) ProxyUpstream(w http.ResponseWriter, r *http.Request, upstreamURL string, forwardHeaders []string) {
-	p.Logger.Debug("proxying to upstream", "url", upstreamURL)
-
-	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
-	if err != nil {
-		http.Error(w, "failed to create request", http.StatusInternalServerError)
-		return
-	}
-
-	// Copy request headers that affect content negotiation / caching
 	for _, header := range forwardHeaders {
 		if v := r.Header.Get(header); v != "" {
 			req.Header.Set(header, v)
 		}
 	}
+	return p.HTTPClient.Do(req)
+}
 
-	resp, err := p.HTTPClient.Do(req)
+// ProxyUpstream forwards a request to an upstream URL without caching.
+// It copies the request, forwards specified headers, and streams the response back.
+// forwardHeaders controls the request headers sent upstream. End-to-end response
+// headers and trailers are relayed independently of that list.
+func (p *Proxy) ProxyUpstream(w http.ResponseWriter, r *http.Request, upstreamURL string, forwardHeaders []string) {
+	p.Logger.Debug("proxying to upstream", "url", upstreamURL)
+
+	resp, err := p.upstreamRequest(r, upstreamURL, forwardHeaders)
 	if err != nil {
 		if writeUpstreamHeld(w, err) {
 			return

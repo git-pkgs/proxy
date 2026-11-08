@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/git-pkgs/registries/fetch"
 )
@@ -169,5 +170,29 @@ func TestMavenUncachedPathFallsBackToPluginPortal(t *testing.T) {
 
 	if w := getMaven(h, dotted); w.Code != http.StatusOK || w.Body.String() != "portal "+dotted {
 		t.Errorf("GET %s = %d %q, want the Plugin Portal's copy", dotted, w.Code, w.Body.String())
+	}
+}
+
+func TestMavenUncachedPathKeepsByteRanges(t *testing.T) {
+	const dotted = "/org.foo/bar/1.0/bar-1.0.jar"
+	ranged := func() *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			http.ServeContent(w, r, "bar.jar", time.Time{}, strings.NewReader("0123456789"))
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+	central, grails := ranged(), ranged()
+	portal, _ := mavenRepoUpstream(t, "portal")
+	h := newMavenRepositoriesHandler(t, central, portal, grails)
+
+	for _, p := range []string{dotted, "/grails" + dotted} {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		req.Header.Set("Range", "bytes=2-4")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusPartialContent || w.Body.String() != "234" {
+			t.Errorf("GET %s with Range = %d %q, want 206 %q", p, w.Code, w.Body.String(), "234")
+		}
 	}
 }
