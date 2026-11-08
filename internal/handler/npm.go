@@ -809,7 +809,6 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 			if writeUpstreamHeld(w, err) {
 				return
 			}
-			// A policy denial keeps its own status and JSON report body.
 			if h.proxy.serveUpstreamBlock(w, err) {
 				return
 			}
