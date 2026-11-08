@@ -3,6 +3,7 @@ package gitcache
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"slices"
@@ -387,5 +388,24 @@ func TestMirrorExplainsShortCommit(t *testing.T) {
 	_, err := tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", commit[:12], true)
 	if !errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "full commit ID") {
 		t.Errorf("mirror of a short commit ID = %v, want ErrNotFound saying it is no full commit ID", err)
+	}
+}
+
+// TestMirrorWarnsOfStaleTag checks a tag served from the cache when the
+// refresh fails is mirrored with a warning, since the tag may have moved.
+func TestMirrorWarnsOfStaleTag(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	if _, err := tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", "v1", true); err != nil {
+		t.Fatalf("Mirror: %v", err)
+	}
+	upstream.status.Store(http.StatusServiceUnavailable)
+
+	if _, err := tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", "v1", true); err != nil {
+		t.Fatalf("mirror of a cached tag with the upstream down: %v", err)
+	}
+	if !strings.Contains(tc.logs.String(), "tag=v1") {
+		t.Errorf("no warning naming the tag in the log:\n%s", tc.logs.String())
 	}
 }

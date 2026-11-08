@@ -87,6 +87,10 @@ func (c *Cache) Mirror(ctx context.Context, key, repoURL, version string, fetchW
 			}
 			return MirrorResult{}, err
 		}
+		if refreshErr != nil {
+			// Tags can move; this is where it pointed when last fetched.
+			c.logger.Warn("git cache: refresh failed, mirroring the cached tag", "repository", key, "tag", version, "commit", commit, "error", refreshErr)
+		}
 	case version != "":
 		if err := c.ensureCommit(ctx, rp, repoURL, commit, fetchWants); err != nil {
 			return MirrorResult{}, err
