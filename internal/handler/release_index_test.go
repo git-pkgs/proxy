@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -242,5 +243,23 @@ func TestDebianIndexSkipsReleaseWithoutListing(t *testing.T) {
 	getBody(t, h, "dists/stable/InRelease")
 	if got := getBody(t, h, index); got != indexBody(1) {
 		t.Errorf("index after InRelease refetch = %q, want %q", got, indexBody(1))
+	}
+}
+
+// TestCachedReleaseChecksStoredBytes checks that a release file whose stored
+// bytes no longer match its row, because another instance replaced them, is
+// not used to decide which index to serve.
+func TestCachedReleaseChecksStoredBytes(t *testing.T) {
+	proxy, db, store, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	path := seedMetadataRow(t, db, store)
+	if proxy.readCachedRelease(context.Background(), "test", "pkg") == nil {
+		t.Fatal("matching release file not read")
+	}
+	store.mu.Lock()
+	store.files[path] = []byte(`{"v":2}`)
+	store.mu.Unlock()
+	if release := proxy.readCachedRelease(context.Background(), "test", "pkg"); release != nil {
+		t.Errorf("read a release file whose bytes don't match its row: %q", release.body)
 	}
 }

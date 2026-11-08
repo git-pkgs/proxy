@@ -44,7 +44,9 @@ func (p *Proxy) readCachedRelease(ctx context.Context, ecosystem, cacheKey strin
 		return nil
 	}
 	body, _, err := p.readCachedMetadata(ctx, entry, nil)
-	if err != nil {
+	// Bytes another instance replaced since the row was read don't describe
+	// the release the row records.
+	if err != nil || !matchesEntryDigest(entry, body) {
 		return nil
 	}
 	return &cachedRelease{ecosystem: ecosystem, cacheKey: cacheKey, body: body, fetchedAt: entry.FetchedAt.Time}
