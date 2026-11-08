@@ -214,11 +214,10 @@ func debIndexFiles(ctx context.Context, m *Mirror, indexURL string, body []byte,
 	indexes := debPackagesIndexes(body)
 	wanted := map[string]bool{}
 	for _, c := range cached {
-		rest, ok := strings.CutPrefix(c.rel, "pool/")
+		component, ok := debComponent(c.rel, indexes)
 		if !ok {
 			continue
 		}
-		component, _, _ := strings.Cut(rest, "/")
 		if dir := component + "/binary-" + c.arch; indexes[dir] != "" {
 			wanted[dir] = true
 			continue
@@ -241,6 +240,26 @@ func debIndexFiles(ctx context.Context, m *Mirror, indexURL string, body []byte,
 		files = append(files, listed...)
 	}
 	return files, nil
+}
+
+// debComponent returns the component of a pool file that the release file
+// lists indexes for. It is the first segment after pool/, or the second, as
+// in the security archive's pool/updates/main.
+func debComponent(rel string, indexes map[string]string) (string, bool) {
+	rest, ok := strings.CutPrefix(rel, "pool/")
+	if !ok {
+		return "", false
+	}
+	first, rest, _ := strings.Cut(rest, "/")
+	second, _, _ := strings.Cut(rest, "/")
+	for _, component := range []string{first, second} {
+		for dir := range indexes {
+			if strings.HasPrefix(dir, component+"/binary-") {
+				return component, true
+			}
+		}
+	}
+	return "", false
 }
 
 // rpmIndexFiles reads the primary metadata a repomd.xml points at.

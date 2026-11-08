@@ -307,3 +307,26 @@ func TestRefreshRefusesAPKIndexesOverTheSizeLimit(t *testing.T) {
 		t.Errorf("progress = %+v, fetched %v; want the index failing for its size", progress, fetcher.fetched())
 	}
 }
+
+// TestRefreshDebianSecurityPool checks the security archive's layout, whose
+// pool is pool/updates/main while its InRelease lists main/binary-*.
+func TestRefreshDebianSecurityPool(t *testing.T) {
+	m, fetcher, idx := setupIndexRefresh(t)
+	pool := idx.URL + "/debian-security/pool/updates/main/c/curl/"
+	packages := func(version string) []byte {
+		return gzipped(t, "Package: curl\nVersion: "+version+"\nArchitecture: amd64\nFilename: pool/updates/main/c/curl/curl_"+version+"_amd64.deb\n\n")
+	}
+	idx.set("/debian-security/dists/bookworm-security/InRelease", []byte("SHA256:\n 0000 1 main/binary-amd64/Packages.gz\n"))
+	idx.set("/debian-security/dists/bookworm-security/main/binary-amd64/Packages.gz", packages("7.88.1-10+deb12u7"))
+	clientFetchesCurl(t, m, "debian", idx.URL+"/debian-security/dists/bookworm-security/InRelease",
+		"deb", "7.88.1-10+deb12u7", "curl_7.88.1-10+deb12u7_amd64.deb", pool+"curl_7.88.1-10+deb12u7_amd64.deb")
+
+	idx.set("/debian-security/dists/bookworm-security/main/binary-amd64/Packages.gz", packages("7.88.1-10+deb12u8"))
+	fetcher.reset()
+	progress := refreshOnce(t, m)
+
+	want := []string{pool + "curl_7.88.1-10+deb12u8_amd64.deb"}
+	if !slices.Equal(fetcher.fetched(), want) || progress.Completed != 1 || progress.Failed != 0 {
+		t.Errorf("progress = %+v, fetched %v; want %v", progress, fetcher.fetched(), want)
+	}
+}
