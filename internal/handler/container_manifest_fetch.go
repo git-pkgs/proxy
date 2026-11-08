@@ -210,6 +210,11 @@ func (h *ContainerHandler) headManifest(ctx context.Context, req manifestRequest
 	digest := resp.Header.Get("Docker-Content-Digest")
 	switch {
 	case resp.StatusCode == http.StatusOK && manifestDigestReferencePattern.MatchString(digest):
+		if req.immutable() && digestMismatch(req.reference, digest) {
+			h.proxy.Logger.Error("upstream manifest HEAD names another digest",
+				"name", req.name, "reference", req.reference, "upstream", digest)
+			return manifestOutcome{digestInvalid: true}
+		}
 		if !req.immutable() {
 			if outcome, ok := h.tagFromCachedDigest(ctx, req, cached, fromFallback, resp, digest); ok {
 				return outcome
@@ -232,6 +237,14 @@ func (h *ContainerHandler) headManifest(ctx context.Context, req manifestRequest
 		return manifestOutcome{err: fmt.Errorf("upstream status %d", resp.StatusCode)}
 	}
 	return manifestOutcome{relay: h.captureResponse(resp)}
+}
+
+// digestMismatch reports whether two digests of the same algorithm differ.
+// Digests of different algorithms can't be compared without the body.
+func digestMismatch(requested, upstream string) bool {
+	reqAlg, reqHex, _ := strings.Cut(requested, ":")
+	upAlg, upHex, _ := strings.Cut(upstream, ":")
+	return reqAlg == upAlg && !strings.EqualFold(reqHex, upHex)
 }
 
 // tagFromCachedDigest answers a tag from the cache once a HEAD named the

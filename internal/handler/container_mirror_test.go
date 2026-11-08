@@ -2,7 +2,9 @@ package handler
 
 import (
 	"context"
+	"crypto/sha512"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
@@ -608,5 +610,37 @@ func TestMirrorImageBlobFailureKeepsOtherFetches(t *testing.T) {
 	registry.offline.Store(true)
 	if response := pull(t, h, "/team/app/blobs/"+image.singleLayer, ""); response.Code != http.StatusOK {
 		t.Errorf("layer fetched alongside the failing blob: status %d, want it cached", response.Code)
+	}
+}
+
+func TestMirrorImageAcceptsSHA512Blobs(t *testing.T) {
+	registry, image := newFakeImageRegistry(t)
+	const layer = "sha512 layer"
+	sum := sha512.Sum512([]byte(layer))
+	layerDigest := "sha512:" + hex.EncodeToString(sum[:])
+	body, err := json.Marshal(map[string]any{
+		"schemaVersion": 2, "mediaType": ociManifestMediaType,
+		"config": map[string]any{"mediaType": "application/vnd.oci.image.config.v1+json", "digest": image.singleLayer},
+		"layers": []map[string]any{{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": layerDigest}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.mu.Lock()
+	registry.manifests["/v2/team/app/manifests/sha512"] = fakeManifest{contentType: ociManifestMediaType, body: string(body)}
+	registry.blobs["/v2/team/app/blobs/"+layerDigest] = layer
+	registry.mu.Unlock()
+
+	proxy := newMirrorTestProxy(t, registry)
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example", registry.server.URL)
+	if _, err := h.MirrorImage(context.Background(), ImageRef{Name: "team/app", References: []string{"sha512"}}, nil); err != nil {
+		t.Fatalf("MirrorImage: %v", err)
+	}
+	cached, err := proxy.GetCachedArtifact(t.Context(), "oci", "team/app", layerDigest, layerDigest)
+	if err != nil || cached == nil {
+		t.Fatalf("sha512 layer not cached: %v, %v", cached, err)
+	}
+	if cached.Reader != nil {
+		_ = cached.Reader.Close()
 	}
 }

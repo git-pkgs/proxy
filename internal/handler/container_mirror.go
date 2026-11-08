@@ -36,7 +36,7 @@ var (
 	// Grammar from the OCI distribution spec.
 	mirrorNamePattern   = regexp.MustCompile(`^[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*$`)
 	mirrorTagPattern    = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$`)
-	mirrorDigestPattern = regexp.MustCompile(`^sha256:[a-f0-9]{64}$`)
+	mirrorDigestPattern = regexp.MustCompile(`^(sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$`)
 )
 
 // dockerHubMirrorAliases are registry hosts that name Docker Hub in image
