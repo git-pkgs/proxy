@@ -157,6 +157,12 @@ func (c *Cache) startRefresh(rp *repo, repoURL string) *refreshCall {
 		}
 		c.mu.Lock()
 		rp.refreshing = nil
+		switch {
+		case call.err == nil:
+			rp.refused = nil
+		case !servesStale(call.err):
+			rp.refused = call.err
+		}
 		c.mu.Unlock()
 		c.release(rp)
 		close(call.done)

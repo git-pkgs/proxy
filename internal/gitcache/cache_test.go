@@ -786,3 +786,92 @@ func TestCloseTwice(t *testing.T) {
 		t.Errorf("closing twice: %v", err)
 	}
 }
+
+// lsRefs sends a protocol v2 ls-refs request for "repo" straight to
+// git-upload-pack, as a client may without asking for info/refs first, and
+// returns the status.
+func (tc *testCache) lsRefs(t *testing.T) int {
+	t.Helper()
+	body := pktLine("command=ls-refs\n") + pktDelim + pktLine("peel\n") + pktFlush
+	req, err := http.NewRequestWithContext(t.Context(), http.MethodPost, tc.url("repo")+"/git-upload-pack", strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	req.Header.Set("Content-Type", requestType)
+	req.Header.Set("Git-Protocol", "version=2")
+	resp, err := http.DefaultClient.Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	return resp.StatusCode
+}
+
+// TestUploadPackChecksCopyPastStaleMaxAge sends upload-pack requests without
+// info/refs: a copy not checked within stale_max_age is checked first.
+func TestUploadPackChecksCopyPastStaleMaxAge(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.clone(t, "repo")
+	if status := tc.lsRefs(t); status != http.StatusOK {
+		t.Fatalf("ls-refs on a fresh copy: status %d", status)
+	}
+
+	waitIdle(t, tc.Cache)
+	rp := tc.acquire("up/repo.git")
+	rp.lastChecked.Store(time.Now().Add(-2 * time.Hour).UnixNano())
+	tc.release(rp)
+	upstream.status.Store(http.StatusNotFound)
+	if status := tc.lsRefs(t); status == http.StatusOK {
+		t.Errorf("served a copy older than stale_max_age to ls-refs")
+	}
+}
+
+// TestUploadPackRefusedAfterUpstreamRefusal has the upstream refuse a
+// refresh: upload-pack requests are refused too until a check succeeds.
+func TestUploadPackRefusedAfterUpstreamRefusal(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.clone(t, "repo")
+
+	upstream.status.Store(http.StatusForbidden)
+	if out, err := tryGit(t, "", "ls-remote", tc.url("repo")); err == nil {
+		t.Fatalf("served the cached copy after 403:\n%s", out)
+	}
+	if status := tc.lsRefs(t); status == http.StatusOK {
+		t.Errorf("ls-refs served after the upstream refused the repository")
+	}
+
+	upstream.status.Store(0)
+	tc.clone(t, "repo")
+	if status := tc.lsRefs(t); status != http.StatusOK {
+		t.Errorf("ls-refs after a successful check: status %d", status)
+	}
+}
+
+// TestCloneChecksUpstreamOnce clones with a stale_max_age of 0: the
+// upload-pack requests after info/refs do not check the upstream again.
+func TestCloneChecksUpstreamOnce(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) { o.StaleMaxAge = 0 })
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+
+	checks := func() int32 { return upstream.requests.Load() - upstream.gitRequests.Load() }
+	before := checks()
+	resp, err := http.Get(tc.url("repo") + "/info/refs?service=git-upload-pack")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = resp.Body.Close()
+	perCheck := checks() - before
+
+	before = checks()
+	tc.clone(t, "repo")
+	if got := checks() - before; got != perCheck {
+		t.Errorf("clone made %d upstream check requests, want %d", got, perCheck)
+	}
+}

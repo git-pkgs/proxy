@@ -121,14 +121,17 @@ type Cache struct {
 	failedWants map[string]time.Time
 }
 
-// repo is a cached repository, or one being cloned. users, refreshing and
-// the map entry itself are guarded by Cache.mu.
+// repo is a cached repository, or one being cloned. users, refreshing,
+// refused and the map entry itself are guarded by Cache.mu.
 type repo struct {
 	key string
 	dir string
 
 	users      int
 	refreshing *refreshCall
+	// refused is the error of the last refresh when the upstream reported
+	// the repository missing or refused it, until a refresh succeeds.
+	refused error
 	// writes serializes git fetches into the repository.
 	writes chan struct{}
 
