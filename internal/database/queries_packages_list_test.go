@@ -252,11 +252,11 @@ func TestCachedPackageFiltersMatchEcosystemAliases(t *testing.T) {
 	})
 }
 
-func TestSearchPackagesIgnoresCaseAndEscapesWildcards(t *testing.T) {
+func TestSearchPackagesIgnoresCaseAndEscapesPercent(t *testing.T) {
 	runWithBothDatabases(t, func(t *testing.T, db *DB) {
 		seedArtifact(t, db, "pypi", "Django", "5.0.0", 100, 1)
+		seedArtifact(t, db, "pypi", "typing-extensions", "4.12.0", 100, 1)
 		seedArtifact(t, db, "npm", "my_pkg", "1.0.0", 100, 1)
-		seedArtifact(t, db, "npm", "myxpkg", "1.0.0", 100, 1)
 		seedArtifact(t, db, "npm", "100%-done", "1.0.0", 100, 1)
 		seedArtifact(t, db, "npm", "1000-done", "1.0.0", 100, 1)
 		seedArtifact(t, db, "npm", `back\slash`, "1.0.0", 100, 1)
@@ -268,6 +268,9 @@ func TestSearchPackagesIgnoresCaseAndEscapesWildcards(t *testing.T) {
 			{"django", []string{"Django"}},
 			{"DJANGO", []string{"Django"}},
 			{"my_pkg", []string{"my_pkg"}},
+			// _ stays a single-character wildcard, so it matches - too.
+			{"typing_extensions", []string{"typing-extensions"}},
+			{"typing-extensions", []string{"typing-extensions"}},
 			{"100%", []string{"100%-done"}},
 			{`k\s`, []string{`back\slash`}},
 		} {

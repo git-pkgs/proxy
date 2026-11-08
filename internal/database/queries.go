@@ -898,10 +898,11 @@ func (db *DB) SearchPackages(query string, ecosystem string, limit int, offset i
 // from nameSearchPattern, ignoring case on SQLite and Postgres alike.
 const nameSearchCondition = `LOWER(p.name) LIKE LOWER(?) ESCAPE '!'`
 
-// nameSearchPattern is the LIKE pattern for names containing query, with
-// the LIKE wildcards in query matched literally.
+// nameSearchPattern is the LIKE pattern for names containing query. A %
+// in query is matched literally, but _ stays a single-character wildcard
+// so typing_extensions still finds typing-extensions.
 func nameSearchPattern(query string) string {
-	escaped := strings.NewReplacer("!", "!!", "%", "!%", "_", "!_").Replace(query)
+	escaped := strings.NewReplacer("!", "!!", "%", "!%").Replace(query)
 	return "%" + escaped + "%"
 }
 
