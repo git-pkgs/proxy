@@ -67,7 +67,7 @@ storage:
 |--------|-------------|------|-------------|
 | `storage.url` | `PROXY_STORAGE_URL` | `-storage-url` | Storage URL (file:// or s3://) |
 | `storage.path` | `PROXY_STORAGE_PATH` | `-storage-path` | Local path (deprecated, use url) |
-| `storage.max_size` | `PROXY_STORAGE_MAX_SIZE` | - | Max cache size (e.g., "10GB") |
+| `storage.max_size` | `PROXY_STORAGE_MAX_SIZE` | - | Max cache size (e.g., "10GB"). Negative or out-of-range sizes are rejected at startup |
 | `storage.cache_artifacts` | `PROXY_STORAGE_CACHE_ARTIFACTS` | - | Store fetched artifacts (default: true); `false` streams them from upstream |
 | `storage.retention.default` | `PROXY_STORAGE_RETENTION_DEFAULT` | - | Evict artifacts not served for this long (e.g. "30d"); see [Retention](#retention) |
 | `storage.retention.sweep_interval` | `PROXY_STORAGE_RETENTION_SWEEP_INTERVAL` | - | How often expired artifacts are looked for (default: "10m", at least "1m") |

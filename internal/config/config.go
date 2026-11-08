@@ -64,6 +64,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
@@ -1655,8 +1656,8 @@ func (c *Config) Validate() error {
 
 	// Validate direct serve TTL if specified
 	if c.Storage.DirectServeTTL != "" {
-		if _, err := time.ParseDuration(c.Storage.DirectServeTTL); err != nil {
-			return fmt.Errorf("invalid storage.direct_serve_ttl %q: %w", c.Storage.DirectServeTTL, err)
+		if _, err := parseNonNegativeDuration("storage.direct_serve_ttl", c.Storage.DirectServeTTL); err != nil {
+			return err
 		}
 	}
 
@@ -1673,8 +1674,8 @@ func (c *Config) Validate() error {
 
 	// Validate metadata TTL if specified
 	if c.MetadataTTL != "" && c.MetadataTTL != "0" {
-		if _, err := time.ParseDuration(c.MetadataTTL); err != nil {
-			return fmt.Errorf("invalid metadata_ttl %q: %w", c.MetadataTTL, err)
+		if _, err := parseNonNegativeDuration("metadata_ttl", c.MetadataTTL); err != nil {
+			return err
 		}
 	}
 
@@ -2172,7 +2173,12 @@ func ParseSize(s string) (int64, error) {
 			if err != nil {
 				return 0, fmt.Errorf("invalid number %q", numStr)
 			}
-			return int64(num * float64(s2.mult)), nil
+			// The comparisons also reject NaN.
+			size := num * float64(s2.mult)
+			if !(size >= 0 && size < math.MaxInt64) {
+				return 0, fmt.Errorf("invalid size %q: must be between 0 and %d bytes", s, int64(math.MaxInt64))
+			}
+			return int64(size), nil
 		}
 	}
 
@@ -2180,6 +2186,9 @@ func ParseSize(s string) (int64, error) {
 	num, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("invalid size %q", s)
+	}
+	if num < 0 {
+		return 0, fmt.Errorf("invalid size %q: must not be negative", s)
 	}
 	return num, nil
 }

@@ -2228,3 +2228,30 @@ func TestScannerEcosystems(t *testing.T) {
 		t.Errorf("Validate() error = %v, want unknown ecosystem pypy", err)
 	}
 }
+
+func TestParseSizeRejectsOutOfRange(t *testing.T) {
+	for _, s := range []string{"-5GB", "-1", "-0.5K", "NaNGB", "InfGB", "+InfB", "1e30GB", "9999999999TB"} {
+		if got, err := ParseSize(s); err == nil {
+			t.Errorf("ParseSize(%q) = %d, want error", s, got)
+		}
+	}
+	cfg := Default()
+	cfg.Storage.MaxSize = "-5GB"
+	if err := cfg.Validate(); err == nil {
+		t.Error("Validate() accepted storage.max_size -5GB")
+	}
+}
+
+func TestValidateRejectsNegativeTTLs(t *testing.T) {
+	cfg := Default()
+	cfg.MetadataTTL = "-5m"
+	if err := cfg.Validate(); err == nil {
+		t.Error("Validate() accepted metadata_ttl -5m")
+	}
+
+	cfg = Default()
+	cfg.Storage.DirectServeTTL = "-5m"
+	if err := cfg.Validate(); err == nil {
+		t.Error("Validate() accepted storage.direct_serve_ttl -5m")
+	}
+}
