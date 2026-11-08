@@ -1270,6 +1270,13 @@ Names and versions are compared the way each ecosystem treats them:
 - PyPI names ignore case, and runs of `-`, `_` and `.` are equivalent (PEP 503),
   so `pkg:pypi/zope.interface@6.0` also covers `zope_interface-6.0-*.whl`.
 - NuGet ids and versions ignore case.
+- Debian, RPM, Alpine, Arch and FreeBSD entries ignore the distribution
+  namespace: `pkg:deb/debian/curl@8.5.0-2` and `pkg:deb/curl@8.5.0-2` are the
+  same entry.
+- Debian and RPM filenames leave out the epoch, so an entry with one also
+  covers the version without it: `pkg:deb/foo@1:2.3-1` denies
+  `foo_2.3-1_amd64.deb`. An entry without an epoch only matches a version
+  without one.
 - A RubyGems entry also covers that version's platform gems:
   `pkg:gem/nokogiri@1.16.0` denies `nokogiri-1.16.0-x86_64-linux.gem`.
 - Composer versions ignore a leading `v`, which Packagist keeps from the tag:

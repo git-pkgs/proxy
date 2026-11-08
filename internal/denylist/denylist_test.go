@@ -90,3 +90,38 @@ func TestEcosystemSpellings(t *testing.T) {
 		t.Error("pypi versions not found under another spelling")
 	}
 }
+
+// TestDistroNamespaces checks that the distribution namespace of a distro
+// package is ignored on both sides, as handlers build some of these PURLs
+// without one and some with one.
+func TestDistroNamespaces(t *testing.T) {
+	p, err := New([]string{"pkg:deb/debian/curl@8.5.0-2", "pkg:rpm/fedora/curl@8.6.0-1.fc40", "pkg:apk/busybox@1.36.1-r15", "pkg:alpm/glibc@2.39-1"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"pkg:deb/curl@8.5.0-2", "pkg:rpm/curl@8.6.0-1.fc40", "pkg:apk/alpine/busybox@1.36.1-r15", "pkg:alpm/arch/glibc@2.39-1"} {
+		if !p.Denied(value) {
+			t.Errorf("not denied: %s", value)
+		}
+	}
+	if p.Denied("pkg:deb/curl@8.5.0-3") {
+		t.Error("other version denied")
+	}
+}
+
+// TestDistroEpochs checks that a deb or rpm entry with an epoch matches the
+// version as it appears in a filename, which leaves the epoch out.
+func TestDistroEpochs(t *testing.T) {
+	p, err := New([]string{"pkg:deb/foo@1:2.3-1", "pkg:rpm/bar@2:1.0-1.fc40"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, value := range []string{"pkg:deb/foo@2.3-1", "pkg:deb/foo@1:2.3-1", "pkg:rpm/bar@1.0-1.fc40"} {
+		if !p.Denied(value) {
+			t.Errorf("not denied: %s", value)
+		}
+	}
+	if p.Denied("pkg:deb/foo@2.3-2") {
+		t.Error("other version denied")
+	}
+}
