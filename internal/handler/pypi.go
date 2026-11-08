@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"mime"
 	"net/http"
@@ -1022,8 +1023,77 @@ func (h *PyPIHandler) proxySimple(w http.ResponseWriter, r *http.Request, path s
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// The HTML root index links projects as /simple/<name>/, which must
+	// point at the proxy's /pypi mount instead. It is large, so it is
+	// rewritten as it streams.
+	if resp.StatusCode == http.StatusOK && resp.Header.Get("Content-Encoding") == "" &&
+		!strings.Contains(resp.Header.Get(headerContentType), "json") {
+		resp.Body = &replacingReader{
+			src:  resp.Body,
+			from: []byte(`href="/simple/`),
+			to:   []byte(`href="` + h.proxyURL + `/pypi/simple/`),
+		}
+		resp.Header.Del(headerContentLength)
+		resp.ContentLength = -1
+	}
+
 	h.proxy.relayResponse(w, r, resp, func(dst, src http.Header) {
 		copyRelayHeaders(dst, src)
 		ensureVaryAccept(dst)
 	})
 }
+
+const replacingReaderBufferSize = 32 << 10
+
+// replacingReader replaces every occurrence of from with to in src as it is
+// read.
+type replacingReader struct {
+	src      io.ReadCloser
+	from, to []byte
+	in       []byte // read from src, not yet scanned
+	out      []byte // scanned, not yet returned
+	buf      []byte
+	err      error
+}
+
+func (r *replacingReader) Read(p []byte) (int, error) {
+	for len(r.out) == 0 {
+		if r.err != nil {
+			return 0, r.err
+		}
+		if r.buf == nil {
+			r.buf = make([]byte, replacingReaderBufferSize)
+		}
+		n, err := r.src.Read(r.buf)
+		r.in = append(r.in, r.buf[:n]...)
+		r.err = err
+		// Keep a tail that could be the start of a match split across reads.
+		keep := len(r.from) - 1
+		if err != nil {
+			keep = 0
+		}
+		scan := max(len(r.in)-keep, 0)
+		var out []byte
+		done := 0
+		for {
+			i := bytes.Index(r.in[done:], r.from)
+			if i < 0 || done+i >= scan {
+				break
+			}
+			out = append(out, r.in[done:done+i]...)
+			out = append(out, r.to...)
+			done += i + len(r.from)
+		}
+		if done < scan {
+			out = append(out, r.in[done:scan]...)
+			done = scan
+		}
+		r.out = out
+		r.in = append([]byte(nil), r.in[done:]...)
+	}
+	n := copy(p, r.out)
+	r.out = r.out[n:]
+	return n, nil
+}
+
+func (r *replacingReader) Close() error { return r.src.Close() }

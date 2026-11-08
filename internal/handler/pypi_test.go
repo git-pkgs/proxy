@@ -2,13 +2,16 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/git-pkgs/cooldown"
@@ -609,5 +612,52 @@ func TestPyPIDownloadCooldownMetadataCache(t *testing.T) {
 
 	if got := metadataRequests.Load(); got != 1 {
 		t.Errorf("upstream metadata JSON requests = %d, want 1 (repeated downloads should reuse the cached metadata)", got)
+	}
+}
+
+func TestPyPISimpleIndexRewritesProjectLinks(t *testing.T) {
+	// Long enough that links cross the rewriter's read boundaries.
+	var upstream, want strings.Builder
+	upstream.WriteString(`<html><body>`)
+	want.WriteString(`<html><body>`)
+	for i := range 3000 {
+		fmt.Fprintf(&upstream, `<a href="/simple/pkg-%d/">pkg-%d</a>`+"\n", i, i)
+		fmt.Fprintf(&want, `<a href="http://proxy.test/pypi/simple/pkg-%d/">pkg-%d</a>`+"\n", i, i)
+	}
+	upstream.WriteString(`</body></html>`)
+	want.WriteString(`</body></html>`)
+
+	h, _ := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+		resp := pypiHTTPResponse(r, "text/html", upstream.String())
+		resp.Header.Set("Content-Length", strconv.Itoa(upstream.Len()))
+		return resp, nil
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/simple/", nil)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, req)
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200", w.Code)
+	}
+	if got := w.Body.String(); got != want.String() {
+		t.Errorf("body not rewritten; starts %q", got[:min(len(got), 120)])
+	}
+	if got := w.Header().Get("Content-Length"); got != "" && got != strconv.Itoa(want.Len()) {
+		t.Errorf("Content-Length = %q, want %d or unset", got, want.Len())
+	}
+}
+
+func TestReplacingReaderSplitReads(t *testing.T) {
+	const in = `ab<a href="/simple/x/">x</a>href="/simplehref="/simple/`
+	const want = `ab<a href="P/x/">x</a>href="/simplehref="P/`
+	r := &replacingReader{
+		src:  io.NopCloser(iotest.OneByteReader(strings.NewReader(in))),
+		from: []byte(`href="/simple/`),
+		to:   []byte(`href="P/`),
+	}
+	got, err := io.ReadAll(r)
+	if err != nil || string(got) != want {
+		t.Errorf("got %q, %v; want %q", got, err, want)
 	}
 }
