@@ -39,6 +39,9 @@ type relay struct {
 
 type relayRoute struct {
 	repoURL string
+	// ctx ends when the fetch does, which stops its relayed requests, so a
+	// git helper left behind by a killed git does not keep downloading.
+	ctx context.Context
 	// limit caps the response bytes the route relays, 0 for no cap, and
 	// budget, when set, holds space within MaxSize for them. exceeded and
 	// full record which of them stopped the route.
@@ -79,13 +82,15 @@ func (rl *relay) close() error {
 	return rl.server.Close()
 }
 
-// register adds a route to repoURL and returns the URL git fetches from and
-// a function that removes the route.
-func (rl *relay) register(repoURL string, limit int64, budget *reservation) (string, *relayRoute, func()) {
+// register adds a route to repoURL for a fetch running with ctx and returns
+// the URL git fetches from and a function that removes the route and stops
+// its requests.
+func (rl *relay) register(ctx context.Context, repoURL string, limit int64, budget *reservation) (string, *relayRoute, func()) {
 	var b [relayIDBytes]byte
 	_, _ = rand.Read(b[:])
 	id := hex.EncodeToString(b[:])
-	route := &relayRoute{repoURL: repoURL, limit: limit, budget: budget}
+	ctx, cancel := context.WithCancel(ctx)
+	route := &relayRoute{repoURL: repoURL, ctx: ctx, limit: limit, budget: budget}
 
 	rl.mu.Lock()
 	rl.routes[id] = route
@@ -95,6 +100,7 @@ func (rl *relay) register(repoURL string, limit int64, budget *reservation) (str
 		rl.mu.Lock()
 		delete(rl.routes, id)
 		rl.mu.Unlock()
+		cancel()
 	}
 }
 
@@ -119,7 +125,10 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	out, err := http.NewRequestWithContext(r.Context(), r.Method, target, r.Body)
+	ctx, cancel := context.WithCancel(r.Context())
+	defer cancel()
+	defer context.AfterFunc(route.ctx, cancel)()
+	out, err := http.NewRequestWithContext(ctx, r.Method, target, r.Body)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusInternalServerError)
 		return
@@ -133,7 +142,9 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	resp, err := rl.client.Do(out)
 	if err != nil {
-		rl.logger.Warn("git relay: upstream request failed", "upstream", route.repoURL, "error", err)
+		if ctx.Err() == nil {
+			rl.logger.Warn("git relay: upstream request failed", "upstream", route.repoURL, "error", err)
+		}
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 		return
 	}
@@ -151,12 +162,12 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", ct)
 	}
 	w.WriteHeader(resp.StatusCode)
-	if _, err := io.Copy(w, &routeReader{ctx: r.Context(), r: resp.Body, route: route}); err != nil {
+	if _, err := io.Copy(w, &routeReader{ctx: ctx, r: resp.Body, route: route}); err != nil {
 		if r.Context().Err() != nil {
 			// git went away; there is no one to tell.
 			return
 		}
-		if !route.exceeded.Load() && !route.full.Load() {
+		if ctx.Err() == nil && !route.exceeded.Load() && !route.full.Load() {
 			rl.logger.Warn("git relay: copying upstream response", "upstream", route.repoURL, "error", err)
 		}
 		// Cut the connection so git fails rather than taking a response

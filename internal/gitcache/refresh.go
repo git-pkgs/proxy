@@ -305,7 +305,7 @@ func (c *Cache) fetch(ctx context.Context, dir, repoURL string, limit int64, res
 		return ctx.Err()
 	}
 
-	relayURL, route, unregister := c.relay.register(repoURL, limit, res)
+	relayURL, route, unregister := c.relay.register(ctx, repoURL, limit, res)
 	defer unregister()
 	args := append([]string{"fetch", "--quiet", "--no-write-fetch-head"}, flags...)
 	_, err := c.run(ctx, dir, append(append(args, relayURL), refspecs...)...)
