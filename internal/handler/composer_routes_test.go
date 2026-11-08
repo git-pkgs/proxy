@@ -235,13 +235,16 @@ func TestComposerRoutedDownloadIgnoresDefaultRepositoryArtifact(t *testing.T) {
 // TestComposerRoutedMinifiedMetadataDisablesNotification checks that every
 // version of a routed package, as Composer expands minified metadata, has an
 // empty notification-url: versions that inherit their fields, versions after a
-// ~dev reset, and versions after one that set its own URL and then unset it.
+// ~dev reset, versions after one that set its own URL and then unset it, and
+// versions with a null URL.
 func TestComposerRoutedMinifiedMetadataDisablesNotification(t *testing.T) {
 	minified := `{"minified":"composer/2.0","packages":{"example/library":[` +
 		`{"name":"example/library","version":"1.0.0","dist":{"url":"https://private.example.com/a/1.0.0.zip","type":"zip"}},` +
 		`{"version":"1.1.0","dist":{"url":"https://private.example.com/a/1.1.0.zip","type":"zip"}},` +
 		`{"version":"1.2.0","notification-url":"https://private.example.com/notify","dist":{"url":"https://private.example.com/a/1.2.0.zip","type":"zip"}},` +
 		`{"version":"1.3.0","notification-url":"__unset","dist":{"url":"https://private.example.com/a/1.3.0.zip","type":"zip"}},` +
+		`{"version":"1.4.0","notification-url":null,"dist":{"url":"https://private.example.com/a/1.4.0.zip","type":"zip"}},` +
+		`{"version":"1.5.0","dist":{"url":"https://private.example.com/a/1.5.0.zip","type":"zip"}},` +
 		`"~dev",` +
 		`{"name":"example/library","version":"dev-main","dist":{"url":"https://private.example.com/a/main.zip","type":"zip"}}]}}`
 	public := newComposerUpstream(t, map[string]string{}, http.StatusOK)
@@ -258,6 +261,8 @@ func TestComposerRoutedMinifiedMetadataDisablesNotification(t *testing.T) {
 		"1.1.0":    "",
 		"1.2.0":    "https://private.example.com/notify", // the route's own URL is kept
 		"1.3.0":    "",
+		"1.4.0":    "", // Composer reads null as absent
+		"1.5.0":    "",
 		"dev-main": "",
 	}
 	versions := composerVersions(t, w.Body.Bytes(), "example/library")
