@@ -221,6 +221,13 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, so
 	// e.g., com/google/guava/guava/32.1.3-jre/guava-32.1.3-jre.jar
 	group, artifact, version, filename := h.parsePath(urlPath)
 	if artifact == "" {
+		if strings.Count(urlPath, "/") >= minMavenParts-1 {
+			// A dot or colon in a group directory, or a colon in the
+			// artifact, which the Maven layout never has. Proxied, the
+			// file would skip the denylist, scan and cooldown.
+			http.NotFound(w, r)
+			return
+		}
 		h.proxyUpstream(w, r, source, urlPath)
 		return
 	}
@@ -357,14 +364,5 @@ func (h *MavenHandler) proxyUpstream(w http.ResponseWriter, r *http.Request, sou
 		_ = resp.Body.Close()
 		resp, err = h.proxy.upstreamRequest(r, source.fallbackURL+"/"+urlPath, mavenForwardHeaders)
 	}
-	if err != nil {
-		if writeUpstreamHeld(w, err) {
-			return
-		}
-		h.proxy.Logger.Error("upstream request failed", "error", err)
-		http.Error(w, "upstream request failed", http.StatusBadGateway)
-		return
-	}
-	defer func() { _ = resp.Body.Close() }()
-	h.proxy.relayResponse(w, r, resp, nil)
+	h.proxy.relayUpstream(w, r, resp, err)
 }

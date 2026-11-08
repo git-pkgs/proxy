@@ -1500,6 +1500,12 @@ func (p *Proxy) ProxyUpstream(w http.ResponseWriter, r *http.Request, upstreamUR
 	p.Logger.Debug("proxying to upstream", "url", upstreamURL)
 
 	resp, err := p.upstreamRequest(r, upstreamURL, forwardHeaders)
+	p.relayUpstream(w, r, resp, err)
+}
+
+// relayUpstream writes the result of an upstream request: the response, or
+// a 502 when the request failed.
+func (p *Proxy) relayUpstream(w http.ResponseWriter, r *http.Request, resp *http.Response, err error) {
 	if err != nil {
 		if writeUpstreamHeld(w, err) {
 			return

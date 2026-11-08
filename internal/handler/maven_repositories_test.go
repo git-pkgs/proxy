@@ -139,45 +139,58 @@ func TestMavenRepositoryRepointedServesTheNewUpstream(t *testing.T) {
 	}
 }
 
-// TestMavenDottedGroupDirectoryNotCachedAsGroup checks that a path whose
-// group directories contain dots is not cached under the group the dots
-// spell, where it would share an entry with the standard layout's path.
+// TestMavenDottedGroupDirectoryNotCachedAsGroup checks that a file whose
+// group directories contain dots or colons, which the Maven layout never
+// has, is not served: it would either share the cache entry of the group
+// the dots spell or be proxied past the denylist, scan and cooldown.
 func TestMavenDottedGroupDirectoryNotCachedAsGroup(t *testing.T) {
 	const standard = "/org/foo/bar/1.0/bar-1.0.jar"
-	const dotted = "/org.foo/bar/1.0/bar-1.0.jar"
-	central, _ := mavenRepoUpstream(t, "central", standard, dotted)
+	odd := []string{"/org.foo/bar/1.0/bar-1.0.jar", "/org/foo:x/bar/1.0/bar-1.0.jar", "/org/foo/b:ar/1.0/b:ar-1.0.jar"}
+	central, requests := mavenRepoUpstream(t, "central", append([]string{standard}, odd...)...)
 	portal, _ := mavenRepoUpstream(t, "portal")
-	grails, _ := mavenRepoUpstream(t, "grails")
+	var restricted []string
+	for _, p := range odd {
+		restricted = append(restricted, "/restricted"+p)
+	}
+	grails, grailsRequests := mavenRepoUpstream(t, "grails", restricted...)
 	h := newMavenRepositoriesHandler(t, central, portal, grails)
 
-	for _, path := range []string{standard, dotted, standard} {
-		w := getMaven(h, path)
-		if want := "central " + path; w.Code != http.StatusOK || w.Body.String() != want {
-			t.Errorf("GET %s = %d %q, want 200 %q", path, w.Code, w.Body.String(), want)
+	if w := getMaven(h, standard); w.Code != http.StatusOK || w.Body.String() != "central "+standard {
+		t.Errorf("GET %s = %d %q", standard, w.Code, w.Body.String())
+	}
+	before := requests.Load() + grailsRequests.Load()
+	for _, p := range odd {
+		for _, path := range []string{p, "/grails" + p} {
+			if w := getMaven(h, path); w.Code != http.StatusNotFound {
+				t.Errorf("GET %s = %d %q, want 404", path, w.Code, w.Body.String())
+			}
 		}
+	}
+	if n := requests.Load() + grailsRequests.Load() - before; n != 0 {
+		t.Errorf("%d upstream requests for paths outside the Maven layout", n)
 	}
 }
 
 // TestMavenUncachedPathFallsBackToPluginPortal checks that a path proxied
-// without caching, such as one with a dotted group directory, still tries
-// the Gradle Plugin Portal when the primary upstream lacks it.
+// without caching, such as a catalog, still tries the Gradle Plugin Portal
+// when the primary upstream lacks it.
 func TestMavenUncachedPathFallsBackToPluginPortal(t *testing.T) {
-	const dotted = "/org.foo/bar/1.0/bar-1.0.jar"
+	const uncached = "/org/foo/archetype-catalog.xml"
 	central, _ := mavenRepoUpstream(t, "central")
-	portal, _ := mavenRepoUpstream(t, "portal", dotted)
+	portal, _ := mavenRepoUpstream(t, "portal", uncached)
 	grails, _ := mavenRepoUpstream(t, "grails")
 	h := newMavenRepositoriesHandler(t, central, portal, grails)
 
-	if w := getMaven(h, dotted); w.Code != http.StatusOK || w.Body.String() != "portal "+dotted {
-		t.Errorf("GET %s = %d %q, want the Plugin Portal's copy", dotted, w.Code, w.Body.String())
+	if w := getMaven(h, uncached); w.Code != http.StatusOK || w.Body.String() != "portal "+uncached {
+		t.Errorf("GET %s = %d %q, want the Plugin Portal's copy", uncached, w.Code, w.Body.String())
 	}
 }
 
 func TestMavenUncachedPathKeepsByteRanges(t *testing.T) {
-	const dotted = "/org.foo/bar/1.0/bar-1.0.jar"
+	const uncached = "/org/foo/archetype-catalog.xml"
 	ranged := func() *httptest.Server {
 		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			http.ServeContent(w, r, "bar.jar", time.Time{}, strings.NewReader("0123456789"))
+			http.ServeContent(w, r, "archetype-catalog.xml", time.Time{}, strings.NewReader("0123456789"))
 		}))
 		t.Cleanup(srv.Close)
 		return srv
@@ -186,7 +199,7 @@ func TestMavenUncachedPathKeepsByteRanges(t *testing.T) {
 	portal, _ := mavenRepoUpstream(t, "portal")
 	h := newMavenRepositoriesHandler(t, central, portal, grails)
 
-	for _, p := range []string{dotted, "/grails" + dotted} {
+	for _, p := range []string{uncached, "/grails" + uncached} {
 		req := httptest.NewRequest(http.MethodGet, p, nil)
 		req.Header.Set("Range", "bytes=2-4")
 		w := httptest.NewRecorder()
