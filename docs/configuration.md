@@ -1004,6 +1004,10 @@ one doesn't fall back to the Gradle Plugin Portal. Files are cached per
 repository, so the same coordinates in two repositories never share a cache
 entry.
 
+In every repository, a path whose group directories contain a dot or are empty
+(`org.foo/bar/1.0/bar-1.0.jar`) is not in the Maven layout and is proxied
+without caching, since its group would read the same as `org/foo`'s.
+
 `upstream.maven_repositories` is additive. `/maven/…` keeps serving
 `upstream.maven` with unchanged cache identities. A repository name is matched
 before the default repository, so it hides every group ID whose first segment

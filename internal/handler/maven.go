@@ -266,6 +266,7 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, so
 // parsePath extracts Maven coordinates from a URL path.
 // e.g., "com/google/guava/guava/32.1.3-jre/guava-32.1.3-jre.jar"
 // -> ("com.google.guava", "guava", "32.1.3-jre", "guava-32.1.3-jre.jar")
+// A path that isn't in the Maven layout returns empty strings.
 func (h *MavenHandler) parsePath(urlPath string) (group, artifact, version, filename string) {
 	parts := strings.Split(urlPath, "/")
 	if len(parts) < minMavenParts {
@@ -276,6 +277,14 @@ func (h *MavenHandler) parsePath(urlPath string) (group, artifact, version, file
 	version = parts[len(parts)-2]
 	artifact = parts[len(parts)-3]
 	groupParts := parts[:len(parts)-3]
+	// The Maven layout splits a group at its dots, so a group directory
+	// never holds a dot or is empty. Such a path would spell the same group
+	// as another and share its cache entries, so it is not parsed.
+	for _, part := range groupParts {
+		if part == "" || strings.Contains(part, ".") {
+			return "", "", "", ""
+		}
+	}
 	group = strings.Join(groupParts, ".")
 
 	return group, artifact, version, filename

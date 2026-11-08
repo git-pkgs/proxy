@@ -137,3 +137,22 @@ func TestMavenRepositoryRepointedServesTheNewUpstream(t *testing.T) {
 		}
 	}
 }
+
+// TestMavenDottedGroupDirectoryNotCachedAsGroup checks that a path whose
+// group directories contain dots is not cached under the group the dots
+// spell, where it would share an entry with the standard layout's path.
+func TestMavenDottedGroupDirectoryNotCachedAsGroup(t *testing.T) {
+	const standard = "/org/foo/bar/1.0/bar-1.0.jar"
+	const dotted = "/org.foo/bar/1.0/bar-1.0.jar"
+	central, _ := mavenRepoUpstream(t, "central", standard, dotted)
+	portal, _ := mavenRepoUpstream(t, "portal")
+	grails, _ := mavenRepoUpstream(t, "grails")
+	h := newMavenRepositoriesHandler(t, central, portal, grails)
+
+	for _, path := range []string{standard, dotted, standard} {
+		w := getMaven(h, path)
+		if want := "central " + path; w.Code != http.StatusOK || w.Body.String() != want {
+			t.Errorf("GET %s = %d %q, want 200 %q", path, w.Code, w.Body.String(), want)
+		}
+	}
+}
