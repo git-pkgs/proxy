@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -2201,5 +2202,29 @@ func TestLoadBoolsFromEnvParseStrictly(t *testing.T) {
 				t.Errorf("len(EnvWarnings()) = %d, want %d: %v", got, tt.warnings, cfg.EnvWarnings())
 			}
 		})
+	}
+}
+
+func TestScannerEcosystems(t *testing.T) {
+	cfg := ScanningConfig{
+		Enabled:    true,
+		SigningKey: "s3cret",
+		Scanners: []ScannerConfig{{
+			Name: "clamav", URL: "http://scanner.invalid/scan",
+			Ecosystems: []string{"go", "Docker", "rubygems", "npm", "arch"},
+		}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error: %v", err)
+	}
+	want := []string{"golang", "oci", "gem", "npm", "arch"}
+	if got := cfg.Scanners[0].Ecosystems; !slices.Equal(got, want) {
+		t.Errorf("Ecosystems = %v, want %v", got, want)
+	}
+
+	cfg.Scanners[0].Ecosystems = []string{"npm", "pypy"}
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "pypy") {
+		t.Errorf("Validate() error = %v, want unknown ecosystem pypy", err)
 	}
 }

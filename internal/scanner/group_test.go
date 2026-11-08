@@ -294,3 +294,21 @@ func TestGroupBlocks(t *testing.T) {
 		t.Error("nil group blocks")
 	}
 }
+
+func TestGroup_NormalisesEcosystemAliases(t *testing.T) {
+	g, err := NewGroup(config.ScanningConfig{
+		Enabled:    true,
+		SigningKey: "test-signing-key",
+		Scanners: []config.ScannerConfig{
+			{Name: "clamav", URL: "http://clamav.invalid", Ecosystems: []string{"go", "docker", "rubygems"}},
+		},
+	}, discardLogger())
+	if err != nil {
+		t.Fatalf("NewGroup() error: %v", err)
+	}
+	for _, ecosystem := range []string{"golang", "oci", "gem"} {
+		if !g.Blocks(ecosystem) {
+			t.Errorf("Blocks(%s) = false, want true", ecosystem)
+		}
+	}
+}

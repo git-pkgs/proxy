@@ -1400,7 +1400,7 @@ scanning:
 | `scanning.scanners[].name` | - | Identifies this scanner in logs and metrics |
 | `scanning.scanners[].url` | - | Endpoint the proxy POSTs scan notifications to |
 | `scanning.scanners[].mode` | - | `block` (default) or `monitor` |
-| `scanning.scanners[].ecosystems` | - | Restricts this scanner to specific ecosystems (e.g. `npm`, `pypi`). Empty means all ecosystems |
+| `scanning.scanners[].ecosystems` | - | Restricts this scanner to specific ecosystems (e.g. `npm`, `pypi`). Empty means all ecosystems. Valid names: `alpine`, `arch`, `cargo`, `chef`, `composer`, `conan`, `conda`, `cran`, `deb`, `freebsd`, `gem`, `generic`, `golang`, `helm`, `hex`, `julia`, `maven`, `npm`, `nuget`, `oci`, `pub`, `pypi`, `rpm`, `swift`. The aliases `go`, `docker`, `rubygems`, `packagist`, `debian` and `apk` are accepted too; any other name stops the proxy at startup |
 | `scanning.scanners[].headers` | - | Extra HTTP headers sent with every scan request (e.g. for authenticating to the scanner service). Values support `${VAR_NAME}` expansion |
 
 ### How caching defers to a scan verdict

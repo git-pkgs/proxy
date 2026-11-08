@@ -70,6 +70,7 @@ import (
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -436,7 +437,42 @@ func (s *ScannerConfig) Validate() error {
 	default:
 		return fmt.Errorf("invalid mode %q (must be block or monitor)", s.Mode)
 	}
+	for i, eco := range s.Ecosystems {
+		key := NormalizeScannerEcosystem(eco)
+		if !slices.Contains(scannerEcosystems, key) {
+			return fmt.Errorf("unknown ecosystem %q (valid: %s)", eco, strings.Join(scannerEcosystems, ", "))
+		}
+		s.Ecosystems[i] = key
+	}
 	return nil
+}
+
+// scannerEcosystems are the ecosystem keys handlers pass to scanners: the
+// retention keys plus the handlers retention does not cover.
+var scannerEcosystems = func() []string {
+	keys := append(slices.Clone(retention.KnownKeys), "arch", "chef")
+	slices.Sort(keys)
+	return keys
+}()
+
+// scannerEcosystemAliases maps common ecosystem names to handler keys.
+var scannerEcosystemAliases = map[string]string{
+	"apk":       "alpine",
+	"debian":    "deb",
+	"docker":    "oci",
+	"go":        "golang",
+	"packagist": "composer",
+	"rubygems":  "gem",
+}
+
+// NormalizeScannerEcosystem returns the handler key for a
+// scanning.scanners[].ecosystems entry, resolving case and common aliases.
+func NormalizeScannerEcosystem(eco string) string {
+	eco = strings.ToLower(strings.TrimSpace(eco))
+	if key, ok := scannerEcosystemAliases[eco]; ok {
+		return key
+	}
+	return eco
 }
 
 // StorageConfig configures artifact storage.

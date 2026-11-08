@@ -67,7 +67,7 @@ func NewGroup(cfg config.ScanningConfig, logger *slog.Logger) (*Group, error) {
 		if len(sc.Ecosystems) > 0 {
 			ecosystems = make(map[string]struct{}, len(sc.Ecosystems))
 			for _, eco := range sc.Ecosystems {
-				ecosystems[eco] = struct{}{}
+				ecosystems[config.NormalizeScannerEcosystem(eco)] = struct{}{}
 			}
 		}
 
