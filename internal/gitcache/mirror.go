@@ -91,7 +91,7 @@ func (c *Cache) Mirror(ctx context.Context, key, repoURL, version string, fetchW
 	}
 	var submodules []Submodule
 	if commit != "" {
-		if submodules, err = c.submodules(ctx, rp.dir, commit); err != nil {
+		if submodules, err = c.submodules(ctx, key, rp.dir, commit); err != nil {
 			return MirrorResult{}, err
 		}
 	}
@@ -123,14 +123,28 @@ func (c *Cache) resolveTag(ctx context.Context, dir, tag string) (string, error)
 
 // submodules lists the submodules commit records: its gitlinks that
 // .gitmodules names a URL for.
-func (c *Cache) submodules(ctx context.Context, dir, commit string) ([]Submodule, error) {
-	if c.command(ctx, nil, "-C", dir, "cat-file", "-e", commit+":.gitmodules").Run() != nil {
+func (c *Cache) submodules(ctx context.Context, key, dir, commit string) ([]Submodule, error) {
+	err := c.command(ctx, nil, "-C", dir, "rev-parse", "--verify", "--quiet", "--end-of-options", commit+":.gitmodules").Run()
+	var exit *exec.ExitError
+	if errors.As(err, &exit) && exit.ExitCode() == 1 && ctx.Err() == nil {
 		return nil, nil
+	}
+	if err != nil {
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		return nil, fmt.Errorf("looking for .gitmodules: %w", err)
 	}
 	// --list rather than --get-regexp, which fails when nothing matches.
 	out, err := c.run(ctx, dir, "config", "-z", "--blob", commit+":.gitmodules", "--list")
 	if err != nil {
-		return nil, fmt.Errorf("reading .gitmodules: %w", err)
+		if ctx.Err() != nil {
+			return nil, ctx.Err()
+		}
+		// The commit is cached; a .gitmodules git can't read only loses
+		// its submodules.
+		c.logger.Warn("git cache: cannot read .gitmodules, skipping submodules", "repository", key, "commit", commit, "error", err)
+		return nil, nil
 	}
 	paths, urls := map[string]string{}, map[string]string{}
 	for entry := range strings.SplitSeq(out, "\x00") {

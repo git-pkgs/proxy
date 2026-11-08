@@ -315,3 +315,53 @@ func TestMirrorWithEmptyGitmodules(t *testing.T) {
 		}
 	}
 }
+
+// TestSubmodulesReportsCancel checks a cancelled context is reported, not
+// read as a commit without .gitmodules.
+func TestSubmodulesReportsCancel(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	commit := runGit(t, work, "rev-parse", "HEAD")
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	tc := newTestCache(t, upstream.server.URL, nil)
+
+	if _, err := tc.submodules(ctx, "up/repo.git", work, commit); !errors.Is(err, context.Canceled) {
+		t.Errorf("submodules with a cancelled context = %v, want context.Canceled", err)
+	}
+}
+
+// TestMirrorSkipsBrokenGitmodules checks a .gitmodules git can't read, one
+// with a syntax error or committed as a symlink, lists no submodules and
+// logs a warning instead of failing the mirror.
+func TestMirrorSkipsBrokenGitmodules(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	gitmodules := filepath.Join(work, ".gitmodules")
+	if err := os.WriteFile(gitmodules, []byte("[submodule \"x\"\n\tpath = x\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", ".gitmodules")
+	runGit(t, work, "commit", "--quiet", "-m", "broken gitmodules")
+	if err := os.Remove(gitmodules); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink("../outside/.gitmodules", gitmodules); err != nil {
+		t.Fatal(err)
+	}
+	runGit(t, work, "add", ".gitmodules")
+	runGit(t, work, "commit", "--quiet", "-m", "symlinked gitmodules")
+	runGit(t, work, "push", "--quiet", "origin", "main")
+	tc := newTestCache(t, upstream.server.URL, nil)
+
+	for _, rev := range []string{"HEAD~1", "HEAD"} {
+		commit := runGit(t, work, "rev-parse", rev)
+		got, err := tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", commit, true)
+		if err != nil || len(got.Submodules) != 0 {
+			t.Errorf("mirror of %s = %+v, %v, want no submodules", rev, got, err)
+		}
+		if !strings.Contains(tc.logs.String(), "commit="+commit) {
+			t.Errorf("no warning naming %s in the log", commit)
+		}
+	}
+}

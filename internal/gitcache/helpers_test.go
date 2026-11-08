@@ -302,6 +302,7 @@ func (u *fakeUpstream) bare() string {
 type testCache struct {
 	*Cache
 	server *httptest.Server
+	logs   *lockedBuffer
 }
 
 func newTestCache(t *testing.T, upstreamURL string, configure func(*Options)) *testCache {
@@ -333,7 +334,7 @@ func newTestCache(t *testing.T, upstreamURL string, configure func(*Options)) *t
 		server.Close()
 		_ = c.Close()
 	})
-	return &testCache{Cache: c, server: server}
+	return &testCache{Cache: c, server: server, logs: logs}
 }
 
 // testFront serves /git/up/{repo}/info/refs and git-upload-pack from c, as
