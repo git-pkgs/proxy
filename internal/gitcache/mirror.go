@@ -172,7 +172,17 @@ func (c *Cache) submodules(ctx context.Context, key, dir, commit string) ([]Subm
 			urls[name] = value
 		}
 	}
-	tree, err := c.run(ctx, dir, "ls-tree", "-r", "-z", "--full-tree", commit)
+	var pathspecs []string
+	for path, name := range paths {
+		if path != "" && urls[name] != "" {
+			pathspecs = append(pathspecs, path)
+		}
+	}
+	if len(pathspecs) == 0 {
+		return nil, nil
+	}
+	args := append([]string{"--literal-pathspecs", "ls-tree", "-z", "--full-tree", commit, "--"}, pathspecs...)
+	tree, err := c.run(ctx, dir, args...)
 	if err != nil {
 		return nil, err
 	}

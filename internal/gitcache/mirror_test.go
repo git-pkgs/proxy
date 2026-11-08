@@ -261,7 +261,8 @@ func TestMirrorListsSubmodules(t *testing.T) {
 	libCommit := runGit(t, libWork, "rev-parse", "HEAD")
 	work := upstream.newRepo("repo")
 	gitmodules := "[submodule \"vendor/lib\"]\n\tpath = vendor/lib\n\turl = ../lib.git\n" +
-		"[submodule \"other\"]\n\tpath = third_party/other\n\turl = https://example.com/other.git\n"
+		"[submodule \"other\"]\n\tpath = third_party/other\n\turl = https://example.com/other.git\n" +
+		"[submodule \"colon\"]\n\tpath = :colon\n\turl = ../lib.git\n"
 	if err := os.WriteFile(filepath.Join(work, ".gitmodules"), []byte(gitmodules), 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -269,6 +270,7 @@ func TestMirrorListsSubmodules(t *testing.T) {
 	runGit(t, work, "add", ".gitmodules")
 	runGit(t, work, "update-index", "--add", "--cacheinfo", "160000,"+libCommit+",vendor/lib")
 	runGit(t, work, "update-index", "--add", "--cacheinfo", "160000,"+otherCommit+",third_party/other")
+	runGit(t, work, "update-index", "--add", "--cacheinfo", "160000,"+libCommit+",:colon")
 	runGit(t, work, "commit", "--quiet", "-m", "submodules")
 	runGit(t, work, "push", "--quiet", "origin", "main")
 	commit := runGit(t, work, "rev-parse", "HEAD")
@@ -279,6 +281,7 @@ func TestMirrorListsSubmodules(t *testing.T) {
 		t.Fatalf("Mirror: %v", err)
 	}
 	want := []Submodule{
+		{Path: ":colon", URL: "../lib.git", Commit: libCommit},
 		{Path: "third_party/other", URL: "https://example.com/other.git", Commit: otherCommit},
 		{Path: "vendor/lib", URL: "../lib.git", Commit: libCommit},
 	}
