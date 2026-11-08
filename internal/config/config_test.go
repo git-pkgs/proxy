@@ -2169,3 +2169,37 @@ func TestCooldownShortest(t *testing.T) {
 		}
 	}
 }
+
+func TestLoadBoolsFromEnvParseStrictly(t *testing.T) {
+	tests := []struct {
+		value    string
+		start    bool
+		want     bool
+		warnings int
+	}{
+		{"true", false, true, 0},
+		{"True", false, true, 0},
+		{" TRUE ", false, true, 0},
+		{"1", false, true, 0},
+		{"false", true, false, 0},
+		{"FALSE", true, false, 0},
+		{"0", true, false, 0},
+		{"yes", true, true, 1},
+		{"on", false, false, 1},
+		{"ture", true, true, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			t.Setenv("PROXY_SCANNING_ENABLED", tt.value)
+			cfg := Default()
+			cfg.Scanning.Enabled = tt.start
+			cfg.LoadFromEnv()
+			if cfg.Scanning.Enabled != tt.want {
+				t.Errorf("Scanning.Enabled = %v, want %v", cfg.Scanning.Enabled, tt.want)
+			}
+			if got := len(cfg.EnvWarnings()); got != tt.warnings {
+				t.Errorf("len(EnvWarnings()) = %d, want %d: %v", got, tt.warnings, cfg.EnvWarnings())
+			}
+		})
+	}
+}

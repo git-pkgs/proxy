@@ -1390,11 +1390,20 @@ func setEnvString(dst *string, key string) {
 	}
 }
 
-// setEnvBool is setEnvString for boolean fields, parsed via envBool.
-func setEnvBool(dst *bool, key string) {
-	if v := os.Getenv(key); v != "" {
-		*dst = envBool(v)
+// setEnvBool is setEnvString for boolean fields. It accepts what
+// strconv.ParseBool does; any other value leaves *dst unchanged and is
+// reported via EnvWarnings.
+func (c *Config) setEnvBool(dst *bool, key string) {
+	v := os.Getenv(key)
+	if v == "" {
+		return
 	}
+	b, err := strconv.ParseBool(strings.TrimSpace(v))
+	if err != nil {
+		c.envWarnings = append(c.envWarnings, fmt.Sprintf("ignoring %s=%q: not a boolean, keeping %t", key, v, *dst))
+		return
+	}
+	*dst = b
 }
 
 // setGradleReadOnlyFromEnv parses strictly: an unrecognised value keeps
@@ -1454,16 +1463,16 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Listen, "PROXY_LISTEN")
 	setEnvString(&c.BaseURL, "PROXY_BASE_URL")
 	setEnvString(&c.UIBaseURL, "PROXY_UI_URL")
-	setEnvBool(&c.TrustForwardedFor, "PROXY_TRUST_FORWARDED_FOR")
-	setEnvBool(&c.UIRequestSources, "PROXY_UI_REQUEST_SOURCES")
-	setEnvBool(&c.UIFailureDetails, "PROXY_UI_FAILURE_DETAILS")
+	c.setEnvBool(&c.TrustForwardedFor, "PROXY_TRUST_FORWARDED_FOR")
+	c.setEnvBool(&c.UIRequestSources, "PROXY_UI_REQUEST_SOURCES")
+	c.setEnvBool(&c.UIFailureDetails, "PROXY_UI_FAILURE_DETAILS")
 	setEnvString(&c.Storage.URL, "PROXY_STORAGE_URL")
 	setEnvString(&c.Storage.Path, "PROXY_STORAGE_PATH")
 	setEnvString(&c.Storage.MaxSize, "PROXY_STORAGE_MAX_SIZE")
-	setEnvBool(&c.Storage.DirectServe, "PROXY_STORAGE_DIRECT_SERVE")
+	c.setEnvBool(&c.Storage.DirectServe, "PROXY_STORAGE_DIRECT_SERVE")
 	setEnvString(&c.Storage.DirectServeTTL, "PROXY_STORAGE_DIRECT_SERVE_TTL")
 	setEnvString(&c.Storage.DirectServeBaseURL, "PROXY_STORAGE_DIRECT_SERVE_BASE_URL")
-	setEnvBool(&c.Storage.CacheArtifacts, "PROXY_STORAGE_CACHE_ARTIFACTS")
+	c.setEnvBool(&c.Storage.CacheArtifacts, "PROXY_STORAGE_CACHE_ARTIFACTS")
 	setEnvString(&c.Storage.Retention.Default, "PROXY_STORAGE_RETENTION_DEFAULT")
 	setEnvString(&c.Storage.Retention.SweepInterval, "PROXY_STORAGE_RETENTION_SWEEP_INTERVAL")
 	setEnvString(&c.Database.Driver, "PROXY_DATABASE_DRIVER")
@@ -1474,11 +1483,11 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Log.Format, "PROXY_LOG_FORMAT")
 	setEnvString(&c.AccessLog.Path, "PROXY_ACCESS_LOG_PATH")
 	setEnvStringSlice(&c.Upstream.AllowPrivateHosts, "PROXY_UPSTREAM_ALLOW_PRIVATE_HOSTS")
-	setEnvBool(&c.Upstream.AllowLoopback, "PROXY_UPSTREAM_ALLOW_LOOPBACK")
+	c.setEnvBool(&c.Upstream.AllowLoopback, "PROXY_UPSTREAM_ALLOW_LOOPBACK")
 	setEnvString(&c.Upstream.NPM, "PROXY_UPSTREAM_NPM")
-	setEnvBool(&c.Upstream.NPMFullMetadata, "PROXY_UPSTREAM_NPM_FULL_METADATA")
-	setEnvBool(&c.Upstream.NPMChangeFeed, "PROXY_UPSTREAM_NPM_CHANGE_FEED")
-	setEnvBool(&c.Upstream.GoSumDBsOffline, "PROXY_UPSTREAM_GO_SUMDBS_OFFLINE")
+	c.setEnvBool(&c.Upstream.NPMFullMetadata, "PROXY_UPSTREAM_NPM_FULL_METADATA")
+	c.setEnvBool(&c.Upstream.NPMChangeFeed, "PROXY_UPSTREAM_NPM_CHANGE_FEED")
+	c.setEnvBool(&c.Upstream.GoSumDBsOffline, "PROXY_UPSTREAM_GO_SUMDBS_OFFLINE")
 	setEnvString(&c.Upstream.Cargo, "PROXY_UPSTREAM_CARGO")
 	setEnvString(&c.Upstream.CargoDownload, "PROXY_UPSTREAM_CARGO_DOWNLOAD")
 	setEnvString(&c.Upstream.Gem, "PROXY_UPSTREAM_GEM")
@@ -1495,7 +1504,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Upstream.NuGetSearch, "PROXY_UPSTREAM_NUGET_SEARCH")
 	setEnvString(&c.Upstream.Composer, "PROXY_UPSTREAM_COMPOSER")
 	setEnvString(&c.Upstream.ComposerRepository, "PROXY_UPSTREAM_COMPOSER_REPOSITORY")
-	setEnvBool(&c.Upstream.ComposerChangeFeed, "PROXY_UPSTREAM_COMPOSER_CHANGE_FEED")
+	c.setEnvBool(&c.Upstream.ComposerChangeFeed, "PROXY_UPSTREAM_COMPOSER_CHANGE_FEED")
 	setEnvString(&c.Upstream.Conan, "PROXY_UPSTREAM_CONAN")
 	setEnvString(&c.Upstream.Chef, "PROXY_UPSTREAM_CHEF")
 	setEnvString(&c.Upstream.Conda, "PROXY_UPSTREAM_CONDA")
@@ -1509,20 +1518,20 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Upstream.HomebrewAPI, "PROXY_UPSTREAM_HOMEBREW_API")
 	setEnvString(&c.Upstream.HomebrewArtifact, "PROXY_UPSTREAM_HOMEBREW_ARTIFACT")
 	setEnvString(&c.Cooldown.Default, "PROXY_COOLDOWN_DEFAULT")
-	setEnvBool(&c.Scanning.Enabled, "PROXY_SCANNING_ENABLED")
-	setEnvBool(&c.Scanning.FailOpen, "PROXY_SCANNING_FAIL_OPEN")
+	c.setEnvBool(&c.Scanning.Enabled, "PROXY_SCANNING_ENABLED")
+	c.setEnvBool(&c.Scanning.FailOpen, "PROXY_SCANNING_FAIL_OPEN")
 	setEnvString(&c.Scanning.Timeout, "PROXY_SCANNING_TIMEOUT")
 	setEnvString(&c.Scanning.SigningKey, "PROXY_SCANNING_SIGNING_KEY")
 	setEnvString(&c.Scanning.FetchBaseURL, "PROXY_SCANNING_FETCH_BASE_URL")
-	setEnvBool(&c.CacheMetadata, "PROXY_CACHE_METADATA")
-	setEnvBool(&c.MirrorAPI, "PROXY_MIRROR_API")
-	setEnvBool(&c.CacheDelete, "PROXY_CACHE_DELETE")
-	setEnvBool(&c.Hosted.Enabled, "PROXY_HOSTED_ENABLED")
+	c.setEnvBool(&c.CacheMetadata, "PROXY_CACHE_METADATA")
+	c.setEnvBool(&c.MirrorAPI, "PROXY_MIRROR_API")
+	c.setEnvBool(&c.CacheDelete, "PROXY_CACHE_DELETE")
+	c.setEnvBool(&c.Hosted.Enabled, "PROXY_HOSTED_ENABLED")
 	setEnvString(&c.Hosted.Token, "PROXY_HOSTED_TOKEN")
 	setEnvString(&c.Hosted.MaxUploadSize, "PROXY_HOSTED_MAX_UPLOAD_SIZE")
 	setEnvStringSlice(&c.Hosted.NPMScopes, "PROXY_HOSTED_NPM_SCOPES")
 	setEnvStringSlice(&c.Hosted.ComposerVendors, "PROXY_HOSTED_COMPOSER_VENDORS")
-	setEnvBool(&c.Projects.Enabled, "PROXY_PROJECTS_ENABLED")
+	c.setEnvBool(&c.Projects.Enabled, "PROXY_PROJECTS_ENABLED")
 	setEnvString(&c.Projects.Token, "PROXY_PROJECTS_TOKEN")
 	setEnvString(&c.Projects.MaxAge, "PROXY_PROJECTS_MAX_AGE")
 	setEnvString(&c.MetadataTTL, "PROXY_METADATA_TTL")
@@ -2175,8 +2184,4 @@ func (a *AuthConfig) Header() (name, value string) {
 // expandEnv expands ${VAR_NAME} references in a string.
 func expandEnv(s string) string {
 	return os.Expand(s, os.Getenv)
-}
-
-func envBool(v string) bool {
-	return v == "true" || v == "1"
 }
