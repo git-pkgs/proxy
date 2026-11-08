@@ -955,10 +955,10 @@ and, while the last refresh failed, the kind of error (such as
 memory and start over when the proxy restarts. Like the rest of the UI the
 page has no authentication, so it shows the names of repositories from
 upstreams with credentials to everyone who can reach it, as `/git` lets them
-clone those. The `proxy_ecosystem_cache_size_bytes` and
-`proxy_ecosystem_cached_artifacts` gauges report the git cache as
-`ecosystem="git"`, counting repositories as artifacts, and clones and
-fetches count as cache hits or misses there too.
+clone those. The `proxy_git_cache_size_bytes` and
+`proxy_git_cached_repositories` gauges report the git cache's size and
+repository count, apart from the artifact gauges, and clones and fetches
+count as cache hits or misses under `ecosystem="git"`.
 
 Git LFS objects are cached in the artifact cache, so they use the configured
 storage backend and retention rather than `cache_dir`. git-lfs finds the LFS

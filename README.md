@@ -1590,6 +1590,8 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 | `proxy_metadata_cache_served_bytes_total` | counter | `ecosystem` | Metadata bytes served from the metadata cache. |
 | `proxy_metadata_cache_size_bytes` | gauge | `ecosystem` | Size of cached metadata documents per ecosystem. |
 | `proxy_metadata_cache_entries` | gauge | `ecosystem` | Number of cached metadata documents per ecosystem. |
+| `proxy_git_cache_size_bytes` | gauge | | Size of the cached Git repositories. Git LFS objects are artifacts and count under `proxy_cache_size_bytes`. |
+| `proxy_git_cached_repositories` | gauge | | Number of cached Git repositories. |
 | `proxy_artifacts_evicted_total` | counter | `reason`, `ecosystem` | Artifacts evicted by the size limit (`lru`) or by age (`retention`) |
 | `proxy_metadata_evicted_total` | counter | `ecosystem` | Cached metadata documents evicted by the size limit |
 | `proxy_metadata_expired_by_change_feed_total` | counter | `ecosystem` | Cached metadata documents set to revalidate because an upstream [change feed](docs/configuration.md#change-feeds) listed them |
@@ -1606,7 +1608,7 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 | `proxy_ecosystem_downloaded_bytes` | gauge | `ecosystem` | Accumulated bytes served from cache: cache hits multiplied by the artifact size they served. |
 | `proxy_ecosystem_artifact_downloads` | gauge | `ecosystem` | Accumulated artifact downloads served from cache. |
 | `proxy_ecosystem_cache_size_bytes` | gauge | `ecosystem` | Size of cached artifacts per ecosystem. |
-| `proxy_ecosystem_cached_artifacts` | gauge | `ecosystem` | Number of cached artifacts per ecosystem; for `git`, cached repositories. |
+| `proxy_ecosystem_cached_artifacts` | gauge | `ecosystem` | Number of cached artifacts per ecosystem. |
 | `proxy_ecosystem_packages` | gauge | `ecosystem` | Known packages per ecosystem. |
 | `proxy_ecosystem_versions` | gauge | `ecosystem` | Known package versions per ecosystem. |
 | `proxy_response_bytes_total` | counter | `ecosystem` | Response body bytes written to clients. Route-labelled, see the label caveat below. |

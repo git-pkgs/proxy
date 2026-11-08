@@ -103,12 +103,12 @@ func plural(n int, one, many string) string {
 	return fmt.Sprintf("%d %s", n, many)
 }
 
-// gitEcosystemStats is the git cache's row of the per-ecosystem gauges: its
-// repositories as artifacts, and their size.
-func gitEcosystemStats(repos []gitcache.RepositoryStats) metrics.EcosystemStats {
-	stats := metrics.EcosystemStats{Ecosystem: "git", Artifacts: int64(len(repos))}
+// updateGitCacheStats publishes the git cache gauges.
+func (s *Server) updateGitCacheStats() {
+	repos := s.git.Repositories()
+	var size int64
 	for _, r := range repos {
-		stats.CacheSize += r.Size
+		size += r.Size
 	}
-	return stats
+	metrics.UpdateGitCacheStats(len(repos), size)
 }

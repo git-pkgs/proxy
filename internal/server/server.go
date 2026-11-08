@@ -713,13 +713,22 @@ func (s *Server) updateCacheStatsMetrics(ctx context.Context) {
 	defer ticker.Stop()
 
 	for {
-		s.updateCacheStats()
-		s.updateMetadataCacheStats()
+		s.updateGauges()
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+// updateGauges republishes the cache gauges. Each group is updated on its
+// own, so one failing leaves the others current.
+func (s *Server) updateGauges() {
+	s.updateCacheStats()
+	s.updateMetadataCacheStats()
+	if s.git != nil {
+		s.updateGitCacheStats()
 	}
 }
 
@@ -752,11 +761,7 @@ func (s *Server) updateCacheStats() {
 		s.logger.Warn("failed to get ecosystem stats for metrics", "error", err)
 		return
 	}
-	published := ecosystemMetrics(ecosystems)
-	if s.git != nil {
-		published = append(published, gitEcosystemStats(s.git.Repositories()))
-	}
-	metrics.UpdateEcosystemStats(published)
+	metrics.UpdateEcosystemStats(ecosystemMetrics(ecosystems))
 }
 
 // ecosystemMetrics converts database rows into the metrics package's own

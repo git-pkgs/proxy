@@ -1,6 +1,8 @@
 package server
 
 import (
+	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"path/filepath"
@@ -9,7 +11,10 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/gitcache"
+	"github.com/git-pkgs/proxy/internal/metrics"
+	"github.com/prometheus/client_golang/prometheus/testutil"
 )
 
 func TestGitRepositoriesPage(t *testing.T) {
@@ -73,9 +78,36 @@ func TestGitRepositoryRows(t *testing.T) {
 		r.Branch != "main" || r.Commit != "0123456" || r.Subject != "Fix the build" || r.CommitAge != "3 hours ago" || r.Refs != "2 branches, 1 tag" {
 		t.Errorf("row %+v", r)
 	}
+}
 
-	stats := gitEcosystemStats([]gitcache.RepositoryStats{{Size: 10}, {Size: 32}})
-	if stats.Ecosystem != "git" || stats.Artifacts != 2 || stats.CacheSize != 42 {
-		t.Errorf("ecosystem stats %+v, want git with 2 repositories and 42 bytes", stats)
+// TestGitCacheGauges checks the git cache has gauges of its own, published
+// even when the database can't be read.
+func TestGitCacheGauges(t *testing.T) {
+	cacheDir := t.TempDir()
+	upstreamDir := gitcache.UpstreamDir("up", "https://example.com")
+	gitCommand(t, "", "init", "--quiet", "--bare", filepath.Join(cacheDir, upstreamDir, "team", "repo.git"))
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cache, err := gitcache.New(gitcache.Options{
+		CacheDir: cacheDir, RefreshWait: time.Second, StaleMaxAge: time.Hour,
+		Client: &http.Client{}, Logger: logger, Upstreams: map[string]string{"up": upstreamDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Close() })
+	db, err := database.Create(filepath.Join(t.TempDir(), "proxy.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = db.Close()
+
+	metrics.UpdateGitCacheStats(0, 0)
+	s := &Server{db: db, git: cache, logger: logger}
+	s.updateGauges()
+	if got := testutil.ToFloat64(metrics.GitCachedRepositories); got != 1 {
+		t.Errorf("proxy_git_cached_repositories = %v, want 1", got)
+	}
+	if got := testutil.ToFloat64(metrics.GitCacheSize); got <= 0 {
+		t.Errorf("proxy_git_cache_size_bytes = %v, want the repository's size", got)
 	}
 }
