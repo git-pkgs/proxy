@@ -43,6 +43,12 @@ func (h *ComposerHandler) composerLocalEntries(packageName string, dev bool) ([]
 		manifest["name"] = packageName
 		manifest["version"] = lv.Version
 		manifest["time"] = lv.PushedAt.Format(time.RFC3339)
+		// As for routed packages, keep Composer from reporting installs of
+		// a private version to the default repository's notify-batch.
+		// Composer reads a null notification-url as absent too.
+		if manifest["notification-url"] == nil {
+			manifest["notification-url"] = ""
+		}
 		manifest["dist"] = map[string]string{
 			"type":      "zip",
 			"url":       h.localDistURL(packageName, lv.Version, lv.Filename),

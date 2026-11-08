@@ -498,6 +498,8 @@ local({
 })
 ```
 
+Source packages, Windows and macOS binaries (including the `bin/macosx/big-sur-arm64/` layout used by R 4.3 and later) are cached as artifacts. `PACKAGES` indexes and the `src/contrib/Meta/*.rds` files that `remotes::install_version` and pak read are cached as metadata.
+
 ### Julia
 
 Set the Pkg server before starting Julia:

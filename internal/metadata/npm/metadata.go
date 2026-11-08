@@ -402,7 +402,7 @@ func (h *transformer) tarballsRewritten(count int) {
 }
 
 // applyCooldownFiltering removes versions that are too recently published,
-// and updates dist-tags.latest if the current latest was filtered out.
+// and updates the dist-tags that named them.
 func (h *transformer) applyCooldownFiltering(metadata map[string]any, versions map[string]any, packageName string) {
 	if h.Cooldown == nil || !h.Cooldown.Enabled() {
 		return
@@ -415,6 +415,7 @@ func (h *transformer) applyCooldownFiltering(metadata map[string]any, versions m
 
 	packagePURL := packageurl.MakeString("npm", packageName, "")
 
+	withheld := map[string]bool{}
 	for version := range versions {
 		publishedStr, ok := timeMap[version].(string)
 		if !ok {
@@ -430,18 +431,27 @@ func (h *transformer) applyCooldownFiltering(metadata map[string]any, versions m
 			}
 			delete(versions, version)
 			delete(timeMap, version)
+			withheld[version] = true
 		}
 	}
 
-	h.updateDistTagsLatest(metadata, versions, timeMap)
+	h.updateDistTags(metadata, versions, timeMap, withheld)
 }
 
-// updateDistTagsLatest updates the dist-tags.latest field if the current latest
-// version was removed by cooldown filtering.
-func (h *transformer) updateDistTagsLatest(metadata, versions, timeMap map[string]any) {
+// updateDistTags moves dist-tags.latest to the newest remaining version if
+// the current latest was removed by cooldown filtering, and, as the denylist
+// does, drops other tags that name a withheld version.
+func (h *transformer) updateDistTags(metadata, versions, timeMap map[string]any, withheld map[string]bool) {
 	distTags, ok := metadata["dist-tags"].(map[string]any)
 	if !ok {
 		return
+	}
+
+	for tag, value := range distTags {
+		version, _ := value.(string)
+		if tag != "latest" && withheld[version] {
+			delete(distTags, tag)
+		}
 	}
 
 	latest, ok := distTags["latest"].(string)
@@ -455,6 +465,8 @@ func (h *transformer) updateDistTagsLatest(metadata, versions, timeMap map[strin
 
 	if newLatest := h.findNewestVersion(versions, timeMap); newLatest != "" {
 		distTags["latest"] = newLatest
+	} else if withheld[latest] {
+		delete(distTags, "latest")
 	}
 }
 

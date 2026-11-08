@@ -194,3 +194,39 @@ func TestNPMRewriteAttestationsURL(t *testing.T) {
 		}
 	}
 }
+
+// TestNPMRewriteCooldownDropsTags checks that cooldown, like the denylist,
+// drops a tag other than latest that names a version it withholds, in both
+// the in-memory and the streamed rewrite.
+func TestNPMRewriteCooldownDropsTags(t *testing.T) {
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	ts := func(age time.Duration) string { return now.Add(-age).UTC().Format(time.RFC3339) }
+	options := Options{ProxyURL: "http://proxy", EvaluatedAt: now, Cooldown: &cooldown.Config{Default: "3d"}}
+	input := `{"name":"demo",` +
+		`"dist-tags":{"latest":"3.0.0","next":"3.0.0","legacy":"1.0.0"},` +
+		`"versions":{"1.0.0":{},"2.0.0":{},"3.0.0":{}},` +
+		`"time":{"1.0.0":"` + ts(900*time.Hour) + `","2.0.0":"` + ts(800*time.Hour) + `","3.0.0":"` + ts(time.Hour) + `"}}`
+
+	rewrite := map[string]func() ([]byte, []string, error){
+		"memory": func() ([]byte, []string, error) { return Rewrite("demo", []byte(input), options) },
+		"stream": func() ([]byte, []string, error) { return rewriteStream("demo", []byte(input), options) },
+	}
+	for name, run := range rewrite {
+		t.Run(name, func(t *testing.T) {
+			out, _, err := run()
+			if err != nil {
+				t.Fatal(err)
+			}
+			var doc struct {
+				DistTags map[string]string `json:"dist-tags"`
+			}
+			if err := json.Unmarshal(out, &doc); err != nil {
+				t.Fatalf("output is not JSON: %v\n%s", err, out)
+			}
+			want := map[string]string{"latest": "2.0.0", "legacy": "1.0.0"}
+			if fmt.Sprint(doc.DistTags) != fmt.Sprint(want) {
+				t.Errorf("dist-tags = %v, want %v", doc.DistTags, want)
+			}
+		})
+	}
+}
