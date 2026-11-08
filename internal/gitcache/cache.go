@@ -130,7 +130,7 @@ type repo struct {
 	users      int
 	refreshing *refreshCall
 	// refused is the error of the last refresh when the upstream reported
-	// the repository missing or refused it, until a refresh succeeds.
+	// the repository missing or refused it, until a ref check succeeds.
 	refused error
 	// writes serializes git fetches into the repository.
 	writes chan struct{}

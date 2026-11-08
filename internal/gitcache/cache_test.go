@@ -922,3 +922,24 @@ func TestUploadPackClearsRefusal(t *testing.T) {
 		t.Errorf("ls-refs after the upstream allowed the repository again: status %d", status)
 	}
 }
+
+// TestRefCheckClearsRefusal has the upstream list the refs again after a
+// refusal but fail the fetch that follows: the check alone clears the
+// refusal, and the cached copy is served.
+func TestRefCheckClearsRefusal(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.clone(t, "repo")
+	tc.refuse(t, upstream)
+
+	upstream.commit(work, "second")
+	runGit(t, work, "push", "--quiet", "origin", "main")
+	upstream.fetchStatus.Store(http.StatusInternalServerError)
+	if out, err := tryGit(t, "", "ls-remote", tc.url("repo")); err != nil {
+		t.Errorf("cached copy refused after the upstream listed its refs: %v\n%s", err, out)
+	}
+	if status := tc.lsRefs(t); status != http.StatusOK {
+		t.Errorf("ls-refs after the upstream listed its refs: status %d", status)
+	}
+}

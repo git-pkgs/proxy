@@ -98,7 +98,7 @@ func (c *Cache) checkServable(ctx context.Context, rp *repo, repoURL string) err
 }
 
 // refusal returns the error of the last refresh that found the repository
-// gone or refused upstream, until a refresh succeeds.
+// gone or refused upstream, until a ref check succeeds.
 func (c *Cache) refusal(rp *repo) error {
 	c.mu.Lock()
 	defer c.mu.Unlock()

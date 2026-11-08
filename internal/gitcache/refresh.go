@@ -157,10 +157,7 @@ func (c *Cache) startRefresh(rp *repo, repoURL string) *refreshCall {
 		}
 		c.mu.Lock()
 		rp.refreshing = nil
-		switch {
-		case call.err == nil:
-			rp.refused = nil
-		case !servesStale(call.err):
+		if call.err != nil && !servesStale(call.err) {
 			rp.refused = call.err
 		}
 		c.mu.Unlock()
@@ -186,6 +183,11 @@ func (c *Cache) refresh(ctx context.Context, rp *repo, repoURL string, checked f
 	if err != nil {
 		return err
 	}
+	// The upstream lets us read the repository again, even if the fetch
+	// below fails.
+	c.mu.Lock()
+	rp.refused = nil
+	c.mu.Unlock()
 	if rp.exists() {
 		err = c.update(ctx, rp, repoURL, remote, checked)
 	} else {
