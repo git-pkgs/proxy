@@ -5,6 +5,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	pathpkg "path"
 	"regexp"
 	"sort"
 	"strings"
@@ -183,13 +184,36 @@ func (h *DebianHandler) handlePackageDownload(
 
 // handleMetadata serves repository metadata files through the metadata cache,
 // so they keep resolving while the upstream archive is unreachable.
+// Index files the cached InRelease or Release lists follow that listing (see
+// proxyListedIndex).
 func (h *DebianHandler) handleMetadata(
 	w http.ResponseWriter,
 	r *http.Request,
 	repository, upstreamURL, path string,
 ) {
 	cacheKey := h.metadataCacheKeyFor(repository, upstreamURL, path)
-	h.proxy.ProxyCached(w, r, fmt.Sprintf("%s/%s", upstreamURL, path), "debian", cacheKey, "*/*")
+	fileURL := fmt.Sprintf("%s/%s", upstreamURL, path)
+	switch pathpkg.Base(path) {
+	case "InRelease", "Release", "Release.gpg":
+		h.proxy.ProxyCached(w, r, fileURL, "debian", cacheKey, "*/*")
+		return
+	}
+	release, want := h.releaseListing(r, repository, upstreamURL, path)
+	h.proxy.proxyListedIndex(w, r, fileURL, "debian", cacheKey, release, want)
+}
+
+// releaseListing finds the cached release file of the suite path belongs
+// to, nearest directory first, and the sha256 it lists for path.
+func (h *DebianHandler) releaseListing(r *http.Request, repository, upstreamURL, path string) (*cachedRelease, string) {
+	for dir := pathpkg.Dir(path); strings.HasPrefix(dir, "dists/"); dir = pathpkg.Dir(dir) {
+		for _, name := range []string{"InRelease", "Release"} {
+			release := h.proxy.readCachedRelease(r.Context(), "debian", h.metadataCacheKeyFor(repository, upstreamURL, dir+"/"+name))
+			if release != nil {
+				return release, debianReleaseSHA256(release.body, strings.TrimPrefix(path, dir+"/"))
+			}
+		}
+	}
+	return nil, ""
 }
 
 // artifactCacheFilename scopes a package by repository, since the same

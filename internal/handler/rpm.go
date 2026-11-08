@@ -122,14 +122,27 @@ func (h *RPMHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 // handleMetadata proxies repository metadata files (repomd.xml,
 // primary.xml.gz, etc.). repomd.xml changes with every repository update and
 // follows the metadata TTL. The files it points at are usually named after
-// their own checksum and so never change; those are kept for good.
+// their own checksum and so never change; those are kept for good. Plainly
+// named ones follow the cached repomd.xml (see proxyListedIndex).
 func (h *RPMHandler) handleMetadata(w http.ResponseWriter, r *http.Request, path string) {
 	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, path)
 	if rpmContentAddressed(path) {
 		h.proxy.proxyImmutable(w, r, upstreamURL, "rpm", h.metadataCacheKey(path), "*/*")
 		return
 	}
-	h.proxy.ProxyCached(w, r, upstreamURL, "rpm", h.metadataCacheKey(path), "*/*")
+	i := strings.LastIndex(path, "/repodata/")
+	if strings.HasPrefix(path[i:], "/repodata/repomd.xml") {
+		h.proxy.ProxyCached(w, r, upstreamURL, "rpm", h.metadataCacheKey(path), "*/*")
+		return
+	}
+	// Plainly named files (createrepo --simple-md-filenames) follow the
+	// cached repomd.xml that lists them.
+	repomd := h.proxy.readCachedRelease(r.Context(), "rpm", h.metadataCacheKey(path[:i]+"/repodata/repomd.xml"))
+	var want string
+	if repomd != nil {
+		want = repomdSHA256(repomd.body, path[i+1:])
+	}
+	h.proxy.proxyListedIndex(w, r, upstreamURL, "rpm", h.metadataCacheKey(path), repomd, want)
 }
 
 // rpmChecksumPrefix matches a repodata filename that createrepo prefixed
