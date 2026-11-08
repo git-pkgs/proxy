@@ -166,6 +166,9 @@ func TestCondaCooldownSecondTimestamps(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
+	if len(index) != 2 {
+		t.Fatalf("index has %d entries, want 2", len(index))
+	}
 	for filename, published := range index {
 		if published.Unix() != recent.Unix() {
 			t.Errorf("%s published at %v, want %v", filename, published, recent)
