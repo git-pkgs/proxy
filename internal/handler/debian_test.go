@@ -25,6 +25,7 @@ func TestDebianHandler_parsePoolPath(t *testing.T) {
 			"nmap", "7.91+dfsg1+really7.80+dfsg1-2ubuntu0.1", "amd64",
 		},
 		{"pool/main/o/openssl/openssl_3.0.2-0ubuntu1.15~build1_amd64.deb", "openssl", "3.0.2-0ubuntu1.15~build1", "amd64"},
+		{"nginx_1.18.0-6_amd64.deb", "nginx", "1.18.0-6", "amd64"},
 		{"invalid/path", "", "", ""},
 		{"pool/main/n/nginx/nginx.deb", "", "", ""},
 	})
@@ -248,6 +249,44 @@ func TestDebianHandler_PackageCacheScopedPerRepository(t *testing.T) {
 	if second.Body.String() != securityPkg {
 		t.Errorf("named repository served %q, want %q (artifact cache collision)",
 			second.Body.String(), securityPkg)
+	}
+}
+
+func TestDebianHandler_FlatArchivePackageIsCached(t *testing.T) {
+	const pkgBody = "docker-ce package bytes"
+
+	var upstreamHits int
+
+	archive := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		upstreamHits++
+		_, _ = fmt.Fprint(w, pkgBody)
+	}))
+	defer archive.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(archive.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+
+	h := NewDebianHandler(proxy, "http://proxy.example", "https://archive.test", map[string]string{
+		"docker": archive.URL,
+	})
+
+	for _, path := range []string{
+		"/docker/dists/trixie/pool/stable/amd64/docker-ce_5.0.1-1~debian.13~trixie_amd64.deb",
+		"/docker/foo_1.0_amd64.deb",
+	} {
+		for attempt := 1; attempt <= 2; attempt++ {
+			w := serveDebianRequest(h, path)
+			if w.Code != http.StatusOK || w.Body.String() != pkgBody {
+				t.Fatalf("%s request %d: status = %d, body = %q, want 200 %q",
+					path, attempt, w.Code, w.Body.String(), pkgBody)
+			}
+		}
+	}
+
+	if upstreamHits != 2 {
+		t.Errorf("upstream fetched %d times for four requests, want 2: the package is not cached", upstreamHits)
 	}
 }
 

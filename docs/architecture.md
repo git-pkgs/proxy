@@ -304,6 +304,11 @@ HTTP protocol handlers for each registry type.
 - `handleIndex()` - Proxy sparse index
 - `handleDownload()` - Serve cached crate
 
+**DebianHandler:**
+- Serves `/debian` and `/debian/{name}` mirrors of APT archives (`upstream.debian_repositories`)
+- Routes `.deb` packages to the artifact cache, `dists/…` to the metadata cache, and proxies all other paths
+- Keys the artifact cache on name, version, and filename, scoped by repository for named archives
+
 **SwiftHandler:**
 - Proxies the Swift Package Registry v1 read endpoints
 - Rewrites release URLs and caches source archives
