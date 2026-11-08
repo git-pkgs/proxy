@@ -41,7 +41,7 @@ func (h *NPMHandler) handleAttestations(w http.ResponseWriter, r *http.Request) 
 
 	registryURL, cacheKey := h.sourceFor(packageName)
 	metadata := sync.OnceValues(func() (npmVersionData, error) {
-		return h.versionData(r.Context(), registryURL+"/"+url.PathEscape(packageName), cacheKey, version)
+		return h.versionData(r.Context(), packageName, registryURL+"/"+url.PathEscape(packageName), cacheKey, version)
 	})
 
 	inCooldown, err := h.versionInCooldown(packageName, version, metadata)

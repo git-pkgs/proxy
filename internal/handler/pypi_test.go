@@ -276,6 +276,32 @@ func TestPyPISimpleJSONCooldown(t *testing.T) {
 	}
 }
 
+// TestPyPISimpleJSONFiltersVersions checks that the PEP 700 versions list
+// loses a version whose files were all filtered out, and keeps one that
+// still has files.
+func TestPyPISimpleJSONFiltersVersions(t *testing.T) {
+	h := &PyPIHandler{proxy: &Proxy{Logger: slog.Default()}, proxyURL: "http://proxy.test"}
+	body := `{"meta":{"api-version":"1.1"},"name":"ruff","versions":["1.0.0","2.0.0","3.0.0"],"files":[` +
+		`{"filename":"ruff-1.0.0.tar.gz","url":"https://files.pythonhosted.org/packages/ab/ruff-1.0.0.tar.gz"},` +
+		`{"filename":"ruff-2.0.0.tar.gz","url":"https://files.pythonhosted.org/packages/cd/ruff-2.0.0.tar.gz"},` +
+		`{"filename":"ruff-2.0.0-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/ef/ruff-2.0.0-py3-none-any.whl"}` +
+		`]}`
+	out, err := h.rewriteSimpleJSON([]byte(body), map[string]bool{"2.0.0": true, "3.0.0": true})
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Versions []string `json:"versions"`
+	}
+	if err := json.Unmarshal(out, &result); err != nil {
+		t.Fatal(err)
+	}
+	// 3.0.0 has no files to filter, but it is still held back.
+	if strings.Join(result.Versions, ",") != "1.0.0" {
+		t.Errorf("versions = %v, want [1.0.0]", result.Versions)
+	}
+}
+
 func TestPyPIParseFilename(t *testing.T) {
 	h := &PyPIHandler{proxy: &Proxy{Logger: slog.Default()}}
 

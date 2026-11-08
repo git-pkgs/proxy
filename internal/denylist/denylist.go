@@ -40,6 +40,13 @@ func New(packages []string) (*Policy, error) {
 			p.packages[key] = make(map[string]bool)
 		}
 		p.packages[key][id.version] = true
+		// Debian and RPM filenames leave the epoch out, so an entry with
+		// one also matches the version without it.
+		if pkg.Type == "deb" || pkg.Type == "rpm" {
+			if _, version, ok := strings.Cut(id.version, ":"); ok && version != "" {
+				p.packages[key][version] = true
+			}
+		}
 	}
 	return p, nil
 }
@@ -128,6 +135,9 @@ func genericSwiftRegistry(pkg *purl.PURL) (scope, name string, ok bool) {
 
 // identify compares PURLs in purl's comparison form. The generic
 // swift-registry spelling is the proxy's own, so it is mapped here first.
+// The namespace of a distro type names the distribution, which handlers
+// include for some types and not others, so it is dropped as retention and
+// the inventory do.
 func identify(pkg *purl.PURL) identity {
 	if scope, name, ok := genericSwiftRegistry(pkg); ok {
 		pkg = purl.New("swift", scope, name, pkg.Version, nil)
@@ -138,6 +148,10 @@ func identify(pkg *purl.PURL) identity {
 		// An entry without a channel matches every channel.
 		channel = c.Qualifier("channel")
 	}
-	key := purl.New(c.Type, c.Namespace, c.Name, "", nil).String()
+	namespace := c.Namespace
+	if packageurl.DistroType(c.Type) {
+		namespace = ""
+	}
+	key := purl.New(c.Type, namespace, c.Name, "", nil).String()
 	return identity{key: packageurl.PolicyPackageKey(key), channel: channel, version: c.Version}
 }

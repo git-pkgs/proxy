@@ -46,7 +46,7 @@ func (c *Cache) Mirror(ctx context.Context, key, repoURL, version string, fetchW
 			return MirrorResult{}, err
 		}
 	}
-	lease, err := c.Open(ctx, key, repoURL, OpenOptions{FetchWants: fetchWants})
+	lease, err := c.Open(ctx, key, repoURL, OpenOptions{FetchWants: fetchWants, NoCheck: true})
 	if err != nil {
 		return MirrorResult{}, err
 	}

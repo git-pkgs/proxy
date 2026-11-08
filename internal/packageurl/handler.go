@@ -8,6 +8,12 @@ import (
 // ("alpine", "debian"), not part of the package name the handlers store.
 var distroTypes = map[string]bool{"alpm": true, "apk": true, "bsd": true, "deb": true, "rpm": true}
 
+// DistroType reports whether a PURL type's namespace names the distribution,
+// so that handlers ignore it.
+func DistroType(purlType string) bool {
+	return distroTypes[purlType]
+}
+
 // HandlerEcosystem returns the ecosystem name the proxy's handlers store
 // packages of a PURL type under. purl names gem and composer after their
 // registries, rubygems and packagist; the handlers use the type.
