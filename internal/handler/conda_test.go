@@ -3,9 +3,13 @@ package handler
 import (
 	"bytes"
 	"encoding/json"
+	"fmt"
 	"log/slog"
+	"maps"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -130,6 +134,45 @@ func TestCondaCooldownFiltering(t *testing.T) {
 	}
 	if _, ok := condaPkgs["scipy-1.11.0-old.conda"]; !ok {
 		t.Error("expected old scipy to survive filtering")
+	}
+}
+
+// TestCondaCooldownSecondTimestamps checks that a timestamp in seconds,
+// which some repodata entries carry, is read as seconds, as conda does, in
+// both the filter and the download index.
+func TestCondaCooldownSecondTimestamps(t *testing.T) {
+	recent := time.Now().Add(-time.Hour)
+	body := fmt.Sprintf(`{"packages":{"seconds-1.0-0.tar.bz2":{"name":"seconds","version":"1.0","timestamp":%d},`+
+		`"millis-1.0-0.tar.bz2":{"name":"millis","version":"1.0","timestamp":%d}}}`, recent.Unix(), recent.UnixMilli())
+
+	proxy := testProxy()
+	proxy.Cooldown = &cooldown.Config{Default: "3d"}
+	h := &CondaHandler{proxy: proxy, proxyURL: "http://localhost:8080"}
+	filtered, err := filterRepodataBytes(h, []byte(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	var result struct {
+		Packages map[string]json.RawMessage `json:"packages"`
+	}
+	if err := json.Unmarshal(filtered, &result); err != nil {
+		t.Fatal(err)
+	}
+	if len(result.Packages) != 0 {
+		t.Errorf("packages = %v, want both left out", slices.Sorted(maps.Keys(result.Packages)))
+	}
+
+	index, err := readRepodataIndex(strings.NewReader(body))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(index) != 2 {
+		t.Fatalf("index has %d entries, want 2", len(index))
+	}
+	for filename, published := range index {
+		if published.Unix() != recent.Unix() {
+			t.Errorf("%s published at %v, want %v", filename, published, recent)
+		}
 	}
 }
 

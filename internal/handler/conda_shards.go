@@ -378,7 +378,8 @@ func rewriteCondaShardIndex(body []byte, indexURL string, mask [condaShardHashLe
 }
 
 // condaShardRecord holds the fields cooldown needs from a shard record.
-// Timestamps are milliseconds, encoded as an integer or a float.
+// Timestamps are an integer or a float, in seconds or milliseconds as
+// condaTime reads them.
 type condaShardRecord struct {
 	Name      string `msgpack:"name"`
 	Version   string `msgpack:"version"`

@@ -431,8 +431,9 @@ func composerPublishTime(published []byte) (time.Time, bool) {
 // the package name to it. Composer only falls back to notify-batch when a
 // version has no notification-url of its own, and skips an empty one. Setting
 // it on the expanded fields keeps it set for the versions that inherit them.
+// Composer reads a null notification-url as absent too.
 func disableDefaultNotification(fields *composerFields) {
-	if fields.get("notification-url") == nil {
+	if v := fields.get("notification-url"); v == nil || string(v) == "null" {
 		fields.set("notification-url", []byte(`"notification-url"`), []byte(`""`))
 	}
 }

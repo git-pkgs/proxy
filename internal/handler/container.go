@@ -353,7 +353,7 @@ func (h *ContainerHandler) Routes() http.Handler {
 		case path == "" || path == "/":
 			// Version check: GET /v2/
 			h.handleVersionCheck(w, r)
-		case strings.HasSuffix(path, "/blobs/"+r.URL.Query().Get("digest")) || strings.Contains(path, "/blobs/sha256:"):
+		case strings.HasSuffix(path, "/blobs/"+r.URL.Query().Get("digest")) || strings.Contains(path, "/blobs/sha256:") || strings.Contains(path, "/blobs/sha512:"):
 			// Blob download: GET /v2/{name}/blobs/{digest}
 			h.handleBlobDownload(w, r, path)
 		case manifestPathPattern.MatchString(path):
@@ -692,7 +692,7 @@ func (h *ContainerHandler) containerError(w http.ResponseWriter, status int, cod
 }
 
 // blobPathPattern matches blob paths: {name}/blobs/{digest}
-var blobPathPattern = regexp.MustCompile(`^(.+)/blobs/(sha256:[a-f0-9]+)$`)
+var blobPathPattern = regexp.MustCompile(`^(.+)/blobs/(sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$`)
 
 // parseBlobPath extracts repository name and digest from a blob path.
 func (h *ContainerHandler) parseBlobPath(path string) (name, digest string) {

@@ -2,12 +2,15 @@ package handler
 
 import (
 	"context"
+	"crypto/sha512"
 	"database/sql"
+	"encoding/hex"
 	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -34,6 +37,9 @@ type fakeImageRegistry struct {
 	truncateManifests atomic.Bool
 	// onBlob, if set, runs before a blob is served.
 	onBlob func(path string)
+	// sha512Digests makes manifests requested by a sha512 digest name that
+	// digest in Docker-Content-Digest, as registries do.
+	sha512Digests bool
 }
 
 type fakeImage struct {
@@ -127,6 +133,9 @@ func newFakeImageRegistry(t *testing.T) (*fakeImageRegistry, fakeImage) {
 		if ok {
 			w.Header().Set("Content-Type", doc.contentType)
 			w.Header().Set("Docker-Content-Digest", sha256Digest([]byte(doc.body)))
+			if _, ref, _ := strings.Cut(req.URL.Path, "/manifests/"); r.sha512Digests && strings.HasPrefix(ref, "sha512:") {
+				w.Header().Set("Docker-Content-Digest", ref)
+			}
 			if req.Method == http.MethodGet && !strings.Contains(req.URL.Path, "/manifests/sha256:") {
 				r.tagGets.Add(1)
 			}
@@ -608,5 +617,69 @@ func TestMirrorImageBlobFailureKeepsOtherFetches(t *testing.T) {
 	registry.offline.Store(true)
 	if response := pull(t, h, "/team/app/blobs/"+image.singleLayer, ""); response.Code != http.StatusOK {
 		t.Errorf("layer fetched alongside the failing blob: status %d, want it cached", response.Code)
+	}
+}
+
+func TestMirrorImageAcceptsSHA512Blobs(t *testing.T) {
+	registry, image := newFakeImageRegistry(t)
+	const layer = "sha512 layer"
+	sum := sha512.Sum512([]byte(layer))
+	layerDigest := "sha512:" + hex.EncodeToString(sum[:])
+	body, err := json.Marshal(map[string]any{
+		"schemaVersion": 2, "mediaType": ociManifestMediaType,
+		"config": map[string]any{"mediaType": "application/vnd.oci.image.config.v1+json", "digest": image.singleLayer},
+		"layers": []map[string]any{{"mediaType": "application/vnd.oci.image.layer.v1.tar+gzip", "digest": layerDigest}},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	registry.mu.Lock()
+	registry.manifests["/v2/team/app/manifests/sha512"] = fakeManifest{contentType: ociManifestMediaType, body: string(body)}
+	registry.blobs["/v2/team/app/blobs/"+layerDigest] = layer
+	registry.mu.Unlock()
+
+	proxy := newMirrorTestProxy(t, registry)
+	h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example", registry.server.URL)
+	if _, err := h.MirrorImage(context.Background(), ImageRef{Name: "team/app", References: []string{"sha512"}}, nil); err != nil {
+		t.Fatalf("MirrorImage: %v", err)
+	}
+	cached, err := proxy.GetCachedArtifact(t.Context(), "oci", "team/app", layerDigest, layerDigest)
+	if err != nil || cached == nil {
+		t.Fatalf("sha512 layer not cached: %v, %v", cached, err)
+	}
+	if cached.Reader != nil {
+		_ = cached.Reader.Close()
+	}
+}
+
+// TestMirrorImageSHA512ReferenceMatchesTag checks that mirroring a tag
+// pinned by a sha512 digest compares it with the tag's manifest by sha512,
+// so an unmoved tag is neither reported as moved nor counted twice.
+func TestMirrorImageSHA512ReferenceMatchesTag(t *testing.T) {
+	mirror := func(t *testing.T, sha512Ref bool) ImageResult {
+		registry, image := newFakeImageRegistry(t)
+		reference := image.singleDigest
+		if sha512Ref {
+			body := registry.manifests["/v2/team/app/manifests/single"].body
+			sum := sha512.Sum512([]byte(body))
+			reference = "sha512:" + hex.EncodeToString(sum[:])
+			registry.manifests["/v2/team/app/manifests/"+reference] = registry.manifests["/v2/team/app/manifests/single"]
+			registry.sha512Digests = true
+		}
+		proxy := newMirrorTestProxy(t, registry)
+		h := NewContainerHandlerWithRegistry(proxy, "http://proxy.example", registry.server.URL)
+		result, err := h.MirrorImage(context.Background(), ImageRef{Name: "team/app", References: []string{reference, "single"}}, nil)
+		if err != nil {
+			t.Fatalf("MirrorImage: %v", err)
+		}
+		return result
+	}
+	want := mirror(t, false)
+	got := mirror(t, true)
+	if !slices.Equal(got.Warnings, want.Warnings) {
+		t.Errorf("warnings = %v, want %v as for a sha256 reference", got.Warnings, want.Warnings)
+	}
+	if got.Fetched != want.Fetched {
+		t.Errorf("fetched = %d, want %d as for a sha256 reference", got.Fetched, want.Fetched)
 	}
 }

@@ -3,6 +3,7 @@ package config
 import (
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -296,6 +297,8 @@ func TestParseSize(t *testing.T) {
 		{"1TB", 1024 * 1024 * 1024 * 1024, false},
 		{"invalid", 0, true},
 		{"10XB", 0, true},
+		{"0GB", 0, false},
+		{"0.0MB", 0, false},
 	}
 
 	for _, tt := range tests {
@@ -466,8 +469,9 @@ func TestLoadGradleBuildCacheReadOnlyFromEnv(t *testing.T) {
 		{" FALSE ", true, false, 0},
 		{"True", false, true, 0},
 		{"1", false, true, 0},
-		{"yes", false, true, 1},
-		{"off", false, true, 1},
+		{"yes", false, true, 0},
+		{"off", true, false, 0},
+		{"maybe", false, true, 1},
 		{"", false, false, 0},
 	}
 	for _, tt := range tests {
@@ -2167,5 +2171,103 @@ func TestCooldownShortest(t *testing.T) {
 		if got := tc.cfg.Shortest(); got != tc.want {
 			t.Errorf("%s: Shortest() = %v, want %v", tc.name, got, tc.want)
 		}
+	}
+}
+
+func TestLoadBoolsFromEnvParseStrictly(t *testing.T) {
+	t.Run("no turns off a setting from the config file", func(t *testing.T) {
+		t.Setenv("PROXY_TRUST_FORWARDED_FOR", "no")
+		cfg := Default()
+		cfg.TrustForwardedFor = true
+		cfg.LoadFromEnv()
+		if cfg.TrustForwardedFor {
+			t.Error("TrustForwardedFor = true, want false")
+		}
+	})
+
+	tests := []struct {
+		value    string
+		start    bool
+		want     bool
+		warnings int
+	}{
+		{"true", false, true, 0},
+		{"True", false, true, 0},
+		{" TRUE ", false, true, 0},
+		{"1", false, true, 0},
+		{"false", true, false, 0},
+		{"FALSE", true, false, 0},
+		{"0", true, false, 0},
+		{"yes", false, true, 0},
+		{" On ", false, true, 0},
+		{"no", true, false, 0},
+		{"OFF", true, false, 0},
+		{"maybe", false, false, 1},
+		{"ture", true, true, 1},
+	}
+	for _, tt := range tests {
+		t.Run(tt.value, func(t *testing.T) {
+			t.Setenv("PROXY_SCANNING_ENABLED", tt.value)
+			cfg := Default()
+			cfg.Scanning.Enabled = tt.start
+			cfg.LoadFromEnv()
+			if cfg.Scanning.Enabled != tt.want {
+				t.Errorf("Scanning.Enabled = %v, want %v", cfg.Scanning.Enabled, tt.want)
+			}
+			if got := len(cfg.EnvWarnings()); got != tt.warnings {
+				t.Errorf("len(EnvWarnings()) = %d, want %d: %v", got, tt.warnings, cfg.EnvWarnings())
+			}
+		})
+	}
+}
+
+func TestScannerEcosystems(t *testing.T) {
+	cfg := ScanningConfig{
+		Enabled:    true,
+		SigningKey: "s3cret",
+		Scanners: []ScannerConfig{{
+			Name: "clamav", URL: "http://scanner.invalid/scan",
+			Ecosystems: []string{"go", "Docker", "rubygems", "npm", "arch", "git"},
+		}},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() error: %v", err)
+	}
+	want := []string{"golang", "oci", "gem", "npm", "arch", "git"}
+	if got := cfg.Scanners[0].Ecosystems; !slices.Equal(got, want) {
+		t.Errorf("Ecosystems = %v, want %v", got, want)
+	}
+
+	cfg.Scanners[0].Ecosystems = []string{"npm", "pypy"}
+	err := cfg.Validate()
+	if err == nil || !strings.Contains(err.Error(), "pypy") {
+		t.Errorf("Validate() error = %v, want unknown ecosystem pypy", err)
+	}
+}
+
+func TestParseSizeRejectsOutOfRange(t *testing.T) {
+	for _, s := range []string{"-5GB", "-1", "-0.5K", "NaNGB", "InfGB", "+InfB", "1e30GB", "9999999999TB", "0.5B", "0.000000000001GB"} {
+		if got, err := ParseSize(s); err == nil {
+			t.Errorf("ParseSize(%q) = %d, want error", s, got)
+		}
+	}
+	cfg := Default()
+	cfg.Storage.MaxSize = "-5GB"
+	if err := cfg.Validate(); err == nil {
+		t.Error("Validate() accepted storage.max_size -5GB")
+	}
+}
+
+func TestValidateRejectsNegativeTTLs(t *testing.T) {
+	cfg := Default()
+	cfg.MetadataTTL = "-5m"
+	if err := cfg.Validate(); err == nil {
+		t.Error("Validate() accepted metadata_ttl -5m")
+	}
+
+	cfg = Default()
+	cfg.Storage.DirectServeTTL = "-5m"
+	if err := cfg.Validate(); err == nil {
+		t.Error("Validate() accepted storage.direct_serve_ttl -5m")
 	}
 }

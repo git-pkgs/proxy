@@ -495,6 +495,7 @@ func runMirror() {
 		os.Exit(1)
 	}
 	cfg.LoadFromEnv()
+	printEnvWarnings(cfg)
 
 	if *storageURL != "" {
 		cfg.Storage.URL = *storageURL
@@ -822,6 +823,14 @@ func formatSize(bytes int64) string {
 		return fmt.Sprintf("%.1f KB", float64(bytes)/KB)
 	default:
 		return fmt.Sprintf("%d B", bytes)
+	}
+}
+
+// printEnvWarnings reports environment values LoadFromEnv ignored. serve
+// logs them from server.Start; mirror never gets there.
+func printEnvWarnings(cfg *config.Config) {
+	for _, warning := range cfg.EnvWarnings() {
+		fmt.Fprintf(os.Stderr, "warning: %s\n", warning)
 	}
 }
 

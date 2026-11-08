@@ -57,3 +57,24 @@ func TestServeHelpProcess(*testing.T) {
 	os.Args = []string{"proxy", "serve", "-help"}
 	main()
 }
+
+func TestMirrorLogsEnvWarnings(t *testing.T) {
+	cmd := exec.Command(os.Args[0], "-test.run=^TestMirrorEnvWarningsProcess$")
+	// The negative size stops mirror before it opens any storage.
+	cmd.Env = append(os.Environ(),
+		"PROXY_TEST_MIRROR_ENV_WARNINGS=1",
+		"PROXY_CACHE_METADATA=maybe",
+		"PROXY_STORAGE_MAX_SIZE=-1")
+	output, _ := cmd.CombinedOutput()
+	if !strings.Contains(string(output), "PROXY_CACHE_METADATA") {
+		t.Errorf("mirror did not warn about PROXY_CACHE_METADATA:\n%s", output)
+	}
+}
+
+func TestMirrorEnvWarningsProcess(*testing.T) {
+	if os.Getenv("PROXY_TEST_MIRROR_ENV_WARNINGS") != "1" {
+		return
+	}
+	os.Args = []string{"proxy", "mirror", "pkg:npm/lodash@4.17.21"}
+	main()
+}

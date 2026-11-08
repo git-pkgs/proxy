@@ -157,6 +157,9 @@ func (c *Cache) startRefresh(rp *repo, repoURL string) *refreshCall {
 		}
 		c.mu.Lock()
 		rp.refreshing = nil
+		if call.err != nil && !servesStale(call.err) {
+			rp.refused = call.err
+		}
 		c.mu.Unlock()
 		c.release(rp)
 		close(call.done)
@@ -180,6 +183,11 @@ func (c *Cache) refresh(ctx context.Context, rp *repo, repoURL string, checked f
 	if err != nil {
 		return err
 	}
+	// The upstream lets us read the repository again, even if the fetch
+	// below fails.
+	c.mu.Lock()
+	rp.refused = nil
+	c.mu.Unlock()
 	if rp.exists() {
 		err = c.update(ctx, rp, repoURL, remote, checked)
 	} else {
@@ -299,7 +307,7 @@ func (c *Cache) fetch(ctx context.Context, dir, repoURL string, limit int64, res
 		return ctx.Err()
 	}
 
-	relayURL, route, unregister := c.relay.register(repoURL, limit, res)
+	relayURL, route, unregister := c.relay.register(ctx, repoURL, limit, res)
 	defer unregister()
 	args := append([]string{"fetch", "--quiet", "--no-write-fetch-head"}, flags...)
 	_, err := c.run(ctx, dir, append(append(args, relayURL), refspecs...)...)
@@ -317,6 +325,9 @@ func (c *Cache) fetch(ctx context.Context, dir, repoURL string, limit int64, res
 	}
 	if route.full.Load() {
 		return ErrCacheFull
+	}
+	if status := route.redirected.Load(); status != 0 {
+		return upstreamStatusError(int(status))
 	}
 	if err != nil && !route.answered.Load() {
 		return fmt.Errorf("%w: %w", errUpstreamUnanswered, err)

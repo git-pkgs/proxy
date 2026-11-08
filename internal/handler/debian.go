@@ -108,10 +108,10 @@ func (h *DebianHandler) Routes() http.Handler {
 			}
 		}
 
-		// Route based on path type
+		// Route by filename rather than path prefix because repositories such as
+		// Docker's nest the pool under dists/<suite>/.
 		switch {
-		case strings.HasPrefix(rest, "pool/"):
-			// Package downloads - cache these
+		case isDebPackageFile(rest):
 			h.handlePackageDownload(w, r, repository, upstreamURL, rest)
 		case strings.HasPrefix(rest, "dists/"):
 			// Repository metadata - served through the metadata cache
@@ -121,6 +121,10 @@ func (h *DebianHandler) Routes() http.Handler {
 			h.proxyFile(w, r, upstreamURL, rest)
 		}
 	}))
+}
+
+func isDebPackageFile(path string) bool {
+	return strings.HasSuffix(path, ".deb")
 }
 
 // repositoryNotFound answers a request addressed to a repository that is not
@@ -226,12 +230,7 @@ var debPackagePattern = regexp.MustCompile(`^(.+)_([^_]+)_([^_]+)\.deb$`)
 // parsePoolPath extracts package info from a pool path.
 // Example: pool/main/n/nginx/nginx_1.18.0-6_amd64.deb
 func (h *DebianHandler) parsePoolPath(path string) (name, version, arch string) {
-	// Get the filename
-	idx := strings.LastIndex(path, "/")
-	if idx < 0 {
-		return "", "", ""
-	}
-	filename := path[idx+1:]
+	filename := path[strings.LastIndex(path, "/")+1:]
 
 	// Parse the filename
 	matches := debPackagePattern.FindStringSubmatch(filename)

@@ -206,3 +206,58 @@ func TestPubDownloadServesCachedArchive(t *testing.T) {
 		t.Errorf("body = %q, want %q", got, "cached archive")
 	}
 }
+
+// TestPubRewriteMetadataLatest checks that latest points at the proxy and
+// never names a version cooldown holds back, and that a held back latest is
+// replaced with the newest stable version left.
+func TestPubRewriteMetadataLatest(t *testing.T) {
+	old := time.Now().Add(-10 * 24 * time.Hour).Format(time.RFC3339)
+	recent := time.Now().Add(-time.Hour).Format(time.RFC3339)
+	entry := func(version, published string) string {
+		return `{"version":"` + version + `","published":"` + published + `","archive_url":"https://pub.dev/packages/demo/versions/` + version + `.tar.gz"}`
+	}
+	for _, tc := range []struct {
+		name, latest, versions string
+		cooldown               bool
+		want, wantURL          string
+	}{
+		{"kept", entry("1.0.0", old), entry("1.0.0", old), false, "1.0.0",
+			"http://localhost:8080/pub/packages/demo/versions/1.0.0.tar.gz"},
+		{"stable over prerelease", entry("2.0.0", recent),
+			entry("1.0.0", old) + "," + entry("1.1.0", old) + "," + entry("2.0.0-dev.1", old) + "," + entry("2.0.0", recent), true, "1.1.0",
+			"http://localhost:8080/pub/packages/demo/versions/1.1.0.tar.gz"},
+		{"only prereleases", entry("2.0.0", recent), entry("2.0.0-dev.1", old) + "," + entry("2.0.0", recent), true, "2.0.0-dev.1",
+			"http://localhost:8080/pub/packages/demo/versions/2.0.0-dev.1.tar.gz"},
+		{"all held back", entry("2.0.0", recent), entry("2.0.0", recent), true, "", ""},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			proxy := &Proxy{Logger: slog.Default()}
+			if tc.cooldown {
+				proxy.Cooldown = &cooldown.Config{Default: "3d"}
+			}
+			h := &PubHandler{proxy: proxy, proxyURL: "http://localhost:8080"}
+			output, err := h.rewriteMetadata("demo", []byte(`{"name":"demo","latest":`+tc.latest+`,"versions":[`+tc.versions+`]}`))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var result struct {
+				Latest *struct {
+					Version    string `json:"version"`
+					ArchiveURL string `json:"archive_url"`
+				} `json:"latest"`
+			}
+			if err := json.Unmarshal(output, &result); err != nil {
+				t.Fatal(err)
+			}
+			if tc.want == "" {
+				if result.Latest != nil {
+					t.Errorf("latest = %+v, want none", *result.Latest)
+				}
+				return
+			}
+			if result.Latest == nil || result.Latest.Version != tc.want || result.Latest.ArchiveURL != tc.wantURL {
+				t.Errorf("latest = %+v, want %s at %s", result.Latest, tc.want, tc.wantURL)
+			}
+		})
+	}
+}

@@ -1831,7 +1831,7 @@ func (p *Proxy) staleMetadata(ctx context.Context, ecosystem, cacheKey string, v
 
 	p.Logger.Info("serving metadata from cache",
 		"ecosystem", ecosystem, "key", cacheKey)
-	return metadataResult{body: data, contentType: ct, contentEncoding: entry.ContentEncoding.String, stale: true}.describedBy(entry)
+	return metadataResult{body: data, contentType: ct, contentEncoding: entry.ContentEncoding.String, stale: true, upstreamErr: err}.describedBy(entry)
 }
 
 // metadataResult is what a metadata lookup hands back. A shared fetch gives
@@ -1845,8 +1845,9 @@ type metadataResult struct {
 	digest string
 	err    error
 	// stale is set when the body is the cached copy served because upstream
-	// failed.
-	stale bool
+	// failed, and upstreamErr is that failure.
+	stale       bool
+	upstreamErr error
 	// fromCache is set when the body is a stored copy within its TTL, read
 	// without asking upstream.
 	fromCache bool

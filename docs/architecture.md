@@ -304,6 +304,11 @@ HTTP protocol handlers for each registry type.
 - `handleIndex()` - Proxy sparse index
 - `handleDownload()` - Serve cached crate
 
+**DebianHandler:**
+- Serves `/debian` and `/debian/{name}` mirrors of APT archives (`upstream.debian_repositories`)
+- Routes `.deb` packages to the artifact cache, `dists/…` to the metadata cache, and proxies all other paths
+- Keys the artifact cache on name, version, and filename, scoped by repository for named archives
+
 **SwiftHandler:**
 - Proxies the Swift Package Registry v1 read endpoints
 - Rewrites release URLs and caches source archives
@@ -363,7 +368,7 @@ Package metadata enrichment, built on [github.com/git-pkgs/enrichment](https://g
 
 ### `internal/mirror`
 
-Selective package mirroring for pre-populating the proxy cache. Supports multiple input sources: individual PURLs (versioned or unversioned), CycloneDX/SPDX SBOM files, and full registry enumeration. Uses a bounded worker pool backed by `errgroup` to download artifacts in parallel, reusing `handler.Proxy.GetOrFetchArtifact()` for the actual fetch-and-cache work. Container images (`pkg:docker`, `pkg:oci`) go through `handler.ContainerHandler.MirrorImage()` instead, which walks index, platform manifests and blobs and stores them under the keys a pull reads. Git repositories (`pkg:git`) go through `handler.GitHandler.Mirror()`, which caches the repository and commit in the git cache that `/git` serves.
+Selective package mirroring for pre-populating the proxy cache. Supports multiple input sources: individual PURLs (versioned or unversioned), CycloneDX/SPDX SBOM files, and full registry enumeration. Uses a bounded worker pool backed by `errgroup` to download artifacts in parallel, reusing `handler.Proxy.GetOrFetchArtifact()` for the actual fetch-and-cache work. Container images (`pkg:docker`, `pkg:oci`) go through `handler.ContainerHandler.MirrorImage()` instead, which walks index, platform manifests and blobs and stores them under the keys a pull reads. Git repositories (`pkg:git`) go through `handler.GitHandler.Mirror()`, which caches the repository and the commit or tag, with its submodules, in the git cache that `/git` serves.
 
 The package also provides a `MetadataCache` for storing raw upstream metadata blobs so the proxy can serve metadata responses offline. The `JobStore` manages async mirror jobs exposed via the `/api/mirror` endpoints.
 

@@ -849,7 +849,7 @@ func (db *DB) SearchPackages(query string, ecosystem string, limit int, offset i
 	}
 
 	var results []SearchResult
-	searchPattern := "%" + query + "%"
+	searchPattern := nameSearchPattern(query)
 
 	var sqlQuery string
 	var args []any
@@ -864,7 +864,7 @@ func (db *DB) SearchPackages(query string, ecosystem string, limit int, offset i
 			FROM packages p
 			LEFT JOIN versions v ON v.package_purl = p.purl
 			LEFT JOIN artifacts a ON a.version_purl = v.purl
-			WHERE p.name LIKE ? AND ` + condition + ` AND a.storage_path IS NOT NULL
+			WHERE ` + nameSearchCondition + ` AND ` + condition + ` AND a.storage_path IS NOT NULL
 			GROUP BY p.purl, p.ecosystem, p.name, p.latest_version, p.license
 			ORDER BY hits DESC
 			LIMIT ? OFFSET ?
@@ -879,7 +879,7 @@ func (db *DB) SearchPackages(query string, ecosystem string, limit int, offset i
 			FROM packages p
 			LEFT JOIN versions v ON v.package_purl = p.purl
 			LEFT JOIN artifacts a ON a.version_purl = v.purl
-			WHERE p.name LIKE ? AND a.storage_path IS NOT NULL
+			WHERE ` + nameSearchCondition + ` AND a.storage_path IS NOT NULL
 			GROUP BY p.purl, p.ecosystem, p.name, p.latest_version, p.license
 			ORDER BY hits DESC
 			LIMIT ? OFFSET ?
@@ -894,6 +894,18 @@ func (db *DB) SearchPackages(query string, ecosystem string, limit int, offset i
 	return results, nil
 }
 
+// nameSearchCondition matches package names containing a search pattern
+// from nameSearchPattern, ignoring case on SQLite and Postgres alike.
+const nameSearchCondition = `LOWER(p.name) LIKE LOWER(?) ESCAPE '!'`
+
+// nameSearchPattern is the LIKE pattern for names containing query. A %
+// in query is matched literally, but _ stays a single-character wildcard
+// so typing_extensions still finds typing-extensions.
+func nameSearchPattern(query string) string {
+	escaped := strings.NewReplacer("!", "!!", "%", "!%").Replace(query)
+	return "%" + escaped + "%"
+}
+
 func (db *DB) CountSearchResults(query string, ecosystem string) (int64, error) {
 	hasArtifacts, err := db.HasTable("artifacts")
 	if err != nil {
@@ -903,7 +915,7 @@ func (db *DB) CountSearchResults(query string, ecosystem string) (int64, error) 
 		return 0, nil
 	}
 
-	searchPattern := "%" + query + "%"
+	searchPattern := nameSearchPattern(query)
 	var sqlQuery string
 	var args []any
 
@@ -914,7 +926,7 @@ func (db *DB) CountSearchResults(query string, ecosystem string) (int64, error) 
 			FROM packages p
 			LEFT JOIN versions v ON v.package_purl = p.purl
 			LEFT JOIN artifacts a ON a.version_purl = v.purl
-			WHERE p.name LIKE ? AND ` + condition + ` AND a.storage_path IS NOT NULL
+			WHERE ` + nameSearchCondition + ` AND ` + condition + ` AND a.storage_path IS NOT NULL
 		`)
 		args = append([]any{searchPattern}, ecosystemArgs...)
 	} else {
@@ -923,7 +935,7 @@ func (db *DB) CountSearchResults(query string, ecosystem string) (int64, error) 
 			FROM packages p
 			LEFT JOIN versions v ON v.package_purl = p.purl
 			LEFT JOIN artifacts a ON a.version_purl = v.purl
-			WHERE p.name LIKE ? AND a.storage_path IS NOT NULL
+			WHERE ` + nameSearchCondition + ` AND a.storage_path IS NOT NULL
 		`)
 		args = []any{searchPattern}
 	}
