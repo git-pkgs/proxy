@@ -84,16 +84,17 @@ func (c *Cache) Open(ctx context.Context, key, repoURL string, opts OpenOptions)
 // info/refs, so a clone checks the upstream once.
 const uploadPackGrace = time.Minute
 
-// checkServable refuses a cached repository the last refresh found gone or
-// refused upstream, and refreshes one not checked recently first.
+// checkServable refreshes a cached repository first when the last refresh
+// found it gone or refused upstream, or it was not checked recently, and
+// refuses it while that refusal stands.
 func (c *Cache) checkServable(ctx context.Context, rp *repo, repoURL string) error {
-	if err := c.refusal(rp); err != nil {
+	if c.refusal(rp) == nil && time.Since(time.Unix(0, rp.lastChecked.Load())) <= c.opts.StaleMaxAge+uploadPackGrace {
+		return nil
+	}
+	if err := c.ensureFresh(ctx, rp, repoURL); err != nil {
 		return err
 	}
-	if time.Since(time.Unix(0, rp.lastChecked.Load())) > c.opts.StaleMaxAge+uploadPackGrace {
-		return c.ensureFresh(ctx, rp, repoURL)
-	}
-	return nil
+	return c.refusal(rp)
 }
 
 // refusal returns the error of the last refresh that found the repository

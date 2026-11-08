@@ -903,9 +903,10 @@ or redirects is not served from the cache, also to requests that skip the ref
 listing and go straight to `git-upload-pack`, until a later check succeeds.
 Redirects are never followed, so point the upstream at a repository's current
 location. A `git-upload-pack` request does not check the upstream itself
-unless the copy was last checked more than a minute past `stale_max_age` ago,
-so the requests of a clone that follow its ref listing check nothing again;
-an older copy is checked first, as for a ref listing.
+unless the upstream refused the repository at the last check or the copy was
+last checked more than a minute past `stale_max_age` ago, so the requests of a
+clone that follow its ref listing check nothing again; otherwise the
+repository is checked first, as for a ref listing.
 
 The proxy runs `git` 2.31 or newer, which must be installed (the Docker image includes it).
 The `git` processes never reach the network themselves: their fetches go

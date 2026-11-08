@@ -897,3 +897,28 @@ func TestInfoRefsRefusedWhileRefusalStands(t *testing.T) {
 		t.Errorf("advertised refs while the refusal stands:\n%s", out)
 	}
 }
+
+// refuse has the upstream refuse "repo" with a 403 and checks that the
+// cached copy is no longer served.
+func (tc *testCache) refuse(t *testing.T, upstream *fakeUpstream) {
+	t.Helper()
+	upstream.status.Store(http.StatusForbidden)
+	if out, err := tryGit(t, "", "ls-remote", tc.url("repo")); err == nil {
+		t.Fatalf("served the cached copy after 403:\n%s", out)
+	}
+	upstream.status.Store(0)
+}
+
+// TestUploadPackClearsRefusal has a client that only sends upload-pack
+// requests: once the upstream allows the repository again, it is served.
+func TestUploadPackClearsRefusal(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.clone(t, "repo")
+	tc.refuse(t, upstream)
+
+	if status := tc.lsRefs(t); status != http.StatusOK {
+		t.Errorf("ls-refs after the upstream allowed the repository again: status %d", status)
+	}
+}
