@@ -46,7 +46,7 @@ func (h *ComposerHandler) composerLocalEntries(packageName string, dev bool) ([]
 		// As for routed packages, keep Composer from reporting installs of
 		// a private version to the default repository's notify-batch.
 		// Composer reads a null notification-url as absent too.
-		if url, ok := manifest["notification-url"]; !ok || url == nil {
+		if manifest["notification-url"] == nil {
 			manifest["notification-url"] = ""
 		}
 		manifest["dist"] = map[string]string{
