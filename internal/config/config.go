@@ -2192,6 +2192,10 @@ func ParseSize(s string) (int64, error) {
 			if !(size >= 0 && size < math.MaxInt64) {
 				return 0, fmt.Errorf("invalid size %q: must be between 0 and %d bytes", s, int64(math.MaxInt64))
 			}
+			// max_size 0 means unlimited, so don't let a tiny size become 0.
+			if num != 0 && int64(size) == 0 {
+				return 0, fmt.Errorf("invalid size %q: less than one byte", s)
+			}
 			return int64(size), nil
 		}
 	}

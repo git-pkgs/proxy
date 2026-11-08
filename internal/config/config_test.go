@@ -297,6 +297,8 @@ func TestParseSize(t *testing.T) {
 		{"1TB", 1024 * 1024 * 1024 * 1024, false},
 		{"invalid", 0, true},
 		{"10XB", 0, true},
+		{"0GB", 0, false},
+		{"0.0MB", 0, false},
 	}
 
 	for _, tt := range tests {
@@ -2244,7 +2246,7 @@ func TestScannerEcosystems(t *testing.T) {
 }
 
 func TestParseSizeRejectsOutOfRange(t *testing.T) {
-	for _, s := range []string{"-5GB", "-1", "-0.5K", "NaNGB", "InfGB", "+InfB", "1e30GB", "9999999999TB"} {
+	for _, s := range []string{"-5GB", "-1", "-0.5K", "NaNGB", "InfGB", "+InfB", "1e30GB", "9999999999TB", "0.5B", "0.000000000001GB"} {
 		if got, err := ParseSize(s); err == nil {
 			t.Errorf("ParseSize(%q) = %d, want error", s, got)
 		}
