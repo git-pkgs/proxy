@@ -37,6 +37,9 @@ type Submodule struct {
 // OpenOptions.FetchWants), and is kept as long as a commit a client fetched
 // by ID. A tag is cached with the repository's tags.
 func (c *Cache) Mirror(ctx context.Context, key, repoURL, version string, fetchWants bool) (MirrorResult, error) {
+	if lower := strings.ToLower(version); isObjectID(lower) {
+		version = lower
+	}
 	tag := version != "" && !isObjectID(version)
 	if tag {
 		if err := c.checkTagName(ctx, version); err != nil {
@@ -77,6 +80,10 @@ func (c *Cache) Mirror(ctx context.Context, key, repoURL, version string, fetchW
 			if refreshErr != nil {
 				// The tag may be one the failed refresh would have brought.
 				return MirrorResult{}, refreshErr
+			}
+			if errors.Is(err, ErrNotFound) && strings.Trim(strings.ToLower(version), "0123456789abcdef") == "" {
+				// Likely an abbreviated commit ID.
+				return MirrorResult{}, fmt.Errorf("%s is not a full commit ID or tag: %w", version, ErrNotFound)
 			}
 			return MirrorResult{}, err
 		}

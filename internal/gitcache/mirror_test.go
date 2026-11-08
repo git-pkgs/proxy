@@ -365,3 +365,27 @@ func TestMirrorSkipsBrokenGitmodules(t *testing.T) {
 		}
 	}
 }
+
+func TestMirrorAcceptsUppercaseCommit(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	commit := runGit(t, work, "rev-parse", "HEAD")
+	tc := newTestCache(t, upstream.server.URL, nil)
+
+	got, err := tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", strings.ToUpper(commit), true)
+	if err != nil || got.Commit != commit {
+		t.Errorf("mirror of the uppercase commit ID = %+v, %v, want commit %s", got, err, commit)
+	}
+}
+
+func TestMirrorExplainsShortCommit(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	commit := runGit(t, work, "rev-parse", "HEAD")
+	tc := newTestCache(t, upstream.server.URL, nil)
+
+	_, err := tc.Mirror(context.Background(), "up/repo.git", upstream.server.URL+"/repo", commit[:12], true)
+	if !errors.Is(err, ErrNotFound) || !strings.Contains(err.Error(), "full commit ID") {
+		t.Errorf("mirror of a short commit ID = %v, want ErrNotFound saying it is no full commit ID", err)
+	}
+}
