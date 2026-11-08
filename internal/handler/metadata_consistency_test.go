@@ -95,9 +95,11 @@ func TestStaleMetadataMarkedWithoutTTL(t *testing.T) {
 	}
 }
 
-// seedMetadataRow stores body for key "pkg" with etag and a row past its TTL.
-func seedMetadataRow(t *testing.T, db *database.DB, store *mockStorage, body, etag string) string {
+// seedMetadataRow stores {"v":1} for key "pkg" with ETag "v1" and a row past
+// its TTL.
+func seedMetadataRow(t *testing.T, db *database.DB, store *mockStorage) string {
 	t.Helper()
+	const body, etag = `{"v":1}`, `"v1"`
 	path := metadataStoragePath("test", "pkg")
 	store.mu.Lock()
 	store.files[path] = []byte(body)
@@ -142,7 +144,7 @@ func TestNotModifiedChecksStoredBytes(t *testing.T) {
 	proxy, db, store, _ := setupTestProxy(t)
 	proxy.CacheMetadata = true
 	proxy.MetadataTTL = time.Minute
-	path := seedMetadataRow(t, db, store, `{"v":1}`, `"v1"`)
+	path := seedMetadataRow(t, db, store)
 	upstream := v2Upstream(t, func() {
 		// The other instance has written v2 but not yet its row.
 		store.mu.Lock()
@@ -174,7 +176,7 @@ func TestNotModifiedAfterRowReplaced(t *testing.T) {
 	proxy, db, store, _ := setupTestProxy(t)
 	proxy.CacheMetadata = true
 	proxy.MetadataTTL = time.Minute
-	path := seedMetadataRow(t, db, store, `{"v":1}`, `"v1"`)
+	path := seedMetadataRow(t, db, store)
 	upstream := v2Upstream(t, func() {
 		// The other instance has recorded v2's row; its blob is not written
 		// yet.
@@ -210,7 +212,7 @@ func TestNotModifiedRejectedBodyNotRefreshed(t *testing.T) {
 	proxy, db, store, _ := setupTestProxy(t)
 	proxy.CacheMetadata = true
 	proxy.MetadataTTL = time.Minute
-	seedMetadataRow(t, db, store, `{"v":1}`, `"v1"`)
+	seedMetadataRow(t, db, store)
 	before, err := db.GetMetadataCache("test", "pkg")
 	if err != nil || before == nil {
 		t.Fatal(before, err)
@@ -258,7 +260,7 @@ func TestStaleMetadataChecksStoredBytes(t *testing.T) {
 	proxy.CacheMetadata = true
 	proxy.MetadataTTL = 0
 	proxy.HTTPClient = upstream.Client()
-	path := seedMetadataRow(t, db, store, `{"v":1}`, `"v1"`)
+	path := seedMetadataRow(t, db, store)
 	proxy.Storage = &openHookStorage{mockStorage: store, onOpen: func() {
 		// The other instance has written v2 but not yet its row.
 		store.mu.Lock()
