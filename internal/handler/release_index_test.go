@@ -162,3 +162,85 @@ func TestIndexMismatchExpiresRelease(t *testing.T) {
 		})
 	}
 }
+
+// debianSuite serves an APT suite with both InRelease and Release, and the
+// legacy per-component Release that lists no checksums.
+func debianSuite(t *testing.T) (*atomic.Int32, http.Handler, func(path string)) {
+	t.Helper()
+	const index = "main/binary-amd64/Packages"
+	var gen atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body := indexBody(gen.Load())
+		release := fmt.Sprintf("Suite: stable\nSHA256:\n %s %d %s\n", sha256Hex(body), len(body), index)
+		switch r.URL.Path {
+		case "/dists/stable/InRelease":
+			_, _ = w.Write([]byte("-----BEGIN PGP SIGNED MESSAGE-----\n\n" + release + "-----BEGIN PGP SIGNATURE-----\n"))
+		case "/dists/stable/Release":
+			_, _ = w.Write([]byte(release))
+		case "/dists/stable/main/binary-amd64/Release":
+			_, _ = w.Write([]byte("Archive: stable\nComponent: main\nArchitecture: amd64\n"))
+		case "/dists/stable/" + index:
+			_, _ = w.Write([]byte(body))
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, db, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	proxy.HTTPClient = upstream.Client()
+	h := NewDebianHandler(proxy, "http://proxy.test", upstream.URL, nil)
+	expire := func(path string) {
+		t.Helper()
+		key := h.metadataCacheKeyFor("", h.upstreamURL, path)
+		if _, err := db.ExpireMetadataCache("debian", []string{key}, time.Now().Add(time.Second)); err != nil {
+			t.Fatal(err)
+		}
+	}
+	return &gen, h.Routes(), expire
+}
+
+// TestDebianIndexFollowsLatestReleaseFile checks that with both InRelease
+// and Release cached, the index follows the one fetched last, which is what
+// the client asking for the index just read.
+func TestDebianIndexFollowsLatestReleaseFile(t *testing.T) {
+	const index = "dists/stable/main/binary-amd64/Packages"
+	gen, h, expire := debianSuite(t)
+
+	getBody(t, h, "dists/stable/InRelease")
+	getBody(t, h, index)
+	gen.Store(1)
+	time.Sleep(time.Millisecond)
+	getBody(t, h, "dists/stable/Release")
+	if got := getBody(t, h, index); got != indexBody(1) {
+		t.Errorf("index after a fresh Release = %q, want %q", got, indexBody(1))
+	}
+
+	// And back: a fresh InRelease wins over the older Release.
+	gen.Store(2)
+	expire("dists/stable/InRelease")
+	time.Sleep(time.Millisecond)
+	getBody(t, h, "dists/stable/InRelease")
+	if got := getBody(t, h, index); got != indexBody(2) {
+		t.Errorf("index after a fresh InRelease = %q, want %q", got, indexBody(2))
+	}
+}
+
+// TestDebianIndexSkipsReleaseWithoutListing checks that a cached release
+// file that lists nothing for the index, such as the legacy per-component
+// Release, does not stop the lookup at the suite's release file.
+func TestDebianIndexSkipsReleaseWithoutListing(t *testing.T) {
+	const index = "dists/stable/main/binary-amd64/Packages"
+	gen, h, expire := debianSuite(t)
+
+	getBody(t, h, "dists/stable/InRelease")
+	getBody(t, h, "dists/stable/main/binary-amd64/Release")
+	getBody(t, h, index)
+	gen.Store(1)
+	expire("dists/stable/InRelease")
+	getBody(t, h, "dists/stable/InRelease")
+	if got := getBody(t, h, index); got != indexBody(1) {
+		t.Errorf("index after InRelease refetch = %q, want %q", got, indexBody(1))
+	}
+}

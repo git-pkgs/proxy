@@ -203,14 +203,27 @@ func (h *DebianHandler) handleMetadata(
 }
 
 // releaseListing finds the cached release file of the suite path belongs
-// to, nearest directory first, and the sha256 it lists for path.
+// to and the sha256 it lists for path, nearest directory first, skipping
+// release files that list nothing for path (such as the legacy
+// per-component Release). Where both InRelease and Release list it, the one
+// fetched last wins: apt reads InRelease and debootstrap Release, and a
+// client asking for the index has most likely just fetched one of them.
 func (h *DebianHandler) releaseListing(r *http.Request, repository, upstreamURL, path string) (*cachedRelease, string) {
 	for dir := pathpkg.Dir(path); strings.HasPrefix(dir, "dists/"); dir = pathpkg.Dir(dir) {
+		var found *cachedRelease
+		var want string
 		for _, name := range []string{"InRelease", "Release"} {
 			release := h.proxy.readCachedRelease(r.Context(), "debian", h.metadataCacheKeyFor(repository, upstreamURL, dir+"/"+name))
-			if release != nil {
-				return release, debianReleaseSHA256(release.body, strings.TrimPrefix(path, dir+"/"))
+			if release == nil {
+				continue
 			}
+			sum := debianReleaseSHA256(release.body, strings.TrimPrefix(path, dir+"/"))
+			if sum != "" && (found == nil || release.fetchedAt.After(found.fetchedAt)) {
+				found, want = release, sum
+			}
+		}
+		if found != nil {
+			return found, want
 		}
 	}
 	return nil, ""

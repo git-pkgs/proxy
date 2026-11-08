@@ -30,6 +30,7 @@ type cachedRelease struct {
 	ecosystem string
 	cacheKey  string
 	body      []byte
+	fetchedAt time.Time
 }
 
 // readCachedRelease returns the cached release file stored under cacheKey,
@@ -46,7 +47,7 @@ func (p *Proxy) readCachedRelease(ctx context.Context, ecosystem, cacheKey strin
 	if err != nil {
 		return nil
 	}
-	return &cachedRelease{ecosystem: ecosystem, cacheKey: cacheKey, body: body}
+	return &cachedRelease{ecosystem: ecosystem, cacheKey: cacheKey, body: body, fetchedAt: entry.FetchedAt.Time}
 }
 
 // proxyListedIndex serves an index file that release lists with the sha256
