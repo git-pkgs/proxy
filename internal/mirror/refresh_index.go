@@ -98,7 +98,7 @@ func (m *Mirror) indexRefreshItems(ctx context.Context, ix osIndex, packages []d
 			continue
 		}
 		seenIndex[urlDir(doc.UpstreamURL)] = true
-		body, _, err := m.proxy.FetchOrCacheMetadata(ctx, ix.metaEcosystem, doc.Name, doc.UpstreamURL, "*/*")
+		body, err := m.readIndexDocument(ctx, doc.UpstreamURL)
 		if err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", doc.UpstreamURL, err))
 			continue
@@ -272,10 +272,20 @@ func rpmIndexFiles(ctx context.Context, m *Mirror, indexURL string, body []byte,
 	return m.readIndex(ctx, base+"/"+primary, parseRPMPrimary)
 }
 
-// readIndex streams an index from upstream through parse, decompressed as
-// its name says and limited to maxIndexBytes. It is read directly rather than through the metadata
-// cache, since it can be far larger than a metadata document may be.
-func (m *Mirror) readIndex(ctx context.Context, indexURL string, parse func(io.Reader) ([]indexFile, error)) ([]indexFile, error) {
+// readIndexDocument reads the index document a refresh starts from directly
+// from upstream. Read through the metadata cache it would count as a client
+// fetching it, and the suite would never age out of since.
+func (m *Mirror) readIndexDocument(ctx context.Context, indexURL string) ([]byte, error) {
+	body, err := m.openIndex(ctx, indexURL)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = body.Close() }()
+	return io.ReadAll(&indexLimitReader{r: body, url: indexURL, remaining: maxIndexBytes})
+}
+
+// openIndex starts reading an index from upstream.
+func (m *Mirror) openIndex(ctx context.Context, indexURL string) (io.ReadCloser, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, indexURL, nil)
 	if err != nil {
 		return nil, err
@@ -284,11 +294,23 @@ func (m *Mirror) readIndex(ctx context.Context, indexURL string, parse func(io.R
 	if err != nil {
 		return nil, err
 	}
-	defer func() { _ = resp.Body.Close() }()
 	if resp.StatusCode != http.StatusOK {
+		_ = resp.Body.Close()
 		return nil, fmt.Errorf("%s: upstream returned %d", indexURL, resp.StatusCode)
 	}
-	r, err := decompressByName(indexURL, resp.Body)
+	return resp.Body, nil
+}
+
+// readIndex streams an index from upstream through parse, decompressed as
+// its name says and limited to maxIndexBytes. It is read directly rather than through the metadata
+// cache, since it can be far larger than a metadata document may be.
+func (m *Mirror) readIndex(ctx context.Context, indexURL string, parse func(io.Reader) ([]indexFile, error)) ([]indexFile, error) {
+	body, err := m.openIndex(ctx, indexURL)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = body.Close() }()
+	r, err := decompressByName(indexURL, body)
 	if err != nil {
 		return nil, err
 	}

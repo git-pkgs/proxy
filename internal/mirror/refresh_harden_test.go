@@ -353,3 +353,28 @@ func TestRefreshDownloadsDoNotCountAsUse(t *testing.T) {
 		t.Errorf("MostUsedPackages = %+v, want none: only the refresh fetched lodash within since", used)
 	}
 }
+
+// TestRefreshIndexReadIsNotAClientAccess checks that a refresh reading an
+// index again doesn't keep it among those clients fetched within since.
+func TestRefreshIndexReadIsNotAClientAccess(t *testing.T) {
+	m, _, idx := setupIndexRefresh(t)
+	dir := "/alpine/v3.20/main/aarch64"
+	idx.set(dir+"/APKINDEX.tar.gz", apkIndexArchive(t, "P:curl\nV:8.9.0-r0\nA:aarch64\n\n"))
+	clientFetchesCurl(t, m, "alpine", idx.URL+dir+"/APKINDEX.tar.gz",
+		"alpine", "8.9.0-r0", "edge/v3.20/main/aarch64/curl-8.9.0-r0.apk", idx.URL+dir+"/curl-8.9.0-r0.apk")
+	old := time.Now().Add(-2 * time.Hour).UTC()
+	if _, err := m.db.Exec(m.db.Rebind("UPDATE metadata_cache SET last_accessed_at = ?, updated_at = ?"), old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.Refresh(context.Background(), Refresh{Top: 10, Since: 3 * time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	docs, err := m.db.RecentMetadataDocuments("alpine", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 0 {
+		t.Errorf("recent indexes = %+v, want none: only the refresh read the index", docs)
+	}
+}
