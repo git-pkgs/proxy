@@ -1027,8 +1027,10 @@ cached metadata rather than fetched, so they always match it. Other files are
 cached for good, except SNAPSHOT files named with `SNAPSHOT` rather than a
 build timestamp (`lib-1.0-SNAPSHOT.jar`, as JitPack and non-unique snapshot
 repositories publish them), which each build replaces: those are fetched
-again for every request, through the denylist, cooldown, scanning and the
-Plugin Portal fallback like any other file. Timestamped SNAPSHOT files
+again for every `GET`, through the denylist, cooldown, scanning and the
+Plugin Portal fallback like any other file. The new copy replaces the cached
+one once stored; while upstream can't be reached the cached copy is served,
+and `HEAD` is answered from cache. Timestamped SNAPSHOT files
 (`lib-1.0-20240101.120000-1.jar`) never change and are cached.
 
 This field has no environment variable, as with the other named upstream maps.
@@ -1511,7 +1513,7 @@ Set to `"0"` to always revalidate with upstream (ETag-based conditional requests
 
 When upstream is unreachable and the cached entry is past its TTL (with a `metadata_ttl` of `"0"`, on every such request), the proxy serves the stale cached copy with a `Warning: 110 - "Response is Stale"` header so clients can tell the data may be outdated. The `ETag` and `Last-Modified` sent with a document are always those of the bytes served, so a document fetched from upstream but not stored, for example because storage failed, carries the upstream's validators rather than the older cached copy's.
 
-APT and RPM clients fetch a release file first (`InRelease` or `Release`, `repomd.xml`) and reject an index file whose checksum doesn't match it. So an index file the cached release file lists (`Packages`, `Sources`, a plainly named `primary.xml.gz`, …) does not follow its own `metadata_ttl`: its cached copy is served while it matches the cached release file's sha256, however old, and otherwise it is fetched from upstream. If upstream's copy doesn't match either, the repository has changed since the release file was cached; that copy is served and the release file is expired, so the next `apt update` or `dnf makecache` gets a matching pair. The release file itself follows `metadata_ttl`. Index files it doesn't list, such as `by-hash` paths, follow `metadata_ttl` too.
+APT and RPM clients fetch a release file first (`InRelease` or `Release`, `repomd.xml`) and reject an index file whose checksum doesn't match it. So an index file the cached release file lists (`Packages`, `Sources`, a plainly named `primary.xml.gz`, …) does not follow its own `metadata_ttl`: its cached copy is served while it matches the cached release file's sha256, however old, and otherwise it is fetched from upstream. If upstream's copy doesn't match either, the repository has changed since the release file was cached; that copy is served and the release file is expired, so the next `apt update` or `dnf makecache` gets a matching pair. Where a suite has both `InRelease` and `Release` cached, the one fetched last decides. The release file itself follows `metadata_ttl`. Index files it doesn't list, such as `by-hash` paths, follow `metadata_ttl` too.
 
 ### Change feeds
 
