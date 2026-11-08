@@ -201,3 +201,34 @@ func TestNotModifiedAfterRowReplaced(t *testing.T) {
 		t.Errorf("row etag = %q, want %q", row.ETag.String, `"v2"`)
 	}
 }
+
+// TestNotModifiedRejectedBodyNotRefreshed checks that a 304 for a stored
+// document validate rejects does not mark that document fresh.
+func TestNotModifiedRejectedBodyNotRefreshed(t *testing.T) {
+	proxy, db, store, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Minute
+	seedMetadataRow(t, db, store, `{"v":1}`, `"v1"`)
+	before, err := db.GetMetadataCache("test", "pkg")
+	if err != nil || before == nil {
+		t.Fatal(before, err)
+	}
+	upstream := v2Upstream(t, func() {})
+	proxy.HTTPClient = upstream.Client()
+
+	reject := func(body []byte) error {
+		if string(body) == `{"v":1}` {
+			return errors.New("damaged")
+		}
+		return nil
+	}
+	proxy.fetchMetadataDocument(context.Background(), "test", "pkg", upstream.URL+"/pkg", contentTypeJSON, reject)
+	row, err := db.GetMetadataCache("test", "pkg")
+	if err != nil || row == nil {
+		t.Fatal(row, err)
+	}
+	if !row.FetchedAt.Time.Equal(before.FetchedAt.Time) {
+		t.Errorf("rejected v1 row fetched_at moved from %v to %v", before.FetchedAt.Time, row.FetchedAt.Time)
+	}
+}
+

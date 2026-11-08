@@ -1782,18 +1782,23 @@ func (p *Proxy) refreshMetadata(ctx context.Context, ecosystem, cacheKey, upstre
 // and falls back to the cached copy if upstream fails. entry is the row to
 // revalidate against, or nil.
 func (p *Proxy) fetchMetadataFromUpstream(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding string, validate func([]byte) error, entry *database.MetadataCacheEntry) metadataResult {
-	meta, err := p.fetchUpstreamMetadata(ctx, upstreamURL, entry, accept, acceptEncoding)
+	fetch := func(entry *database.MetadataCacheEntry) (*upstreamMetadata, error) {
+		meta, err := p.fetchUpstreamMetadata(ctx, upstreamURL, entry, accept, acceptEncoding)
+		if err == nil && validate != nil {
+			err = validate(meta.body)
+		}
+		return meta, err
+	}
+	meta, err := fetch(entry)
 	var digest string
+	// Validated first, so a 304 for a rejected copy doesn't mark it fresh.
 	if err == nil && p.CacheMetadata {
 		digest, err = p.refreshMetadataBlob(ecosystem, cacheKey, meta)
 	}
 	if errors.Is(err, errStale304) {
 		// 304 but the cached copy is gone or was replaced; retry without
 		// validators.
-		meta, err = p.fetchUpstreamMetadata(ctx, upstreamURL, nil, accept, acceptEncoding)
-	}
-	if err == nil && validate != nil {
-		err = validate(meta.body)
+		meta, err = fetch(nil)
 	}
 	if err == nil {
 		if p.CacheMetadata && digest == "" {
