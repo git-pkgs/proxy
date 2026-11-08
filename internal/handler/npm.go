@@ -591,7 +591,7 @@ func (h *NPMHandler) handleFilteredNPMVersionMetadata(w http.ResponseWriter, r *
 		return
 	}
 
-	packument, _, _, err := h.proxy.fetchOrCacheMetadata(r.Context(), "npm", cacheKey, packumentURL, "", h.packumentValidator(), accept)
+	packument, _, err := h.proxy.fetchOrCacheMetadata(r.Context(), "npm", cacheKey, packumentURL, "", h.packumentValidator(), accept)
 	if err != nil {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
@@ -901,7 +901,7 @@ func (h *NPMHandler) versionData(ctx context.Context, packumentURL, cacheKey, ve
 		return npmVersionData{}, fetchErr
 	}
 
-	body, _, _, err := h.proxy.fetchOrCacheMetadata(ctx, "npm", cacheKey, packumentURL, "", h.packumentValidator(), accept)
+	body, _, err := h.proxy.fetchOrCacheMetadata(ctx, "npm", cacheKey, packumentURL, "", h.packumentValidator(), accept)
 	if err != nil {
 		return npmVersionData{}, err
 	}

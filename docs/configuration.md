@@ -1499,7 +1499,7 @@ Or via environment variable: `PROXY_METADATA_TTL=10m`.
 
 Set to `"0"` to always revalidate with upstream (ETag-based conditional requests still avoid re-downloading unchanged content).
 
-When upstream is unreachable and the cached entry is past its TTL, the proxy serves the stale cached copy with a `Warning: 110 - "Response is Stale"` header so clients can tell the data may be outdated.
+When upstream is unreachable and the cached entry is past its TTL (with a `metadata_ttl` of `"0"`, on every such request), the proxy serves the stale cached copy with a `Warning: 110 - "Response is Stale"` header so clients can tell the data may be outdated. The `ETag` and `Last-Modified` sent with a document are always those of the bytes served, so a document fetched from upstream but not stored, for example because storage failed, carries the upstream's validators rather than the older cached copy's.
 
 ### Change feeds
 

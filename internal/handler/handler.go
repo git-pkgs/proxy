@@ -4,7 +4,9 @@ package handler
 import (
 	"bytes"
 	"context"
+	"crypto/sha256"
 	"database/sql"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"io"
@@ -1618,8 +1620,7 @@ var errStale304 = fmt.Errorf("upstream returned 304 but cached file is missing")
 // cacheKey is typically the package name but can include subpath components.
 // Optional acceptHeaders specify the Accept header(s) to send; defaults to application/json.
 func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL string, acceptHeaders ...string) ([]byte, string, error) {
-	body, contentType, _, err := p.fetchOrCacheMetadata(ctx, ecosystem, cacheKey, upstreamURL, "", nil, acceptHeaders...)
-	return body, contentType, err
+	return p.fetchOrCacheMetadata(ctx, ecosystem, cacheKey, upstreamURL, "", nil, acceptHeaders...)
 }
 
 // fetchOrCacheMetadata implements FetchOrCacheMetadata. acceptEncoding controls
@@ -1635,13 +1636,13 @@ func (p *Proxy) FetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, u
 // it can also decode the document into request-local state; a caller that
 // joined a fetch gets its own validation error directly. It must not modify the
 // body, which joined callers share.
-func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, acceptEncoding string, validate func([]byte) error, acceptHeaders ...string) ([]byte, string, string, error) {
+func (p *Proxy) fetchOrCacheMetadata(ctx context.Context, ecosystem, cacheKey, upstreamURL, acceptEncoding string, validate func([]byte) error, acceptHeaders ...string) ([]byte, string, error) {
 	accept := contentTypeJSON
 	if len(acceptHeaders) > 0 && acceptHeaders[0] != "" {
 		accept = acceptHeaders[0]
 	}
 	res := p.lookupMetadata(ctx, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding, validate)
-	return res.body, res.contentType, res.contentEncoding, res.err
+	return res.body, res.contentType, res.err
 }
 
 // fetchMetadataDocument is FetchOrCacheMetadata for callers that rewrite the
@@ -1782,22 +1783,23 @@ func (p *Proxy) refreshMetadata(ctx context.Context, ecosystem, cacheKey, upstre
 // revalidate against, or nil.
 func (p *Proxy) fetchMetadataFromUpstream(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding string, validate func([]byte) error, entry *database.MetadataCacheEntry) metadataResult {
 	meta, err := p.fetchUpstreamMetadata(ctx, upstreamURL, entry, accept, acceptEncoding)
+	var digest string
+	if err == nil && p.CacheMetadata {
+		digest, err = p.refreshMetadataBlob(ecosystem, cacheKey, meta)
+	}
 	if errors.Is(err, errStale304) {
-		// 304 but cached file is gone; retry without ETag
+		// 304 but the cached copy is gone or was replaced; retry without
+		// validators.
 		meta, err = p.fetchUpstreamMetadata(ctx, upstreamURL, nil, accept, acceptEncoding)
 	}
 	if err == nil && validate != nil {
 		err = validate(meta.body)
 	}
 	if err == nil {
-		var digest string
-		if p.CacheMetadata {
-			digest = p.refreshMetadataBlob(ecosystem, cacheKey, meta)
-			if digest == "" {
-				digest = p.cacheMetadataBlob(ctx, ecosystem, cacheKey, metadataStoragePath(ecosystem, cacheKey), meta)
-			}
+		if p.CacheMetadata && digest == "" {
+			digest = p.cacheMetadataBlob(ctx, ecosystem, cacheKey, metadataStoragePath(ecosystem, cacheKey), meta)
 		}
-		return metadataResult{body: meta.body, contentType: meta.contentType, contentEncoding: meta.contentEncoding, digest: digest}
+		return fetchedResult(meta, digest)
 	}
 
 	return p.staleMetadata(ctx, ecosystem, cacheKey, validate, entry, err)
@@ -1842,6 +1844,10 @@ type metadataResult struct {
 	// empty otherwise.
 	digest string
 	err    error
+	// etag and lastModified are the validators of body: upstream's for a
+	// fetched document, the cache row's for a stored one.
+	etag         string
+	lastModified time.Time
 	// stale is set when the body is the cached copy served because upstream
 	// failed.
 	stale bool
@@ -1854,13 +1860,35 @@ type metadataResult struct {
 	entry *database.MetadataCacheEntry
 }
 
-// describedBy returns res with the digest that entry, the cache row its body
-// was read for, records.
+// describedBy returns res with the digest and validators that entry, the
+// cache row its body was read for, records.
 func (res metadataResult) describedBy(entry *database.MetadataCacheEntry) metadataResult {
 	if entry.ContentDigest.Valid {
 		res.digest = entry.ContentDigest.String
 	}
+	res.etag = entry.ETag.String
+	if entry.LastModified.Valid {
+		res.lastModified = entry.LastModified.Time
+	}
 	return res
+}
+
+// fetchedResult returns the result for meta, a document from upstream (or
+// the stored copy it answered 304 for), cached under digest.
+func fetchedResult(meta *upstreamMetadata, digest string) metadataResult {
+	return metadataResult{
+		body:            meta.body,
+		contentType:     meta.contentType,
+		contentEncoding: meta.contentEncoding,
+		digest:          digest,
+		etag:            meta.etag,
+		lastModified:    meta.lastModified,
+	}
+}
+
+// cachedMeta returns the validators and staleness of res's body.
+func (res metadataResult) cachedMeta() cachedMeta {
+	return cachedMeta{etag: res.etag, lastModified: res.lastModified, stale: res.stale}
 }
 
 // inflightMetadata is one metadata fetch that concurrent callers share. res is
@@ -2006,7 +2034,8 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		}
 		defer func() { _ = cached.Close() }()
 		data, readErr := p.ReadMetadataSized(cached, metadataEntrySize(entry))
-		if readErr != nil {
+		if readErr != nil || !matchesEntryDigest(entry, data) {
+			// Gone, or replaced by another instance since entry was read.
 			return nil, errStale304
 		}
 		meta := &upstreamMetadata{body: data, contentType: contentTypeJSON, etag: entry.ETag.String, notModified: entry}
@@ -2073,6 +2102,17 @@ func (p *Proxy) requestUpstreamMetadata(ctx context.Context, upstreamURL string,
 	return resp, nil
 }
 
+// matchesEntryDigest reports whether data is the document entry records,
+// when entry has a sha256 digest to check it by.
+func matchesEntryDigest(entry *database.MetadataCacheEntry, data []byte) bool {
+	want, ok := strings.CutPrefix(entry.ContentDigest.String, "sha256:")
+	if !entry.ContentDigest.Valid || !ok {
+		return true
+	}
+	sum := sha256.Sum256(data)
+	return hex.EncodeToString(sum[:]) == want
+}
+
 // upstreamMetadataStatus returns the error for a metadata response other
 // than 200. Callers handle a 304 they asked for before.
 func upstreamMetadataStatus(resp *http.Response) error {
@@ -2090,23 +2130,25 @@ func upstreamMetadataStatus(resp *http.Response) error {
 // document meta was read from, by moving the row's fetched_at on. The bytes in
 // storage are unchanged, so they are neither written nor hashed again. It
 // returns the row's digest, or "" when the caller has to store meta as for a
-// new document: when upstream sent one, the row records no digest, or a
-// concurrent fetch has replaced the document since it was read.
-func (p *Proxy) refreshMetadataBlob(ecosystem, cacheKey string, meta *upstreamMetadata) string {
+// new document: when upstream sent one or the row records no digest. When
+// the row could not be refreshed, for instance because a concurrent fetch has
+// replaced the document since it was read, it returns errStale304: storing
+// meta would put the old document back under the new one.
+func (p *Proxy) refreshMetadataBlob(ecosystem, cacheKey string, meta *upstreamMetadata) (string, error) {
 	entry := meta.notModified
 	if entry == nil || p.DB == nil || !entry.ContentDigest.Valid {
-		return ""
+		return "", nil
 	}
 	refreshed, err := p.DB.RefreshMetadataCache(ecosystem, cacheKey, entry.ContentDigest.String, time.Now())
 	if err != nil {
 		p.Logger.Warn("failed to refresh cached metadata", "ecosystem", ecosystem, "key", cacheKey, "error", err)
-		return ""
+		return "", errStale304
 	}
 	if !refreshed {
-		return ""
+		return "", errStale304
 	}
 	p.recordMetadataRead(entry)
-	return entry.ContentDigest.String
+	return entry.ContentDigest.String, nil
 }
 
 // cacheMetadataBlob stores metadata bytes in storage and updates the
@@ -2250,16 +2292,20 @@ func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	body, contentType, contentEncoding, err := p.fetchOrCacheMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, acceptEncoding, nil, acceptHeaders...)
-	if err != nil {
-		p.writeMetadataFetchError(w, err)
+	accept := contentTypeJSON
+	if len(acceptHeaders) > 0 && acceptHeaders[0] != "" {
+		accept = acceptHeaders[0]
+	}
+	res := p.lookupMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, accept, acceptEncoding, nil)
+	if res.err != nil {
+		p.writeMetadataFetchError(w, res.err)
 		return
 	}
 
 	if hooks != nil && hooks.fetched != nil {
-		hooks.fetched(body, contentType, contentEncoding)
+		hooks.fetched(res.body, res.contentType, res.contentEncoding)
 	}
-	p.writeMetadataCachedResponseWithEncoding(w, r, ecosystem, cacheKey, body, contentType, contentEncoding)
+	writeMetadataResult(w, r, res)
 }
 
 // writeMetadataFetchError answers a failed metadata fetch.
@@ -2288,6 +2334,13 @@ func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Reque
 // mislabel the bytes.
 func (p *Proxy) writeMetadataCachedResponseWithEncoding(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, body []byte, contentType, contentEncoding string) {
 	writeMetadataBody(w, r, p.lookupCachedMeta(ecosystem, cacheKey), body, contentType, contentEncoding)
+}
+
+// writeMetadataResult writes the document res holds with its own validators
+// and staleness, rather than the cache row's, which may describe other bytes
+// when the cache write failed or another instance replaced it.
+func writeMetadataResult(w http.ResponseWriter, r *http.Request, res metadataResult) {
+	writeMetadataBody(w, r, res.cachedMeta(), res.body, res.contentType, res.contentEncoding)
 }
 
 // writeMetadataBody writes a metadata document with the validators and
