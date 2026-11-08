@@ -802,7 +802,7 @@ func TestCaseOnlyDifferentKeysShareOneRepository(t *testing.T) {
 
 	rp := tc.acquire("up/REPO.git")
 	defer tc.release(rp)
-	if other := tc.repo("up/repo.git"); other != nil && other != rp {
+	if other := tc.repo("up/repo.git"); other != rp {
 		t.Error("up/REPO.git and up/repo.git are separate repositories")
 	}
 	tc.mu.Lock()
@@ -811,5 +811,26 @@ func TestCaseOnlyDifferentKeysShareOneRepository(t *testing.T) {
 	tc.evict()
 	if !rp.exists() {
 		t.Error("repository in use as up/REPO.git was evicted")
+	}
+}
+
+// TestFoldCaseKeysShareOneEntry checks key folding on any file system by
+// setting foldCase directly.
+func TestFoldCaseKeysShareOneEntry(t *testing.T) {
+	tc := newTestCache(t, newFakeUpstream(t).server.URL, nil)
+	tc.foldCase = true
+
+	upper := tc.acquire("up/REPO.git")
+	defer tc.release(upper)
+	lower := tc.acquire("up/repo.git")
+	defer tc.release(lower)
+	if upper != lower {
+		t.Error("up/REPO.git and up/repo.git are separate repositories")
+	}
+	tc.mu.Lock()
+	n := len(tc.repos)
+	tc.mu.Unlock()
+	if n != 1 {
+		t.Errorf("%d repository entries, want 1", n)
 	}
 }

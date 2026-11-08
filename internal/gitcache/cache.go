@@ -356,10 +356,11 @@ func (c *Cache) removeRepointed() {
 func (c *Cache) acquire(key string) *repo {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	rp := c.repos[c.repoKey(key)]
+	rk := c.repoKey(key)
+	rp := c.repos[rk]
 	if rp == nil {
-		rp = newRepo(c.repoKey(key), filepath.Join(c.dir, filepath.FromSlash(key)))
-		c.repos[rp.key] = rp
+		rp = newRepo(rk, filepath.Join(c.dir, filepath.FromSlash(key)))
+		c.repos[rk] = rp
 	}
 	rp.users++
 	return rp
