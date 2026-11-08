@@ -1026,8 +1026,9 @@ its `.md5`, `.sha1`, `.sha256` and `.sha512` files are computed from the
 cached metadata rather than fetched, so they always match it. Other files are
 cached for good, except SNAPSHOT files named with `SNAPSHOT` rather than a
 build timestamp (`lib-1.0-SNAPSHOT.jar`, as JitPack and non-unique snapshot
-repositories publish them), which each build replaces: those are passed
-through uncached. Timestamped SNAPSHOT files
+repositories publish them), which each build replaces: those are fetched
+again for every request, through the denylist, cooldown, scanning and the
+Plugin Portal fallback like any other file. Timestamped SNAPSHOT files
 (`lib-1.0-20240101.120000-1.jar`) never change and are cached.
 
 This field has no environment variable, as with the other named upstream maps.

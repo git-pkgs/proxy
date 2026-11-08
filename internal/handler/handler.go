@@ -2131,9 +2131,10 @@ func upstreamMetadataStatus(resp *http.Response) error {
 // storage are unchanged, so they are neither written nor hashed again. It
 // returns the row's digest, or "" when the caller has to store meta as for a
 // new document: when upstream sent one or the row records no digest. When
-// the row could not be refreshed, for instance because a concurrent fetch has
-// replaced the document since it was read, it returns errStale304: storing
-// meta would put the old document back under the new one.
+// a concurrent fetch has replaced the document since it was read, it returns
+// errStale304: storing meta would put the old document back under the new
+// one. A failed database write only leaves fetched_at behind, so the
+// confirmed bytes are still served.
 func (p *Proxy) refreshMetadataBlob(ecosystem, cacheKey string, meta *upstreamMetadata) (string, error) {
 	entry := meta.notModified
 	if entry == nil || p.DB == nil || !entry.ContentDigest.Valid {
@@ -2141,8 +2142,10 @@ func (p *Proxy) refreshMetadataBlob(ecosystem, cacheKey string, meta *upstreamMe
 	}
 	refreshed, err := p.DB.RefreshMetadataCache(ecosystem, cacheKey, entry.ContentDigest.String, time.Now())
 	if err != nil {
+		// The bytes were checked against the row and upstream confirmed
+		// them; only fetched_at stays behind, so they are still served.
 		p.Logger.Warn("failed to refresh cached metadata", "ecosystem", ecosystem, "key", cacheKey, "error", err)
-		return "", errStale304
+		return entry.ContentDigest.String, nil
 	}
 	if !refreshed {
 		return "", errStale304
@@ -2611,6 +2614,23 @@ func (p *Proxy) getCachedArtifactWithUpstreamHash(ctx context.Context, pkgPURL, 
 		_ = cached.Reader.Close()
 	}
 	return nil, nil
+}
+
+// forgetCachedArtifact clears the cached entry for a file upstream replaces
+// in place, queueing its object for deletion, so the next request fetches
+// it again.
+func (p *Proxy) forgetCachedArtifact(ecosystem, name, version, filename string) {
+	if p.DB == nil {
+		return
+	}
+	versionPURL := canonicalVersionPURL(ecosystem, name, version)
+	record, err := p.DB.GetCachedArtifact(canonicalPackagePURL(ecosystem, name), versionPURL, filename)
+	if err != nil || record == nil {
+		return
+	}
+	if err := p.DB.DiscardArtifact(versionPURL, filename, record.StoragePath); err != nil {
+		p.Logger.Warn("failed to clear artifact cache record", "purl", versionPURL, "filename", filename, "error", err)
+	}
 }
 
 // discardStaleArtifact clears the cached entry when its digest disagrees with

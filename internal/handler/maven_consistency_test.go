@@ -95,3 +95,32 @@ func TestMavenNonUniqueSnapshotNotKept(t *testing.T) {
 		t.Errorf("timestamped SNAPSHOT jar fetched %d times, want once", m.requests[timestamped].Load())
 	}
 }
+
+// TestMavenMutableSnapshotKeepsPolicyAndFallback checks that a SNAPSHOT file
+// fetched again for each request still goes through the denylist, and falls
+// back to the Gradle Plugin Portal when the primary upstream lacks it.
+func TestMavenMutableSnapshotKeepsPolicyAndFallback(t *testing.T) {
+	const snapshot = "/com/example/lib/1.0-SNAPSHOT/lib-1.0-SNAPSHOT.jar"
+	primary := httptest.NewServer(http.NotFoundHandler())
+	t.Cleanup(primary.Close)
+	portal := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = io.WriteString(w, "portal build")
+	}))
+	t.Cleanup(portal.Close)
+
+	proxy, _, store, _ := setupTestProxy(t)
+	store.seekable = true
+	proxy.HTTPClient = primary.Client()
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(primary.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+	h := NewMavenHandler(proxy, "http://localhost", primary.URL, portal.URL).Routes()
+
+	if w := getMaven(h, snapshot); w.Code != http.StatusOK || w.Body.String() != "portal build" {
+		t.Errorf("SNAPSHOT from the fallback = %d %q, want 200 portal build", w.Code, w.Body)
+	}
+	setTestDenylist(t, proxy, "pkg:maven/com.example/lib@1.0-SNAPSHOT")
+	if w := getMaven(h, snapshot); w.Code != http.StatusForbidden {
+		t.Errorf("denied SNAPSHOT = %d, want 403", w.Code)
+	}
+}

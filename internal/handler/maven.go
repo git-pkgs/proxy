@@ -137,12 +137,6 @@ func (h *MavenHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if h.isMutableSnapshotFile(urlPath) {
-		// Rebuilt in place, so not cached.
-		h.proxyUpstream(w, r, source, urlPath)
-		return
-	}
-
 	if h.isArtifactFile(filename) || h.isChecksumFile(filename) || h.isCoordinateFile(urlPath) {
 		h.handleDownload(w, r, source, urlPath)
 		return
@@ -267,6 +261,13 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, so
 
 	upstreamURL := fmt.Sprintf("%s/%s", source.upstreamURL, urlPath)
 	cacheFilename := source.cacheFilename(filename)
+
+	// Each build replaces a SNAPSHOT file named without a timestamp, so the
+	// cached copy is dropped and the file fetched again, through the same
+	// denylist, cooldown and scanning as any other download.
+	if h.isMutableSnapshotFile(urlPath) {
+		h.proxy.forgetCachedArtifact("maven", name, version, cacheFilename)
+	}
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(ctx, "maven", name, version, cacheFilename, upstreamURL)
 	if err != nil && source.fallbackURL != "" {
