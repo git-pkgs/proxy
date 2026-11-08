@@ -616,45 +616,62 @@ func TestPyPIDownloadCooldownMetadataCache(t *testing.T) {
 }
 
 func TestPyPISimpleIndexRewritesProjectLinks(t *testing.T) {
-	// Long enough that links cross the rewriter's read boundaries.
-	var upstream, want strings.Builder
-	upstream.WriteString(`<html><body>`)
-	want.WriteString(`<html><body>`)
-	for i := range 3000 {
-		fmt.Fprintf(&upstream, `<a href="/simple/pkg-%d/">pkg-%d</a>`+"\n", i, i)
-		fmt.Fprintf(&want, `<a href="http://proxy.test/pypi/simple/pkg-%d/">pkg-%d</a>`+"\n", i, i)
-	}
-	upstream.WriteString(`</body></html>`)
-	want.WriteString(`</body></html>`)
+	for _, tc := range []struct{ name, upstream, prefix string }{
+		{"root", "https://pypi.test", "/simple/"},
+		{"subpath", "https://nexus.test/repository/pypi", "/repository/pypi/simple/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Long enough that links cross the rewriter's read boundaries.
+			var upstream, want strings.Builder
+			upstream.WriteString(`<html><body>`)
+			want.WriteString(`<html><body>`)
+			for i := range 3000 {
+				fmt.Fprintf(&upstream, `<a href="%spkg-%d/">pkg-%d</a>`+"\n", tc.prefix, i, i)
+				fmt.Fprintf(&want, `<a href="http://proxy.test/pypi/simple/pkg-%d/">pkg-%d</a>`+"\n", i, i)
+			}
+			fmt.Fprintf(&upstream, `<a href='%sq/'>q</a>`, tc.prefix)
+			want.WriteString(`<a href='http://proxy.test/pypi/simple/q/'>q</a>`)
+			upstream.WriteString(`</body></html>`)
+			want.WriteString(`</body></html>`)
 
-	h, _ := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
-		resp := pypiHTTPResponse(r, "text/html", upstream.String())
-		resp.Header.Set("Content-Length", strconv.Itoa(upstream.Len()))
-		return resp, nil
-	})
+			h, _ := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+				resp := pypiHTTPResponse(r, "text/html", upstream.String())
+				resp.Header.Set("Content-Length", strconv.Itoa(upstream.Len()))
+				resp.Header.Set("ETag", `"upstream"`)
+				return resp, nil
+			})
+			h.upstreamURL = tc.upstream
 
-	req := httptest.NewRequest(http.MethodGet, "/simple/", nil)
-	w := httptest.NewRecorder()
-	h.Routes().ServeHTTP(w, req)
+			req := httptest.NewRequest(http.MethodGet, "/simple/", nil)
+			w := httptest.NewRecorder()
+			h.Routes().ServeHTTP(w, req)
 
-	if w.Code != http.StatusOK {
-		t.Fatalf("status = %d, want 200", w.Code)
-	}
-	if got := w.Body.String(); got != want.String() {
-		t.Errorf("body not rewritten; starts %q", got[:min(len(got), 120)])
-	}
-	if got := w.Header().Get("Content-Length"); got != "" && got != strconv.Itoa(want.Len()) {
-		t.Errorf("Content-Length = %q, want %d or unset", got, want.Len())
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", w.Code)
+			}
+			if got := w.Body.String(); got != want.String() {
+				t.Errorf("body not rewritten; starts %q", got[:min(len(got), 120)])
+			}
+			if got := w.Header().Get("Content-Length"); got != "" && got != strconv.Itoa(want.Len()) {
+				t.Errorf("Content-Length = %q, want %d or unset", got, want.Len())
+			}
+			// The upstream's ETag names the body before the rewrite.
+			if got := w.Header().Get("ETag"); got != "" {
+				t.Errorf("ETag = %q, want none on a rewritten body", got)
+			}
+		})
 	}
 }
 
 func TestReplacingReaderSplitReads(t *testing.T) {
-	const in = `ab<a href="/simple/x/">x</a>href="/simplehref="/simple/`
-	const want = `ab<a href="P/x/">x</a>href="/simplehref="P/`
+	const in = `ab<a href="/simple/x/">x</a>href="/simplehref="/simple/href='/simple/y/'`
+	const want = `ab<a href="P/x/">x</a>href="/simplehref="P/href='Q/y/'`
 	r := &replacingReader{
-		src:  io.NopCloser(iotest.OneByteReader(strings.NewReader(in))),
-		from: []byte(`href="/simple/`),
-		to:   []byte(`href="P/`),
+		src: io.NopCloser(iotest.OneByteReader(strings.NewReader(in))),
+		replacements: []replacement{
+			{from: []byte(`href="/simple/`), to: []byte(`href="P/`)},
+			{from: []byte(`href='/simple/`), to: []byte(`href='Q/`)},
+		},
 	}
 	got, err := io.ReadAll(r)
 	if err != nil || string(got) != want {
