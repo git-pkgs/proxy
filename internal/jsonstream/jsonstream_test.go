@@ -180,3 +180,23 @@ func TestSkipThenWriteReplaces(t *testing.T) {
 		t.Errorf("got %s, %v", got, err)
 	}
 }
+
+// TestCopyObjectInvalidUTF8Key checks a key with invalid UTF-8 is accepted:
+// Key has U+FFFD in its place, as with encoding/json, and the key is written
+// with its original bytes.
+func TestCopyObjectInvalidUTF8Key(t *testing.T) {
+	var keys []string
+	got, err := copyString(t, "{\"k\xff\":1}", func(m *Member) error {
+		keys = append(keys, m.Key)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "{\"k\xff\":1}"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if want := []string{"k�"}; !slices.Equal(keys, want) {
+		t.Errorf("keys %q, want %q", keys, want)
+	}
+}

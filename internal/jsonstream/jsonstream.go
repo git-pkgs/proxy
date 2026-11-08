@@ -131,10 +131,10 @@ func copyObject(dec *jsontext.Decoder, w io.Writer, fn func(*Member) error, allo
 			return fmt.Errorf("object key is %v, not a string", rawKey.Kind())
 		}
 		keyBuf = append(keyBuf[:0], rawKey...)
-		key, err := jsontext.AppendUnquote(nil, keyBuf)
-		if err != nil {
-			return err
-		}
+		// The decoder has checked the key, so the only error left is invalid
+		// UTF-8, which AppendUnquote reports after replacing it with U+FFFD,
+		// as encoding/json does.
+		key, _ := jsontext.AppendUnquote(nil, keyBuf)
 		*m = Member{Key: string(key), rawKey: keyBuf, dec: dec, out: out}
 		if err := fn(m); err != nil {
 			return err
