@@ -1240,7 +1240,7 @@ Maven caveats:
 
 Helm uses each release's `created` time from the repository's `index.yaml`. Releases in cooldown are left out of the index the proxy serves, and their archives aren't served; a release without `created` is let through. Charts pulled over OCI have no publish time and aren't held back.
 
-Cargo, RubyGems, Hex, pub.dev, Conda and Helm check artifact downloads against cooldown, including files cached before the policy changed. When a publish-time lookup fails, an already-cached file is still served; an uncached download fails with 502, or 503 with `Retry-After` when the rate-limit gate holds the request. Conda checks timestamps per file because builds of one version can have different publish times.
+Cargo, RubyGems, Hex, pub.dev, Conda and Helm check artifact downloads against cooldown, including files cached before the policy changed. When a publish-time lookup fails, an already-cached file is still served; an uncached download fails with 502, or 503 with `Retry-After` when the rate-limit gate holds the request. Conda checks timestamps per file because builds of one version can have different publish times. As in conda, a repodata `timestamp` is read as milliseconds when it is above 253402300799 (the end of year 9999 in seconds) and as seconds otherwise, since some older entries use seconds.
 
 Conda repodata and Helm indexes are parsed once per cached document for download checks. With `cache_metadata` off, the parsed index is kept for one minute, including the fetch, so an install can reuse it across files. Conda streams repodata when its compressed copy exceeds `metadata_max_size`, under the same decompressed size bound as the metadata filter.
 
@@ -1248,7 +1248,9 @@ RubyGems, Hex and PyPI keep their publish times outside the metadata clients rea
 
 For RubyGems and Hex, both documents go through the metadata cache. With [`cache_metadata`](#metadata-caching) they are served from it within `metadata_ttl` without asking the upstream, revalidated with their ETags after it, and filtered from the last cached copies, marked stale, while the upstream is down; without it they are still fetched once for concurrent requests. Each document has its own TTL, so the compact index or Hex package can be newer than the cached times and list a version they don't have. The times are then fetched again before filtering, and if that fails, such versions are left out until the times can be read. The filtered index or package carries an ETag of its own, so Bundler and Mix revalidate it with `304 Not Modified`. Publish times are compared with the current time on each request, and the filtered result is kept until the first version it held back leaves cooldown (see [rewritten metadata cache](#rewritten-metadata-cache)); a newly published version shows up within `metadata_ttl`, as with other cached metadata. Upstream errors are answered as for other cached metadata (404, or 502) rather than relayed.
 
-With cooldown on, the proxy asks npm for full packuments, since the abbreviated ones it uses otherwise carry no publish times. Abbreviated packuments cached before cooldown was turned on are fetched again in full rather than served, including as a stale copy when the upstream is down. When `latest` is in cooldown, the packument tags the newest version out of cooldown instead, and `npm dist-tag ls` shows the same tags.
+With cooldown on, the proxy asks npm for full packuments, since the abbreviated ones it uses otherwise carry no publish times. Abbreviated packuments cached before cooldown was turned on are fetched again in full rather than served, including as a stale copy when the upstream is down. When `latest` is in cooldown, the packument tags the newest version out of cooldown instead; other tags that name a version in cooldown are removed, as for the denylist, and `npm dist-tag ls` shows the same tags. A tarball request for a version the cached packument doesn't list yet fetches the packument again, within `metadata_ttl` or not, and is decided on what the upstream lists now; if the packument can't be fetched, the download is not let through, as when a publish time can't be read.
+
+In pub.dev package metadata, when `latest` is in cooldown it names the newest stable version out of cooldown instead, or the newest prerelease when no stable version is left, and it is left out when every version is in cooldown.
 
 Conda cooldown covers `repodata.json`, `current_repodata.json`, `repodata_from_packages.json` and sharded repodata (CEP 16). Other forms of the repodata, such as `repodata.json.zst`, `repodata.json.bz2` and `repodata.jlap` patches, would list versions still in cooldown, so with cooldown on they are answered 404 and conda and mamba fall back to `repodata.json`. With `cache_metadata`, `repodata.json` is read through the metadata cache as it is without cooldown: within `metadata_ttl` the stored copy is filtered as it is read from storage, after it the upstream is asked with its ETag, and while the upstream is down the stale copy is filtered. Once a document has been filtered, the proxy remembers the ETag of the result until the first entry it left out leaves cooldown, so a client revalidating with `If-None-Match` gets `304 Not Modified` without the document being filtered or sent again. The first response for each document has no ETag, as it is sent while it is filtered. Without `cache_metadata`, `repodata.json` is fetched and filtered on every request. Clients cache shards by the hash in the shard index, so with cooldown on the proxy serves a rewritten index whose shard hashes change every hour and filters each shard as it is fetched. Versions leaving cooldown show up within the hour, and clients fetch the shards they need again once an hour. If a channel's shard index points packages or shards somewhere the proxy doesn't route, the proxy answers 404 for it and clients fall back to `repodata.json`.
 
@@ -1276,6 +1278,13 @@ Names and versions are compared the way each ecosystem treats them:
 - PyPI names ignore case, and runs of `-`, `_` and `.` are equivalent (PEP 503),
   so `pkg:pypi/zope.interface@6.0` also covers `zope_interface-6.0-*.whl`.
 - NuGet ids and versions ignore case.
+- Debian, RPM, Alpine, Arch and FreeBSD entries ignore the distribution
+  namespace: `pkg:deb/debian/curl@8.5.0-2` and `pkg:deb/curl@8.5.0-2` are the
+  same entry.
+- Debian and RPM filenames leave out the epoch, so an entry with one also
+  covers the version without it: `pkg:deb/foo@1:2.3-1` denies
+  `foo_2.3-1_amd64.deb`. An entry without an epoch only matches a version
+  without one.
 - A RubyGems entry also covers that version's platform gems:
   `pkg:gem/nokogiri@1.16.0` denies `nokogiri-1.16.0-x86_64-linux.gem`.
 - Composer versions ignore a leading `v`, which Packagist keeps from the tag:
@@ -1304,7 +1313,7 @@ Names and versions are compared the way each ecosystem treats them:
   channel only.
 
 Denied versions are removed from npm packuments, Cargo sparse indexes, and PyPI
-simple HTML/JSON and release metadata, including responses served from cached
+simple HTML/JSON (files and the JSON `versions` list) and release metadata, including responses served from cached
 metadata during an upstream outage. No publication timestamp or enabled cooldown
 is required. npm tags pointing at denied versions are removed; `latest` is moved
 to the highest remaining stable version when available. Other tags are not
