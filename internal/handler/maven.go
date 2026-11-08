@@ -262,20 +262,21 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, so
 	upstreamURL := fmt.Sprintf("%s/%s", source.upstreamURL, urlPath)
 	cacheFilename := source.cacheFilename(filename)
 
-	// Each build replaces a SNAPSHOT file named without a timestamp, so the
-	// cached copy is dropped and the file fetched again, through the same
-	// denylist, cooldown and scanning as any other download.
-	if h.isMutableSnapshotFile(urlPath) {
-		h.proxy.forgetCachedArtifact("maven", name, version, cacheFilename)
+	// Each build replaces a SNAPSHOT file named without a timestamp, so a
+	// GET fetches it again rather than serving the cached copy. HEAD is
+	// answered from cache.
+	get := h.proxy.GetOrFetchArtifactFromURL
+	if h.isMutableSnapshotFile(urlPath) && r.Method != http.MethodHead {
+		get = h.proxy.refetchArtifactFromURL
 	}
 
-	result, err := h.proxy.GetOrFetchArtifactFromURL(ctx, "maven", name, version, cacheFilename, upstreamURL)
+	result, err := get(ctx, "maven", name, version, cacheFilename, upstreamURL)
 	if err != nil && source.fallbackURL != "" {
 		if errors.Is(err, ErrUpstreamNotFound) {
 			pluginPortalURL := fmt.Sprintf("%s/%s", source.fallbackURL, urlPath)
 			h.proxy.Logger.Info("maven artifact not found in primary upstream, trying Gradle Plugin Portal",
 				"group", group, "artifact", artifact, "version", version, "filename", filename)
-			result, err = h.proxy.GetOrFetchArtifactFromURL(ctx, "maven", name, version, cacheFilename, pluginPortalURL)
+			result, err = get(ctx, "maven", name, version, cacheFilename, pluginPortalURL)
 		}
 	}
 	if err != nil {

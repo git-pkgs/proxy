@@ -2616,21 +2616,37 @@ func (p *Proxy) getCachedArtifactWithUpstreamHash(ctx context.Context, pkgPURL, 
 	return nil, nil
 }
 
-// forgetCachedArtifact clears the cached entry for a file upstream replaces
-// in place, queueing its object for deletion, so the next request fetches
-// it again.
-func (p *Proxy) forgetCachedArtifact(ecosystem, name, version, filename string) {
-	if p.DB == nil {
-		return
+// refetchArtifactFromURL fetches a file upstream replaces in place, which
+// a cached copy can't stand in for while upstream answers. The new copy
+// replaces the cached one only once it is stored, and the cached one is
+// served when the fetch fails for any reason but the file being missing or
+// blocked. Concurrent callers share one fetch.
+func (p *Proxy) refetchArtifactFromURL(ctx context.Context, ecosystem, name, version, filename, downloadURL string) (*CacheResult, error) {
+	pkgPURL, versionPURL, err := packagePURLStrings(ecosystem, name, version)
+	if err != nil {
+		return nil, err
 	}
-	versionPURL := canonicalVersionPURL(ecosystem, name, version)
-	record, err := p.DB.GetCachedArtifact(canonicalPackagePURL(ecosystem, name), versionPURL, filename)
-	if err != nil || record == nil {
-		return
+	// Streaming never serves a cached copy, and a denied version is refused
+	// there.
+	if p.StreamArtifacts || p.versionDenied(ecosystem, name, version) || p.Denylist.Denied(versionPURL) {
+		return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, nil, "", "")
 	}
-	if err := p.DB.DiscardArtifact(versionPURL, filename, record.StoragePath); err != nil {
-		p.Logger.Warn("failed to clear artifact cache record", "purl", versionPURL, "filename", filename, "error", err)
+	metrics.RecordArtifactCacheMiss(ecosystem)
+	key := artifactCoalesceKey(versionPURL, filename, downloadURL, "", "")
+	noRecheck := func() (artifacts.Artifact, string, bool) { return artifacts.Artifact{}, "", false }
+	result, err := p.coalesceFetch(ctx, key, noRecheck, func(fetchCtx context.Context) (artifacts.Artifact, string, error) {
+		return p.fetchAndCacheFromURL(fetchCtx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, nil, "", "")
+	})
+	if err == nil || errors.Is(err, ErrUpstreamNotFound) || errors.Is(err, ErrArtifactBlocked) || ctx.Err() != nil {
+		return result, err
 	}
+	cached, cacheErr := p.checkCache(ctx, pkgPURL, versionPURL, filename)
+	if cacheErr != nil || cached == nil {
+		return nil, err
+	}
+	p.Logger.Warn("upstream fetch failed, serving cached copy",
+		"purl", versionPURL, "filename", filename, "error", err)
+	return cached, nil
 }
 
 // discardStaleArtifact clears the cached entry when its digest disagrees with

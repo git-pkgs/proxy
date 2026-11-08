@@ -18,6 +18,8 @@ import (
 type mavenGenerations struct {
 	gen      atomic.Int32
 	requests map[string]*atomic.Int32
+	// down makes every request fail with 502.
+	down atomic.Bool
 }
 
 func (m *mavenGenerations) body(path string) string {
@@ -33,6 +35,10 @@ func newMavenGenerations(t *testing.T, paths ...string) (*mavenGenerations, http
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if n := m.requests[r.URL.Path]; n != nil {
 			n.Add(1)
+		}
+		if m.down.Load() {
+			http.Error(w, "unavailable", http.StatusBadGateway)
+			return
 		}
 		const metadata = "/com/example/lib/maven-metadata.xml"
 		if r.URL.Path == metadata+".sha1" {
@@ -122,5 +128,30 @@ func TestMavenMutableSnapshotKeepsPolicyAndFallback(t *testing.T) {
 	setTestDenylist(t, proxy, "pkg:maven/com.example/lib@1.0-SNAPSHOT")
 	if w := getMaven(h, snapshot); w.Code != http.StatusForbidden {
 		t.Errorf("denied SNAPSHOT = %d, want 403", w.Code)
+	}
+}
+
+// TestMavenMutableSnapshotServesCacheWhenUpstreamFails checks that a
+// SNAPSHOT file fetched again for each request is still served from cache
+// while upstream is down, and that HEAD does not download it again.
+func TestMavenMutableSnapshotServesCacheWhenUpstreamFails(t *testing.T) {
+	const snapshot = "/com/example/lib/1.0-SNAPSHOT/lib-1.0-SNAPSHOT.jar"
+	m, h := newMavenGenerations(t, snapshot)
+
+	built := getMaven(h, snapshot).Body.String()
+	w := httptest.NewRecorder()
+	h.ServeHTTP(w, httptest.NewRequest(http.MethodHead, snapshot, nil))
+	if w.Code != http.StatusOK || m.requests[snapshot].Load() != 1 {
+		t.Errorf("HEAD = %d after %d upstream requests, want 200 from cache", w.Code, m.requests[snapshot].Load())
+	}
+
+	m.down.Store(true)
+	if w := getMaven(h, snapshot); w.Code != http.StatusOK || w.Body.String() != built {
+		t.Errorf("SNAPSHOT while upstream is down = %d %q, want the cached build %q", w.Code, w.Body, built)
+	}
+	m.down.Store(false)
+	m.gen.Store(1)
+	if w := getMaven(h, snapshot); w.Body.String() != m.body(snapshot) {
+		t.Errorf("SNAPSHOT once upstream is back = %q, want the new build", w.Body)
 	}
 }
