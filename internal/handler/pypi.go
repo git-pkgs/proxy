@@ -1066,18 +1066,6 @@ type replacingReader struct {
 
 type replacement struct{ from, to []byte }
 
-// next finds the earliest replacement in b, returning its index or -1.
-func (r *replacingReader) next(b []byte) (int, *replacement) {
-	at, found := -1, (*replacement)(nil)
-	for i := range r.replacements {
-		rep := &r.replacements[i]
-		if j := bytes.Index(b, rep.from); j >= 0 && (at < 0 || j < at) {
-			at, found = j, rep
-		}
-	}
-	return at, found
-}
-
 func (r *replacingReader) Read(p []byte) (int, error) {
 	for len(r.out) == 0 {
 		if r.err != nil {
@@ -1099,14 +1087,32 @@ func (r *replacingReader) Read(p []byte) (int, error) {
 		scan := max(len(r.in)-keep, 0)
 		var out []byte
 		done := 0
+		// at holds each replacement's next match at or after done, or -1.
+		// Only a match the last replacement consumed is searched for again,
+		// so each pass over r.in stays linear.
+		at := make([]int, len(r.replacements))
+		for i := range at {
+			at[i] = indexFrom(r.in, r.replacements[i].from, 0)
+		}
 		for {
-			i, rep := r.next(r.in[done:])
-			if i < 0 || done+i >= scan {
+			k := -1
+			for i, j := range at {
+				if j >= 0 && (k < 0 || j < at[k]) {
+					k = i
+				}
+			}
+			if k < 0 || at[k] >= scan {
 				break
 			}
-			out = append(out, r.in[done:done+i]...)
+			rep := &r.replacements[k]
+			out = append(out, r.in[done:at[k]]...)
 			out = append(out, rep.to...)
-			done += i + len(rep.from)
+			done = at[k] + len(rep.from)
+			for i, j := range at {
+				if j >= 0 && j < done {
+					at[i] = indexFrom(r.in, r.replacements[i].from, done)
+				}
+			}
 		}
 		if done < scan {
 			out = append(out, r.in[done:scan]...)
@@ -1121,3 +1127,11 @@ func (r *replacingReader) Read(p []byte) (int, error) {
 }
 
 func (r *replacingReader) Close() error { return r.src.Close() }
+
+// indexFrom returns the index of the first sep in b at or after from, or -1.
+func indexFrom(b, sep []byte, from int) int {
+	if i := bytes.Index(b[from:], sep); i >= 0 {
+		return from + i
+	}
+	return -1
+}

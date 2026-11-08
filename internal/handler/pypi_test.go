@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
@@ -676,5 +677,67 @@ func TestReplacingReaderSplitReads(t *testing.T) {
 	got, err := io.ReadAll(r)
 	if err != nil || string(got) != want {
 		t.Errorf("got %q, %v; want %q", got, err, want)
+	}
+}
+
+// replaceReference makes the replacements the way replacingReader should:
+// left to right, the earliest match first, and the first listed on a tie.
+func replaceReference(in string, reps []replacement) string {
+	var out strings.Builder
+	for len(in) > 0 {
+		at, found := -1, -1
+		for i, rep := range reps {
+			if j := strings.Index(in, string(rep.from)); j >= 0 && (at < 0 || j < at) {
+				at, found = j, i
+			}
+		}
+		if at < 0 {
+			out.WriteString(in)
+			break
+		}
+		out.WriteString(in[:at])
+		out.Write(reps[found].to)
+		in = in[at+len(reps[found].from):]
+	}
+	return out.String()
+}
+
+func TestReplacingReaderMatchesReference(t *testing.T) {
+	reps := []replacement{
+		{from: []byte(`href="/s/`), to: []byte(`href="P/`)},
+		{from: []byte(`href='/s/`), to: []byte(`href='Q/`)},
+	}
+	pieces := []string{`href="/s/`, `href='/s/`, `href="/s`, `href=`, `x`, `/s/`, `'`, `"`}
+	rng := rand.New(rand.NewPCG(1, 2))
+	for range 500 {
+		var b strings.Builder
+		for range rng.IntN(40) {
+			b.WriteString(pieces[rng.IntN(len(pieces))])
+		}
+		in := b.String()
+		for _, src := range []io.Reader{strings.NewReader(in), iotest.OneByteReader(strings.NewReader(in))} {
+			got, err := io.ReadAll(&replacingReader{src: io.NopCloser(src), replacements: reps})
+			if want := replaceReference(in, reps); err != nil || string(got) != want {
+				t.Fatalf("in %q: got %q, %v; want %q", in, got, err, want)
+			}
+		}
+	}
+}
+
+// BenchmarkReplacingReaderRootIndex reads a root index of double-quoted
+// links, where the single-quote pattern never matches.
+func BenchmarkReplacingReaderRootIndex(b *testing.B) {
+	var page strings.Builder
+	for i := range 50000 {
+		fmt.Fprintf(&page, "<a href=\"/simple/project-%d/\">project-%d</a>\n", i, i)
+	}
+	in := page.String()
+	reps := []replacement{
+		{from: []byte(`href="/simple/`), to: []byte(`href="http://proxy/pypi/simple/`)},
+		{from: []byte(`href='/simple/`), to: []byte(`href='http://proxy/pypi/simple/`)},
+	}
+	b.SetBytes(int64(len(in)))
+	for b.Loop() {
+		_, _ = io.Copy(io.Discard, &replacingReader{src: io.NopCloser(strings.NewReader(in)), replacements: reps})
 	}
 }
