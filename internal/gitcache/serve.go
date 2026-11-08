@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -88,7 +89,12 @@ const uploadPackGrace = time.Minute
 // found it gone or refused upstream, or it was not checked recently, and
 // refuses it while that refusal stands.
 func (c *Cache) checkServable(ctx context.Context, rp *repo, repoURL string) error {
-	if c.refusal(rp) == nil && time.Since(time.Unix(0, rp.lastChecked.Load())) <= c.opts.StaleMaxAge+uploadPackGrace {
+	// The sum saturates rather than overflow for a huge StaleMaxAge.
+	maxAge := c.opts.StaleMaxAge + uploadPackGrace
+	if maxAge < c.opts.StaleMaxAge {
+		maxAge = math.MaxInt64
+	}
+	if c.refusal(rp) == nil && time.Since(time.Unix(0, rp.lastChecked.Load())) <= maxAge {
 		return nil
 	}
 	if err := c.ensureFresh(ctx, rp, repoURL); err != nil {

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"maps"
+	"math"
 	"net/http"
 	"net/http/httptest"
 	"net/http/httputil"
@@ -941,5 +942,25 @@ func TestRefCheckClearsRefusal(t *testing.T) {
 	}
 	if status := tc.lsRefs(t); status != http.StatusOK {
 		t.Errorf("ls-refs after the upstream listed its refs: status %d", status)
+	}
+}
+
+// TestHugeStaleMaxAgeUploadPackChecksNothing sets stale_max_age near the
+// largest duration: upload-pack requests on a fresh copy do not check the
+// upstream.
+func TestHugeStaleMaxAgeUploadPackChecksNothing(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) { o.StaleMaxAge = math.MaxInt64 - time.Second })
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+
+	before := upstream.requests.Load()
+	if status := tc.lsRefs(t); status != http.StatusOK {
+		t.Fatalf("ls-refs: status %d", status)
+	}
+	waitIdle(t, tc.Cache)
+	if got := upstream.requests.Load() - before; got != 0 {
+		t.Errorf("ls-refs made %d upstream requests, want 0", got)
 	}
 }
