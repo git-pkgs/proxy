@@ -1232,7 +1232,7 @@ Maven caveats:
 
 Helm uses each release's `created` time from the repository's `index.yaml`. Releases in cooldown are left out of the index the proxy serves, and their archives aren't served; a release without `created` is let through. Charts pulled over OCI have no publish time and aren't held back.
 
-Cargo, RubyGems, Hex, pub.dev, Conda and Helm check artifact downloads against cooldown, including files cached before the policy changed. When a publish-time lookup fails, an already-cached file is still served; an uncached download fails with 502, or 503 with `Retry-After` when the rate-limit gate holds the request. Conda checks timestamps per file because builds of one version can have different publish times.
+Cargo, RubyGems, Hex, pub.dev, Conda and Helm check artifact downloads against cooldown, including files cached before the policy changed. When a publish-time lookup fails, an already-cached file is still served; an uncached download fails with 502, or 503 with `Retry-After` when the rate-limit gate holds the request. Conda checks timestamps per file because builds of one version can have different publish times. As in conda, a repodata `timestamp` is read as milliseconds when it is above 253402300799 (the end of year 9999 in seconds) and as seconds otherwise, since some older entries use seconds.
 
 Conda repodata and Helm indexes are parsed once per cached document for download checks. With `cache_metadata` off, the parsed index is kept for one minute, including the fetch, so an install can reuse it across files. Conda streams repodata when its compressed copy exceeds `metadata_max_size`, under the same decompressed size bound as the metadata filter.
 
