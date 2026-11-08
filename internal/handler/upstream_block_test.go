@@ -17,62 +17,15 @@ const firewallReport = `{"status":403,"title":"Sonatype Firewall Report","detail
 // blockedByUpstream is the error the fetch layer produces for an upstream that
 // refuses an artifact with a policy denial.
 func blockedByUpstream(status int, body string) error {
-	return fmt.Errorf("fetching from upstream: %w", fmt.Errorf("unexpected status %d: %s", status, body))
+	return blockedByUpstreamTyped(status, "", body)
 }
 
-func TestUpstreamStatus(t *testing.T) {
-	tests := []struct {
-		name     string
-		err      error
-		wantCode int
-		wantBody string
-		wantOK   bool
-	}{
-		{
-			name:     "wrapped policy denial",
-			err:      blockedByUpstream(http.StatusForbidden, firewallReport),
-			wantCode: http.StatusForbidden,
-			wantBody: firewallReport,
-			wantOK:   true,
-		},
-		{
-			name:     "unwrapped policy denial",
-			err:      errors.New("unexpected status 409: conflict"),
-			wantCode: http.StatusConflict,
-			wantBody: "conflict",
-			wantOK:   true,
-		},
-		{
-			name:   "transport error carries no status",
-			err:    errors.New("dial tcp 127.0.0.1:9: connect: connection refused"),
-			wantOK: false,
-		},
-		{
-			name:   "fetch layer sentinel carries no status",
-			err:    fetch.ErrUpstreamDown,
-			wantOK: false,
-		},
-		{
-			name:   "no error",
-			err:    nil,
-			wantOK: false,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			code, body, ok := upstreamStatus(tt.err)
-			if ok != tt.wantOK {
-				t.Fatalf("ok = %v, want %v", ok, tt.wantOK)
-			}
-			if code != tt.wantCode {
-				t.Errorf("code = %d, want %d", code, tt.wantCode)
-			}
-			if body != tt.wantBody {
-				t.Errorf("body = %q, want %q", body, tt.wantBody)
-			}
-		})
-	}
+func blockedByUpstreamTyped(status int, contentType, body string) error {
+	return fmt.Errorf("fetching from upstream: %w", &fetch.StatusError{
+		Code:        status,
+		Body:        body,
+		ContentType: contentType,
+	})
 }
 
 func TestServeArtifactErrorForwardsPolicyBlock(t *testing.T) {
@@ -95,6 +48,27 @@ func TestServeArtifactErrorForwardsPolicyBlock(t *testing.T) {
 			err:        blockedByUpstream(http.StatusConflict, "blocked by policy"),
 			wantStatus: http.StatusConflict,
 			wantBody:   "blocked by policy",
+			wantCT:     "text/plain; charset=utf-8",
+		},
+		{
+			name:       "the upstream content type is forwarded",
+			err:        blockedByUpstreamTyped(http.StatusForbidden, contentTypeJSON, firewallReport),
+			wantStatus: http.StatusForbidden,
+			wantBody:   firewallReport,
+			wantCT:     contentTypeJSON,
+		},
+		{
+			name:       "a structured JSON content type is forwarded",
+			err:        blockedByUpstreamTyped(http.StatusForbidden, "application/problem+json", firewallReport),
+			wantStatus: http.StatusForbidden,
+			wantBody:   firewallReport,
+			wantCT:     "application/problem+json",
+		},
+		{
+			name:       "a truncated JSON body is not labelled JSON",
+			err:        blockedByUpstreamTyped(http.StatusForbidden, contentTypeJSON, firewallReport[:40]),
+			wantStatus: http.StatusForbidden,
+			wantBody:   firewallReport[:40],
 			wantCT:     "text/plain; charset=utf-8",
 		},
 		{
@@ -191,8 +165,8 @@ func TestNPMHandler_ForwardsUpstreamPolicyBlock(t *testing.T) {
 	}
 }
 
-// A refused blob is reported the way an OCI registry reports a denial, not as
-// a proxy failure.
+// A refused blob is reported the way an OCI registry reports a denial, with
+// the upstream's reason, not as a proxy failure.
 func TestContainerHandler_BlobPolicyBlockIsDenied(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
@@ -214,7 +188,11 @@ func TestContainerHandler_BlobPolicyBlockIsDenied(t *testing.T) {
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusForbidden, w.Body.String())
 	}
-	if !strings.Contains(w.Body.String(), "DENIED") {
-		t.Errorf("body = %q, want an OCI DENIED error", w.Body.String())
+	body := w.Body.String()
+	if !strings.Contains(body, "DENIED") {
+		t.Errorf("body = %q, want an OCI DENIED error", body)
+	}
+	if !strings.Contains(body, "potentially malicious") {
+		t.Errorf("body = %q, want the upstream reason", body)
 	}
 }
