@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path"
 	"strings"
@@ -136,6 +137,12 @@ func (h *MavenHandler) handleRequest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	if h.isMutableSnapshotFile(urlPath) {
+		// Rebuilt in place, so not cached.
+		h.proxyUpstream(w, r, source, urlPath)
+		return
+	}
+
 	if h.isArtifactFile(filename) || h.isChecksumFile(filename) || h.isCoordinateFile(urlPath) {
 		h.handleDownload(w, r, source, urlPath)
 		return
@@ -175,32 +182,51 @@ func (h *MavenHandler) handleMetadata(w http.ResponseWriter, r *http.Request, so
 		return
 	}
 
-	body, contentType, cacheKey, err := h.fetchMetadata(r.Context(), source, urlPath)
-	if err != nil {
-		h.writeMetadataError(w, err)
+	// The checksums of maven-metadata.xml are computed from the cached
+	// metadata, as with cooldown, so they never describe another deploy.
+	if suffix, ok := strings.CutPrefix(path.Base(urlPath), mavenMetadataFile); ok && mavenChecksums[suffix] != nil {
+		res, _ := h.fetchMetadata(r.Context(), source, path.Join(path.Dir(urlPath), mavenMetadataFile))
+		var body []byte
+		if res.err == nil {
+			body, res.err = h.proxy.decodedMetadataBody(res)
+		}
+		if res.err != nil {
+			h.writeMetadataError(w, res.err)
+			return
+		}
+		sum := mavenChecksums[suffix]()
+		_, _ = sum.Write(body)
+		w.Header().Set(headerContentType, "text/plain")
+		markStale(w, res.stale)
+		_, _ = io.WriteString(w, hex.EncodeToString(sum.Sum(nil)))
 		return
 	}
 
-	h.proxy.writeMetadataCachedResponse(w, r, "maven", cacheKey, body, contentType)
+	res, _ := h.fetchMetadata(r.Context(), source, urlPath)
+	if res.err != nil {
+		h.writeMetadataError(w, res.err)
+		return
+	}
+	writeMetadataResult(w, r, res)
 }
 
 // fetchMetadata fetches a metadata file from the source's upstream, or from
 // its fallback when the upstream doesn't have it, and returns it with the
 // key it is cached under.
-func (h *MavenHandler) fetchMetadata(ctx context.Context, source mavenSource, urlPath string) (body []byte, contentType, cacheKey string, err error) {
-	cacheKey = source.metadataCacheKey(urlPath)
+func (h *MavenHandler) fetchMetadata(ctx context.Context, source mavenSource, urlPath string) (metadataResult, string) {
+	cacheKey := source.metadataCacheKey(urlPath)
 	upstreamURL := fmt.Sprintf("%s/%s", source.upstreamURL, urlPath)
 
-	body, contentType, err = h.proxy.FetchOrCacheMetadata(ctx, "maven", cacheKey, upstreamURL, "*/*")
-	if err != nil && source.fallbackURL != "" {
-		if errors.Is(err, ErrUpstreamNotFound) {
+	res := h.proxy.lookupMetadata(ctx, "maven", cacheKey, upstreamURL, "*/*", "", nil)
+	if res.err != nil && source.fallbackURL != "" {
+		if errors.Is(res.err, ErrUpstreamNotFound) {
 			pluginPortalURL := fmt.Sprintf("%s/%s", source.fallbackURL, urlPath)
 			h.proxy.Logger.Info("maven metadata unavailable in primary upstream, trying Gradle Plugin Portal",
 				"path", urlPath)
-			body, contentType, err = h.proxy.FetchOrCacheMetadata(ctx, "maven", cacheKey, pluginPortalURL, "*/*")
+			res = h.proxy.lookupMetadata(ctx, "maven", cacheKey, pluginPortalURL, "*/*", "", nil)
 		}
 	}
-	return body, contentType, cacheKey, err
+	return res, cacheKey
 }
 
 func (h *MavenHandler) writeMetadataError(w http.ResponseWriter, err error) {
@@ -307,6 +333,15 @@ func (h *MavenHandler) isCoordinateFile(urlPath string) bool {
 		return false
 	}
 	return strings.HasPrefix(filename, artifact+"-"+strings.TrimSuffix(version, "SNAPSHOT"))
+}
+
+// isMutableSnapshotFile reports whether urlPath is a SNAPSHOT file named
+// with "SNAPSHOT" rather than a build timestamp (lib-1.0-SNAPSHOT.jar), which
+// each new build replaces. Timestamped SNAPSHOT files never change.
+func (h *MavenHandler) isMutableSnapshotFile(urlPath string) bool {
+	_, artifact, version, filename := h.parsePath(urlPath)
+	return artifact != "" && strings.HasSuffix(version, mavenSnapshot) &&
+		strings.HasPrefix(filename, artifact+"-"+version)
 }
 
 // isVersionListingFile matches maven-metadata.xml and its checksums. The

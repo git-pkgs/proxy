@@ -1,7 +1,9 @@
 package handler
 
 import (
+	"crypto/sha1"
 	"database/sql"
+	"encoding/hex"
 	"fmt"
 	"io"
 	"net/http"
@@ -1074,8 +1076,7 @@ func TestMavenHandler_GradlePluginMarkerFallbackAndCache(t *testing.T) {
 
 func TestMavenHandler_GradlePluginMarkerMetadataFallback(t *testing.T) {
 	paths := map[string]string{
-		"/com/diffplug/spotless/com.diffplug.spotless.gradle.plugin/maven-metadata.xml":      "<metadata/>",
-		"/com/diffplug/spotless/com.diffplug.spotless.gradle.plugin/maven-metadata.xml.sha1": "sha1",
+		"/com/diffplug/spotless/com.diffplug.spotless.gradle.plugin/maven-metadata.xml": "<metadata/>",
 	}
 
 	primaryHits := map[string]int{}
@@ -1130,6 +1131,18 @@ func TestMavenHandler_GradlePluginMarkerMetadataFallback(t *testing.T) {
 		if pluginHits[reqPath] == 0 {
 			t.Fatalf("GET %s did not hit plugin portal fallback", reqPath)
 		}
+	}
+
+	// The checksum is computed from the metadata served from the fallback.
+	resp, err := http.Get(srv.URL + "/com/diffplug/spotless/com.diffplug.spotless.gradle.plugin/maven-metadata.xml.sha1")
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	_ = resp.Body.Close()
+	sum := sha1.Sum([]byte("<metadata/>")) //nolint:gosec // Maven publishes SHA-1 checksums.
+	if resp.StatusCode != http.StatusOK || string(body) != hex.EncodeToString(sum[:]) {
+		t.Fatalf("GET maven-metadata.xml.sha1: %d %q, want %x", resp.StatusCode, body, sum)
 	}
 }
 

@@ -2321,17 +2321,12 @@ func (p *Proxy) writeMetadataFetchError(w http.ResponseWriter, err error) {
 	http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
 }
 
-// writeMetadataCachedResponse writes a cached metadata response and handles
-// conditional request headers using metadata cache validators.
-func (p *Proxy) writeMetadataCachedResponse(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, body []byte, contentType string) {
-	p.writeMetadataCachedResponseWithEncoding(w, r, ecosystem, cacheKey, body, contentType, "")
-}
-
-// writeMetadataCachedResponseWithEncoding is writeMetadataCachedResponse with
-// an explicit Content-Encoding. contentEncoding must describe the body being
-// written; it is passed in rather than re-read from the cache row, which is
-// missing or stale when the metadata cache write failed and would otherwise
-// mislabel the bytes.
+// writeMetadataCachedResponseWithEncoding writes a metadata document with the
+// validators of its current cache row. Prefer writeMetadataResult, which
+// takes them from the lookup the body came from. contentEncoding must
+// describe the body being written; it is passed in rather than re-read from
+// the cache row, which is missing or stale when the metadata cache write
+// failed and would otherwise mislabel the bytes.
 func (p *Proxy) writeMetadataCachedResponseWithEncoding(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, body []byte, contentType, contentEncoding string) {
 	writeMetadataBody(w, r, p.lookupCachedMeta(ecosystem, cacheKey), body, contentType, contentEncoding)
 }
