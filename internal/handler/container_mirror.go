@@ -332,7 +332,7 @@ func (m *imageMirror) requestTag(ctx context.Context, method, tag, accept string
 
 // mirrorManifest stores the manifest for reference through the handler's own
 // manifest route, then follows what it references. It returns the manifest
-// digest.
+// sha256 digest.
 func (m *imageMirror) mirrorManifest(ctx context.Context, reference string, depth int) (string, error) {
 	cacheAccept := normalizeContainerManifestAccept(containerManifestAccept(&http.Request{Header: http.Header{}}))
 	before, _ := m.h.loadContainerManifestForAccept(ctx, m.registryURL, m.upstreamName, reference, cacheAccept, cacheAccept)
@@ -360,6 +360,9 @@ func (m *imageMirror) mirrorManifest(ctx context.Context, reference string, dept
 	if before == nil || before.contentDigest != digest {
 		m.result.Fetched++
 	}
+	// Tags resolve to sha256 digests, so a manifest asked for by another
+	// digest is tracked by its sha256 too.
+	digest = sha256Digest(response.body.Bytes())
 	if m.seen[digest] {
 		return digest, nil
 	}
