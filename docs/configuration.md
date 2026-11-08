@@ -946,6 +946,12 @@ those yourself. The proxy locks `cache_dir` while it runs, through a
 `.gitcache-lock` file in it, so a second process given the same directory,
 such as another replica on a shared volume, fails to start; give each its own.
 
+Each repository's directory is named by its path as requested. Where
+`cache_dir` ignores case in file names, as on macOS and Windows by default,
+paths that differ only in case (`acme/widgets` and `acme/WIDGETS`) share one
+directory and are treated as one repository. Use a case-sensitive file system
+for an upstream whose repositories differ only in case.
+
 Git LFS objects are cached in the artifact cache, so they use the configured
 storage backend and retention rather than `cache_dir`. git-lfs finds the LFS
 API under the rewritten remote, at `/git/{name}/{repo}.git/info/lfs`, with no
