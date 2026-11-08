@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -13,6 +14,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	registryclient "github.com/git-pkgs/registries/client"
 	"github.com/git-pkgs/registries/fetch"
 )
 
@@ -256,5 +258,169 @@ func TestNPMTarballCooldownRefetchesStalePackument(t *testing.T) {
 				t.Fatalf("status = %d, want %d: %s", response.Code, tc.want, response.Body.String())
 			}
 		})
+	}
+}
+
+// widgetPackument is a packument listing only widget 1.0.0, published long
+// ago.
+func widgetPackument() string {
+	old := time.Now().Add(-60 * 24 * time.Hour).Format(time.RFC3339)
+	return fmt.Sprintf(`{"name":"widget","time":{"1.0.0":%q},"versions":{"1.0.0":{"dist":{}}}}`, old)
+}
+
+// cooldownNPMHandler returns an npm handler for upstream with cooldown on
+// and a tarball fetcher that would serve anything asked of it.
+func cooldownNPMHandler(t *testing.T, upstream *httptest.Server, ttl time.Duration) *NPMHandler {
+	t.Helper()
+	p, _, _, fetcher := setupTestProxy(t)
+	p.CacheMetadata = true
+	p.MetadataTTL = ttl
+	p.Cooldown = &cooldown.Config{Default: "7d"}
+	p.HTTPClient = upstream.Client()
+	fetcher.artifact = &fetch.Artifact{Body: io.NopCloser(strings.NewReader("package"))}
+	return NewNPMHandler(p, "http://proxy.test", upstream.URL)
+}
+
+// TestNPMTarballCooldownStalePackument checks that a stale packument served
+// because upstream failed doesn't let through a version it doesn't list,
+// and that the upstream failure decides the response.
+func TestNPMTarballCooldownStalePackument(t *testing.T) {
+	for _, tc := range []struct {
+		name    string
+		status  int
+		limited bool
+		want    int
+	}{
+		{"upstream down", http.StatusServiceUnavailable, false, http.StatusBadGateway},
+		{"not found", http.StatusNotFound, false, http.StatusNotFound},
+		{"rate limited", http.StatusTooManyRequests, true, http.StatusServiceUnavailable},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var down atomic.Bool
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				if down.Load() {
+					w.Header().Set("Retry-After", "60")
+					w.WriteHeader(tc.status)
+					return
+				}
+				_, _ = io.WriteString(w, widgetPackument())
+			}))
+			t.Cleanup(upstream.Close)
+			// With no TTL the packument is read in memory and every read
+			// asks upstream.
+			h := cooldownNPMHandler(t, upstream, 0)
+			if tc.limited {
+				gate := registryclient.NewRateLimitGate(http.DefaultTransport)
+				h.proxy.HTTPClient = &http.Client{Transport: gate}
+				h.proxy.RateLimits = gate
+			}
+
+			metadata := httptest.NewRecorder()
+			h.Routes().ServeHTTP(metadata, httptest.NewRequest(http.MethodGet, "/widget", nil))
+			if metadata.Code != http.StatusOK {
+				t.Fatalf("metadata status = %d: %s", metadata.Code, metadata.Body.String())
+			}
+			down.Store(true)
+
+			response := httptest.NewRecorder()
+			h.Routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/widget/-/widget-2.0.0.tgz", nil))
+			if response.Code != tc.want {
+				t.Fatalf("status = %d, want %d: %s", response.Code, tc.want, response.Body.String())
+			}
+			if tc.limited && response.Header().Get("Retry-After") == "" {
+				t.Error("no Retry-After on a rate-limited response")
+			}
+		})
+	}
+}
+
+// TestNPMTarballCooldownFetchesMissingVersionOnce checks that a packument
+// just fetched from upstream isn't fetched again because it doesn't list the
+// requested version.
+func TestNPMTarballCooldownFetchesMissingVersionOnce(t *testing.T) {
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		_, _ = io.WriteString(w, widgetPackument())
+	}))
+	t.Cleanup(upstream.Close)
+	h := cooldownNPMHandler(t, upstream, time.Hour)
+
+	response := httptest.NewRecorder()
+	h.Routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/widget/-/widget-99.0.0.tgz", nil))
+	if n := requests.Load(); n != 1 {
+		t.Errorf("upstream packument requests = %d, want 1", n)
+	}
+}
+
+// TestNPMTarballCooldownRefreshIgnoresSharedStale checks that a refetch of a
+// stored packument lacking the version, joining another caller's fetch that
+// falls back to the stored copy, doesn't take that copy as upstream's answer.
+func TestNPMTarballCooldownRefreshIgnoresSharedStale(t *testing.T) {
+	var blocked atomic.Bool
+	arrived := make(chan struct{}, 1)
+	release := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !blocked.Load() {
+			_, _ = io.WriteString(w, widgetPackument())
+			return
+		}
+		arrived <- struct{}{}
+		select {
+		case <-release:
+		case <-r.Context().Done():
+		}
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(upstream.Close)
+	h := cooldownNPMHandler(t, upstream, time.Hour)
+	p := h.proxy
+
+	metadata := httptest.NewRecorder()
+	h.Routes().ServeHTTP(metadata, httptest.NewRequest(http.MethodGet, "/widget", nil))
+	if metadata.Code != http.StatusOK {
+		t.Fatalf("metadata status = %d: %s", metadata.Code, metadata.Body.String())
+	}
+	registryURL, cacheKey := h.sourceFor("widget")
+	packumentURL := registryURL + "/widget"
+	accept := h.packumentAccept()
+	row, err := p.DB.GetMetadataCache("npm", cacheKey)
+	if err != nil || row == nil {
+		t.Fatalf("no stored packument row: %v", err)
+	}
+	setFetchedAt := func(at time.Time) {
+		t.Helper()
+		if ok, err := p.DB.RefreshMetadataCache("npm", cacheKey, row.ContentDigest.String, at); err != nil || !ok {
+			t.Fatalf("setting fetched_at: %t, %v", ok, err)
+		}
+	}
+
+	// Another caller revalidates the expired copy, and upstream holds it.
+	setFetchedAt(time.Now().Add(-2 * time.Hour))
+	blocked.Store(true)
+	other := make(chan error, 1)
+	go func() {
+		_, err := p.storedMetadataDocument(context.Background(), "npm", cacheKey, packumentURL, accept, h.packumentStreamValidator())
+		other <- err
+	}()
+	<-arrived
+
+	// The tarball request reads the copy as within its TTL and refetches it,
+	// joining that fetch.
+	setFetchedAt(time.Now())
+	response := httptest.NewRecorder()
+	done := make(chan struct{})
+	go func() {
+		defer close(done)
+		h.Routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/widget/-/widget-2.0.0.tgz", nil))
+	}()
+	waitForMetadataWaiters(t, p, metadataCoalesceKey("npm", cacheKey, packumentURL, accept, "", false)+"\x00stored", 1)
+	close(release)
+	<-done
+	if err := <-other; err != nil {
+		t.Fatalf("other caller: %v", err)
+	}
+	if response.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d: %s", response.Code, http.StatusBadGateway, response.Body.String())
 	}
 }
