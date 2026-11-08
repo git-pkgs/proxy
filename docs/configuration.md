@@ -1018,12 +1018,12 @@ one doesn't fall back to the Gradle Plugin Portal. Files are cached per
 repository, so the same coordinates in two repositories never share a cache
 entry.
 
-In every repository, an artifact file (one with an artifact extension or named
-`{artifact}-{version}…`) whose group directories contain a dot or colon or are
-empty (`org.foo/bar/1.0/bar-1.0.jar`), or whose artifact contains a colon, is
-not in the Maven layout and gets 404 without an upstream request. Its group
-would read the same as `org/foo`'s. Other paths there, such as
-`maven-metadata.xml` or a directory listing, are handled as anywhere else.
+In every repository, a file the proxy would cache (an artifact, checksum or
+signature) whose group directories contain a dot or colon
+(`org.foo/bar/1.0/bar-1.0.jar`), or whose artifact contains a colon, is not in
+the Maven layout and gets 404 without an upstream request. Its group would read
+the same as `org/foo`'s. Other paths there, such as `maven-metadata.xml` or a
+directory listing, are handled as anywhere else.
 
 `upstream.maven_repositories` is additive. `/maven/…` keeps serving
 `upstream.maven` with unchanged cache identities. A repository name is matched
