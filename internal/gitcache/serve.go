@@ -63,6 +63,12 @@ func (c *Cache) Open(ctx context.Context, key, repoURL string, opts OpenOptions)
 	switch {
 	case opts.Refresh || !hit:
 		err = c.ensureFresh(ctx, rp, repoURL)
+		if err == nil && hit && !opts.NoCheck {
+			// A refresh still running or failed serves the cached copy,
+			// but not one the upstream refused since and no check has
+			// cleared.
+			err = c.refusal(rp)
+		}
 	case !opts.NoCheck:
 		err = c.checkServable(ctx, rp, repoURL)
 	}
@@ -81,16 +87,21 @@ const uploadPackGrace = time.Minute
 // checkServable refuses a cached repository the last refresh found gone or
 // refused upstream, and refreshes one not checked recently first.
 func (c *Cache) checkServable(ctx context.Context, rp *repo, repoURL string) error {
-	c.mu.Lock()
-	err := rp.refused
-	c.mu.Unlock()
-	if err != nil {
+	if err := c.refusal(rp); err != nil {
 		return err
 	}
 	if time.Since(time.Unix(0, rp.lastChecked.Load())) > c.opts.StaleMaxAge+uploadPackGrace {
 		return c.ensureFresh(ctx, rp, repoURL)
 	}
 	return nil
+}
+
+// refusal returns the error of the last refresh that found the repository
+// gone or refused upstream, until a refresh succeeds.
+func (c *Cache) refusal(rp *repo) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return rp.refused
 }
 
 // Hit reports whether the repository was already cached when it was opened.

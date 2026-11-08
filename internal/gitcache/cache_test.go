@@ -875,3 +875,25 @@ func TestCloneChecksUpstreamOnce(t *testing.T) {
 		t.Errorf("clone made %d upstream check requests, want %d", got, perCheck)
 	}
 }
+
+// TestInfoRefsRefusedWhileRefusalStands checks that once the upstream
+// refused a repository, a later check that runs past RefreshWait, which
+// would otherwise serve the cached copy, doesn't advertise its refs.
+func TestInfoRefsRefusedWhileRefusalStands(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) { o.RefreshWait = 100 * time.Millisecond })
+	tc.clone(t, "repo")
+
+	upstream.status.Store(http.StatusForbidden)
+	if out, err := tryGit(t, "", "ls-remote", tc.url("repo")); err == nil {
+		t.Fatalf("served the cached copy after 403:\n%s", out)
+	}
+	upstream.status.Store(0)
+	release := upstream.holdRequests()
+	defer release()
+	// Protocol v0 advertises the refs in the info/refs response itself.
+	if out, err := tryGit(t, "", "-c", "protocol.version=0", "ls-remote", tc.url("repo")); err == nil {
+		t.Errorf("advertised refs while the refusal stands:\n%s", out)
+	}
+}
