@@ -1481,6 +1481,15 @@ func copyArtifactBody(w http.ResponseWriter, reader io.Reader, expectedSize int6
 // It copies the request, forwards specified headers, and streams the response back.
 // forwardHeaders controls the request headers sent upstream. End-to-end response
 // headers and trailers are relayed independently of that list.
+// upstreamRequest sends r's method to upstreamURL with no request headers.
+func (p *Proxy) upstreamRequest(r *http.Request, upstreamURL string) (*http.Response, error) {
+	req, err := http.NewRequestWithContext(r.Context(), r.Method, upstreamURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	return p.HTTPClient.Do(req)
+}
+
 func (p *Proxy) ProxyUpstream(w http.ResponseWriter, r *http.Request, upstreamURL string, forwardHeaders []string) {
 	p.Logger.Debug("proxying to upstream", "url", upstreamURL)
 

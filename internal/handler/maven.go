@@ -343,5 +343,25 @@ func (h *MavenHandler) isChecksumFile(filename string) bool {
 
 // proxyUpstream forwards a request to the source's upstream without caching.
 func (h *MavenHandler) proxyUpstream(w http.ResponseWriter, r *http.Request, source mavenSource, urlPath string) {
-	h.proxy.ProxyUpstream(w, r, source.upstreamURL+"/"+urlPath, nil)
+	if source.fallbackURL == "" {
+		h.proxy.ProxyUpstream(w, r, source.upstreamURL+"/"+urlPath, nil)
+		return
+	}
+	// As for cached files, a file the primary upstream lacks is looked for
+	// on the Gradle Plugin Portal.
+	resp, err := h.proxy.upstreamRequest(r, source.upstreamURL+"/"+urlPath)
+	if err == nil && resp.StatusCode == http.StatusNotFound {
+		_ = resp.Body.Close()
+		resp, err = h.proxy.upstreamRequest(r, source.fallbackURL+"/"+urlPath)
+	}
+	if err != nil {
+		if writeUpstreamHeld(w, err) {
+			return
+		}
+		h.proxy.Logger.Error("upstream request failed", "error", err)
+		http.Error(w, "upstream request failed", http.StatusBadGateway)
+		return
+	}
+	defer func() { _ = resp.Body.Close() }()
+	h.proxy.relayResponse(w, r, resp, nil)
 }

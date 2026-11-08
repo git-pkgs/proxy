@@ -156,3 +156,18 @@ func TestMavenDottedGroupDirectoryNotCachedAsGroup(t *testing.T) {
 		}
 	}
 }
+
+// TestMavenUncachedPathFallsBackToPluginPortal checks that a path proxied
+// without caching, such as one with a dotted group directory, still tries
+// the Gradle Plugin Portal when the primary upstream lacks it.
+func TestMavenUncachedPathFallsBackToPluginPortal(t *testing.T) {
+	const dotted = "/org.foo/bar/1.0/bar-1.0.jar"
+	central, _ := mavenRepoUpstream(t, "central")
+	portal, _ := mavenRepoUpstream(t, "portal", dotted)
+	grails, _ := mavenRepoUpstream(t, "grails")
+	h := newMavenRepositoriesHandler(t, central, portal, grails)
+
+	if w := getMaven(h, dotted); w.Code != http.StatusOK || w.Body.String() != "portal "+dotted {
+		t.Errorf("GET %s = %d %q, want the Plugin Portal's copy", dotted, w.Code, w.Body.String())
+	}
+}
