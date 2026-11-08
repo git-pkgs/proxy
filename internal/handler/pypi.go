@@ -467,6 +467,19 @@ func (h *PyPIHandler) rewriteSimpleJSON(body []byte, filteredVersions map[string
 	}
 
 	metadata["files"] = rewrittenFiles
+
+	// The versions list (PEP 700) loses the filtered versions too, whose
+	// files were all left out above.
+	if versions, ok := metadata["versions"].([]any); ok && len(filteredVersions) > 0 {
+		keptVersions := make([]any, 0, len(versions))
+		for _, v := range versions {
+			if version, ok := v.(string); ok && filteredVersions[version] {
+				continue
+			}
+			keptVersions = append(keptVersions, v)
+		}
+		metadata["versions"] = keptVersions
+	}
 	return json.Marshal(metadata)
 }
 

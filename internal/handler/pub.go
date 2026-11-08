@@ -10,6 +10,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/retention"
 )
@@ -293,32 +294,47 @@ func (h *PubHandler) shouldFilterVersion(packagePURL, name, version string, vmap
 	return false
 }
 
-// updateLatestVersion updates the latest field if the current latest version
-// was removed by cooldown filtering.
+// updateLatestVersion points latest at the kept entry for its version, so
+// its archive_url is the proxy's too. When cooldown removed that version,
+// latest becomes the newest stable version left, or the newest version left
+// if all are prereleases, and is dropped when none is left.
 func (h *PubHandler) updateLatestVersion(metadata map[string]any, filtered []any) {
-	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		return
-	}
-
 	latest, ok := metadata["latest"].(map[string]any)
 	if !ok {
 		return
 	}
+	latestVer, _ := latest["version"].(string)
 
-	latestVer, ok := latest["version"].(string)
-	if !ok {
-		return
-	}
-
+	var newest, newestStable *semver.Version
+	var newestEntry, newestStableEntry any
 	for _, vdata := range filtered {
-		if vmap, ok := vdata.(map[string]any); ok {
-			if vmap["version"] == latestVer {
-				return
-			}
+		vmap, ok := vdata.(map[string]any)
+		if !ok {
+			continue
+		}
+		version, _ := vmap["version"].(string)
+		if version == latestVer {
+			latest["archive_url"] = vmap["archive_url"]
+			return
+		}
+		parsed, err := semver.NewVersion(version)
+		if err != nil {
+			continue
+		}
+		if newest == nil || parsed.GreaterThan(newest) {
+			newest, newestEntry = parsed, vdata
+		}
+		if parsed.Prerelease() == "" && (newestStable == nil || parsed.GreaterThan(newestStable)) {
+			newestStable, newestStableEntry = parsed, vdata
 		}
 	}
 
-	if len(filtered) > 0 {
-		metadata["latest"] = filtered[len(filtered)-1]
+	switch {
+	case newestStableEntry != nil:
+		metadata["latest"] = newestStableEntry
+	case newestEntry != nil:
+		metadata["latest"] = newestEntry
+	default:
+		delete(metadata, "latest")
 	}
 }

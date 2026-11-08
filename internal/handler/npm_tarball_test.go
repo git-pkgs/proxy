@@ -201,3 +201,60 @@ func TestNPMTarballRejectsUnsafeMetadataURL(t *testing.T) {
 		})
 	}
 }
+
+// TestNPMTarballCooldownRefetchesStalePackument checks that a tarball for a
+// version the cached packument does not list yet is decided on the packument
+// upstream serves now, not let through for want of a publish time.
+func TestNPMTarballCooldownRefetchesStalePackument(t *testing.T) {
+	for _, tc := range []struct {
+		name      string
+		published time.Time
+		down      bool
+		want      int
+	}{
+		{"recent", time.Now().Add(-time.Hour), false, http.StatusNotFound},
+		// Without upstream the version can't be checked, so it isn't served.
+		{"upstream down", time.Now().Add(-time.Hour), true, http.StatusBadGateway},
+		// The refetched entry's integrity is checked, so a tarball that
+		// doesn't match it is refused rather than served unverified.
+		{"old", time.Now().Add(-30 * 24 * time.Hour), false, http.StatusBadGateway},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var released atomic.Bool
+			upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				old := time.Now().Add(-60 * 24 * time.Hour).Format(time.RFC3339)
+				if released.Load() && tc.down {
+					w.WriteHeader(http.StatusServiceUnavailable)
+					return
+				}
+				if !released.Load() {
+					_, _ = fmt.Fprintf(w, `{"name":"widget","time":{"1.0.0":%q},"versions":{"1.0.0":{"dist":{}}}}`, old)
+					return
+				}
+				_, _ = fmt.Fprintf(w, `{"name":"widget","time":{"1.0.0":%q,"2.0.0":%q},"versions":{"1.0.0":{"dist":{}},"2.0.0":{"dist":{"integrity":%q}}}}`,
+					old, tc.published.Format(time.RFC3339), sha512SRI("package"))
+			}))
+			t.Cleanup(upstream.Close)
+			p, _, _, fetcher := setupTestProxy(t)
+			p.CacheMetadata = true
+			p.MetadataTTL = time.Hour
+			p.Cooldown = &cooldown.Config{Default: "7d"}
+			p.HTTPClient = upstream.Client()
+			fetcher.artifact = &fetch.Artifact{Body: io.NopCloser(strings.NewReader("tampered"))}
+			h := NewNPMHandler(p, "http://proxy.test", upstream.URL)
+
+			metadata := httptest.NewRecorder()
+			h.Routes().ServeHTTP(metadata, httptest.NewRequest(http.MethodGet, "/widget", nil))
+			if metadata.Code != http.StatusOK {
+				t.Fatalf("metadata status = %d: %s", metadata.Code, metadata.Body.String())
+			}
+			released.Store(true)
+
+			response := httptest.NewRecorder()
+			h.Routes().ServeHTTP(response, httptest.NewRequest(http.MethodGet, "/widget/-/widget-2.0.0.tgz", nil))
+			if response.Code != tc.want {
+				t.Fatalf("status = %d, want %d: %s", response.Code, tc.want, response.Body.String())
+			}
+		})
+	}
+}
