@@ -20,8 +20,8 @@ import (
 const (
 	debCurlPath    = "/pool/main/c/curl/curl_8.14.1-2_amd64.deb"
 	debBusyboxPath = "/pool/main/b/busybox/busybox_1.37.0-6_amd64.deb"
-	debCurlFile    = "curl_8.14.1-2_amd64.deb"
-	debBusyboxFile = "busybox_1.37.0-6_amd64.deb"
+	debCurlFile    = "pool/main/c/curl/curl_8.14.1-2_amd64.deb"
+	debBusyboxFile = "pool/main/b/busybox/busybox_1.37.0-6_amd64.deb"
 )
 
 // debRetentionUpstream serves package files the way a Debian archive does,

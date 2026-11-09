@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -9,6 +10,8 @@ import (
 	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/git-pkgs/registries/fetch"
 )
 
 const testProxyURL = "http://localhost:8080"
@@ -302,13 +305,13 @@ func TestConanV2FileRoutesCacheArchives(t *testing.T) {
 		filename string
 	}{
 		{"recipe", "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/files/conan_sources.tgz",
-			"rrev1_conan_sources.tgz"},
+			"_/_/rrev1/conan_sources.tgz"},
 		{"package", "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/packages/pkgid1/revisions/prev1/files/conan_package.tgz",
-			"rrev1_pkgid1_prev1_conan_package.tgz"},
+			"_/_/rrev1/packages/pkgid1/prev1/conan_package.tgz"},
 		{"recipe xz", "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/files/conan_export.txz",
-			"rrev1_conan_export.txz"},
+			"_/_/rrev1/conan_export.txz"},
 		{"package zstd", "/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/packages/pkgid1/revisions/prev1/files/conan_package.tzst",
-			"rrev1_pkgid1_prev1_conan_package.tzst"},
+			"_/_/rrev1/packages/pkgid1/prev1/conan_package.tzst"},
 	}
 
 	for _, tt := range tests {
@@ -362,9 +365,9 @@ func TestConanUserChannelKeptApart(t *testing.T) {
 
 	for _, ref := range []struct{ path, body, filename string }{
 		{"/v2/conans/zlib/1.3.1/_/_/revisions/rrev1/files/conan_sources.tgz",
-			"center sources", "rrev1_conan_sources.tgz"},
+			"center sources", "_/_/rrev1/conan_sources.tgz"},
 		{"/v2/conans/zlib/1.3.1/acme/stable/revisions/rrev1/files/conan_sources.tgz",
-			"acme sources", "acme@stable_rrev1_conan_sources.tgz"},
+			"acme sources", "acme/stable/rrev1/conan_sources.tgz"},
 	} {
 		fetcher.artifact = artifactBody(ref.body)
 		fetcher.fetchCalled = false
@@ -649,5 +652,74 @@ func TestConanMetadataPreservesStatusCodes(t *testing.T) {
 		}
 
 		upstream.Close()
+	}
+}
+
+const (
+	conanRecipeLookalike = "/v2/conans/zlib/1.3/_/_/revisions/R_P_Q/files/conan_package.tgz"
+	conanPackageFile     = "/v2/conans/zlib/1.3/_/_/revisions/R/packages/P/revisions/Q/files/conan_package.tgz"
+)
+
+// conanPathEchoServer answers every file with its own path, so each URL has
+// different bytes.
+func conanPathEchoServer(t *testing.T, available *atomic.Bool) *httptest.Server {
+	t.Helper()
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !available.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write([]byte(r.URL.Path))
+	}))
+	t.Cleanup(upstream.Close)
+	return upstream
+}
+
+func serveConanRequest(h *ConanHandler, target string) *httptest.ResponseRecorder {
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, target, nil))
+	return w
+}
+
+// A recipe revision with underscores must not share a cache entry with a
+// package whose revision, reference and package revision spell it.
+func TestConanFileKeysKeepPathFieldsApart(t *testing.T) {
+	var available atomic.Bool
+	available.Store(true)
+	upstream := conanPathEchoServer(t, &available)
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.Fetcher = fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	h := NewConanHandlerWithUpstream(proxy, testProxyURL, upstream.URL)
+
+	for _, target := range []string{conanRecipeLookalike, conanPackageFile} {
+		if w := serveConanRequest(h, target); w.Code != http.StatusOK || w.Body.String() != target {
+			t.Errorf("GET %s = %d %q, want its own file", target, w.Code, w.Body.String())
+		}
+	}
+}
+
+// A file cached under the name used before path fields were kept apart is
+// still served for the URL it was fetched from, and only for that URL.
+func TestConanLegacyFileEntryServedForItsURL(t *testing.T) {
+	var available atomic.Bool
+	available.Store(true)
+	upstream := conanPathEchoServer(t, &available)
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.Fetcher = fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	h := NewConanHandlerWithUpstream(proxy, testProxyURL, upstream.URL)
+
+	legacy, err := proxy.GetOrFetchArtifactFromURL(context.Background(), "conan", "zlib", "1.3",
+		"R_P_Q_conan_package.tgz", upstream.URL+conanRecipeLookalike)
+	if err != nil {
+		t.Fatalf("seed legacy entry: %v", err)
+	}
+	_ = legacy.Reader.Close()
+
+	if w := serveConanRequest(h, conanPackageFile); w.Body.String() != conanPackageFile {
+		t.Errorf("package file = %d %q, want its own file, not the legacy entry", w.Code, w.Body.String())
+	}
+	available.Store(false)
+	if w := serveConanRequest(h, conanRecipeLookalike); w.Code != http.StatusOK || w.Body.String() != conanRecipeLookalike {
+		t.Errorf("recipe file with the upstream down = %d %q, want the legacy entry", w.Code, w.Body.String())
 	}
 }

@@ -89,7 +89,13 @@ func (h *ConanHandler) handleRecipeFile(w http.ResponseWriter, r *http.Request) 
 		"name", name, "version", version, "user", user, "channel", channel, "filename", filename)
 
 	upstreamURL := h.upstreamURL + r.URL.Path
-	storageFilename := conanStorageFilename(user, channel, revision+"_"+filename)
+	storageFilename, err := h.proxy.cacheFilenameKeepingLegacy("conan", name, version,
+		conanStorageFilename(user, channel, revision, filename),
+		conanLegacyStorageFilename(user, channel, revision+"_"+filename), upstreamURL)
+	if err != nil {
+		h.proxy.serveArtifactError(w, err, "failed to fetch file")
+		return
+	}
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", name, version, storageFilename, upstreamURL)
 	if err != nil {
@@ -121,7 +127,13 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 		"name", name, "version", version, "pkgref", pkgref, "filename", filename)
 
 	upstreamURL := h.upstreamURL + r.URL.Path
-	storageFilename := conanStorageFilename(user, channel, revision+"_"+pkgref+"_"+pkgrev+"_"+filename)
+	storageFilename, err := h.proxy.cacheFilenameKeepingLegacy("conan", name, version,
+		conanStorageFilename(user, channel, revision, "packages", pkgref, pkgrev, filename),
+		conanLegacyStorageFilename(user, channel, revision+"_"+pkgref+"_"+pkgrev+"_"+filename), upstreamURL)
+	if err != nil {
+		h.proxy.serveArtifactError(w, err, "failed to fetch file")
+		return
+	}
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", name, version, storageFilename, upstreamURL)
 	if err != nil {
@@ -133,9 +145,19 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 }
 
 // conanStorageFilename names a cached archive. Archives are stored under
-// pkg:conan/{name}@{version}, so the file name carries the revisions and, when
-// set, user and channel, to keep every recipe and binary apart.
-func conanStorageFilename(user, channel, file string) string {
+// pkg:conan/{name}@{version}, so the file name carries user, channel and the
+// revisions, to keep every recipe and binary apart. The parts are path
+// segments, which can't contain a slash, so joining them with one keeps
+// different references apart.
+func conanStorageFilename(user, channel string, parts ...string) string {
+	return strings.Join(append([]string{user, channel}, parts...), "/")
+}
+
+// conanLegacyStorageFilename is the name archives were cached under before
+// their parts were joined with slashes. Underscores, which revisions, user
+// and channel can contain, joined them, so it is only read for the URL an
+// entry was fetched from.
+func conanLegacyStorageFilename(user, channel, file string) string {
 	if user == "_" && channel == "_" {
 		return file
 	}

@@ -2396,6 +2396,26 @@ func (p *Proxy) GetOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, 
 	return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, nil, "", "")
 }
 
+// cacheFilenameKeepingLegacy returns the filename to cache an artifact
+// fetched from downloadURL under: legacy, an earlier cache filename that more
+// than one URL could share, while an artifact recorded for downloadURL is
+// cached under it, and filename otherwise. It keeps entries cached before a
+// key change in use, without serving one to a URL it wasn't fetched from.
+func (p *Proxy) cacheFilenameKeepingLegacy(ecosystem, name, version, filename, legacy, downloadURL string) (string, error) {
+	_, versionPURL, err := packagePURLStrings(ecosystem, name, version)
+	if err != nil {
+		return "", err
+	}
+	record, err := p.DB.GetArtifact(versionPURL, legacy)
+	if err != nil {
+		return "", fmt.Errorf("checking artifact cache: %w", err)
+	}
+	if record != nil && record.UpstreamURL == downloadURL {
+		return legacy, nil
+	}
+	return filename, nil
+}
+
 // GetOrFetchArtifactFromURLWithHeaders retrieves an artifact from cache or fetches from a URL
 // with additional request-specific HTTP headers.
 func (p *Proxy) GetOrFetchArtifactFromURLWithHeaders(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header) (*CacheResult, error) {

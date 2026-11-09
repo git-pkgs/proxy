@@ -168,7 +168,12 @@ func (h *DebianHandler) handlePackageDownload(
 	filename := path[strings.LastIndex(path, "/")+1:]
 	downloadURL := fmt.Sprintf("%s/%s", upstreamURL, path)
 
-	cacheFilename := h.artifactCacheFilename(repository, filename)
+	cacheFilename, err := h.proxy.cacheFilenameKeepingLegacy("deb", name, version,
+		h.artifactCacheFilename(repository, path), h.legacyArtifactCacheFilename(repository, filename), downloadURL)
+	if err != nil {
+		h.proxy.serveArtifactError(w, err, "failed to fetch package")
+		return
+	}
 
 	h.proxy.Logger.Info("debian package download",
 		"repository", repository,
@@ -196,10 +201,21 @@ func (h *DebianHandler) handleMetadata(
 	h.proxy.ProxyCached(w, r, fmt.Sprintf("%s/%s", upstreamURL, path), "debian", cacheKey, "*/*")
 }
 
-// artifactCacheFilename scopes a package by repository, since the same
-// filename can hold different bytes in different archives. The main archive
-// keeps the unscoped filename its existing cache entries were stored under.
-func (h *DebianHandler) artifactCacheFilename(repository, filename string) string {
+// artifactCacheFilename names a package in the cache by its repository and
+// its path in it, since the same file name can hold different bytes in
+// different archives, and in different directories of one archive: Docker's
+// repository has a pool under each suite.
+func (h *DebianHandler) artifactCacheFilename(repository, path string) string {
+	if repository == "" {
+		return path
+	}
+	return repository + "/" + path
+}
+
+// legacyArtifactCacheFilename is the name packages were cached under before
+// they were keyed by path: the file name, scoped by repository for a named
+// one. It is still read for the URL an entry was fetched from.
+func (h *DebianHandler) legacyArtifactCacheFilename(repository, filename string) string {
 	if repository == "" {
 		return filename
 	}

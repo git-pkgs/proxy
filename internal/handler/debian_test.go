@@ -1,10 +1,12 @@
 package handler
 
 import (
+	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -37,10 +39,11 @@ func TestDebianHandler_Routes(t *testing.T) {
 }
 
 // TestDebianHandler_LegacyCacheKeysUnchanged pins the artifact cache identity
-// the main archive used before named repositories existed. Deployments carry
-// warm caches across upgrades, so a changed key here silently discards them.
-// Metadata is cheap to refetch; its keys are covered by
-// TestMetadataCacheKeysUnambiguous.
+// the main archive used before named repositories existed. Packages are now
+// keyed by path, but deployments carry warm caches across upgrades, so
+// entries under this name are still read for the URL they were fetched from
+// (TestDebianHandler_LegacyPackageEntryServedForItsPath). Metadata is cheap
+// to refetch; its keys are covered by TestMetadataCacheKeysUnambiguous.
 func TestDebianHandler_LegacyCacheKeysUnchanged(t *testing.T) {
 	const (
 		poolPath = "pool/main/h/hello/hello_2.10-3_amd64.deb"
@@ -53,12 +56,12 @@ func TestDebianHandler_LegacyCacheKeysUnchanged(t *testing.T) {
 
 	// Artifact cache: the bare filename, with no repository prefix.
 	filename := poolPath[strings.LastIndex(poolPath, "/")+1:]
-	if got := h.artifactCacheFilename("", filename); got != "hello_2.10-3_amd64.deb" {
+	if got := h.legacyArtifactCacheFilename("", filename); got != "hello_2.10-3_amd64.deb" {
 		t.Errorf("legacy artifact cache filename = %q, want %q", got, "hello_2.10-3_amd64.deb")
 	}
 
 	// A named repository must not reuse either identity.
-	if got := h.artifactCacheFilename("security", filename); got == "hello_2.10-3_amd64.deb" {
+	if got := h.legacyArtifactCacheFilename("security", filename); got == "hello_2.10-3_amd64.deb" {
 		t.Error("named repository reused the legacy artifact cache filename")
 	}
 	if h.metadataCacheKeyFor("security", "https://security.test", distPath) == h.metadataCacheKeyFor("", h.upstreamURL, distPath) {
@@ -322,5 +325,74 @@ func TestDebRetentionKey(t *testing.T) {
 	}
 	if _, ok := debRetentionKey(nil); ok {
 		t.Error("debRetentionKey(nil) accepted")
+	}
+}
+
+// debianSuiteArchive serves a different build of one package file name per
+// suite, as Docker's repository nests a pool under each suite.
+func debianSuiteArchive(t *testing.T, available *atomic.Bool) *httptest.Server {
+	t.Helper()
+	archive := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !available.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		suite := strings.Split(strings.TrimPrefix(r.URL.Path, "/dists/"), "/")[0]
+		_, _ = fmt.Fprint(w, suite+" build")
+	}))
+	t.Cleanup(archive.Close)
+	return archive
+}
+
+const (
+	debianBullseyePackage = "/docker/dists/bullseye/pool/stable/amd64/containerd.io_1.7.25-1_amd64.deb"
+	debianBookwormPackage = "/docker/dists/bookworm/pool/stable/amd64/containerd.io_1.7.25-1_amd64.deb"
+)
+
+// TestDebianHandler_PackageCacheScopedPerPath checks that one file name in
+// two directories of a repository does not resolve to one cached artifact.
+func TestDebianHandler_PackageCacheScopedPerPath(t *testing.T) {
+	var available atomic.Bool
+	available.Store(true)
+	archive := debianSuiteArchive(t, &available)
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.Fetcher = fetch.NewFetcher(fetch.WithHTTPClient(archive.Client()), fetch.WithMaxRetries(0))
+	h := NewDebianHandler(proxy, "http://proxy.example", "https://archive.test", map[string]string{"docker": archive.URL})
+
+	for _, tc := range []struct{ path, want string }{
+		{debianBullseyePackage, "bullseye build"},
+		{debianBookwormPackage, "bookworm build"},
+	} {
+		if w := serveDebianRequest(h, tc.path); w.Code != http.StatusOK || w.Body.String() != tc.want {
+			t.Errorf("GET %s = %d %q, want %q", tc.path, w.Code, w.Body.String(), tc.want)
+		}
+	}
+}
+
+// TestDebianHandler_LegacyPackageEntryServedForItsPath checks that a package
+// cached under the file name alone, as before packages were keyed by path, is
+// still served for the path it was fetched from, and only for that path.
+func TestDebianHandler_LegacyPackageEntryServedForItsPath(t *testing.T) {
+	var available atomic.Bool
+	available.Store(true)
+	archive := debianSuiteArchive(t, &available)
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.Fetcher = fetch.NewFetcher(fetch.WithHTTPClient(archive.Client()), fetch.WithMaxRetries(0))
+	h := NewDebianHandler(proxy, "http://proxy.example", "https://archive.test", map[string]string{"docker": archive.URL})
+
+	// The entry an earlier version cached for the bullseye path.
+	legacy, err := proxy.GetOrFetchArtifactFromURL(context.Background(), "deb", "containerd.io", "1.7.25-1",
+		"docker/containerd.io_1.7.25-1_amd64.deb", archive.URL+strings.TrimPrefix(debianBullseyePackage, "/docker"))
+	if err != nil {
+		t.Fatalf("seed legacy entry: %v", err)
+	}
+	_ = legacy.Reader.Close()
+
+	if w := serveDebianRequest(h, debianBookwormPackage); w.Body.String() != "bookworm build" {
+		t.Errorf("bookworm = %d %q, want its own build, not the legacy bullseye entry", w.Code, w.Body.String())
+	}
+	available.Store(false)
+	if w := serveDebianRequest(h, debianBullseyePackage); w.Code != http.StatusOK || w.Body.String() != "bullseye build" {
+		t.Errorf("bullseye with the archive down = %d %q, want the legacy entry", w.Code, w.Body.String())
 	}
 }
