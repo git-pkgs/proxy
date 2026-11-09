@@ -102,7 +102,7 @@ func RewriteStream(packageName string, scan *Scan, r io.Reader, w io.Writer, opt
 		filtered:    f,
 		seen:        map[string]int{},
 	}
-	if err := jsonstream.CopyObject(json.NewDecoder(r), w, sw.member); err != nil {
+	if err := jsonstream.CopyObject(r, w, sw.member); err != nil {
 		return nil, err
 	}
 	h.tarballsRewritten(sw.rewritten)
@@ -162,8 +162,7 @@ func (s *streamWriter) member(m *jsonstream.Member) error {
 	}
 	s.seen[m.Key]++
 	if s.seen[m.Key] < total {
-		_, err := m.Raw() // an earlier duplicate, dropped
-		return err
+		return m.Skip() // an earlier duplicate, dropped
 	}
 	switch {
 	case m.Key == "versions":
@@ -171,7 +170,7 @@ func (s *streamWriter) member(m *jsonstream.Member) error {
 	case m.Key == "time" && s.timeChanged:
 		return m.Object(s.time)
 	case m.Key == "dist-tags" && s.tagsChanged:
-		if _, err := m.Raw(); err != nil {
+		if err := m.Skip(); err != nil {
 			return err
 		}
 		encoded, err := json.Marshal(s.distTags)
@@ -185,12 +184,12 @@ func (s *streamWriter) member(m *jsonstream.Member) error {
 
 // version writes a kept version with its tarball pointing at the proxy.
 func (s *streamWriter) version(v *jsonstream.Member) error {
+	if _, keep := s.versions[v.Key]; !keep {
+		return v.Skip()
+	}
 	raw, err := v.Raw()
 	if err != nil {
 		return err
-	}
-	if _, keep := s.versions[v.Key]; !keep {
-		return nil
 	}
 	s.entry.Reset()
 	if s.writeNPMVersion(&s.entry, s.packageName, v.Key, raw) {
@@ -204,8 +203,7 @@ func (s *streamWriter) time(t *jsonstream.Member) error {
 	if _, keep := s.timeMap[t.Key]; keep {
 		return t.Copy()
 	}
-	_, err := t.Raw()
-	return err
+	return t.Skip()
 }
 
 // objectValue records value under name in metadata, as Rewrite's

@@ -5,7 +5,7 @@ package jsonstream
 
 import (
 	"bytes"
-	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
 	"io"
@@ -20,26 +20,32 @@ var (
 )
 
 // Member is one member of an object being copied. Its value must be consumed
-// exactly once, with Raw, Copy or Object.
+// exactly once, with Raw, Skip, Copy or Object.
 type Member struct {
 	Key      string
-	dec      *json.Decoder
+	rawKey   []byte
+	dec      *jsontext.Decoder
 	out      *objectWriter
 	consumed bool
 }
 
 // Raw reads the member's value without writing it. Follow it with Write to
-// keep the member.
-func (m *Member) Raw() (json.RawMessage, error) {
+// keep the member. The bytes are only valid until the next member is read.
+func (m *Member) Raw() ([]byte, error) {
 	if m.consumed {
 		return nil, errConsumed
 	}
 	m.consumed = true
-	var raw json.RawMessage
-	if err := m.dec.Decode(&raw); err != nil {
-		return nil, err
+	return m.dec.ReadValue()
+}
+
+// Skip reads past the member's value, leaving the member out.
+func (m *Member) Skip() error {
+	if m.consumed {
+		return errConsumed
 	}
-	return raw, nil
+	m.consumed = true
+	return m.dec.SkipValue()
 }
 
 // Write writes the member with value as its raw JSON value.
@@ -47,7 +53,7 @@ func (m *Member) Write(value []byte) error {
 	if !m.consumed {
 		return errUnconsumed
 	}
-	if err := m.out.key(m.Key); err != nil {
+	if err := m.out.key(m.rawKey); err != nil {
 		return err
 	}
 	_, err := m.out.w.Write(value)
@@ -70,54 +76,66 @@ func (m *Member) Object(fn func(*Member) error) error {
 		return errConsumed
 	}
 	m.consumed = true
-	if err := m.out.key(m.Key); err != nil {
+	if err := m.out.key(m.rawKey); err != nil {
 		return err
 	}
 	return copyObject(m.dec, m.out.w, fn, true)
 }
 
-// CopyObject copies the object read from dec to w, calling fn for each
-// member. fn decides what is written by how it consumes the member's value; a
-// member whose value fn leaves unconsumed is copied unchanged.
-func CopyObject(dec *json.Decoder, w io.Writer, fn func(*Member) error) error {
+// CopyObject copies the object read from r to w, calling fn for each member.
+// fn decides what is written by how it consumes the member's value; a member
+// whose value fn leaves unconsumed is copied unchanged. As with
+// encoding/json, of repeated names each is passed to fn, and invalid UTF-8
+// is accepted.
+func CopyObject(r io.Reader, w io.Writer, fn func(*Member) error) error {
+	dec := jsontext.NewDecoder(r, jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
 	if err := copyObject(dec, w, fn, false); err != nil {
 		return err
 	}
-	if _, err := dec.Token(); err != io.EOF {
-		if err == nil {
-			err = errors.New("unexpected data after the top-level object")
-		}
-		return err
+	_, err := dec.ReadToken()
+	switch err {
+	case io.EOF:
+		return nil
+	case nil:
+		return errors.New("unexpected data after the top-level object")
 	}
-	return nil
+	return err
 }
 
-func copyObject(dec *json.Decoder, w io.Writer, fn func(*Member) error, allowNull bool) error {
-	tok, err := dec.Token()
+func copyObject(dec *jsontext.Decoder, w io.Writer, fn func(*Member) error, allowNull bool) error {
+	tok, err := dec.ReadToken()
 	if err != nil {
 		return err
 	}
-	if tok == nil && allowNull {
+	if tok.Kind() == 'n' && allowNull {
 		_, err := io.WriteString(w, "null")
 		return err
 	}
-	if tok != json.Delim('{') {
+	if tok.Kind() != '{' {
 		return ErrNotObject
 	}
 	if _, err := io.WriteString(w, "{"); err != nil {
 		return err
 	}
 	out := &objectWriter{w: w}
-	for dec.More() {
-		tok, err := dec.Token()
+	m := &Member{dec: dec, out: out}
+	// keyBuf holds the current key; ReadValue's bytes don't outlast fn.
+	var keyBuf []byte
+	for dec.PeekKind() != '}' {
+		// The key is read raw, so it is written with its own bytes.
+		rawKey, err := dec.ReadValue()
 		if err != nil {
 			return err
 		}
-		key, ok := tok.(string)
-		if !ok {
-			return fmt.Errorf("object key is %T, not a string", tok)
+		if rawKey.Kind() != '"' {
+			return fmt.Errorf("object key is %v, not a string", rawKey.Kind())
 		}
-		m := &Member{Key: key, dec: dec, out: out}
+		keyBuf = append(keyBuf[:0], rawKey...)
+		// The decoder has checked the key, so the only error left is invalid
+		// UTF-8, which AppendUnquote reports after replacing it with U+FFFD,
+		// as encoding/json does.
+		key, _ := jsontext.AppendUnquote(nil, keyBuf)
+		*m = Member{Key: string(key), rawKey: keyBuf, dec: dec, out: out}
 		if err := fn(m); err != nil {
 			return err
 		}
@@ -127,7 +145,7 @@ func copyObject(dec *json.Decoder, w io.Writer, fn func(*Member) error, allowNul
 			}
 		}
 	}
-	if _, err := dec.Token(); err != nil {
+	if _, err := dec.ReadToken(); err != nil {
 		return err
 	}
 	_, err = io.WriteString(w, "}")
@@ -137,23 +155,18 @@ func copyObject(dec *json.Decoder, w io.Writer, fn func(*Member) error, allowNul
 type objectWriter struct {
 	w     io.Writer
 	wrote bool
+	buf   bytes.Buffer
 }
 
-// key writes the separator and key for the next member. Keys are re-encoded
-// without HTML escaping, so plain keys keep their original bytes.
-func (o *objectWriter) key(k string) error {
-	var buf bytes.Buffer
+// key writes the separator and the key's bytes for the next member.
+func (o *objectWriter) key(rawKey []byte) error {
+	o.buf.Reset()
 	if o.wrote {
-		buf.WriteByte(',')
+		o.buf.WriteByte(',')
 	}
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(k); err != nil {
-		return err
-	}
-	buf.Truncate(buf.Len() - 1) // Encode appends a newline
-	buf.WriteByte(':')
+	o.buf.Write(rawKey)
+	o.buf.WriteByte(':')
 	o.wrote = true
-	_, err := o.w.Write(buf.Bytes())
+	_, err := o.w.Write(o.buf.Bytes())
 	return err
 }

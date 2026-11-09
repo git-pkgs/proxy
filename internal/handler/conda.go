@@ -461,7 +461,7 @@ func (h *CondaHandler) filterRepodata(r io.Reader, w io.Writer) error {
 
 // filterRepodataWith is filterRepodata deciding by filter.
 func (h *CondaHandler) filterRepodataWith(r io.Reader, w io.Writer, filter *repodataFilter) error {
-	return jsonstream.CopyObject(json.NewDecoder(r), w, func(m *jsonstream.Member) error {
+	return jsonstream.CopyObject(r, w, func(m *jsonstream.Member) error {
 		if m.Key != "packages" && m.Key != "packages.conda" {
 			return m.Copy()
 		}
@@ -619,7 +619,7 @@ func (h *CondaHandler) streamRepodataIndex(r *http.Request, upstreamURL string) 
 // is not limited by metadata_max_size.
 func readRepodataIndex(r io.Reader) (map[string]time.Time, error) {
 	index := make(map[string]time.Time)
-	err := jsonstream.CopyObject(json.NewDecoder(io.LimitReader(r, maxRepodataSize)), io.Discard, func(m *jsonstream.Member) error {
+	err := jsonstream.CopyObject(io.LimitReader(r, maxRepodataSize), io.Discard, func(m *jsonstream.Member) error {
 		if m.Key != "packages" && m.Key != "packages.conda" {
 			return m.Copy()
 		}
