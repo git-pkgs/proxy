@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"gocloud.dev/blob"
@@ -31,6 +32,17 @@ const (
 	uploadBufferSize  = 5 << 20
 	uploadConcurrency = 2
 )
+
+// storeCopyBufferSize is the size of the buffers Store copies with, the size
+// io.Copy uses itself.
+const storeCopyBufferSize = 32 << 10
+
+var storeCopyBuffers = sync.Pool{ //nolint:gochecknoglobals // shared across stores
+	New: func() any {
+		buffer := make([]byte, storeCopyBufferSize)
+		return &buffer
+	},
+}
 
 // attrsExt is fileblob's sidecar suffix, kept only to clear sidecars an
 // earlier version wrote.
@@ -231,7 +243,11 @@ func (b *Blob) Store(ctx context.Context, path string, r io.Reader) (int64, stri
 		return 0, "", fmt.Errorf("creating writer: %w", err)
 	}
 
-	size, err := io.Copy(w, tee)
+	// Hide the writer's ReadFrom, which allocates a 1 MiB buffer on every
+	// call, however small the object, so the copy uses a pooled buffer.
+	buffer := storeCopyBuffers.Get().(*[]byte)
+	defer storeCopyBuffers.Put(buffer)
+	size, err := io.CopyBuffer(struct{ io.Writer }{w}, tee, *buffer)
 	if err != nil {
 		abort()
 		_ = w.Close()
