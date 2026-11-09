@@ -36,39 +36,119 @@ func (h *NuGetHandler) nugetCooldownApplies(id string) bool {
 // Cache upstream documents, not filtered results, so policy changes and elapsed
 // time take effect even while metadata is fresh. Include the upstream in the key.
 func (h *NuGetHandler) nugetMetadata(ctx context.Context, path string) (map[string]any, error) {
-	target := h.upstreamURL + path
-	key := fmt.Sprintf("_cooldown/%x", sha256.Sum256([]byte(target)))
 	var document map[string]any
-	validate := func(body []byte) error {
-		var err error
-		document, err = h.decodeNuGetMetadata(body)
+	err := h.readNuGetMetadata(ctx, path, func(body []byte) (err error) {
+		document, err = decodeNuGetDocument(body)
 		return err
-	}
-	_, _, _, err := h.proxy.fetchOrCacheMetadata(ctx, "nuget", key, target, "", validate)
+	})
 	if err != nil {
 		return nil, err
 	}
 	return document, nil
 }
 
-func (h *NuGetHandler) decodeNuGetMetadata(body []byte) (map[string]any, error) {
-	// Normally the HTTP transport decodes gzip. Also support compressed cached
-	// bytes and clients with transparent decompression disabled, with the same
-	// metadata limit applied to the decompressed document.
-	if bytes.HasPrefix(body, []byte{0x1f, 0x8b}) {
-		reader, err := gzip.NewReader(bytes.NewReader(body))
-		if err != nil {
-			return nil, err
+// readNuGetMetadata fetches a document and passes it to decode, which keeps
+// what its caller needs. decode can run more than once and must not keep body.
+func (h *NuGetHandler) readNuGetMetadata(ctx context.Context, path string, decode func(body []byte) error) error {
+	target := h.upstreamURL + path
+	key := fmt.Sprintf("_cooldown/%x", sha256.Sum256([]byte(target)))
+	validate := func(body []byte) error {
+		// Normally the HTTP transport decodes gzip. Also support compressed cached
+		// bytes and clients with transparent decompression disabled, with the same
+		// metadata limit applied to the decompressed document.
+		if bytes.HasPrefix(body, []byte{0x1f, 0x8b}) {
+			reader, err := gzip.NewReader(bytes.NewReader(body))
+			if err != nil {
+				return err
+			}
+			defer func() { _ = reader.Close() }()
+			body, err = h.proxy.ReadMetadata(reader)
+			if err != nil {
+				return err
+			}
 		}
-		defer func() { _ = reader.Close() }()
-		body, err = h.proxy.ReadMetadata(reader)
-		if err != nil {
-			return nil, err
-		}
+		return decode(body)
 	}
+	_, _, _, err := h.proxy.fetchOrCacheMetadata(ctx, "nuget", key, target, "", validate)
+	return err
+}
+
+func decodeNuGetDocument(body []byte) (map[string]any, error) {
 	var document map[string]any
 	if err := json.Unmarshal(body, &document); err != nil {
 		return nil, fmt.Errorf("parsing NuGet metadata: %w", err)
+	}
+	if document == nil {
+		return nil, fmt.Errorf("empty NuGet metadata")
+	}
+	return document, nil
+}
+
+// nugetTimes holds the fields of a registration index, page or leaf that decide
+// which versions are in cooldown. Decoding into it skips everything else, which
+// is nearly all of a registration.
+type nugetTimes struct {
+	ID           string            `json:"@id"`
+	Version      string            `json:"version"`
+	Published    string            `json:"published"`
+	CatalogEntry nugetCatalogTimes `json:"catalogEntry"`
+	Items        []nugetTimes      `json:"items"`
+}
+
+// nugetCatalogTimes is the catalogEntry of a registration leaf. It stays unset
+// unless the entry is an object: standalone leaves carry a link there.
+type nugetCatalogTimes struct {
+	set       bool
+	version   string
+	published string
+}
+
+func (e *nugetCatalogTimes) UnmarshalJSON(data []byte) error {
+	if !bytes.HasPrefix(data, []byte("{")) {
+		return nil
+	}
+	var fields struct {
+		Version   string `json:"version"`
+		Published string `json:"published"`
+	}
+	var mismatch *json.UnmarshalTypeError
+	if err := json.Unmarshal(data, &fields); err != nil && !errors.As(err, &mismatch) {
+		return err
+	}
+	*e = nugetCatalogTimes{set: true, version: fields.Version, published: fields.Published}
+	return nil
+}
+
+// release returns the version and publish time of a leaf. A leaf embedded in a
+// page carries them in catalogEntry, a standalone leaf at its root.
+func (t *nugetTimes) release() (version, published string) {
+	if t.CatalogEntry.set {
+		return t.CatalogEntry.version, t.CatalogEntry.published
+	}
+	return t.Version, t.Published
+}
+
+func (h *NuGetHandler) nugetTimesMetadata(ctx context.Context, path string) (*nugetTimes, error) {
+	var document *nugetTimes
+	err := h.readNuGetMetadata(ctx, path, func(body []byte) (err error) {
+		document, err = decodeNuGetTimes(body)
+		return err
+	})
+	if err != nil {
+		return nil, err
+	}
+	return document, nil
+}
+
+// decodeNuGetTimes accepts the documents decodeNuGetDocument does. A field of
+// an unexpected type is left empty, as it is when read from the generic document.
+func decodeNuGetTimes(body []byte) (*nugetTimes, error) {
+	var document *nugetTimes
+	if err := json.Unmarshal(body, &document); err != nil {
+		var mismatch *json.UnmarshalTypeError
+		if !errors.As(err, &mismatch) || mismatch.Field == "" {
+			return nil, fmt.Errorf("parsing NuGet metadata: %w", err)
+		}
 	}
 	if document == nil {
 		return nil, fmt.Errorf("empty NuGet metadata")
@@ -80,9 +160,9 @@ func (h *NuGetHandler) decodeNuGetMetadata(body []byte) (map[string]any, error) 
 // Retry only advertised aliases on 404; transport/validation errors must not
 // silently switch to a hive with less complete metadata. Keep requests on the
 // configured upstream, consistent with the service-index route rewriting.
-func (h *NuGetHandler) nugetRegistrationMetadata(ctx context.Context, suffix string) (map[string]any, string, error) {
+func (h *NuGetHandler) nugetRegistrationMetadata(ctx context.Context, suffix string) (*nugetTimes, string, error) {
 	path := nugetRegistrationPath + suffix
-	document, err := h.nugetMetadata(ctx, path)
+	document, err := h.nugetTimesMetadata(ctx, path)
 	if !errors.Is(err, ErrUpstreamNotFound) {
 		return document, path, err
 	}
@@ -105,7 +185,7 @@ func (h *NuGetHandler) nugetRegistrationMetadata(ctx context.Context, suffix str
 		}
 		seen[prefix] = true
 		path = prefix + suffix
-		document, err = h.nugetMetadata(ctx, path)
+		document, err = h.nugetTimesMetadata(ctx, path)
 		if !errors.Is(err, ErrUpstreamNotFound) {
 			return document, path, err
 		}
@@ -142,7 +222,7 @@ func (h *NuGetHandler) handleVersionList(w http.ResponseWriter, r *http.Request)
 	if h.nugetCooldownApplies(id) {
 		registration, registrationPath, err := h.nugetRegistrationMetadata(r.Context(), url.PathEscape(id)+"/index.json")
 		if err == nil {
-			err = h.expandNuGetPages(r.Context(), registration, registrationPath)
+			err = h.expandNuGetPageTimes(r.Context(), registration, registrationPath)
 		}
 		if err != nil {
 			h.nugetMetadataError(w, err)
@@ -185,7 +265,8 @@ func (h *NuGetHandler) nugetDownloadAllowed(ctx context.Context, id, version str
 	if err != nil {
 		return false, err
 	}
-	return h.nugetLeafAllowed(leaf, id), nil
+	_, published := leaf.release()
+	return h.nugetPublishedAllowed(id, published), nil
 }
 
 // A standalone leaf has published at its root; leaves embedded in pages carry
@@ -200,6 +281,10 @@ func (h *NuGetHandler) nugetLeafAllowed(leaf map[string]any, id string) bool {
 		id, _ = entry["id"].(string)
 	}
 	published, _ := entry["published"].(string)
+	return h.nugetPublishedAllowed(id, published)
+}
+
+func (h *NuGetHandler) nugetPublishedAllowed(id, published string) bool {
 	when, err := time.Parse(time.RFC3339, published)
 	if err != nil {
 		return true
@@ -214,16 +299,12 @@ func nugetCatalogEntry(leaf map[string]any) map[string]any {
 	return leaf
 }
 
-func (h *NuGetHandler) collectNuGetBlockedVersions(document map[string]any, id string, blocked map[string]bool) {
-	entry := nugetCatalogEntry(document)
-	if version, ok := entry["version"].(string); ok && !h.nugetLeafAllowed(document, id) {
+func (h *NuGetHandler) collectNuGetBlockedVersions(document *nugetTimes, id string, blocked map[string]bool) {
+	if version, published := document.release(); version != "" && !h.nugetPublishedAllowed(id, published) {
 		blocked[nugetVersionKey(version)] = true
 	}
-	items, _ := document["items"].([]any)
-	for _, item := range items {
-		if child, ok := item.(map[string]any); ok {
-			h.collectNuGetBlockedVersions(child, id, blocked)
-		}
+	for i := range document.Items {
+		h.collectNuGetBlockedVersions(&document.Items[i], id, blocked)
 	}
 }
 
@@ -272,11 +353,6 @@ func (h *NuGetHandler) expandNuGetPages(ctx context.Context, document map[string
 	if !ok {
 		return fmt.Errorf("missing registration pages")
 	}
-	base, err := url.Parse(h.upstreamURL + path)
-	if err != nil {
-		return err
-	}
-	pagePrefix := strings.TrimSuffix(base.Path, "index.json") + "page/"
 	for _, item := range items {
 		page, ok := item.(map[string]any)
 		if !ok {
@@ -286,13 +362,11 @@ func (h *NuGetHandler) expandNuGetPages(ctx context.Context, document map[string
 			continue
 		}
 		link, _ := page["@id"].(string)
-		target, err := base.Parse(link)
-		if err != nil || target.Scheme != base.Scheme || target.Host != base.Host ||
-			!strings.HasPrefix(target.Path, pagePrefix) || containsPathTraversal(target.Path) || target.RawQuery != "" || target.Fragment != "" {
-			return fmt.Errorf("invalid registration page URL: %q", link)
+		pagePath, err := h.nugetRegistrationPagePath(path, link)
+		if err != nil {
+			return err
 		}
-		upstream, _ := url.Parse(h.upstreamURL)
-		pageDocument, err := h.nugetMetadata(ctx, strings.TrimPrefix(target.Path, upstream.Path))
+		pageDocument, err := h.nugetMetadata(ctx, pagePath)
 		if err != nil {
 			return err
 		}
@@ -303,6 +377,50 @@ func (h *NuGetHandler) expandNuGetPages(ctx context.Context, document map[string
 		page["items"] = leaves
 	}
 	return nil
+}
+
+// expandNuGetPageTimes is expandNuGetPages for a registration index decoded
+// into nugetTimes.
+func (h *NuGetHandler) expandNuGetPageTimes(ctx context.Context, index *nugetTimes, path string) error {
+	if index.Items == nil {
+		return fmt.Errorf("missing registration pages")
+	}
+	for i := range index.Items {
+		page := &index.Items[i]
+		if page.Items != nil {
+			continue
+		}
+		pagePath, err := h.nugetRegistrationPagePath(path, page.ID)
+		if err != nil {
+			return err
+		}
+		pageDocument, err := h.nugetTimesMetadata(ctx, pagePath)
+		if err != nil {
+			return err
+		}
+		if pageDocument.Items == nil {
+			return fmt.Errorf("missing registration leaves")
+		}
+		page.Items = pageDocument.Items
+	}
+	return nil
+}
+
+// nugetRegistrationPagePath returns the upstream path of a page that the
+// registration index at indexPath links to.
+func (h *NuGetHandler) nugetRegistrationPagePath(indexPath, link string) (string, error) {
+	base, err := url.Parse(h.upstreamURL + indexPath)
+	if err != nil {
+		return "", err
+	}
+	pagePrefix := strings.TrimSuffix(base.Path, "index.json") + "page/"
+	target, err := base.Parse(link)
+	if err != nil || target.Scheme != base.Scheme || target.Host != base.Host ||
+		!strings.HasPrefix(target.Path, pagePrefix) || containsPathTraversal(target.Path) || target.RawQuery != "" || target.Fragment != "" {
+		return "", fmt.Errorf("invalid registration page URL: %q", link)
+	}
+	upstream, _ := url.Parse(h.upstreamURL)
+	return strings.TrimPrefix(target.Path, upstream.Path), nil
 }
 
 func (h *NuGetHandler) filterNuGetRegistration(document map[string]any, id string) bool {
