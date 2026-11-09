@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
@@ -48,7 +49,8 @@ func (h *NuGetHandler) nugetMetadata(ctx context.Context, path string) (map[stri
 }
 
 // readNuGetMetadata fetches a document and passes it to decode, which keeps
-// what its caller needs. decode can run more than once and must not keep body.
+// what its caller needs. decode can run more than once, and the document is
+// the one it last accepted. It must not modify body.
 func (h *NuGetHandler) readNuGetMetadata(ctx context.Context, path string, decode func(body []byte) error) error {
 	target := h.upstreamURL + path
 	key := fmt.Sprintf("_cooldown/%x", sha256.Sum256([]byte(target)))
@@ -129,15 +131,26 @@ func (t *nugetTimes) release() (version, published string) {
 }
 
 func (h *NuGetHandler) nugetTimesMetadata(ctx context.Context, path string) (*nugetTimes, error) {
+	document, _, err := h.nugetTimesDocument(ctx, path)
+	return document, err
+}
+
+// nugetTimesDocument is nugetTimesMetadata that also returns the document
+// itself, for a caller that goes on to copy it.
+func (h *NuGetHandler) nugetTimesDocument(ctx context.Context, path string) (*nugetTimes, []byte, error) {
 	var document *nugetTimes
-	err := h.readNuGetMetadata(ctx, path, func(body []byte) (err error) {
-		document, err = decodeNuGetTimes(body)
+	var body []byte
+	err := h.readNuGetMetadata(ctx, path, func(candidate []byte) error {
+		decoded, err := decodeNuGetTimes(candidate)
+		if err == nil {
+			document, body = decoded, candidate
+		}
 		return err
 	})
 	if err != nil {
-		return nil, err
+		return nil, nil, err
 	}
-	return document, nil
+	return document, body, nil
 }
 
 // decodeNuGetTimes accepts the documents decodeNuGetDocument does. A field of
@@ -222,7 +235,7 @@ func (h *NuGetHandler) handleVersionList(w http.ResponseWriter, r *http.Request)
 	if h.nugetCooldownApplies(id) {
 		registration, registrationPath, err := h.nugetRegistrationMetadata(r.Context(), url.PathEscape(id)+"/index.json")
 		if err == nil {
-			err = h.expandNuGetPageTimes(r.Context(), registration, registrationPath)
+			err = h.expandNuGetPageTimes(r.Context(), registration, registrationPath, nil)
 		}
 		if err != nil {
 			h.nugetMetadataError(w, err)
@@ -269,34 +282,14 @@ func (h *NuGetHandler) nugetDownloadAllowed(ctx context.Context, id, version str
 	return h.nugetPublishedAllowed(id, published), nil
 }
 
-// A standalone leaf has published at its root; leaves embedded in pages carry
-// it in catalogEntry. Missing/invalid timestamps retain the existing permissive
-// behavior, but fetch and JSON errors must not bypass the policy.
-func (h *NuGetHandler) nugetLeafAllowed(leaf map[string]any, id string) bool {
-	if !h.cooldownEnabled() {
-		return true
-	}
-	entry := nugetCatalogEntry(leaf)
-	if id == "" {
-		id, _ = entry["id"].(string)
-	}
-	published, _ := entry["published"].(string)
-	return h.nugetPublishedAllowed(id, published)
-}
-
+// Missing/invalid timestamps retain the existing permissive behavior, but
+// fetch and JSON errors must not bypass the policy.
 func (h *NuGetHandler) nugetPublishedAllowed(id, published string) bool {
 	when, err := time.Parse(time.RFC3339, published)
 	if err != nil {
 		return true
 	}
 	return h.proxy.cooldown().IsAllowed("nuget", canonicalPackagePURL("nuget", strings.ToLower(id)), when)
-}
-
-func nugetCatalogEntry(leaf map[string]any) map[string]any {
-	if entry, ok := leaf["catalogEntry"].(map[string]any); ok {
-		return entry
-	}
-	return leaf
 }
 
 func (h *NuGetHandler) collectNuGetBlockedVersions(document *nugetTimes, id string, blocked map[string]bool) {
@@ -315,22 +308,41 @@ func (h *NuGetHandler) handleRegistration(w http.ResponseWriter, r *http.Request
 	}
 	id := nugetRegistrationID(r.URL.Path)
 	applyCooldown := h.nugetCooldownApplies(id)
-	document, err := h.nugetMetadata(r.Context(), r.URL.Path)
-	if err == nil && applyCooldown {
-		err = h.expandNuGetPages(r.Context(), document, r.URL.Path)
+	// Everything the response is made of is loaded and checked before any of
+	// it is written, so a registration that can't be filtered is an error
+	// response and not a cut-off document.
+	document, body, err := h.nugetTimesDocument(r.Context(), r.URL.Path)
+	var pages map[string][]byte
+	if err == nil && applyCooldown && strings.HasSuffix(r.URL.Path, "/index.json") {
+		pages = make(map[string][]byte)
+		err = h.expandNuGetPageTimes(r.Context(), document, r.URL.Path, pages)
 	}
 	if err != nil {
 		h.nugetMetadataError(w, err)
 		return
 	}
-	_, hasItems := document["items"]
-	if applyCooldown && !h.filterNuGetRegistration(document, id) && !hasItems {
-		JSONError(w, http.StatusNotFound, "version not found")
-		return
+	if applyCooldown && document.Items == nil {
+		if _, published := document.release(); !h.nugetPublishedAllowed(id, published) {
+			JSONError(w, http.StatusNotFound, "version not found")
+			return
+		}
 	}
-	h.rewriteNuGetRegistrationLinks(document)
+	out := &countingWriter{w: w}
+	buffered := bufio.NewWriterSize(out, nugetFlushSize)
 	w.Header().Set(headerContentType, contentTypeJSON)
-	_ = json.NewEncoder(w).Encode(document)
+	err = h.writeNuGetRegistration(buffered, body, id, applyCooldown, pages)
+	if err == nil {
+		err = buffered.Flush()
+	}
+	if err != nil {
+		h.proxy.Logger.Error("failed to write NuGet registration", "path", r.URL.Path, "error", err)
+		if out.n == 0 {
+			JSONError(w, http.StatusBadGateway, "failed to process package metadata")
+			return
+		}
+		// Abort rather than end a partial document as if it were complete.
+		panic(http.ErrAbortHandler)
+	}
 }
 
 func nugetRegistrationID(path string) string {
@@ -343,45 +355,12 @@ func nugetRegistrationID(path string) string {
 	return ""
 }
 
-// Only expand index pages, never recursively follow arbitrary upstream links.
-// Pin requests to this configured upstream and the current package's page path.
-func (h *NuGetHandler) expandNuGetPages(ctx context.Context, document map[string]any, path string) error {
-	if !strings.HasSuffix(path, "/index.json") {
-		return nil
-	}
-	items, ok := document["items"].([]any)
-	if !ok {
-		return fmt.Errorf("missing registration pages")
-	}
-	for _, item := range items {
-		page, ok := item.(map[string]any)
-		if !ok {
-			return fmt.Errorf("invalid registration page")
-		}
-		if _, ok := page["items"].([]any); ok {
-			continue
-		}
-		link, _ := page["@id"].(string)
-		pagePath, err := h.nugetRegistrationPagePath(path, link)
-		if err != nil {
-			return err
-		}
-		pageDocument, err := h.nugetMetadata(ctx, pagePath)
-		if err != nil {
-			return err
-		}
-		leaves, ok := pageDocument["items"].([]any)
-		if !ok {
-			return fmt.Errorf("missing registration leaves")
-		}
-		page["items"] = leaves
-	}
-	return nil
-}
-
-// expandNuGetPageTimes is expandNuGetPages for a registration index decoded
-// into nugetTimes.
-func (h *NuGetHandler) expandNuGetPageTimes(ctx context.Context, index *nugetTimes, path string) error {
+// expandNuGetPageTimes gives each page of a registration index that only
+// links to its leaves the leaves of the page it links to. With bodies not nil
+// the linked pages themselves are kept in it, by link. Only index pages are
+// expanded, never arbitrary upstream links followed: requests are pinned to
+// this configured upstream and the current package's page path.
+func (h *NuGetHandler) expandNuGetPageTimes(ctx context.Context, index *nugetTimes, path string, bodies map[string][]byte) error {
 	if index.Items == nil {
 		return fmt.Errorf("missing registration pages")
 	}
@@ -394,7 +373,7 @@ func (h *NuGetHandler) expandNuGetPageTimes(ctx context.Context, index *nugetTim
 		if err != nil {
 			return err
 		}
-		pageDocument, err := h.nugetTimesMetadata(ctx, pagePath)
+		pageDocument, body, err := h.nugetTimesDocument(ctx, pagePath)
 		if err != nil {
 			return err
 		}
@@ -402,6 +381,9 @@ func (h *NuGetHandler) expandNuGetPageTimes(ctx context.Context, index *nugetTim
 			return fmt.Errorf("missing registration leaves")
 		}
 		page.Items = pageDocument.Items
+		if bodies != nil {
+			bodies[page.ID] = body
+		}
 	}
 	return nil
 }
@@ -421,50 +403,6 @@ func (h *NuGetHandler) nugetRegistrationPagePath(indexPath, link string) (string
 	}
 	upstream, _ := url.Parse(h.upstreamURL)
 	return strings.TrimPrefix(target.Path, upstream.Path), nil
-}
-
-func (h *NuGetHandler) filterNuGetRegistration(document map[string]any, id string) bool {
-	items, ok := document["items"].([]any)
-	if !ok {
-		return h.nugetLeafAllowed(document, id)
-	}
-	filtered := make([]any, 0, len(items))
-	for _, item := range items {
-		child, ok := item.(map[string]any)
-		if ok && h.filterNuGetRegistration(child, id) {
-			filtered = append(filtered, child)
-		}
-	}
-	document["items"] = filtered
-	document["count"] = len(filtered)
-	// Page bounds describe the retained leaves, not versions hidden by cooldown.
-	if _, isPage := document["lower"]; isPage && len(filtered) > 0 {
-		first, _ := filtered[0].(map[string]any)
-		last, _ := filtered[len(filtered)-1].(map[string]any)
-		document["lower"] = nugetCatalogEntry(first)["version"]
-		document["upper"] = nugetCatalogEntry(last)["version"]
-	}
-	return len(filtered) > 0
-}
-
-func (h *NuGetHandler) rewriteNuGetRegistrationLinks(value any) {
-	switch node := value.(type) {
-	case map[string]any:
-		for key, child := range node {
-			if link, ok := child.(string); ok {
-				switch key {
-				case "@id", "parent", "registration", "packageContent":
-					node[key] = h.nugetProxyLink(link)
-				}
-			} else {
-				h.rewriteNuGetRegistrationLinks(child)
-			}
-		}
-	case []any:
-		for _, child := range node {
-			h.rewriteNuGetRegistrationLinks(child)
-		}
-	}
 }
 
 func (h *NuGetHandler) nugetProxyLink(link string) string {
