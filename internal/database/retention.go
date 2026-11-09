@@ -83,6 +83,16 @@ func (db *DB) GetRetentionCandidates(fromID, toID int64, cutoff time.Time) ([]Re
 // path and a later sweep tries again, instead of the object staying in
 // storage with nothing left pointing at it.
 func (db *DB) ClearExpiredArtifact(versionPURL, filename, storagePath string, cutoff time.Time) (bool, error) {
+	if db.hits != nil {
+		db.hits.flushMu.Lock()
+		defer db.hits.flushMu.Unlock()
+		db.hits.mu.Lock()
+		defer db.hits.mu.Unlock()
+		if err := db.flushHitsLocked(); err != nil {
+			return false, err
+		}
+	}
+
 	tx, err := db.Beginx()
 	if err != nil {
 		return false, err
@@ -106,6 +116,28 @@ func (db *DB) ClearExpiredArtifact(versionPURL, filename, storagePath string, cu
 		return false, fmt.Errorf("queueing %s for deletion: %w", storagePath, err)
 	}
 	return true, tx.Commit()
+}
+
+// flushHitsLocked writes the current artifact-hit batch while the caller
+// holds both hit locks, serializing it with background flushes and new hits.
+func (db *DB) flushHitsLocked() error {
+	pending := db.hits.pending
+	db.hits.pending = map[hitKey]hitEntry{}
+	if len(pending) == 0 {
+		return nil
+	}
+	if err := db.writeHits(pending); err != nil {
+		for k, e := range pending {
+			cur := db.hits.pending[k]
+			cur.count += e.count
+			if e.last.After(cur.last) {
+				cur.last = e.last
+			}
+			db.hits.pending[k] = cur
+		}
+		return err
+	}
+	return nil
 }
 
 // MarkArtifactMirrored records that a mirror run found the artifact cached,

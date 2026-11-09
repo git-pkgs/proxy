@@ -26,6 +26,7 @@ type hitEntry struct {
 type metadataHitKey struct{ ecosystem, name string }
 
 type hitBatch struct {
+	flushMu  sync.Mutex
 	mu       sync.Mutex
 	pending  map[hitKey]hitEntry
 	metadata map[metadataHitKey]time.Time
@@ -105,6 +106,9 @@ func (db *DB) BatchHits(interval time.Duration, logger *slog.Logger) {
 // fails they are put back for the next flush, so a failed write delays
 // counts rather than losing them.
 func (db *DB) flushHits() error {
+	db.hits.flushMu.Lock()
+	defer db.hits.flushMu.Unlock()
+
 	metadataErr := db.flushMetadataHits()
 	pending := db.hits.take()
 	if len(pending) == 0 {
