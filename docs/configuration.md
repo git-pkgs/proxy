@@ -954,6 +954,12 @@ those yourself. The proxy locks `cache_dir` while it runs, through a
 `.gitcache-lock` file in it, so a second process given the same directory,
 such as another replica on a shared volume, fails to start; give each its own.
 
+Each repository's directory is named by its path as requested. Where
+`cache_dir` ignores case in file names, as on macOS and Windows by default,
+paths that differ only in case (`acme/widgets` and `acme/WIDGETS`) share one
+directory and are treated as one repository. Use a case-sensitive file system
+for an upstream whose repositories differ only in case.
+
 Git LFS objects are cached in the artifact cache, so they use the configured
 storage backend and retention rather than `cache_dir`. git-lfs finds the LFS
 API under the rewritten remote, at `/git/{name}/{repo}.git/info/lfs`, with no
@@ -1011,6 +1017,13 @@ and is fetched from that upstream alone: unlike the default repository, a named
 one doesn't fall back to the Gradle Plugin Portal. Files are cached per
 repository, so the same coordinates in two repositories never share a cache
 entry.
+
+In every repository, a file the proxy would cache (an artifact, checksum or
+signature) whose group directories contain a dot or colon
+(`org.foo/bar/1.0/bar-1.0.jar`), or whose artifact contains a colon, is not in
+the Maven layout and gets 404 without an upstream request. Its group would read
+the same as `org/foo`'s. Other paths there, such as `maven-metadata.xml` or a
+directory listing, are handled as anywhere else.
 
 `upstream.maven_repositories` is additive. `/maven/…` keeps serving
 `upstream.maven` with unchanged cache identities. A repository name is matched
@@ -1674,6 +1687,7 @@ Pushed versions are listed in the package metadata clients resolve against, with
 - Pushed versions are added next to the upstream ones and are never held back by cooldown. npm `dist-tags` stay as the upstream has them, also in `npm dist-tag ls`.
 - A package the upstream doesn't know is served from its pushed versions alone. Its npm `latest` tag is the highest pushed version.
 - Pushed Composer dev versions (`dev-*`, `*-dev`) are listed in the `~dev` metadata file.
+- Pushed Composer versions carry an empty `notification-url`, as routed packages do, so Composer does not report their installs to the default upstream's `notify-batch` endpoint. A pushed `composer.json` that sets its own `notification-url` keeps it, and Composer then reports installs there.
 - npm entries carry the archive's sha512 as `dist.integrity`. Composer entries carry its sha256 as `dist.reference` and leave `shasum` empty.
 
 Metadata of packages with pushed versions is rewritten on every request instead of being cached, so a push or delete shows up on the next request.
@@ -1851,7 +1865,7 @@ curl -X DELETE http://localhost:8080/api/cache/maven/com.google.guava:guava/32.1
 curl -X DELETE 'http://localhost:8080/api/cache/maven/com.google.guava:guava/32.1.3-jre?filename=guava-32.1.3-jre.jar'
 ```
 
-The name is the package name the UI shows, for example `group:artifact` for Maven. The response lists the deleted files. The next request for a deleted file fetches it from the upstream again. The stored bytes are removed after the same delay as a replaced artifact, so downloads already in progress can finish.
+The name is the package name the UI shows, for example `group:artifact` for Maven. An RPM package's `filename` is its path under `upstream.rpm` (`updates/40/Everything/x86_64/Packages/c/curl-8.6.0-10.fc40.x86_64.rpm`), since repositories under one upstream can ship different files under one name. The response lists the deleted files. The next request for a deleted file fetches it from the upstream again. The stored bytes are removed after the same delay as a replaced artifact, so downloads already in progress can finish.
 
 Pushed archives are not touched: a whole-version delete skips them, and naming one answers 409. Delete those through the [hosted API](#hosted-packages).
 
@@ -1941,16 +1955,18 @@ proxy mirror --platform linux/arm64 pkg:brew/hello@2.12.3 pkg:brew/openssl%403
 
 ### Git repositories
 
-`pkg:git` PURLs mirror a repository of an [`upstream.git`](#git-repositories) host into the git cache, so a clone through `/git` is served from it, also when the upstream is unreachable. The PURL names the repository by host and path, and the version is a full commit ID:
+`pkg:git` PURLs mirror a repository of an [`upstream.git`](#git-repositories) host into the git cache, so a clone through `/git` is served from it, also when the upstream is unreachable. The PURL names the repository by host and path, and the version is a full commit ID or a tag:
 
 ```bash
 proxy mirror pkg:git/github.com/git-pkgs/purl@0123456789abcdef0123456789abcdef01234567
+proxy mirror pkg:git/github.com/git-pkgs/purl@v0.2.1
 proxy mirror pkg:git/github.com/git-pkgs/purl
 ```
 
 - The repository is served by the `upstream.git` host whose URL its host and path start with, the longest one if several do, and has to match that host's `repos`. Others fail.
 - The repository's branches and tags are cached, as a clone through the proxy caches them. A commit on none of them is fetched by ID and kept, like one a client fetches by ID, until a branch or tag includes it, or for seven days from the last mirror run that named it, as long as `git.max_size` doesn't evict the repository. Where `upstream.auth` has credentials for the host, commits aren't fetched by ID, and one on no branch or tag that isn't cached yet fails.
-- Without a version the repository's branches and tags are mirrored. A tag or branch name as the version fails; give the commit ID.
+- Without a version the repository's branches and tags are mirrored. A tag as the version has to be one of them, so a tag the upstream doesn't have fails. When the upstream can't be reached, a cached tag is mirrored at the commit it last pointed to, with a warning in the log. A branch name or an abbreviated commit ID as the version fails too; give the full commit ID.
+- With a version, the submodules that commit records are mirrored at the commits it pins, with their submodules in turn. A relative submodule URL is resolved against the repository's, and an `ssh://`, `git://` or `git@host:path` URL names the repository by its host and path. A submodule no `upstream.git` host serves is skipped with a warning in the log, as are all of a commit's submodules when git can't read its `.gitmodules`.
 - The git cache is used by one process. While the server runs, the command can't open `git.cache_dir`, so `pkg:git` items fail and the rest are mirrored; use the mirror API instead.
 
 ### Scheduled refresh

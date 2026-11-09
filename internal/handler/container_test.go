@@ -18,6 +18,11 @@ import (
 	"github.com/git-pkgs/registries/fetch"
 )
 
+var (
+	testSHA256Digest = "sha256:" + strings.Repeat("ab", 32)
+	testSHA512Digest = "sha512:" + strings.Repeat("cd", 64)
+)
+
 func TestContainerHandler_parseBlobPath(t *testing.T) {
 	h := &ContainerHandler{}
 
@@ -27,19 +32,29 @@ func TestContainerHandler_parseBlobPath(t *testing.T) {
 		wantDigest string
 	}{
 		{
-			path:       "library/nginx/blobs/sha256:abc123def456",
+			path:       "library/nginx/blobs/" + testSHA256Digest,
 			wantName:   "library/nginx",
-			wantDigest: "sha256:abc123def456",
+			wantDigest: testSHA256Digest,
 		},
 		{
-			path:       "myorg/myrepo/blobs/sha256:0123456789abcdef",
-			wantName:   "myorg/myrepo",
-			wantDigest: "sha256:0123456789abcdef",
-		},
-		{
-			path:       "deep/nested/repo/name/blobs/sha256:fedcba9876543210",
+			path:       "deep/nested/repo/name/blobs/" + testSHA256Digest,
 			wantName:   "deep/nested/repo/name",
-			wantDigest: "sha256:fedcba9876543210",
+			wantDigest: testSHA256Digest,
+		},
+		{
+			path:       "myorg/myrepo/blobs/" + testSHA512Digest,
+			wantName:   "myorg/myrepo",
+			wantDigest: testSHA512Digest,
+		},
+		{
+			path:       "library/nginx/blobs/sha256:abc123def456",
+			wantName:   "",
+			wantDigest: "",
+		},
+		{
+			path:       "library/nginx/blobs/sha512:" + strings.Repeat("a", 64),
+			wantName:   "",
+			wantDigest: "",
 		},
 		{
 			path:       "invalid/path",
@@ -1474,5 +1489,54 @@ func TestContainerHandler_ManifestHonoursSeparateAcceptHeaders(t *testing.T) {
 	}
 	if w.Body.String() != manifest {
 		t.Errorf("offline body = %q, want the cached manifest", w.Body.String())
+	}
+}
+
+func TestContainerHandler_BlobSHA512(t *testing.T) {
+	proxy, _, _, fetcher := setupTestProxy(t)
+	const blob = "sha512 layer"
+	fetcher.artifact = &fetch.Artifact{
+		Body:        io.NopCloser(strings.NewReader(blob)),
+		ContentType: "application/octet-stream",
+	}
+	sum := sha512.Sum512([]byte(blob))
+	digest := "sha512:" + hex.EncodeToString(sum[:])
+	h := &ContainerHandler{proxy: proxy, registryURL: "https://registry.example.test"}
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/library/app/blobs/"+digest, nil))
+
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusOK, w.Body.String())
+	}
+	if w.Body.String() != blob {
+		t.Errorf("body = %q, want %q", w.Body.String(), blob)
+	}
+	if got := w.Header().Get("Docker-Content-Digest"); got != digest {
+		t.Errorf("Docker-Content-Digest = %q, want %q", got, digest)
+	}
+}
+
+func TestContainerHandler_HeadManifestByDigestChecksUpstreamDigest(t *testing.T) {
+	requested := sha256Digest([]byte("requested"))
+	other := sha256Digest([]byte("other"))
+	registry := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.Header().Set("Content-Type", ociManifestMediaType)
+		w.Header().Set("Docker-Content-Digest", other)
+		w.Header().Set("Content-Length", "5")
+	}))
+	defer registry.Close()
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.HTTPClient = registry.Client()
+	h := &ContainerHandler{proxy: proxy, registryURL: registry.URL}
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodHead, "/library/app/manifests/"+requested, nil))
+
+	if w.Code != http.StatusBadGateway {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusBadGateway)
+	}
+	if got := w.Header().Get("Docker-Content-Digest"); got == other {
+		t.Errorf("Docker-Content-Digest = %q, the upstream's other digest", got)
 	}
 }

@@ -241,6 +241,13 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, so
 	// e.g., com/google/guava/guava/32.1.3-jre/guava-32.1.3-jre.jar
 	group, artifact, version, filename := h.parsePath(urlPath)
 	if artifact == "" {
+		if strings.Count(urlPath, "/") >= minMavenParts-1 {
+			// A dot or colon in a group directory, or a colon in the
+			// artifact, which the Maven layout never has. Proxied, the
+			// file would skip the denylist, scan and cooldown.
+			http.NotFound(w, r)
+			return
+		}
 		h.proxyUpstream(w, r, source, urlPath)
 		return
 	}
@@ -294,6 +301,7 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, so
 // parsePath extracts Maven coordinates from a URL path.
 // e.g., "com/google/guava/guava/32.1.3-jre/guava-32.1.3-jre.jar"
 // -> ("com.google.guava", "guava", "32.1.3-jre", "guava-32.1.3-jre.jar")
+// A path that isn't in the Maven layout returns empty strings.
 func (h *MavenHandler) parsePath(urlPath string) (group, artifact, version, filename string) {
 	parts := strings.Split(urlPath, "/")
 	if len(parts) < minMavenParts {
@@ -304,6 +312,18 @@ func (h *MavenHandler) parsePath(urlPath string) (group, artifact, version, file
 	version = parts[len(parts)-2]
 	artifact = parts[len(parts)-3]
 	groupParts := parts[:len(parts)-3]
+	// The Maven layout splits a group at its dots, so a group directory
+	// never holds a dot or is empty. Such a path would spell the same group
+	// as another and share its cache entries, so it is not parsed. Nor is a
+	// colon in the group or artifact, which are cached as group:artifact.
+	for _, part := range groupParts {
+		if part == "" || strings.ContainsAny(part, ".:") {
+			return "", "", "", ""
+		}
+	}
+	if strings.Contains(artifact, ":") {
+		return "", "", "", ""
+	}
 	group = strings.Join(groupParts, ".")
 
 	return group, artifact, version, filename
@@ -329,8 +349,15 @@ func (h *MavenHandler) isArtifactFile(filename string) bool {
 // artifact and version of its directory, {artifact}-{version}..., as Maven
 // names every file it publishes, whatever the extension. A SNAPSHOT's
 // files carry a timestamp in place of "SNAPSHOT".
+//
+// The group isn't checked, so a file under a group directory outside the
+// Maven layout still goes to handleDownload, which answers 404.
 func (h *MavenHandler) isCoordinateFile(urlPath string) bool {
-	_, artifact, version, filename := h.parsePath(urlPath)
+	parts := strings.Split(urlPath, "/")
+	if len(parts) < minMavenParts {
+		return false
+	}
+	filename, version, artifact := parts[len(parts)-1], parts[len(parts)-2], parts[len(parts)-3]
 	if artifact == "" || version == "" {
 		return false
 	}
@@ -365,7 +392,21 @@ func (h *MavenHandler) isChecksumFile(filename string) bool {
 	return false
 }
 
+// mavenForwardHeaders lets clients resume artifacts proxied without caching.
+var mavenForwardHeaders = []string{"Range", "If-Range"}
+
 // proxyUpstream forwards a request to the source's upstream without caching.
 func (h *MavenHandler) proxyUpstream(w http.ResponseWriter, r *http.Request, source mavenSource, urlPath string) {
-	h.proxy.ProxyUpstream(w, r, source.upstreamURL+"/"+urlPath, nil)
+	if source.fallbackURL == "" {
+		h.proxy.ProxyUpstream(w, r, source.upstreamURL+"/"+urlPath, mavenForwardHeaders)
+		return
+	}
+	// As for cached files, a file the primary upstream lacks is looked for
+	// on the Gradle Plugin Portal.
+	resp, err := h.proxy.upstreamRequest(r, source.upstreamURL+"/"+urlPath, mavenForwardHeaders)
+	if err == nil && resp.StatusCode == http.StatusNotFound {
+		_ = resp.Body.Close()
+		resp, err = h.proxy.upstreamRequest(r, source.fallbackURL+"/"+urlPath, mavenForwardHeaders)
+	}
+	h.proxy.relayUpstream(w, r, resp, err)
 }

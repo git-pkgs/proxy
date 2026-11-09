@@ -2,13 +2,17 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"io"
 	"log/slog"
+	"math/rand/v2"
 	"net/http"
 	"net/http/httptest"
+	"strconv"
 	"strings"
 	"sync/atomic"
 	"testing"
+	"testing/iotest"
 	"time"
 
 	"github.com/git-pkgs/cooldown"
@@ -635,5 +639,131 @@ func TestPyPIDownloadCooldownMetadataCache(t *testing.T) {
 
 	if got := metadataRequests.Load(); got != 1 {
 		t.Errorf("upstream metadata JSON requests = %d, want 1 (repeated downloads should reuse the cached metadata)", got)
+	}
+}
+
+func TestPyPISimpleIndexRewritesProjectLinks(t *testing.T) {
+	for _, tc := range []struct{ name, upstream, prefix string }{
+		{"root", "https://pypi.test", "/simple/"},
+		{"subpath", "https://nexus.test/repository/pypi", "/repository/pypi/simple/"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			// Long enough that links cross the rewriter's read boundaries.
+			var upstream, want strings.Builder
+			upstream.WriteString(`<html><body>`)
+			want.WriteString(`<html><body>`)
+			for i := range 3000 {
+				fmt.Fprintf(&upstream, `<a href="%spkg-%d/">pkg-%d</a>`+"\n", tc.prefix, i, i)
+				fmt.Fprintf(&want, `<a href="http://proxy.test/pypi/simple/pkg-%d/">pkg-%d</a>`+"\n", i, i)
+			}
+			fmt.Fprintf(&upstream, `<a href='%sq/'>q</a>`, tc.prefix)
+			want.WriteString(`<a href='http://proxy.test/pypi/simple/q/'>q</a>`)
+			upstream.WriteString(`</body></html>`)
+			want.WriteString(`</body></html>`)
+
+			h, _ := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+				resp := pypiHTTPResponse(r, "text/html", upstream.String())
+				resp.Header.Set("Content-Length", strconv.Itoa(upstream.Len()))
+				resp.Header.Set("ETag", `"upstream"`)
+				return resp, nil
+			})
+			h.upstreamURL = tc.upstream
+
+			req := httptest.NewRequest(http.MethodGet, "/simple/", nil)
+			w := httptest.NewRecorder()
+			h.Routes().ServeHTTP(w, req)
+
+			if w.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200", w.Code)
+			}
+			if got := w.Body.String(); got != want.String() {
+				t.Errorf("body not rewritten; starts %q", got[:min(len(got), 120)])
+			}
+			if got := w.Header().Get("Content-Length"); got != "" && got != strconv.Itoa(want.Len()) {
+				t.Errorf("Content-Length = %q, want %d or unset", got, want.Len())
+			}
+			// The upstream's ETag names the body before the rewrite.
+			if got := w.Header().Get("ETag"); got != "" {
+				t.Errorf("ETag = %q, want none on a rewritten body", got)
+			}
+		})
+	}
+}
+
+func TestReplacingReaderSplitReads(t *testing.T) {
+	const in = `ab<a href="/simple/x/">x</a>href="/simplehref="/simple/href='/simple/y/'`
+	const want = `ab<a href="P/x/">x</a>href="/simplehref="P/href='Q/y/'`
+	r := &replacingReader{
+		src: io.NopCloser(iotest.OneByteReader(strings.NewReader(in))),
+		replacements: []replacement{
+			{from: []byte(`href="/simple/`), to: []byte(`href="P/`)},
+			{from: []byte(`href='/simple/`), to: []byte(`href='Q/`)},
+		},
+	}
+	got, err := io.ReadAll(r)
+	if err != nil || string(got) != want {
+		t.Errorf("got %q, %v; want %q", got, err, want)
+	}
+}
+
+// replaceReference makes the replacements the way replacingReader should:
+// left to right, the earliest match first, and the first listed on a tie.
+func replaceReference(in string, reps []replacement) string {
+	var out strings.Builder
+	for len(in) > 0 {
+		at, found := -1, -1
+		for i, rep := range reps {
+			if j := strings.Index(in, string(rep.from)); j >= 0 && (at < 0 || j < at) {
+				at, found = j, i
+			}
+		}
+		if at < 0 {
+			out.WriteString(in)
+			break
+		}
+		out.WriteString(in[:at])
+		out.Write(reps[found].to)
+		in = in[at+len(reps[found].from):]
+	}
+	return out.String()
+}
+
+func TestReplacingReaderMatchesReference(t *testing.T) {
+	reps := []replacement{
+		{from: []byte(`href="/s/`), to: []byte(`href="P/`)},
+		{from: []byte(`href='/s/`), to: []byte(`href='Q/`)},
+	}
+	pieces := []string{`href="/s/`, `href='/s/`, `href="/s`, `href=`, `x`, `/s/`, `'`, `"`}
+	rng := rand.New(rand.NewPCG(1, 2))
+	for range 500 {
+		var b strings.Builder
+		for range rng.IntN(40) {
+			b.WriteString(pieces[rng.IntN(len(pieces))])
+		}
+		in := b.String()
+		for _, src := range []io.Reader{strings.NewReader(in), iotest.OneByteReader(strings.NewReader(in))} {
+			got, err := io.ReadAll(&replacingReader{src: io.NopCloser(src), replacements: reps})
+			if want := replaceReference(in, reps); err != nil || string(got) != want {
+				t.Fatalf("in %q: got %q, %v; want %q", in, got, err, want)
+			}
+		}
+	}
+}
+
+// BenchmarkReplacingReaderRootIndex reads a root index of double-quoted
+// links, where the single-quote pattern never matches.
+func BenchmarkReplacingReaderRootIndex(b *testing.B) {
+	var page strings.Builder
+	for i := range 50000 {
+		fmt.Fprintf(&page, "<a href=\"/simple/project-%d/\">project-%d</a>\n", i, i)
+	}
+	in := page.String()
+	reps := []replacement{
+		{from: []byte(`href="/simple/`), to: []byte(`href="http://proxy/pypi/simple/`)},
+		{from: []byte(`href='/simple/`), to: []byte(`href='http://proxy/pypi/simple/`)},
+	}
+	b.SetBytes(int64(len(in)))
+	for b.Loop() {
+		_, _ = io.Copy(io.Discard, &replacingReader{src: io.NopCloser(strings.NewReader(in)), replacements: reps})
 	}
 }

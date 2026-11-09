@@ -7,9 +7,11 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"maps"
 	"mime"
 	"net/http"
+	"net/url"
 	"regexp"
 	"slices"
 	"strconv"
@@ -1035,8 +1037,119 @@ func (h *PyPIHandler) proxySimple(w http.ResponseWriter, r *http.Request, path s
 	}
 	defer func() { _ = resp.Body.Close() }()
 
+	// The HTML root index links projects by absolute path, such as
+	// /simple/<name>/, which must point at the proxy's /pypi mount instead.
+	// It is large, so it is rewritten as it streams.
+	if resp.StatusCode == http.StatusOK && resp.Header.Get("Content-Encoding") == "" &&
+		!strings.Contains(resp.Header.Get(headerContentType), "json") {
+		prefix := "/simple/"
+		if u, err := url.Parse(h.upstreamURL); err == nil {
+			prefix = strings.TrimSuffix(u.Path, "/") + prefix
+		}
+		to := h.proxyURL + "/pypi/simple/"
+		resp.Body = &replacingReader{
+			src: resp.Body,
+			replacements: []replacement{
+				{from: []byte(`href="` + prefix), to: []byte(`href="` + to)},
+				{from: []byte(`href='` + prefix), to: []byte(`href='` + to)},
+			},
+		}
+		resp.Header.Del(headerContentLength)
+		resp.Header.Del("ETag") // it names the upstream body
+		resp.ContentLength = -1
+	}
+
 	h.proxy.relayResponse(w, r, resp, func(dst, src http.Header) {
 		copyRelayHeaders(dst, src)
 		ensureVaryAccept(dst)
 	})
+}
+
+const replacingReaderBufferSize = 32 << 10
+
+// replacingReader makes each replacement in src as it is read.
+type replacingReader struct {
+	src          io.ReadCloser
+	replacements []replacement
+	in           []byte // read from src, not yet scanned
+	out          []byte // scanned, not yet returned
+	buf          []byte
+	err          error
+}
+
+type replacement struct{ from, to []byte }
+
+func (r *replacingReader) Read(p []byte) (int, error) {
+	for len(r.out) == 0 {
+		if r.err != nil {
+			return 0, r.err
+		}
+		if r.buf == nil {
+			r.buf = make([]byte, replacingReaderBufferSize)
+		}
+		n, err := r.src.Read(r.buf)
+		r.in = append(r.in, r.buf[:n]...)
+		r.err = err
+		// Keep a tail that could be the start of a match split across reads.
+		keep := 0
+		if err == nil {
+			for _, rep := range r.replacements {
+				keep = max(keep, len(rep.from)-1)
+			}
+		}
+		scan := max(len(r.in)-keep, 0)
+		out, done := r.replace(scan)
+		if done < scan {
+			out = append(out, r.in[done:scan]...)
+			done = scan
+		}
+		r.out = out
+		r.in = append([]byte(nil), r.in[done:]...)
+	}
+	n := copy(p, r.out)
+	r.out = r.out[n:]
+	return n, nil
+}
+
+// replace makes the replacements that start before scan in r.in, returning
+// the output and how much of r.in it covers.
+func (r *replacingReader) replace(scan int) (out []byte, done int) {
+	// at holds each replacement's next match at or after done, or -1.
+	// Only a match the last replacement consumed is searched for again,
+	// so each pass over r.in stays linear.
+	at := make([]int, len(r.replacements))
+	for i := range at {
+		at[i] = indexFrom(r.in, r.replacements[i].from, 0)
+	}
+	for {
+		k := -1
+		for i, j := range at {
+			if j >= 0 && (k < 0 || j < at[k]) {
+				k = i
+			}
+		}
+		if k < 0 || at[k] >= scan {
+			break
+		}
+		rep := &r.replacements[k]
+		out = append(out, r.in[done:at[k]]...)
+		out = append(out, rep.to...)
+		done = at[k] + len(rep.from)
+		for i, j := range at {
+			if j >= 0 && j < done {
+				at[i] = indexFrom(r.in, r.replacements[i].from, done)
+			}
+		}
+	}
+	return out, done
+}
+
+func (r *replacingReader) Close() error { return r.src.Close() }
+
+// indexFrom returns the index of the first sep in b at or after from, or -1.
+func indexFrom(b, sep []byte, from int) int {
+	if i := bytes.Index(b[from:], sep); i >= 0 {
+		return from + i
+	}
+	return -1
 }

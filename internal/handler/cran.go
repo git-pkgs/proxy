@@ -51,10 +51,20 @@ func (h *CRANHandler) Routes() http.Handler {
 	mux.HandleFunc("GET /src/contrib/PACKAGES.gz", h.proxyCached)
 	mux.HandleFunc("GET /src/contrib/PACKAGES.rds", h.proxyCached)
 
+	// Repository metadata such as archive.rds and current.rds, used by
+	// remotes::install_version and pak to find archived versions.
+	mux.HandleFunc("GET /src/contrib/Meta/{filename}", h.handleMeta)
+
 	// Binary package indexes
 	mux.HandleFunc("GET /bin/{platform}/contrib/{rversion}/PACKAGES", h.proxyCached)
 	mux.HandleFunc("GET /bin/{platform}/contrib/{rversion}/PACKAGES.gz", h.proxyCached)
 	mux.HandleFunc("GET /bin/{platform}/contrib/{rversion}/PACKAGES.rds", h.proxyCached)
+
+	// macOS binaries for R >= 4.3 use two platform segments, e.g.
+	// bin/macosx/big-sur-arm64/contrib/4.4/.
+	mux.HandleFunc("GET /bin/{platform}/{arch}/contrib/{rversion}/PACKAGES", h.proxyCached)
+	mux.HandleFunc("GET /bin/{platform}/{arch}/contrib/{rversion}/PACKAGES.gz", h.proxyCached)
+	mux.HandleFunc("GET /bin/{platform}/{arch}/contrib/{rversion}/PACKAGES.rds", h.proxyCached)
 
 	// Source package downloads
 	mux.HandleFunc("GET /src/contrib/{filename}", h.handleSourceDownload)
@@ -62,8 +72,18 @@ func (h *CRANHandler) Routes() http.Handler {
 
 	// Binary package downloads
 	mux.HandleFunc("GET /bin/{platform}/contrib/{rversion}/{filename}", h.handleBinaryDownload)
+	mux.HandleFunc("GET /bin/{platform}/{arch}/contrib/{rversion}/{filename}", h.handleBinaryDownload)
 
 	return rejectQueryChars(mux)
+}
+
+// handleMeta serves the .rds files under src/contrib/Meta as cached metadata.
+func (h *CRANHandler) handleMeta(w http.ResponseWriter, r *http.Request) {
+	if !strings.HasSuffix(r.PathValue("filename"), ".rds") {
+		http.NotFound(w, r)
+		return
+	}
+	h.proxyCached(w, r)
 }
 
 // handleSourceDownload serves a source package, fetching and caching from upstream.
@@ -99,6 +119,9 @@ func (h *CRANHandler) handleSourceDownload(w http.ResponseWriter, r *http.Reques
 // handleBinaryDownload serves a binary package, fetching and caching from upstream.
 func (h *CRANHandler) handleBinaryDownload(w http.ResponseWriter, r *http.Request) {
 	platform := r.PathValue("platform")
+	if arch := r.PathValue("arch"); arch != "" {
+		platform += "-" + arch
+	}
 	rversion := r.PathValue("rversion")
 	filename := r.PathValue("filename")
 

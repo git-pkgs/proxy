@@ -3,6 +3,7 @@ package database
 import (
 	"database/sql"
 	"maps"
+	"slices"
 	"testing"
 	"time"
 )
@@ -246,6 +247,47 @@ func TestCachedPackageFiltersMatchEcosystemAliases(t *testing.T) {
 			found, err := db.SearchPackages("ra", ecosystem, 50, 0)
 			if err != nil || len(found) != 2 {
 				t.Errorf("SearchPackages(ra, %q) = %d results, %v, want 2", ecosystem, len(found), err)
+			}
+		}
+	})
+}
+
+func TestSearchPackagesIgnoresCaseAndEscapesPercent(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		seedArtifact(t, db, "pypi", "Django", "5.0.0", 100, 1)
+		seedArtifact(t, db, "pypi", "typing-extensions", "4.12.0", 100, 1)
+		seedArtifact(t, db, "npm", "my_pkg", "1.0.0", 100, 1)
+		seedArtifact(t, db, "npm", "100%-done", "1.0.0", 100, 1)
+		seedArtifact(t, db, "npm", "1000-done", "1.0.0", 100, 1)
+		seedArtifact(t, db, "npm", `back\slash`, "1.0.0", 100, 1)
+
+		for _, tc := range []struct {
+			query string
+			want  []string
+		}{
+			{"django", []string{"Django"}},
+			{"DJANGO", []string{"Django"}},
+			{"my_pkg", []string{"my_pkg"}},
+			// _ stays a single-character wildcard, so it matches - too.
+			{"typing_extensions", []string{"typing-extensions"}},
+			{"typing-extensions", []string{"typing-extensions"}},
+			{"100%", []string{"100%-done"}},
+			{`k\s`, []string{`back\slash`}},
+		} {
+			found, err := db.SearchPackages(tc.query, "", 50, 0)
+			if err != nil {
+				t.Fatalf("SearchPackages(%q): %v", tc.query, err)
+			}
+			var names []string
+			for _, p := range found {
+				names = append(names, p.Name)
+			}
+			if !slices.Equal(names, tc.want) {
+				t.Errorf("SearchPackages(%q) = %v, want %v", tc.query, names, tc.want)
+			}
+			count, err := db.CountSearchResults(tc.query, "")
+			if err != nil || count != int64(len(tc.want)) {
+				t.Errorf("CountSearchResults(%q) = %d, %v, want %d", tc.query, count, err, len(tc.want))
 			}
 		}
 	})
