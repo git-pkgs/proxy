@@ -2248,18 +2248,6 @@ type cachedMeta struct {
 	stale        bool
 }
 
-// lookupCachedMeta retrieves cache validators for a metadata entry.
-func (p *Proxy) lookupCachedMeta(ecosystem, cacheKey string) cachedMeta {
-	if p.DB == nil {
-		return cachedMeta{}
-	}
-	entry, err := p.DB.GetMetadataCache(ecosystem, cacheKey)
-	if err != nil || entry == nil {
-		return cachedMeta{}
-	}
-	return p.cachedMetaFor(entry)
-}
-
 // cachedMetaFor returns the cache validators and freshness state of entry.
 func (p *Proxy) cachedMetaFor(entry *database.MetadataCacheEntry) cachedMeta {
 	var cm cachedMeta
@@ -2344,16 +2332,6 @@ func (p *Proxy) writeMetadataFetchError(w http.ResponseWriter, err error) {
 	}
 	p.Logger.Error("metadata fetch failed", "error", err)
 	http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
-}
-
-// writeMetadataCachedResponseWithEncoding writes a metadata document with the
-// validators of its current cache row. Prefer writeMetadataResult, which
-// takes them from the lookup the body came from. contentEncoding must
-// describe the body being written; it is passed in rather than re-read from
-// the cache row, which is missing or stale when the metadata cache write
-// failed and would otherwise mislabel the bytes.
-func (p *Proxy) writeMetadataCachedResponseWithEncoding(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, body []byte, contentType, contentEncoding string) {
-	writeMetadataBody(w, r, p.lookupCachedMeta(ecosystem, cacheKey), body, contentType, contentEncoding)
 }
 
 // writeMetadataResult writes the document res holds with its own validators
