@@ -984,3 +984,51 @@ func TestFetchRedirectRefusesRepository(t *testing.T) {
 		t.Errorf("ls-refs served after the fetch was redirected")
 	}
 }
+
+// TestCaseOnlyDifferentKeysShareOneRepository checks that, where the file
+// system ignores case, keys that differ only in case are one repository, so
+// a user of one spelling keeps the directory from being evicted under it.
+func TestCaseOnlyDifferentKeysShareOneRepository(t *testing.T) {
+	if !caseInsensitive(t.TempDir()) {
+		t.Skip("file system is case-sensitive")
+	}
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+
+	rp := tc.acquire("up/REPO.git")
+	defer tc.release(rp)
+	if other := tc.repo("up/repo.git"); other != rp {
+		t.Error("up/REPO.git and up/repo.git are separate repositories")
+	}
+	tc.mu.Lock()
+	tc.opts.MaxSize = 1
+	tc.mu.Unlock()
+	tc.evict()
+	if !rp.exists() {
+		t.Error("repository in use as up/REPO.git was evicted")
+	}
+}
+
+// TestFoldCaseKeysShareOneEntry checks key folding on any file system by
+// setting foldCase directly.
+func TestFoldCaseKeysShareOneEntry(t *testing.T) {
+	tc := newTestCache(t, newFakeUpstream(t).server.URL, nil)
+	tc.foldCase = true
+
+	upper := tc.acquire("up/REPO.git")
+	defer tc.release(upper)
+	lower := tc.acquire("up/repo.git")
+	defer tc.release(lower)
+	if upper != lower {
+		t.Error("up/REPO.git and up/repo.git are separate repositories")
+	}
+	tc.mu.Lock()
+	n := len(tc.repos)
+	tc.mu.Unlock()
+	if n != 1 {
+		t.Errorf("%d repository entries, want 1", n)
+	}
+}
