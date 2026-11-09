@@ -107,7 +107,9 @@ func TestRepositoryStateFoldsCase(t *testing.T) {
 	upstream := newFakeUpstream(t)
 	upstream.newRepo("repo")
 	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.mu.Lock()
 	tc.foldCase = true
+	tc.mu.Unlock()
 	tc.clone(t, "repo")
 	waitIdle(t, tc.Cache)
 
