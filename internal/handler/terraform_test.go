@@ -307,3 +307,23 @@ func TestTerraformProviderRejectsUnknownAndInvalidRequests(t *testing.T) {
 		t.Errorf("upstream requests = %d, want 0", got)
 	}
 }
+
+func TestTerraformProviderArchiveCacheDependsOnRegistry(t *testing.T) {
+	public := newFakeTerraformRegistry(t)
+	h, proxy := newTerraformTestHandler(t, public)
+	if w := serveTerraformRequest(h, terraformTestProvider+"3.6.0/linux_amd64.zip"); w.Body.String() != terraformTestArchive {
+		t.Fatalf("first registry archive = %d %q", w.Code, w.Body.String())
+	}
+
+	// The same hostname pointed at another registry, which publishes other
+	// bytes for the same version and platform.
+	private := newFakeTerraformRegistry(t)
+	private.archive = "other provider zip bytes"
+	sum := sha256.Sum256([]byte(private.archive))
+	private.shasum = hex.EncodeToString(sum[:])
+	remapped := NewTerraformHandler(proxy, map[string]string{terraformTestHost: private.api.URL})
+
+	if w := serveTerraformRequest(remapped, terraformTestProvider+"3.6.0/linux_amd64.zip"); w.Body.String() != private.archive {
+		t.Errorf("remapped archive = %d %q, want the second registry's archive", w.Code, w.Body.String())
+	}
+}
