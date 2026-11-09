@@ -1996,6 +1996,27 @@ func TestValidateFreeBSDUpstreams(t *testing.T) {
 	}
 }
 
+func TestValidateTerraformUpstreams(t *testing.T) {
+	tests := []struct {
+		name       string
+		registries map[string]string
+		wantErr    bool
+	}{
+		{"valid", map[string]string{"registry.terraform.io": "https://registry.terraform.io", "terraform.example.com": "https://terraform.example.com"}, false},
+		{"hostname contains path separator", map[string]string{"registry.terraform.io/v1": "https://registry.terraform.io"}, true},
+		{"URL is not absolute", map[string]string{"registry.terraform.io": "registry.terraform.io"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Upstream.Terraform = tt.registries
+			if err := cfg.Validate(); (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateGenericPaths(t *testing.T) {
 	githubAPI := map[string]string{"github-api": "https://api.github.com"}
 	token := map[string]AuthConfig{"https://api.github.com": {Type: "bearer", Token: "t"}}

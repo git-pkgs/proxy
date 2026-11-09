@@ -164,6 +164,7 @@ func supportedEcosystems() []string {
 		"pypi",
 		"rpm",
 		"swift",
+		"terraform",
 	}
 }
 
@@ -222,6 +223,8 @@ func ecosystemColorClasses(ecosystem string) string {
 		return "bg-blue-100 text-blue-800 dark:bg-blue-900/50 dark:text-blue-300"
 	case "freebsd":
 		return "bg-red-200 text-red-900 dark:bg-red-950/60 dark:text-red-200"
+	case "terraform":
+		return "bg-violet-200 text-violet-900 dark:bg-violet-950/60 dark:text-violet-200"
 	default:
 		return "bg-gray-100 text-gray-700 dark:bg-gray-800 dark:text-gray-300"
 	}
@@ -549,6 +552,7 @@ Server = ` + baseURL + `/arch/archlinux/$repo/os/$arch
 pacman -Syu</code></pre>`),
 		},
 		freebsdRegistryConfig(baseURL),
+		terraformRegistryConfig(baseURL),
 	}
 }
 
@@ -585,5 +589,22 @@ FreeBSD-ports: {
 
 # Then run:
 pkg update</code></pre>`),
+	}
+}
+
+// terraformRegistryConfig describes the provider network mirror for the
+// dashboard.
+func terraformRegistryConfig(baseURL string) RegistryConfig {
+	return RegistryConfig{
+		ID:       "terraform",
+		Name:     "Terraform/OpenTofu providers",
+		Language: "Terraform",
+		Endpoint: "/terraform/providers/",
+		Instructions: template.HTML(`<p class="config-note">Add a network mirror to the CLI configuration (<code>~/.terraformrc</code>, or <code>~/.tofurc</code> for OpenTofu):</p>
+<pre><code>provider_installation {
+  network_mirror {
+    url = "` + baseURL + `/terraform/providers/"
+  }
+}</code></pre>`),
 	}
 }

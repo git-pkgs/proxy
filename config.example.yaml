@@ -332,6 +332,13 @@ upstream:
   #   freebsd: "https://pkg.freebsd.org"
   #   poudriere: "https://packages.example.com"
 
+  # Provider registries mirrored at /terraform/providers/, by hostname.
+  # Defaults to registry.terraform.io and registry.opentofu.org when empty;
+  # configuring any entry replaces that default.
+  # terraform:
+  #   registry.terraform.io: "https://registry.terraform.io"
+  #   registry.opentofu.org: "https://registry.opentofu.org"
+
   # Named generic HTTP upstreams (used by /generic/{name}/). The remaining
   # request path and query are appended to the upstream URL. GitHub release
   # assets ({owner}/{repo}/releases/download/{tag}/{asset}) are cached

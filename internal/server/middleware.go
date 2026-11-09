@@ -129,7 +129,7 @@ func requestEcosystem(path string) string {
 	switch segment {
 	case "npm", "cargo", "hex", "pub", "pypi", "maven", "gradle", "nuget",
 		"conan", "chef", "conda", "cran", "julia", "debian", "rpm", "arch",
-		"freebsd", "helm", "homebrew", "generic", "swift", "git":
+		"freebsd", "helm", "homebrew", "generic", "swift", "git", "terraform":
 		return segment
 	case "apk":
 		return "alpine"

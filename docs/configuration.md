@@ -635,6 +635,27 @@ as signatures and keys, is passed through uncached. When `upstream.freebsd` is e
 repository named `freebsd` pointing at `https://pkg.freebsd.org` is available;
 configuring any entry replaces that default.
 
+### Terraform and OpenTofu providers
+
+```yaml
+upstream:
+
+  # Provider registries, by the hostname in provider source addresses.
+  terraform:
+    registry.terraform.io: "https://registry.terraform.io"
+    registry.opentofu.org: "https://registry.opentofu.org"
+```
+
+`/terraform/providers/` serves the provider network mirror protocol, e.g.
+`/terraform/providers/registry.terraform.io/hashicorp/aws/index.json`. Only
+hostnames listed here are fetched; others get a 404. The registry's service
+discovery document, version lists and download documents use the metadata
+cache (`metadata_ttl`, stale fallback), so enable `cache_metadata` to keep
+`terraform init` working while the registry is down. Provider archives use the
+shared artifact cache and are checked against the registry's `shasum`. When
+`upstream.terraform` is empty, the two registries above are mirrored;
+configuring any entry replaces that default.
+
 ### Alpine APK snapshots
 
 ```yaml

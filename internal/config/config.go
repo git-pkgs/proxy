@@ -452,7 +452,7 @@ func (s *ScannerConfig) Validate() error {
 // retention keys plus the handlers retention does not cover, and git for
 // Git LFS objects.
 var scannerEcosystems = func() []string {
-	keys := append(slices.Clone(retention.KnownKeys), "arch", "chef", "git")
+	keys := append(slices.Clone(retention.KnownKeys), "arch", "chef", "git", "terraform")
 	slices.Sort(keys)
 	return keys
 }()
@@ -862,6 +862,12 @@ type UpstreamConfig struct {
 	// Default when empty: {"freebsd": "https://pkg.freebsd.org"}.
 	FreeBSD map[string]string `json:"freebsd" yaml:"freebsd"`
 
+	// Terraform maps provider registry hostnames to registry base URLs,
+	// served as a provider network mirror at /terraform/providers/. Only
+	// providers of a listed hostname are mirrored.
+	// Default when empty: registry.terraform.io and registry.opentofu.org.
+	Terraform map[string]string `json:"terraform" yaml:"terraform"`
+
 	// OCI maps names to OCI registry URLs. Requests to a named registry use
 	// the repository prefix upstream/{name}/, for example
 	// oci://proxy.example.com/upstream/ghcr/owner/chart.
@@ -967,6 +973,9 @@ func (u *UpstreamConfig) Validate() error {
 		return err
 	}
 	if err := validateNamedUpstreams("upstream.freebsd", u.FreeBSD); err != nil {
+		return err
+	}
+	if err := validateNamedUpstreams("upstream.terraform", u.Terraform); err != nil {
 		return err
 	}
 	if err := validateNamedUpstreams("upstream.go_sumdbs", u.GoSumDBs); err != nil {
