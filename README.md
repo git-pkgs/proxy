@@ -923,10 +923,13 @@ The proxy is a provider network mirror. Add it to the CLI configuration
 ```hcl
 provider_installation {
   network_mirror {
-    url = "http://localhost:8080/terraform/providers/"
+    url = "https://proxy.example.com/terraform/providers/"
   }
 }
 ```
+
+Terraform and OpenTofu only accept an `https:` mirror URL, so the proxy has to
+be reachable over TLS, for example behind a TLS-terminating reverse proxy.
 
 `source` addresses in your configuration stay as they are. Providers from
 `registry.terraform.io` and `registry.opentofu.org` are mirrored by default;

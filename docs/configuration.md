@@ -647,7 +647,9 @@ upstream:
 ```
 
 `/terraform/providers/` serves the provider network mirror protocol, e.g.
-`/terraform/providers/registry.terraform.io/hashicorp/aws/index.json`. Only
+`/terraform/providers/registry.terraform.io/hashicorp/aws/index.json`.
+Terraform and OpenTofu only accept an `https:` mirror URL, so serve the proxy
+over TLS. Only
 hostnames listed here are fetched; others get a 404. The registry's service
 discovery document, version lists and download documents use the metadata
 cache (`metadata_ttl`, stale fallback), so enable `cache_metadata` to keep
