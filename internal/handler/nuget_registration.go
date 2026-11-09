@@ -515,8 +515,10 @@ func (rw *nugetRegistrationWriter) endNode(n *nugetNode) error {
 	return nil
 }
 
+// nugetVersionJSON returns the version of a leaf as JSON. A leaf without one
+// leaves an empty version behind, which is not always nil.
 func nugetVersionJSON(version []byte) []byte {
-	if version == nil {
+	if len(version) == 0 {
 		return []byte("null")
 	}
 	return version

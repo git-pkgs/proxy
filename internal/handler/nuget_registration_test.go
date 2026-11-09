@@ -142,6 +142,14 @@ func TestNuGetRegistrationDocumentCooldown(t *testing.T) {
 			want:     `{"count":1,"items":[{"catalogEntry":{"published":"` + old + `"}}],"lower":null,"upper":null}`,
 		},
 		{
+			name:     "leaf without a version after one with a version",
+			path:     page,
+			document: `{"items":[` + nugetTestLeaf("", "1.0.0", old) + `,{"catalogEntry":{"published":"` + old + `"}}],"lower":"0"}`,
+			status:   http.StatusOK,
+			want: `{"count":2,"items":[` + nugetTestLeaf(base, "1.0.0", old) + `,{"catalogEntry":{"published":"` + old + `"}}],` +
+				`"lower":"1.0.0","upper":null}`,
+		},
+		{
 			name:     "leaf without a publish time is kept",
 			path:     page,
 			document: `{"items":[{"catalogEntry":{"version":"1.0.0"}},{"catalogEntry":{"published":7,"version":"2.0.0"}}],"lower":"0"}`,
