@@ -288,6 +288,11 @@ type Proxy struct {
 	metaMu       sync.Mutex
 	inFlightMeta map[string]*inflightMetadata
 
+	// metaDetachSlots caps the metadata fetches that keep running after
+	// their caller went away (see coalesceMetadata). Guarded by metaMu
+	// while it is created.
+	metaDetachSlots chan struct{}
+
 	// rewrites caches metadata documents after their handler rewrites them.
 	// Nil leaves every request to rewrite its own copy.
 	rewrites *rewriteCache
@@ -1177,24 +1182,46 @@ const maxDetachedFetches = 64
 
 func (p *Proxy) acquireDetachSlot() bool {
 	shared := p.sharedProxy()
-	shared.fetchMu.Lock()
-	if shared.detachSlots == nil {
-		shared.detachSlots = make(chan struct{}, maxDetachedFetches)
-	}
-	slots := shared.detachSlots
-	shared.fetchMu.Unlock()
-
-	select {
-	case slots <- struct{}{}:
-		return true
-	default:
-		return false
-	}
+	return trySlot(&shared.fetchMu, &shared.detachSlots, maxDetachedFetches)
 }
 
 func (p *Proxy) releaseDetachSlot() {
 	shared := p.sharedProxy()
 	<-shared.detachSlots
+}
+
+// maxDetachedMetadataFetches caps the metadata fetches that may outlive their
+// caller, for the same reason as maxDetachedFetches: a client could request
+// any number of uncached documents and hang up, leaving each fetch to run to
+// the HTTP client's timeout. Fetches beyond the cap end with their caller.
+const maxDetachedMetadataFetches = 64
+
+func (p *Proxy) acquireMetadataDetachSlot() bool {
+	shared := p.sharedProxy()
+	return trySlot(&shared.metaMu, &shared.metaDetachSlots, maxDetachedMetadataFetches)
+}
+
+func (p *Proxy) releaseMetadataDetachSlot() {
+	shared := p.sharedProxy()
+	<-shared.metaDetachSlots
+}
+
+// trySlot takes one of size slots without waiting, creating the slots under
+// mu on first use. It reports whether a slot was free.
+func trySlot(mu *sync.Mutex, slots *chan struct{}, size int) bool {
+	mu.Lock()
+	if *slots == nil {
+		*slots = make(chan struct{}, size)
+	}
+	ch := *slots
+	mu.Unlock()
+
+	select {
+	case ch <- struct{}{}:
+		return true
+	default:
+		return false
+	}
 }
 
 // fetchedArtifact is what a shared fetch hands its callers: metadata and a
@@ -1900,7 +1927,9 @@ func metadataCoalesceKey(ecosystem, cacheKey, upstreamURL, accept, acceptEncodin
 // metadata fetch has no scan or mirror that depends on the caller aborting it,
 // and CI jobs asking for the same Composer or npm metadata would otherwise all
 // fail when the first of them disconnects. It stays bounded by the HTTP
-// client's timeout. Waiters still leave when their own context ends.
+// client's timeout, and at most maxDetachedMetadataFetches run detached at
+// once; beyond that, fetch ends with the first caller. Waiters still leave
+// when their own context ends.
 func (p *Proxy) coalesceMetadata(ctx context.Context, key string, fetch func(context.Context) metadataResult) (metadataResult, bool) {
 	shared := p.sharedProxy()
 	shared.metaMu.Lock()
@@ -1934,7 +1963,12 @@ func (p *Proxy) coalesceMetadata(ctx context.Context, key string, fetch func(con
 		shared.metaMu.Unlock()
 		close(f.done)
 	}()
-	f.res = fetch(context.WithoutCancel(ctx))
+	fetchCtx := ctx
+	if p.acquireMetadataDetachSlot() {
+		defer p.releaseMetadataDetachSlot()
+		fetchCtx = context.WithoutCancel(ctx)
+	}
+	f.res = fetch(fetchCtx)
 	return f.res, false
 }
 
