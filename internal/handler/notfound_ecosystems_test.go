@@ -10,6 +10,10 @@ import (
 )
 
 func TestArtifactDownloadUpstreamNotFoundReturns404(t *testing.T) {
+	// The Terraform handler reads the archive location from the registry
+	// before fetching the archive, so it gets a local registry.
+	terraformRegistry := newFakeTerraformRegistry(t)
+
 	tests := []struct {
 		name    string
 		path    string
@@ -42,7 +46,9 @@ func TestArtifactDownloadUpstreamNotFoundReturns404(t *testing.T) {
 		{"hex", "/tarballs/phoenix-1.7.10.tar",
 			func(p *Proxy) http.Handler { return NewHexHandler(p, "http://localhost").Routes() }},
 		{"terraform", "/providers/registry.terraform.io/hashicorp/random/3.6.0/linux_amd64.zip",
-			func(p *Proxy) http.Handler { return NewTerraformHandler(p, nil).Routes() }},
+			func(p *Proxy) http.Handler {
+				return NewTerraformHandler(p, map[string]string{"registry.terraform.io": terraformRegistry.api.URL}).Routes()
+			}},
 		{"chef", "/api/v1/cookbooks/apt/versions/7.5.22/download",
 			func(p *Proxy) http.Handler { return NewChefHandler(p, "http://localhost", "http://localhost").Routes() }},
 	}

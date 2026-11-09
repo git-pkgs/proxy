@@ -610,6 +610,7 @@ func terraformRegistryConfig(baseURL string) RegistryConfig {
   network_mirror {
     url = "` + baseURL + `/terraform/providers/"
   }
-}</code></pre>`),
+}</code></pre>
+<p class="config-note">Terraform and OpenTofu only accept an <code>https:</code> mirror URL, so the proxy has to be served over TLS.</p>`),
 	}
 }
