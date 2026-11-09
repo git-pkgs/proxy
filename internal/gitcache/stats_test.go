@@ -3,6 +3,7 @@ package gitcache
 import (
 	"context"
 	"errors"
+	"net/http"
 	"os"
 	"path/filepath"
 	"strings"
@@ -41,6 +42,33 @@ func TestRepositoriesDescribesCachedRepositories(t *testing.T) {
 	r = tc.Repositories()[0]
 	if r.LastError != "fetch_failed" || r.LastErrorAt.Before(start) || r.Requests != 3 {
 		t.Errorf("after a failed refresh %+v, want fetch_failed and 3 requests", r)
+	}
+}
+
+// TestRepositoriesReportsRefusal checks a repository the upstream refused is
+// reported as refused until a check succeeds, unlike a failed fetch.
+func TestRepositoriesReportsRefusal(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	if r := tc.Repositories()[0]; r.Refused {
+		t.Fatalf("fresh copy reported refused: %+v", r)
+	}
+
+	upstream.status.Store(http.StatusForbidden)
+	_, _ = tryGit(t, "", "ls-remote", tc.url("repo"))
+	waitIdle(t, tc.Cache)
+	if r := tc.Repositories()[0]; !r.Refused {
+		t.Errorf("refused copy not reported refused: %+v", r)
+	}
+
+	upstream.status.Store(0)
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	if r := tc.Repositories()[0]; r.Refused {
+		t.Errorf("still reported refused after a check succeeded: %+v", r)
 	}
 }
 

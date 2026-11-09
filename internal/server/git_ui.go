@@ -52,7 +52,9 @@ func (s *Server) handleGitRepositories(w http.ResponseWriter, r *http.Request) {
 
 // gitRepositoryRows names each cached repository by its upstream and path,
 // and gives the URL it is cloned from through the proxy. Repositories of an
-// upstream no longer configured are left out. state reads what a repository
+// upstream no longer configured, or that its repos allowlist no longer
+// allows, are left out, and a repository the upstream refused shows no
+// cached state, as /git serves none of them. state reads what a repository
 // holds, reporting false when it can't. It also returns the rows' total size.
 func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, repos []gitcache.RepositoryStats,
 	state func(key string) (gitcache.RepositoryState, bool)) ([]GitRepositoryRow, int64) {
@@ -65,7 +67,7 @@ func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, 
 	for _, repo := range repos {
 		dir, path, _ := strings.Cut(repo.Key, "/")
 		name, ok := names[dir]
-		if !ok {
+		if !ok || !upstreams[name].AllowsRepo(strings.TrimSuffix(path, ".git")) {
 			continue
 		}
 		row := GitRepositoryRow{
@@ -79,7 +81,7 @@ func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, 
 			LastError:   repo.LastError,
 			LastErrorAt: formatTimeAgo(repo.LastErrorAt),
 		}
-		if st, ok := state(repo.Key); ok {
+		if st, ok := rowState(repo, state); ok {
 			row.Branch, row.Subject, row.CommitAge = st.Branch, st.Subject, formatTimeAgo(st.CommitTime)
 			row.Commit = st.Commit[:min(len(st.Commit), shortCommitLength)]
 			row.Refs = plural(st.Branches, "branch", "branches") + ", " + plural(st.Tags, "tag", "tags")
@@ -88,6 +90,14 @@ func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, 
 		size += repo.Size
 	}
 	return rows, size
+}
+
+// rowState is what repo holds, unless the upstream refused it.
+func rowState(repo gitcache.RepositoryStats, state func(key string) (gitcache.RepositoryState, bool)) (gitcache.RepositoryState, bool) {
+	if repo.Refused {
+		return gitcache.RepositoryState{}, false
+	}
+	return state(repo.Key)
 }
 
 // escapePath escapes each segment of a slash-separated path.

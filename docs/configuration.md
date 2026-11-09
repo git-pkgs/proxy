@@ -965,8 +965,10 @@ navigation: each one's upstream, clone URL, size, the newest commit of the
 branch HEAD names (ID, subject and age), how many branches and tags it has,
 when the upstream was last checked and a client last read it, how many clones and fetches it served,
 and, while the last refresh failed, the kind of error (such as
-`fetch_failed` or `too_large`). The request counts and errors are kept in
-memory and start over when the proxy restarts. Like the rest of the UI the
+`fetch_failed` or `too_large`). A repository the upstream refused shows no
+commit, and one the `repos` allowlist no longer allows isn't listed, as `/git`
+serves neither. The request counts and errors are kept in memory and start over
+when the proxy restarts. Like the rest of the UI the
 page has no authentication, so it shows the names of repositories from
 upstreams with credentials to everyone who can reach it, as `/git` lets them
 clone those. The `proxy_git_cache_size_bytes` and

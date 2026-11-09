@@ -80,6 +80,31 @@ func TestGitRepositoryRows(t *testing.T) {
 	}
 }
 
+// TestGitRepositoryRowsHideWhatGitRefuses checks the page leaves out
+// repositories the repos allowlist no longer allows, and shows no cached
+// commit of one the upstream refused, as /git serves neither.
+func TestGitRepositoryRowsHideWhatGitRefuses(t *testing.T) {
+	upstreams := map[string]config.GitUpstream{"github": {URL: "https://github.com", Repos: []string{"acme/*"}}}
+	dir := gitcache.UpstreamDir("github", "https://github.com")
+	state := func(string) (gitcache.RepositoryState, bool) {
+		return gitcache.RepositoryState{Branch: "main", Commit: "0123456789", Subject: "Secret plans", Branches: 1}, true
+	}
+	rows, size := gitRepositoryRows("http://proxy.example", upstreams, []gitcache.RepositoryStats{
+		{Key: dir + "/acme/widgets.git", Size: 1, Refused: true, LastError: "refused"},
+		{Key: dir + "/acme/gadgets.git", Size: 2, LastError: "fetch_failed"},
+		{Key: dir + "/other/secret.git", Size: 4},
+	}, state)
+	if len(rows) != 2 || size != 3 {
+		t.Fatalf("rows %+v, size %d; want the two allowed repositories", rows, size)
+	}
+	if r := rows[0]; r.Repo != "acme/widgets" || r.Commit != "" || r.Subject != "" || r.Branch != "" || r.Refs != "" || r.LastError != "refused" {
+		t.Errorf("refused row %+v, want no cached state but the error", r)
+	}
+	if r := rows[1]; r.Repo != "acme/gadgets" || r.Subject != "Secret plans" {
+		t.Errorf("row after a failed fetch %+v, want its cached state", r)
+	}
+}
+
 // TestGitRepositoryRowsEscapeCloneURL checks path segments such as Azure
 // DevOps project names, which may hold spaces, '#' or '%', are escaped.
 func TestGitRepositoryRowsEscapeCloneURL(t *testing.T) {

@@ -27,6 +27,9 @@ type RepositoryStats struct {
 	// once a refresh succeeds.
 	LastError   string
 	LastErrorAt time.Time
+	// Refused is set while the upstream's last answer refused the
+	// repository or reported it missing, so it isn't served.
+	Refused bool
 }
 
 // refreshError is the last failed refresh of a repository.
@@ -39,8 +42,10 @@ type refreshError struct {
 func (c *Cache) Repositories() []RepositoryStats {
 	c.mu.Lock()
 	repos := make([]*repo, 0, len(c.repos))
+	refused := make(map[*repo]bool)
 	for _, rp := range c.repos {
 		repos = append(repos, rp)
+		refused[rp] = rp.refused != nil
 	}
 	c.mu.Unlock()
 
@@ -55,6 +60,7 @@ func (c *Cache) Repositories() []RepositoryStats {
 			LastChecked: unixNanoTime(rp.lastChecked.Load()),
 			LastUsed:    unixNanoTime(rp.lastUsed.Load()),
 			Requests:    rp.requests.Load(),
+			Refused:     refused[rp],
 		}
 		if e := rp.lastError.Load(); e != nil {
 			s.LastError, s.LastErrorAt = e.kind, e.at
