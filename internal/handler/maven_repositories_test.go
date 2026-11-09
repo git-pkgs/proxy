@@ -139,15 +139,17 @@ func TestMavenRepositoryRepointedServesTheNewUpstream(t *testing.T) {
 	}
 }
 
-// TestMavenDottedGroupDirectoryNotCachedAsGroup checks that a file whose
-// group directories contain dots or colons, which the Maven layout never
-// has, is not served: it would either share the cache entry of the group
-// the dots spell or be proxied past the denylist, scan and cooldown.
+// TestMavenDottedGroupDirectoryNotCachedAsGroup checks that a file outside
+// the Maven layout is not served: a group directory with a dot or a colon,
+// which the layout never has and which would share the cache entry of the
+// group the dots spell, and a path too short to hold a coordinate. Proxied,
+// they would skip the denylist, scan and cooldown.
 func TestMavenDottedGroupDirectoryNotCachedAsGroup(t *testing.T) {
 	const standard = "/org/foo/bar/1.0/bar-1.0.jar"
 	odd := []string{
 		"/org.foo/bar/1.0/bar-1.0.jar", "/org.foo/bar/1.0/bar-1.0-linux.exe",
 		"/org/foo:x/bar/1.0/bar-1.0.jar", "/org/foo/b:ar/1.0/b:ar-1.0.jar",
+		"/bar/1.0/bar-1.0.jar", "/bar-1.0.jar",
 	}
 	central, requests := mavenRepoUpstream(t, "central", append([]string{standard}, odd...)...)
 	portal, _ := mavenRepoUpstream(t, "portal")

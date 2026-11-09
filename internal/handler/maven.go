@@ -221,14 +221,11 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, so
 	// e.g., com/google/guava/guava/32.1.3-jre/guava-32.1.3-jre.jar
 	group, artifact, version, filename := h.parsePath(urlPath)
 	if artifact == "" {
-		if strings.Count(urlPath, "/") >= minMavenParts-1 {
-			// A dot or colon in a group directory, or a colon in the
-			// artifact, which the Maven layout never has. Proxied, the
-			// file would skip the denylist, scan and cooldown.
-			http.NotFound(w, r)
-			return
-		}
-		h.proxyUpstream(w, r, source, urlPath)
+		// Too few segments to hold a coordinate, or a dot or colon in a
+		// group directory, or a colon in the artifact, which the Maven
+		// layout never has. Proxied, the file would skip the denylist,
+		// scan and cooldown.
+		http.NotFound(w, r)
 		return
 	}
 
