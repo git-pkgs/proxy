@@ -250,7 +250,7 @@ func (h *TerraformHandler) handleArchive(w http.ResponseWriter, r *http.Request)
 
 	name := provider.address()
 	pkgPURL, versionPURL := provider.purls(version)
-	filename := fmt.Sprintf("terraform-provider-%s_%s_%s_%s.zip", provider.name, version, goos, arch)
+	filename := provider.archiveFilename(version, goos, arch)
 	if h.proxy.versionDenied(terraformEcosystem, name, version) || h.proxy.Denylist.Denied(versionPURL) {
 		h.proxy.serveArtifactError(w, fmt.Errorf("%w: %s", ErrVersionDenied, versionPURL), "failed to fetch provider")
 		return
@@ -384,12 +384,24 @@ func (p terraformProvider) purls(version string) (pkgPURL, versionPURL string) {
 	return pkg.String(), pkg.WithVersion(version).String()
 }
 
-// cacheKey scopes a metadata cache key to the registry's hostname and base
-// URL, so pointing a hostname at another registry does not serve the
-// previous one's documents.
-func (p terraformProvider) cacheKey(documentKey string) string {
+// upstreamKey identifies the registry's base URL in cache keys, so pointing
+// a hostname at another registry does not serve the previous one's documents
+// or archives.
+func (p terraformProvider) upstreamKey() string {
 	digest := sha256.Sum256([]byte(p.baseURL))
-	return p.hostname + "-" + hex.EncodeToString(digest[:])[:terraformUpstreamKeyLength] + "/" + documentKey
+	return hex.EncodeToString(digest[:])[:terraformUpstreamKeyLength]
+}
+
+// cacheKey scopes a metadata cache key to the registry's hostname and base
+// URL.
+func (p terraformProvider) cacheKey(documentKey string) string {
+	return p.hostname + "-" + p.upstreamKey() + "/" + documentKey
+}
+
+// archiveFilename names a provider archive in the cache. The filename is
+// part of the artifact's cache identity, so it carries the registry's key.
+func (p terraformProvider) archiveFilename(version, goos, arch string) string {
+	return fmt.Sprintf("terraform-provider-%s_%s_%s_%s-%s.zip", p.name, version, goos, arch, p.upstreamKey())
 }
 
 func writeTerraformJSON(w http.ResponseWriter, v any) {
