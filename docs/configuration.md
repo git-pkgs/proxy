@@ -954,6 +954,12 @@ those yourself. The proxy locks `cache_dir` while it runs, through a
 `.gitcache-lock` file in it, so a second process given the same directory,
 such as another replica on a shared volume, fails to start; give each its own.
 
+Each repository's directory is named by its path as requested. Where
+`cache_dir` ignores case in file names, as on macOS and Windows by default,
+paths that differ only in case (`acme/widgets` and `acme/WIDGETS`) share one
+directory and are treated as one repository. Use a case-sensitive file system
+for an upstream whose repositories differ only in case.
+
 Git LFS objects are cached in the artifact cache, so they use the configured
 storage backend and retention rather than `cache_dir`. git-lfs finds the LFS
 API under the rewritten remote, at `/git/{name}/{repo}.git/info/lfs`, with no
@@ -1011,6 +1017,13 @@ and is fetched from that upstream alone: unlike the default repository, a named
 one doesn't fall back to the Gradle Plugin Portal. Files are cached per
 repository, so the same coordinates in two repositories never share a cache
 entry.
+
+In every repository, a file the proxy would cache (an artifact, checksum or
+signature) whose group directories contain a dot or colon
+(`org.foo/bar/1.0/bar-1.0.jar`), or whose artifact contains a colon, is not in
+the Maven layout and gets 404 without an upstream request. Its group would read
+the same as `org/foo`'s. Other paths there, such as `maven-metadata.xml` or a
+directory listing, are handled as anywhere else.
 
 `upstream.maven_repositories` is additive. `/maven/…` keeps serving
 `upstream.maven` with unchanged cache identities. A repository name is matched
@@ -1838,7 +1851,7 @@ curl -X DELETE http://localhost:8080/api/cache/maven/com.google.guava:guava/32.1
 curl -X DELETE 'http://localhost:8080/api/cache/maven/com.google.guava:guava/32.1.3-jre?filename=guava-32.1.3-jre.jar'
 ```
 
-The name is the package name the UI shows, for example `group:artifact` for Maven. The response lists the deleted files. The next request for a deleted file fetches it from the upstream again. The stored bytes are removed after the same delay as a replaced artifact, so downloads already in progress can finish.
+The name is the package name the UI shows, for example `group:artifact` for Maven. An RPM package's `filename` is its path under `upstream.rpm` (`updates/40/Everything/x86_64/Packages/c/curl-8.6.0-10.fc40.x86_64.rpm`), since repositories under one upstream can ship different files under one name. The response lists the deleted files. The next request for a deleted file fetches it from the upstream again. The stored bytes are removed after the same delay as a replaced artifact, so downloads already in progress can finish.
 
 Pushed archives are not touched: a whole-version delete skips them, and naming one answers 409. Delete those through the [hosted API](#hosted-packages).
 

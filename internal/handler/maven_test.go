@@ -31,6 +31,15 @@ func TestMavenParsePath(t *testing.T) {
 			"short/path",
 			"", "", "", "",
 		},
+		// Group directories never hold dots or are empty in the Maven
+		// layout; these would spell the same group as org/foo.
+		{"org.foo/bar/1.0/bar-1.0.jar", "", "", "", ""},
+		{"org/.foo/bar/1.0/bar-1.0.jar", "", "", "", ""},
+		{"org//foo/bar/1.0/bar-1.0.jar", "", "", "", ""},
+		// Cache identity is group:artifact, so a colon in either would
+		// let org:foo/bar and org/foo:bar share one entry.
+		{"org:foo/bar/1.0/bar-1.0.jar", "", "", "", ""},
+		{"org/foo:bar/1.0/bar-1.0.jar", "", "", "", ""},
 	}
 
 	for _, tt := range tests {

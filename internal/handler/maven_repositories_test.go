@@ -7,6 +7,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/git-pkgs/registries/fetch"
 )
@@ -134,6 +135,91 @@ func TestMavenRepositoryRepointedServesTheNewUpstream(t *testing.T) {
 			WithRepositories(map[string]string{"grails": upstream.srv.URL}).Routes()
 		if w := getMaven(h, "/grails"+mavenJarPath); w.Code != http.StatusOK || w.Body.String() != upstream.label+" "+mavenJarPath {
 			t.Errorf("%s: status = %d, body = %q", upstream.label, w.Code, w.Body)
+		}
+	}
+}
+
+// TestMavenDottedGroupDirectoryNotCachedAsGroup checks that a file whose
+// group directories contain dots or colons, which the Maven layout never
+// has, is not served: it would either share the cache entry of the group
+// the dots spell or be proxied past the denylist, scan and cooldown.
+func TestMavenDottedGroupDirectoryNotCachedAsGroup(t *testing.T) {
+	const standard = "/org/foo/bar/1.0/bar-1.0.jar"
+	odd := []string{
+		"/org.foo/bar/1.0/bar-1.0.jar", "/org.foo/bar/1.0/bar-1.0-linux.exe",
+		"/org/foo:x/bar/1.0/bar-1.0.jar", "/org/foo/b:ar/1.0/b:ar-1.0.jar",
+	}
+	central, requests := mavenRepoUpstream(t, "central", append([]string{standard}, odd...)...)
+	portal, _ := mavenRepoUpstream(t, "portal")
+	var restricted []string
+	for _, p := range odd {
+		restricted = append(restricted, "/restricted"+p)
+	}
+	grails, grailsRequests := mavenRepoUpstream(t, "grails", restricted...)
+	h := newMavenRepositoriesHandler(t, central, portal, grails)
+
+	if w := getMaven(h, standard); w.Code != http.StatusOK || w.Body.String() != "central "+standard {
+		t.Errorf("GET %s = %d %q", standard, w.Code, w.Body.String())
+	}
+	before := requests.Load() + grailsRequests.Load()
+	for _, p := range odd {
+		for _, path := range []string{p, "/grails" + p} {
+			if w := getMaven(h, path); w.Code != http.StatusNotFound {
+				t.Errorf("GET %s = %d %q, want 404", path, w.Code, w.Body.String())
+			}
+		}
+	}
+	if n := requests.Load() + grailsRequests.Load() - before; n != 0 {
+		t.Errorf("%d upstream requests for paths outside the Maven layout", n)
+	}
+}
+
+// TestMavenUncachedPathFallsBackToPluginPortal checks that a path proxied
+// without caching, such as a catalog, still tries the Gradle Plugin Portal
+// when the primary upstream lacks it.
+func TestMavenUncachedPathFallsBackToPluginPortal(t *testing.T) {
+	const uncached = "/org/foo/archetype-catalog.xml"
+	central, _ := mavenRepoUpstream(t, "central")
+	portal, _ := mavenRepoUpstream(t, "portal", uncached)
+	grails, _ := mavenRepoUpstream(t, "grails")
+	h := newMavenRepositoriesHandler(t, central, portal, grails)
+
+	if w := getMaven(h, uncached); w.Code != http.StatusOK || w.Body.String() != "portal "+uncached {
+		t.Errorf("GET %s = %d %q, want the Plugin Portal's copy", uncached, w.Code, w.Body.String())
+	}
+}
+
+func TestMavenUncachedPathKeepsByteRanges(t *testing.T) {
+	const uncached = "/org/foo/archetype-catalog.xml"
+	ranged := func() *httptest.Server {
+		srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			w.Header().Set("ETag", `"v2"`)
+			http.ServeContent(w, r, "archetype-catalog.xml", time.Time{}, strings.NewReader("0123456789"))
+		}))
+		t.Cleanup(srv.Close)
+		return srv
+	}
+	central, grails := ranged(), ranged()
+	portal, _ := mavenRepoUpstream(t, "portal")
+	h := newMavenRepositoriesHandler(t, central, portal, grails)
+
+	for _, p := range []string{uncached, "/grails" + uncached} {
+		req := httptest.NewRequest(http.MethodGet, p, nil)
+		req.Header.Set("Range", "bytes=2-4")
+		w := httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusPartialContent || w.Body.String() != "234" {
+			t.Errorf("GET %s with Range = %d %q, want 206 %q", p, w.Code, w.Body.String(), "234")
+		}
+
+		// A Range for an older copy gets the whole current file.
+		req = httptest.NewRequest(http.MethodGet, p, nil)
+		req.Header.Set("Range", "bytes=2-4")
+		req.Header.Set("If-Range", `"v1"`)
+		w = httptest.NewRecorder()
+		h.ServeHTTP(w, req)
+		if w.Code != http.StatusOK || w.Body.String() != "0123456789" {
+			t.Errorf("GET %s with stale If-Range = %d %q, want 200 with the whole file", p, w.Code, w.Body.String())
 		}
 	}
 }
