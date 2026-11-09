@@ -101,6 +101,21 @@ func TestRepositoryState(t *testing.T) {
 // TestRepositoryStateRetriesAFailedRead checks a read that fails, here on
 // a branch whose commit is missing, is reported as an error and read again
 // a while later even if the upstream isn't checked in between.
+// TestRepositoryStateFoldsCase checks that, where keys are folded, a
+// repository's state is found under any spelling of its key.
+func TestRepositoryStateFoldsCase(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.foldCase = true
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+
+	if _, err := tc.RepositoryState(context.Background(), "up/REPO.git"); err != nil {
+		t.Errorf("RepositoryState(up/REPO.git): %v", err)
+	}
+}
+
 func TestRepositoryStateRetriesAFailedRead(t *testing.T) {
 	upstream := newFakeUpstream(t)
 	upstream.newRepo("repo")

@@ -109,7 +109,7 @@ type cachedState struct {
 // that failed is kept for stateRetryDelay.
 func (c *Cache) RepositoryState(ctx context.Context, key string) (RepositoryState, error) {
 	c.mu.Lock()
-	rp := c.repos[key]
+	rp := c.repos[c.repoKey(key)]
 	c.mu.Unlock()
 	if rp == nil || !rp.exists() {
 		return RepositoryState{}, ErrNotFound
