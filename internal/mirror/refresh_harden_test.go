@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/denylist"
+	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/registries"
 	"github.com/git-pkgs/registries/fetch"
 )
@@ -306,6 +307,26 @@ func TestRefreshRefusesAPKIndexesOverTheSizeLimit(t *testing.T) {
 
 	progress := refreshOnce(t, m)
 	if progress.Failed != 1 || len(progress.Errors) != 1 || !strings.Contains(progress.Errors[0].Error, "larger than") || len(fetcher.fetched()) != 0 {
+		t.Errorf("progress = %+v, fetched %v; want the index failing for its size", progress, fetcher.fetched())
+	}
+}
+
+// TestRefreshRefusesIndexDocumentsOverTheMetadataLimit checks that an
+// InRelease larger than a metadata document may be fails its index.
+func TestRefreshRefusesIndexDocumentsOverTheMetadataLimit(t *testing.T) {
+	m, fetcher, idx := setupIndexRefresh(t)
+	release := "SHA256:\n 0000 1 main/binary-amd64/Packages.gz\n"
+	idx.set("/debian/dists/bookworm/InRelease", []byte(release))
+	idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", debCurlPackages(t, "7.88.1-10+deb12u8"))
+	clientFetchesCurl(t, m, "debian", idx.URL+"/debian/dists/bookworm/InRelease",
+		"deb", "7.88.1-10", "curl_7.88.1-10_amd64.deb", idx.URL+"/debian/pool/main/c/curl/curl_7.88.1-10_amd64.deb")
+
+	m.proxy.MetadataMaxSize = int64(len(release))
+	idx.set("/debian/dists/bookworm/InRelease", []byte(release+" 0000 1 contrib/binary-amd64/Packages.gz\n"))
+	fetcher.reset()
+
+	progress := refreshOnce(t, m)
+	if progress.Failed != 1 || len(progress.Errors) != 1 || !strings.Contains(progress.Errors[0].Error, handler.ErrMetadataTooLarge.Error()) || len(fetcher.fetched()) != 0 {
 		t.Errorf("progress = %+v, fetched %v; want the index failing for its size", progress, fetcher.fetched())
 	}
 }

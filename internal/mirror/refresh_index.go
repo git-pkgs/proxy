@@ -274,14 +274,15 @@ func rpmIndexFiles(ctx context.Context, m *Mirror, indexURL string, body []byte,
 
 // readIndexDocument reads the index document a refresh starts from directly
 // from upstream. Read through the metadata cache it would count as a client
-// fetching it, and the suite would never age out of since.
+// fetching it, and the suite would never age out of since. It is held in
+// memory, so it is limited like any metadata document.
 func (m *Mirror) readIndexDocument(ctx context.Context, indexURL string) ([]byte, error) {
 	body, err := m.openIndex(ctx, indexURL)
 	if err != nil {
 		return nil, err
 	}
 	defer func() { _ = body.Close() }()
-	return io.ReadAll(&indexLimitReader{r: body, url: indexURL, remaining: maxIndexBytes})
+	return m.proxy.ReadMetadata(body)
 }
 
 // openIndex starts reading an index from upstream.
