@@ -1,10 +1,13 @@
 package server
 
 import (
+	"context"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/url"
 	"strings"
+	"time"
 
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/gitcache"
@@ -17,6 +20,9 @@ type GitRepositoriesData struct {
 	Rows []GitRepositoryRow
 	// Summary counts the rows and their size.
 	Summary string
+	// Pending counts the rows whose branches and commits this view had no
+	// time left to read, and is empty when it read them all.
+	Pending string
 }
 
 // GitRepositoryRow is one cached repository on the git page.
@@ -33,10 +39,21 @@ type GitRepositoryRow struct {
 	Refs                               string
 }
 
+// gitStateBudget is how long one view of the git page spends reading what
+// the repositories hold. The cache keeps what a view read, so the next one
+// goes on where this one stopped.
+const gitStateBudget = 2 * time.Second
+
 func (s *Server) handleGitRepositories(w http.ResponseWriter, r *http.Request) {
 	repos := s.git.Repositories()
+	ctx, cancel := context.WithTimeout(r.Context(), gitStateBudget)
+	defer cancel()
+	pending := 0
 	state := func(key string) (gitcache.RepositoryState, bool) {
-		st, err := s.git.RepositoryState(r.Context(), key)
+		st, err := s.git.RepositoryState(ctx, key)
+		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+			pending++
+		}
 		return st, err == nil
 	}
 	rows, size := gitRepositoryRows(s.cfg.BaseURL, s.cfg.Upstream.Git, repos, state)
@@ -44,6 +61,9 @@ func (s *Server) handleGitRepositories(w http.ResponseWriter, r *http.Request) {
 		Layout:  s.layoutFor(r),
 		Rows:    rows,
 		Summary: plural(len(rows), "repository", "repositories") + " in the git cache, " + formatSize(size),
+	}
+	if pending > 0 {
+		data.Pending = plural(pending, "repository", "repositories")
 	}
 	if err := s.templates.Render(w, "git_repositories", data); err != nil {
 		s.logger.Error("failed to render git repositories", "error", err)

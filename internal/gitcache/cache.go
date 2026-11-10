@@ -98,6 +98,8 @@ type Cache struct {
 	// foldCase is set where the cache directory ignores case, so keys that
 	// differ only in case, which name one directory, are one repository.
 	foldCase bool
+	// stateReads lets one RepositoryState read run git at a time.
+	stateReads chan struct{}
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -142,8 +144,9 @@ type repo struct {
 	lastUsed    atomic.Int64
 	lastChecked atomic.Int64
 	usedWritten atomic.Int64
-	// requests counts clones and fetches, and lastError is the last failed
-	// refresh, nil once one succeeds. Neither is kept across restarts.
+	// requests counts the times clients read the refs, and lastError is the
+	// last failed refresh, nil once one succeeds. Neither is kept across
+	// restarts.
 	requests  atomic.Int64
 	lastError atomic.Pointer[refreshError]
 	// state is the last RepositoryState read.
@@ -219,6 +222,7 @@ func New(opts Options) (*Cache, error) {
 		fetches:         make(chan struct{}, maxConcurrentFetches),
 		uploadPacks:     make(chan struct{}, uploadPacks),
 		refListings:     make(chan struct{}, refListings),
+		stateReads:      make(chan struct{}, 1),
 		refCheckTimeout: defaultRefCheckTimeout,
 		lowSpeedTime:    defaultLowSpeedTime,
 		maxRequestBody:  defaultMaxRequestBody,

@@ -197,6 +197,40 @@ func TestRepositoryStateRetriesAFailedRead(t *testing.T) {
 	}
 }
 
+// TestRepositoryStateReadsOneAtATime checks a state that isn't cached waits
+// for the read running before it, gives up with its context, and that a
+// cached state needs neither.
+func TestRepositoryStateReadsOneAtATime(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+
+	tc.stateReads <- struct{}{}
+	ctx, cancel := context.WithTimeout(context.Background(), 50*time.Millisecond)
+	defer cancel()
+	if st, err := tc.RepositoryState(ctx, "up/repo.git"); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("state read while another runs = %+v, %v; want the context's error", st, err)
+	}
+	if tc.repo("up/repo.git").state.Load() != nil {
+		t.Error("a read that gave up was kept")
+	}
+	<-tc.stateReads
+	want, err := tc.RepositoryState(context.Background(), "up/repo.git")
+	if err != nil || want.Commit == "" {
+		t.Fatalf("state once the other read is done = %+v, %v", want, err)
+	}
+
+	tc.stateReads <- struct{}{}
+	defer func() { <-tc.stateReads }()
+	done, stop := context.WithCancel(context.Background())
+	stop()
+	if got, err := tc.RepositoryState(done, "up/repo.git"); err != nil || got != want {
+		t.Errorf("cached state with a read running and the context done = %+v, %v; want %+v", got, err, want)
+	}
+}
+
 // TestReadStateOfAnEmptyRepository checks a repository with no commits has
 // a state, not an error.
 func TestReadStateOfAnEmptyRepository(t *testing.T) {

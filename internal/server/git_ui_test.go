@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"io"
 	"log/slog"
 	"net/http"
@@ -42,6 +43,77 @@ func TestGitRepositoriesPage(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("page lacks %q:\n%s", want, body)
 		}
+	}
+}
+
+// TestGitRepositoriesPageSaysWhatIsNotReadYet checks a view that is out of
+// time for reading commits lists the repositories without them and says so.
+func TestGitRepositoriesPageSaysWhatIsNotReadYet(t *testing.T) {
+	cacheDir := t.TempDir()
+	upstreams := map[string]config.GitUpstream{"up": {URL: "https://example.com"}}
+	upstreamDir := gitcache.UpstreamDir("up", "https://example.com")
+	for _, name := range []string{"one", "two"} {
+		gitCommand(t, "", "init", "--quiet", "--bare", "--initial-branch=main", filepath.Join(cacheDir, upstreamDir, "team", name+".git"))
+	}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cache, err := gitcache.New(gitcache.Options{
+		CacheDir: cacheDir, RefreshWait: time.Second, StaleMaxAge: time.Hour,
+		Client: &http.Client{}, Logger: logger, Upstreams: map[string]string{"up": upstreamDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Close() })
+	s := &Server{cfg: &config.Config{BaseURL: "http://proxy.example"}, git: cache, logger: logger, templates: &Templates{}}
+	s.cfg.Upstream.Git = upstreams
+
+	view := func(ctx context.Context) string {
+		w := httptest.NewRecorder()
+		s.handleGitRepositories(w, httptest.NewRequest(http.MethodGet, "/ui/git", nil).WithContext(ctx))
+		return w.Body.String()
+	}
+	done, stop := context.WithCancel(context.Background())
+	stop()
+	body := view(done)
+	for _, want := range []string{"2 repositories in the git cache", "team/one", "team/two", "not read yet for 2 repositories"} {
+		if !strings.Contains(body, want) {
+			t.Errorf("page out of time lacks %q:\n%s", want, body)
+		}
+	}
+	if strings.Contains(body, "0 branches") {
+		t.Errorf("page out of time shows a state:\n%s", body)
+	}
+	body = view(context.Background())
+	if !strings.Contains(body, "0 branches, 0 tags") || strings.Contains(body, "not read yet") {
+		t.Errorf("page with time shows no state, or says one is missing:\n%s", body)
+	}
+}
+
+// TestGitRepositoryRowsKeepCase checks an upstream, a repos pattern and a
+// repository with uppercase letters are listed as they are spelled. Where
+// cache_dir ignores case, as on macOS and Windows, the cache tracks them
+// under a lowercased key.
+func TestGitRepositoryRowsKeepCase(t *testing.T) {
+	cacheDir := t.TempDir()
+	upstreams := map[string]config.GitUpstream{"Up": {URL: "https://example.com", Repos: []string{"Team/*"}}}
+	upstreamDir := gitcache.UpstreamDir("Up", "https://example.com")
+	gitCommand(t, "", "init", "--quiet", "--bare", filepath.Join(cacheDir, upstreamDir, "Team", "Repo.git"))
+	cache, err := gitcache.New(gitcache.Options{
+		CacheDir: cacheDir, RefreshWait: time.Second, StaleMaxAge: time.Hour,
+		Client: &http.Client{}, Logger: slog.New(slog.NewTextHandler(io.Discard, nil)), Upstreams: map[string]string{"Up": upstreamDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Close() })
+
+	rows, _ := gitRepositoryRows("http://proxy.example", upstreams, cache.Repositories(), func(key string) (gitcache.RepositoryState, bool) {
+		st, err := cache.RepositoryState(context.Background(), key)
+		return st, err == nil
+	})
+	if len(rows) != 1 || rows[0].Upstream != "Up" || rows[0].Repo != "Team/Repo" ||
+		rows[0].CloneURL != "http://proxy.example/git/Up/Team/Repo.git" || rows[0].Refs == "" {
+		t.Errorf("rows %+v, want Up / Team/Repo with its clone URL and state", rows)
 	}
 }
 

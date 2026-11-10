@@ -127,6 +127,11 @@ type cachedState struct {
 // read again only after the repository's next check of the upstream, so a
 // page listing many repositories runs git for those that changed. A read
 // that failed is kept for stateRetryDelay.
+//
+// One read runs at a time, however many callers ask, so listing a large
+// cache doesn't start git processes without bound. A caller whose ctx ends
+// before its read is done gets ctx's error; a state already read is
+// returned without waiting.
 func (c *Cache) RepositoryState(ctx context.Context, key string) (RepositoryState, error) {
 	c.mu.Lock()
 	rp := c.repos[c.repoKey(key)]
@@ -134,17 +139,41 @@ func (c *Cache) RepositoryState(ctx context.Context, key string) (RepositoryStat
 	if rp == nil || !rp.exists() {
 		return RepositoryState{}, ErrNotFound
 	}
-	checked := rp.lastChecked.Load()
-	if cached := rp.state.Load(); cached != nil && cached.checked == checked &&
-		(cached.err == nil || time.Now().Before(cached.retryAt)) {
+	if cached := rp.knownState(); cached != nil {
 		return cached.state, cached.err
 	}
-	state, err := c.readState(ctx, rp.dir)
-	// A read the request gave up on says nothing about the repository.
-	if ctx.Err() == nil {
-		rp.state.Store(&cachedState{checked: checked, state: state, err: err, retryAt: time.Now().Add(stateRetryDelay)})
+	if err := ctx.Err(); err != nil {
+		return RepositoryState{}, err
 	}
+	select {
+	case c.stateReads <- struct{}{}:
+		defer func() { <-c.stateReads }()
+	case <-ctx.Done():
+		return RepositoryState{}, ctx.Err()
+	}
+	// The read this one waited for may have been of the same repository.
+	if cached := rp.knownState(); cached != nil {
+		return cached.state, cached.err
+	}
+	checked := rp.lastChecked.Load()
+	state, err := c.readState(ctx, rp.dir)
+	if err != nil && ctx.Err() != nil {
+		// A read the caller gave up on says nothing about the repository.
+		return RepositoryState{}, ctx.Err()
+	}
+	rp.state.Store(&cachedState{checked: checked, state: state, err: err, retryAt: time.Now().Add(stateRetryDelay)})
 	return state, err
+}
+
+// knownState is the state read since rp's last check of the upstream, or nil
+// if it has to be read.
+func (rp *repo) knownState() *cachedState {
+	cached := rp.state.Load()
+	if cached == nil || cached.checked != rp.lastChecked.Load() ||
+		(cached.err != nil && !time.Now().Before(cached.retryAt)) {
+		return nil
+	}
+	return cached
 }
 
 func (c *Cache) readState(ctx context.Context, dir string) (RepositoryState, error) {
