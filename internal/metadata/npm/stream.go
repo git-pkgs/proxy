@@ -272,8 +272,7 @@ func decodeValue(dec *jsontext.Decoder, v any) error {
 	return json.Unmarshal(raw, v)
 }
 
-// objectKeys reads a value and returns its keys when it is an object. The
-// members' values are skipped without being kept.
+// objectKeys reads a value and returns its keys when it is an object.
 func objectKeys(dec *jsontext.Decoder) ([]string, bool, error) {
 	kind := dec.PeekKind()
 	if kind != '{' && kind != '[' {
@@ -389,8 +388,7 @@ func LookupVersion(r io.Reader, version string) (VersionEntry, error) {
 }
 
 // objectMember reads a value and returns its member key when it is an object
-// that has one, the last if repeated, or nil. Other members are skipped
-// without being kept.
+// that has one, the last if repeated, or nil.
 func objectMember(dec *jsontext.Decoder, key string) (json.RawMessage, error) {
 	kind := dec.PeekKind()
 	if kind != '{' && kind != '[' {

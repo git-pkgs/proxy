@@ -230,7 +230,7 @@ func TestLookupVersion(t *testing.T) {
 // invalid UTF-8 in strings, and a version entry's bytes kept as they are.
 func TestStreamReadsJSONAsEncodingJSON(t *testing.T) {
 	entry := "{ \"name\" : \"demo\",\n  \"x\":1, \"x\":2, \"note\":\"caf\xe9\" }"
-	doc := "{\"readme\":\"bad \xff byte\",\"meta\":{\"k\":1,\"k\":2},\"dist-tags\":{\"latest\":\"1.0.0\",\"latest\":\"1.0.0\"}," +
+	doc := "{\"readme\":\"bad \xff byte\",\"meta\":{\"k\":1,\"k\":2},\"dist-tags\":{\"latest\":\"0.9.0\",\"latest\":\"1.0.0\"}," +
 		"\"versions\":{\"1.0.0\":" + entry + "},\"time\":{\"1.0.0\":\"2020-01-01T00:00:00Z\"}}\n"
 	if !json.Valid([]byte(strings.ToValidUTF8(doc, "?"))) {
 		t.Fatal("test document isn't JSON")

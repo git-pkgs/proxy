@@ -39,8 +39,7 @@ type relay struct {
 
 type relayRoute struct {
 	repoURL string
-	// ctx ends when the fetch does, which stops its relayed requests, so a
-	// git helper left behind by a killed git does not keep downloading.
+	// ctx ends when the fetch does.
 	ctx context.Context
 	// limit caps the response bytes the route relays, 0 for no cap, and
 	// budget, when set, holds space within MaxSize for them. exceeded and
