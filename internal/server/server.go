@@ -189,7 +189,11 @@ func New(cfg *config.Config, logger *slog.Logger, buildInfo BuildInfo) (*Server,
 		// Fall back to file:// with Path
 		storageURL = "file://" + cfg.Storage.Path //nolint:staticcheck // backwards compat
 	}
-	store, err := storage.OpenBucket(context.Background(), storageURL)
+	var storageOpts []storage.Option
+	if cfg.Storage.DirectServe && cfg.Storage.DirectServeBaseURL != "" {
+		storageOpts = append(storageOpts, storage.WithSignEndpoint(cfg.Storage.DirectServeBaseURL))
+	}
+	store, err := storage.OpenBucket(context.Background(), storageURL, storageOpts...)
 	if err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("initializing storage: %w", err)
@@ -313,7 +317,6 @@ func (s *Server) serve(listener net.Listener) error {
 	proxy.GradleMaxUploadSize = s.cfg.ParseGradleBuildCacheMaxUploadSize()
 	proxy.DirectServe = s.cfg.Storage.DirectServe
 	proxy.DirectServeTTL = s.cfg.ParseDirectServeTTL()
-	proxy.DirectServeBaseURL = s.cfg.Storage.DirectServeBaseURL
 	proxy.StreamArtifacts = !s.cfg.Storage.CacheArtifacts
 	if err := ConfigureDenylist(s.cfg, proxy); err != nil {
 		return err

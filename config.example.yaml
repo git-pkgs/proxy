@@ -138,12 +138,15 @@ storage:
   # How long presigned URLs remain valid (e.g. "5m", "1h"). Default: "15m".
   direct_serve_ttl: "15m"
 
-  # Public base URL to substitute into presigned URLs. Set this when the
-  # proxy reaches storage at an internal address (127.0.0.1, a Docker
-  # service name) but clients must use a public hostname. Only scheme and
-  # host are used; the signed path and query are preserved. For S3/MinIO
-  # the reverse proxy at this address must forward requests with the
-  # internal Host header or the SigV4 signature will not validate.
+  # Public base URL for presigned URLs. Set this when the proxy reaches
+  # storage at an internal address (127.0.0.1, a Docker service name, or
+  # VPC DNS) but clients must use a public hostname. Only scheme and host
+  # are used. For S3/MinIO the URL is signed for this host, so the server
+  # there must receive that Host header: a reverse proxy or CDN that sends
+  # the internal or bucket host to the origin fails signature validation.
+  # With virtual-hosted addressing (no use_path_style) the URL carries no
+  # bucket name, so this must be the bucket's own hostname. For GCS and
+  # Azure the host is replaced after signing.
   # direct_serve_base_url: "https://minio.example.com"
 
 # Database configuration

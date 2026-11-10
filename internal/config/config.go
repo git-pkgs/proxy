@@ -519,10 +519,10 @@ type StorageConfig struct {
 	// Uses Go duration syntax (e.g. "5m", "1h"). Default: "15m".
 	DirectServeTTL string `json:"direct_serve_ttl" yaml:"direct_serve_ttl"`
 
-	// DirectServeBaseURL overrides the scheme and host of presigned URLs
-	// before returning them to clients. Useful when the proxy reaches
-	// storage at an internal address (e.g. 127.0.0.1 or a Docker hostname)
-	// but clients must use a public one.
+	// DirectServeBaseURL sets the scheme and host of presigned URLs. Useful
+	// when the proxy reaches storage at an internal address (e.g. 127.0.0.1
+	// or a Docker hostname) but clients must use a public one. S3 URLs are
+	// signed for this host; GCS and Azure URLs have it replaced after signing.
 	DirectServeBaseURL string `json:"direct_serve_base_url" yaml:"direct_serve_base_url"`
 
 	// CacheArtifacts stores fetched artifacts so later downloads are served

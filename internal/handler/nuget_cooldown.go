@@ -1,13 +1,16 @@
 package handler
 
 import (
+	"bufio"
 	"bytes"
 	"compress/gzip"
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -36,36 +39,45 @@ func (h *NuGetHandler) nugetCooldownApplies(id string) bool {
 // Cache upstream documents, not filtered results, so policy changes and elapsed
 // time take effect even while metadata is fresh. Include the upstream in the key.
 func (h *NuGetHandler) nugetMetadata(ctx context.Context, path string) (map[string]any, error) {
-	target := h.upstreamURL + path
-	key := fmt.Sprintf("_cooldown/%x", sha256.Sum256([]byte(target)))
 	var document map[string]any
-	validate := func(body []byte) error {
-		var err error
-		document, err = h.decodeNuGetMetadata(body)
+	err := h.readNuGetMetadata(ctx, path, func(body []byte) (err error) {
+		document, err = decodeNuGetDocument(body)
 		return err
-	}
-	_, _, err := h.proxy.fetchOrCacheMetadata(ctx, "nuget", key, target, "", validate)
+	})
 	if err != nil {
 		return nil, err
 	}
 	return document, nil
 }
 
-func (h *NuGetHandler) decodeNuGetMetadata(body []byte) (map[string]any, error) {
-	// Normally the HTTP transport decodes gzip. Also support compressed cached
-	// bytes and clients with transparent decompression disabled, with the same
-	// metadata limit applied to the decompressed document.
-	if bytes.HasPrefix(body, []byte{0x1f, 0x8b}) {
-		reader, err := gzip.NewReader(bytes.NewReader(body))
-		if err != nil {
-			return nil, err
+// readNuGetMetadata fetches a document and passes it to decode, which keeps
+// what its caller needs. decode can run more than once, and the document is
+// the one it last accepted. It must not modify body.
+func (h *NuGetHandler) readNuGetMetadata(ctx context.Context, path string, decode func(body []byte) error) error {
+	target := h.upstreamURL + path
+	key := fmt.Sprintf("_cooldown/%x", sha256.Sum256([]byte(target)))
+	validate := func(body []byte) error {
+		// Normally the HTTP transport decodes gzip. Also support compressed cached
+		// bytes and clients with transparent decompression disabled, with the same
+		// metadata limit applied to the decompressed document.
+		if bytes.HasPrefix(body, []byte{0x1f, 0x8b}) {
+			reader, err := gzip.NewReader(bytes.NewReader(body))
+			if err != nil {
+				return err
+			}
+			defer func() { _ = reader.Close() }()
+			body, err = h.proxy.ReadMetadata(reader)
+			if err != nil {
+				return err
+			}
 		}
-		defer func() { _ = reader.Close() }()
-		body, err = h.proxy.ReadMetadata(reader)
-		if err != nil {
-			return nil, err
-		}
+		return decode(body)
 	}
+	_, _, err := h.proxy.fetchOrCacheMetadata(ctx, "nuget", key, target, "", validate)
+	return err
+}
+
+func decodeNuGetDocument(body []byte) (map[string]any, error) {
 	var document map[string]any
 	if err := json.Unmarshal(body, &document); err != nil {
 		return nil, fmt.Errorf("parsing NuGet metadata: %w", err)
@@ -76,13 +88,208 @@ func (h *NuGetHandler) decodeNuGetMetadata(body []byte) (map[string]any, error) 
 	return document, nil
 }
 
+// nugetTimes holds the members of a registration index, page or leaf that
+// decide which versions are in cooldown. Reading only them skips nearly all of
+// a registration.
+type nugetTimes struct {
+	// ID is the node's link. It is kept for the pages of an index only.
+	ID           string
+	Version      string
+	Published    string
+	CatalogEntry nugetCatalogTimes
+	// Items is nil unless the node has an items array.
+	Items []nugetTimes
+}
+
+// nugetCatalogTimes is the catalogEntry of a registration leaf. It stays unset
+// unless the entry is an object: standalone leaves carry a link there.
+type nugetCatalogTimes struct {
+	set       bool
+	version   string
+	published string
+}
+
+// release returns the version and publish time of a leaf. A leaf embedded in a
+// page carries them in catalogEntry, a standalone leaf at its root.
+func (t *nugetTimes) release() (version, published string) {
+	if t.CatalogEntry.set {
+		return t.CatalogEntry.version, t.CatalogEntry.published
+	}
+	return t.Version, t.Published
+}
+
+func (h *NuGetHandler) nugetTimesMetadata(ctx context.Context, path string) (*nugetTimes, error) {
+	document, _, err := h.nugetTimesDocument(ctx, path)
+	return document, err
+}
+
+// nugetTimesDocument is nugetTimesMetadata that also returns the document
+// itself, for a caller that goes on to copy it.
+func (h *NuGetHandler) nugetTimesDocument(ctx context.Context, path string) (*nugetTimes, []byte, error) {
+	var document *nugetTimes
+	var body []byte
+	err := h.readNuGetMetadata(ctx, path, func(candidate []byte) error {
+		decoded, err := decodeNuGetTimes(candidate)
+		if err == nil {
+			document, body = decoded, candidate
+		}
+		return err
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	return document, body, nil
+}
+
+// decodeNuGetTimes reads a registration document the way writeNuGetRegistration
+// copies it, so that what is decided here holds for what is written there:
+// with the same decoder, members by their exact names, and a member of an
+// unexpected type left empty. A node that has one of these members twice is
+// refused, as which of the two counts would be the reader's choice.
+func decodeNuGetTimes(body []byte) (*nugetTimes, error) {
+	dec := newNuGetDecoder(body)
+	if dec.PeekKind() == 'n' {
+		return nil, fmt.Errorf("empty NuGet metadata")
+	}
+	document := &nugetTimes{}
+	var scratch []byte
+	var err error
+	if dec.PeekKind() == '{' {
+		err = document.decode(dec, 0, &scratch)
+	} else if _, err = dec.ReadValue(); err == nil {
+		err = errors.New("not an object")
+	}
+	if err == nil {
+		// Nothing may follow the document.
+		if _, err = dec.ReadToken(); errors.Is(err, io.EOF) {
+			return document, nil
+		} else if err == nil {
+			err = errors.New("data after the document")
+		}
+	}
+	return nil, fmt.Errorf("parsing NuGet metadata: %w", err)
+}
+
+// decode reads the node dec is at, which is depth levels below the document.
+func (t *nugetTimes) decode(dec *jsontext.Decoder, depth int, scratch *[]byte) error {
+	if _, err := dec.ReadToken(); err != nil {
+		return err
+	}
+	seen := 0
+	for dec.PeekKind() != '}' {
+		kind, err := readNuGetMember(dec, &seen, scratch)
+		if err != nil {
+			return err
+		}
+		switch value := dec.PeekKind(); {
+		case kind == nugetMemberItems && value == '[':
+			err = t.decodeItems(dec, depth, scratch)
+		case kind == nugetMemberCatalogEntry && value == '{':
+			err = t.CatalogEntry.decode(dec, scratch)
+		case kind == nugetMemberID && value == '"' && depth == 1:
+			t.ID, err = readNuGetString(dec, scratch)
+		case kind == nugetMemberVersion && value == '"':
+			t.Version, err = readNuGetString(dec, scratch)
+		case kind == nugetMemberPublished && value == '"':
+			t.Published, err = readNuGetString(dec, scratch)
+		default:
+			err = dec.SkipValue()
+		}
+		if err != nil {
+			return err
+		}
+	}
+	_, err := dec.ReadToken()
+	return err
+}
+
+// decodeItems reads the items array dec is at. A child that is not an object
+// is an empty node.
+func (t *nugetTimes) decodeItems(dec *jsontext.Decoder, depth int, scratch *[]byte) error {
+	if _, err := dec.ReadToken(); err != nil {
+		return err
+	}
+	t.Items = []nugetTimes{}
+	for dec.PeekKind() != ']' {
+		t.Items = append(t.Items, nugetTimes{})
+		var err error
+		if dec.PeekKind() == '{' {
+			err = t.Items[len(t.Items)-1].decode(dec, depth+1, scratch)
+		} else {
+			err = dec.SkipValue()
+		}
+		if err != nil {
+			return err
+		}
+	}
+	_, err := dec.ReadToken()
+	return err
+}
+
+func (e *nugetCatalogTimes) decode(dec *jsontext.Decoder, scratch *[]byte) error {
+	if _, err := dec.ReadToken(); err != nil {
+		return err
+	}
+	e.set = true
+	seen := 0
+	for dec.PeekKind() != '}' {
+		kind, err := readNuGetMember(dec, &seen, scratch)
+		if err != nil {
+			return err
+		}
+		switch value := dec.PeekKind(); {
+		case kind == nugetMemberVersion && value == '"':
+			e.version, err = readNuGetString(dec, scratch)
+		case kind == nugetMemberPublished && value == '"':
+			e.published, err = readNuGetString(dec, scratch)
+		default:
+			err = dec.SkipValue()
+		}
+		if err != nil {
+			return err
+		}
+	}
+	_, err := dec.ReadToken()
+	return err
+}
+
+// nugetDecidingMembers are the members that decide what a node is and whether
+// its release is in cooldown.
+const nugetDecidingMembers = 1<<nugetMemberID | 1<<nugetMemberItems | 1<<nugetMemberCatalogEntry |
+	1<<nugetMemberVersion | 1<<nugetMemberPublished
+
+// readNuGetMember reads the name of the next member of an object and returns
+// its kind. seen collects the deciding members the object has had.
+func readNuGetMember(dec *jsontext.Decoder, seen *int, scratch *[]byte) (int, error) {
+	raw, err := dec.ReadValue()
+	if err != nil {
+		return nugetMemberOther, err
+	}
+	kind := nugetMemberKind(nugetUnquote(scratch, raw))
+	if bit := 1 << kind; bit&nugetDecidingMembers != 0 {
+		if *seen&bit != 0 {
+			return kind, fmt.Errorf("member %s is repeated", raw)
+		}
+		*seen |= bit
+	}
+	return kind, nil
+}
+
+func readNuGetString(dec *jsontext.Decoder, scratch *[]byte) (string, error) {
+	raw, err := dec.ReadValue()
+	if err != nil {
+		return "", err
+	}
+	return string(nugetUnquote(scratch, raw)), nil
+}
+
 // Prefer semver2, but a configured source may advertise only an older hive.
 // Retry only advertised aliases on 404; transport/validation errors must not
 // silently switch to a hive with less complete metadata. Keep requests on the
 // configured upstream, consistent with the service-index route rewriting.
-func (h *NuGetHandler) nugetRegistrationMetadata(ctx context.Context, suffix string) (map[string]any, string, error) {
+func (h *NuGetHandler) nugetRegistrationMetadata(ctx context.Context, suffix string) (*nugetTimes, string, error) {
 	path := nugetRegistrationPath + suffix
-	document, err := h.nugetMetadata(ctx, path)
+	document, err := h.nugetTimesMetadata(ctx, path)
 	if !errors.Is(err, ErrUpstreamNotFound) {
 		return document, path, err
 	}
@@ -105,7 +312,7 @@ func (h *NuGetHandler) nugetRegistrationMetadata(ctx context.Context, suffix str
 		}
 		seen[prefix] = true
 		path = prefix + suffix
-		document, err = h.nugetMetadata(ctx, path)
+		document, err = h.nugetTimesMetadata(ctx, path)
 		if !errors.Is(err, ErrUpstreamNotFound) {
 			return document, path, err
 		}
@@ -142,7 +349,7 @@ func (h *NuGetHandler) handleVersionList(w http.ResponseWriter, r *http.Request)
 	if h.nugetCooldownApplies(id) {
 		registration, registrationPath, err := h.nugetRegistrationMetadata(r.Context(), url.PathEscape(id)+"/index.json")
 		if err == nil {
-			err = h.expandNuGetPages(r.Context(), registration, registrationPath)
+			err = h.expandNuGetPageTimes(r.Context(), registration, registrationPath, nil)
 		}
 		if err != nil {
 			h.nugetMetadataError(w, err)
@@ -185,21 +392,13 @@ func (h *NuGetHandler) nugetDownloadAllowed(ctx context.Context, id, version str
 	if err != nil {
 		return false, err
 	}
-	return h.nugetLeafAllowed(leaf, id), nil
+	_, published := leaf.release()
+	return h.nugetPublishedAllowed(id, published), nil
 }
 
-// A standalone leaf has published at its root; leaves embedded in pages carry
-// it in catalogEntry. Missing/invalid timestamps retain the existing permissive
-// behavior, but fetch and JSON errors must not bypass the policy.
-func (h *NuGetHandler) nugetLeafAllowed(leaf map[string]any, id string) bool {
-	if !h.cooldownEnabled() {
-		return true
-	}
-	entry := nugetCatalogEntry(leaf)
-	if id == "" {
-		id, _ = entry["id"].(string)
-	}
-	published, _ := entry["published"].(string)
+// Missing/invalid timestamps retain the existing permissive behavior, but
+// fetch and JSON errors must not bypass the policy.
+func (h *NuGetHandler) nugetPublishedAllowed(id, published string) bool {
 	when, err := time.Parse(time.RFC3339, published)
 	if err != nil {
 		return true
@@ -207,23 +406,12 @@ func (h *NuGetHandler) nugetLeafAllowed(leaf map[string]any, id string) bool {
 	return h.proxy.cooldown().IsAllowed("nuget", canonicalPackagePURL("nuget", strings.ToLower(id)), when)
 }
 
-func nugetCatalogEntry(leaf map[string]any) map[string]any {
-	if entry, ok := leaf["catalogEntry"].(map[string]any); ok {
-		return entry
-	}
-	return leaf
-}
-
-func (h *NuGetHandler) collectNuGetBlockedVersions(document map[string]any, id string, blocked map[string]bool) {
-	entry := nugetCatalogEntry(document)
-	if version, ok := entry["version"].(string); ok && !h.nugetLeafAllowed(document, id) {
+func (h *NuGetHandler) collectNuGetBlockedVersions(document *nugetTimes, id string, blocked map[string]bool) {
+	if version, published := document.release(); version != "" && !h.nugetPublishedAllowed(id, published) {
 		blocked[nugetVersionKey(version)] = true
 	}
-	items, _ := document["items"].([]any)
-	for _, item := range items {
-		if child, ok := item.(map[string]any); ok {
-			h.collectNuGetBlockedVersions(child, id, blocked)
-		}
+	for i := range document.Items {
+		h.collectNuGetBlockedVersions(&document.Items[i], id, blocked)
 	}
 }
 
@@ -234,22 +422,41 @@ func (h *NuGetHandler) handleRegistration(w http.ResponseWriter, r *http.Request
 	}
 	id := nugetRegistrationID(r.URL.Path)
 	applyCooldown := h.nugetCooldownApplies(id)
-	document, err := h.nugetMetadata(r.Context(), r.URL.Path)
-	if err == nil && applyCooldown {
-		err = h.expandNuGetPages(r.Context(), document, r.URL.Path)
+	// Everything the response is made of is loaded and checked before any of
+	// it is written, so a registration that can't be filtered is an error
+	// response and not a cut-off document.
+	document, body, err := h.nugetTimesDocument(r.Context(), r.URL.Path)
+	var pages map[string][]byte
+	if err == nil && applyCooldown && strings.HasSuffix(r.URL.Path, "/index.json") {
+		pages = make(map[string][]byte)
+		err = h.expandNuGetPageTimes(r.Context(), document, r.URL.Path, pages)
 	}
 	if err != nil {
 		h.nugetMetadataError(w, err)
 		return
 	}
-	_, hasItems := document["items"]
-	if applyCooldown && !h.filterNuGetRegistration(document, id) && !hasItems {
-		JSONError(w, http.StatusNotFound, "version not found")
-		return
+	if applyCooldown && document.Items == nil {
+		if _, published := document.release(); !h.nugetPublishedAllowed(id, published) {
+			JSONError(w, http.StatusNotFound, "version not found")
+			return
+		}
 	}
-	h.rewriteNuGetRegistrationLinks(document)
+	out := &countingWriter{w: w}
+	buffered := bufio.NewWriterSize(out, nugetFlushSize)
 	w.Header().Set(headerContentType, contentTypeJSON)
-	_ = json.NewEncoder(w).Encode(document)
+	err = h.writeNuGetRegistration(buffered, body, id, applyCooldown, pages)
+	if err == nil {
+		err = buffered.Flush()
+	}
+	if err != nil {
+		h.proxy.Logger.Error("failed to write NuGet registration", "path", r.URL.Path, "error", err)
+		if out.n == 0 {
+			JSONError(w, http.StatusBadGateway, "failed to process package metadata")
+			return
+		}
+		// Abort rather than end a partial document as if it were complete.
+		panic(http.ErrAbortHandler)
+	}
 }
 
 func nugetRegistrationID(path string) string {
@@ -262,91 +469,54 @@ func nugetRegistrationID(path string) string {
 	return ""
 }
 
-// Only expand index pages, never recursively follow arbitrary upstream links.
-// Pin requests to this configured upstream and the current package's page path.
-func (h *NuGetHandler) expandNuGetPages(ctx context.Context, document map[string]any, path string) error {
-	if !strings.HasSuffix(path, "/index.json") {
-		return nil
-	}
-	items, ok := document["items"].([]any)
-	if !ok {
+// expandNuGetPageTimes gives each page of a registration index that only
+// links to its leaves the leaves of the page it links to. With bodies not nil
+// the linked pages themselves are kept in it, by link. Only index pages are
+// expanded, never arbitrary upstream links followed: requests are pinned to
+// this configured upstream and the current package's page path.
+func (h *NuGetHandler) expandNuGetPageTimes(ctx context.Context, index *nugetTimes, path string, bodies map[string][]byte) error {
+	if index.Items == nil {
 		return fmt.Errorf("missing registration pages")
 	}
-	base, err := url.Parse(h.upstreamURL + path)
-	if err != nil {
-		return err
-	}
-	pagePrefix := strings.TrimSuffix(base.Path, "index.json") + "page/"
-	for _, item := range items {
-		page, ok := item.(map[string]any)
-		if !ok {
-			return fmt.Errorf("invalid registration page")
-		}
-		if _, ok := page["items"].([]any); ok {
+	for i := range index.Items {
+		page := &index.Items[i]
+		if page.Items != nil {
 			continue
 		}
-		link, _ := page["@id"].(string)
-		target, err := base.Parse(link)
-		if err != nil || target.Scheme != base.Scheme || target.Host != base.Host ||
-			!strings.HasPrefix(target.Path, pagePrefix) || containsPathTraversal(target.Path) || target.RawQuery != "" || target.Fragment != "" {
-			return fmt.Errorf("invalid registration page URL: %q", link)
-		}
-		upstream, _ := url.Parse(h.upstreamURL)
-		pageDocument, err := h.nugetMetadata(ctx, strings.TrimPrefix(target.Path, upstream.Path))
+		pagePath, err := h.nugetRegistrationPagePath(path, page.ID)
 		if err != nil {
 			return err
 		}
-		leaves, ok := pageDocument["items"].([]any)
-		if !ok {
+		pageDocument, body, err := h.nugetTimesDocument(ctx, pagePath)
+		if err != nil {
+			return err
+		}
+		if pageDocument.Items == nil {
 			return fmt.Errorf("missing registration leaves")
 		}
-		page["items"] = leaves
+		page.Items = pageDocument.Items
+		if bodies != nil {
+			bodies[page.ID] = body
+		}
 	}
 	return nil
 }
 
-func (h *NuGetHandler) filterNuGetRegistration(document map[string]any, id string) bool {
-	items, ok := document["items"].([]any)
-	if !ok {
-		return h.nugetLeafAllowed(document, id)
+// nugetRegistrationPagePath returns the upstream path of a page that the
+// registration index at indexPath links to.
+func (h *NuGetHandler) nugetRegistrationPagePath(indexPath, link string) (string, error) {
+	base, err := url.Parse(h.upstreamURL + indexPath)
+	if err != nil {
+		return "", err
 	}
-	filtered := make([]any, 0, len(items))
-	for _, item := range items {
-		child, ok := item.(map[string]any)
-		if ok && h.filterNuGetRegistration(child, id) {
-			filtered = append(filtered, child)
-		}
+	pagePrefix := strings.TrimSuffix(base.Path, "index.json") + "page/"
+	target, err := base.Parse(link)
+	if err != nil || target.Scheme != base.Scheme || target.Host != base.Host ||
+		!strings.HasPrefix(target.Path, pagePrefix) || containsPathTraversal(target.Path) || target.RawQuery != "" || target.Fragment != "" {
+		return "", fmt.Errorf("invalid registration page URL: %q", link)
 	}
-	document["items"] = filtered
-	document["count"] = len(filtered)
-	// Page bounds describe the retained leaves, not versions hidden by cooldown.
-	if _, isPage := document["lower"]; isPage && len(filtered) > 0 {
-		first, _ := filtered[0].(map[string]any)
-		last, _ := filtered[len(filtered)-1].(map[string]any)
-		document["lower"] = nugetCatalogEntry(first)["version"]
-		document["upper"] = nugetCatalogEntry(last)["version"]
-	}
-	return len(filtered) > 0
-}
-
-func (h *NuGetHandler) rewriteNuGetRegistrationLinks(value any) {
-	switch node := value.(type) {
-	case map[string]any:
-		for key, child := range node {
-			if link, ok := child.(string); ok {
-				switch key {
-				case "@id", "parent", "registration", "packageContent":
-					node[key] = h.nugetProxyLink(link)
-				}
-			} else {
-				h.rewriteNuGetRegistrationLinks(child)
-			}
-		}
-	case []any:
-		for _, child := range node {
-			h.rewriteNuGetRegistrationLinks(child)
-		}
-	}
+	upstream, _ := url.Parse(h.upstreamURL)
+	return strings.TrimPrefix(target.Path, upstream.Path), nil
 }
 
 func (h *NuGetHandler) nugetProxyLink(link string) string {

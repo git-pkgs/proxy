@@ -2,14 +2,20 @@ package storage
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/rsa"
 	"crypto/sha256"
+	"crypto/x509"
 	"encoding/hex"
 	"encoding/json"
+	"encoding/pem"
 	"errors"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -86,6 +92,56 @@ func TestOpenBucketGCSRoundTripWithEmulator(t *testing.T) {
 	}
 	if _, err := store.SignedURL(ctx, "npm/pkg/file.tgz", time.Minute); !errors.Is(err, ErrSignedURLUnsupported) {
 		t.Fatalf("SignedURL with emulator = %v, want ErrSignedURLUnsupported", err)
+	}
+}
+
+func TestGCSSignedURLSignEndpoint(t *testing.T) {
+	key, err := rsa.GenerateKey(rand.Reader, 2048)
+	if err != nil {
+		t.Fatalf("generating RSA key: %v", err)
+	}
+	pemBytes := pem.EncodeToMemory(&pem.Block{
+		Type:  "RSA PRIVATE KEY",
+		Bytes: x509.MarshalPKCS1PrivateKey(key),
+	})
+	credsJSON, err := json.Marshal(map[string]string{
+		"type":         "service_account",
+		"client_email": "test@example.iam.gserviceaccount.com",
+		"private_key":  string(pemBytes),
+	})
+	if err != nil {
+		t.Fatalf("marshaling creds: %v", err)
+	}
+	credsFile := filepath.Join(t.TempDir(), "creds.json")
+	if err := os.WriteFile(credsFile, credsJSON, 0o600); err != nil {
+		t.Fatalf("writing creds: %v", err)
+	}
+	t.Setenv("GOOGLE_APPLICATION_CREDENTIALS", credsFile)
+	t.Setenv("STORAGE_EMULATOR_HOST", "")
+
+	ctx := context.Background()
+	store, err := OpenBucket(ctx, "gs://test-bucket", WithSignEndpoint("https://cdn.example.com"))
+	if err != nil {
+		t.Fatalf("OpenBucket failed: %v", err)
+	}
+	defer func() { _ = store.Close() }()
+
+	signed, err := store.SignedURL(ctx, "npm/pkg/file.tgz", time.Minute)
+	if err != nil {
+		t.Fatalf("SignedURL failed: %v", err)
+	}
+	u, err := url.Parse(signed)
+	if err != nil {
+		t.Fatalf("parsing signed URL %q: %v", signed, err)
+	}
+	if u.Scheme != "https" || u.Host != "cdn.example.com" {
+		t.Errorf("signed URL = %q, want https://cdn.example.com", signed)
+	}
+	if u.Path != "/test-bucket/npm/pkg/file.tgz" {
+		t.Errorf("signed URL path = %q, want /test-bucket/npm/pkg/file.tgz", u.Path)
+	}
+	if u.Query().Get("Signature") == "" {
+		t.Errorf("signed URL %q carries no signature", signed)
 	}
 }
 

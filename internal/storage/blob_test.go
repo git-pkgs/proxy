@@ -9,6 +9,8 @@ import (
 	"fmt"
 	"io"
 	"io/fs"
+	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -18,6 +20,8 @@ import (
 	"testing"
 	"time"
 
+	"github.com/aws/aws-sdk-go-v2/aws"
+	awssigv4 "github.com/aws/aws-sdk-go-v2/aws/signer/v4"
 	"gocloud.dev/blob"
 )
 
@@ -259,6 +263,203 @@ func TestBlobSignedURLUnsupported(t *testing.T) {
 	_, err := b.SignedURL(ctx, "test/file.txt", time.Minute)
 	if !errors.Is(err, ErrSignedURLUnsupported) {
 		t.Errorf("SignedURL on fileblob = %v, want ErrSignedURLUnsupported", err)
+	}
+}
+
+func TestBlobSignedURLSignEndpoint(t *testing.T) {
+	awsDir := t.TempDir()
+	awsConfigFile := filepath.Join(awsDir, "config")
+	awsCredsFile := filepath.Join(awsDir, "credentials")
+	if err := os.WriteFile(awsConfigFile, nil, 0o600); err != nil {
+		t.Fatalf("writing empty AWS config file: %v", err)
+	}
+	if err := os.WriteFile(awsCredsFile, nil, 0o600); err != nil {
+		t.Fatalf("writing empty AWS credentials file: %v", err)
+	}
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_DEFAULT_PROFILE", "")
+	t.Setenv("AWS_CONFIG_FILE", awsConfigFile)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", awsCredsFile)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+
+	const (
+		pathStyleURL = "s3://bucket?region=us-1&endpoint=http://127.0.0.1:9000&use_path_style=true"
+		vhostURL     = "s3://bucket?region=us-1&endpoint=http://127.0.0.1:9000"
+		signEndpoint = "https://cdn.example.com"
+		artifactPath = "npm/lodash/4.17.21/lodash-4.17.21.tgz"
+	)
+
+	tests := []struct {
+		name       string
+		storageURL string
+		opts       []Option
+		host       string
+		path       string
+	}{
+		{
+			"storage endpoint without a sign endpoint",
+			pathStyleURL,
+			nil,
+			"127.0.0.1:9000",
+			"/bucket/" + artifactPath,
+		},
+		{
+			"configured sign endpoint, reached over another host",
+			pathStyleURL,
+			[]Option{WithSignEndpoint(signEndpoint)},
+			"cdn.example.com",
+			"/bucket/" + artifactPath,
+		},
+		{
+			"configured sign endpoint with virtual-hosted storage URL",
+			vhostURL,
+			[]Option{WithSignEndpoint(signEndpoint)},
+			"cdn.example.com",
+			"/" + artifactPath,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			ctx := context.Background()
+
+			b, err := OpenBucket(ctx, tt.storageURL, tt.opts...)
+			if err != nil {
+				t.Fatalf("OpenBucket failed: %v", err)
+			}
+			defer func() { _ = b.Close() }()
+
+			signed, err := b.SignedURL(ctx, artifactPath, time.Minute)
+			if err != nil {
+				t.Fatalf("SignedURL failed: %v", err)
+			}
+
+			u, err := url.Parse(signed)
+			if err != nil {
+				t.Fatalf("parsing signed URL %q: %v", signed, err)
+			}
+			if u.Host != tt.host {
+				t.Errorf("signed URL %q host = %q, want %q", signed, u.Host, tt.host)
+			}
+			// The bucket and key stay where the storage URL puts them, so the
+			// request the client makes still names the object.
+			if u.Path != tt.path {
+				t.Errorf("signed URL path = %q, want %q", u.Path, tt.path)
+			}
+			assertSigV4Signature(t, u, "us-1", aws.Credentials{AccessKeyID: "test", SecretAccessKey: "test"})
+		})
+	}
+}
+
+// assertSigV4Signature recomputes the SigV4 presigned signature for u and
+// verifies it matches u's X-Amz-Signature query parameter.
+func assertSigV4Signature(t *testing.T, u *url.URL, region string, creds aws.Credentials) {
+	t.Helper()
+
+	q := u.Query()
+	signTime, err := time.Parse("20060102T150405Z", q.Get("X-Amz-Date"))
+	if err != nil {
+		t.Fatalf("parsing X-Amz-Date from %q: %v", u, err)
+	}
+	q.Del("X-Amz-Signature")
+	unsigned := &url.URL{Scheme: u.Scheme, Host: u.Host, Path: u.Path, RawQuery: q.Encode()}
+	req, err := http.NewRequestWithContext(context.Background(), http.MethodGet, unsigned.String(), nil)
+	if err != nil {
+		t.Fatalf("creating request: %v", err)
+	}
+	wantSigned, _, err := awssigv4.NewSigner(func(o *awssigv4.SignerOptions) {
+		o.DisableURIPathEscaping = true
+	}).PresignHTTP(context.Background(), creds, req, "UNSIGNED-PAYLOAD", "s3", region, signTime)
+	if err != nil {
+		t.Fatalf("PresignHTTP failed: %v", err)
+	}
+	wantURL, err := url.Parse(wantSigned)
+	if err != nil {
+		t.Fatalf("parsing expected signed URL %q: %v", wantSigned, err)
+	}
+	if gotSig, wantSig := u.Query().Get("X-Amz-Signature"), wantURL.Query().Get("X-Amz-Signature"); gotSig != wantSig {
+		t.Errorf("X-Amz-Signature = %q, want %q (for host %q)", gotSig, wantSig, u.Host)
+	}
+}
+
+func TestAzureSignedURLSignEndpoint(t *testing.T) {
+	t.Setenv("AZURE_STORAGE_SAS_TOKEN", "")
+	t.Setenv("AZURE_STORAGE_ACCOUNT", "devstoreaccount1")
+	t.Setenv("AZURE_STORAGE_KEY", "Eby8vdM02xNOcqFlqUwJPLlmEtlCDXJ1OUzFT50uSRZ6IFsuFq2UVErCz4I6tq/K1SZFPTOtr/KBHBeksoGMGw==")
+	t.Setenv("AZURE_STORAGE_PROTOCOL", "http")
+	t.Setenv("AZURE_STORAGE_IS_LOCAL_EMULATOR", "true")
+
+	ctx := context.Background()
+	b, err := OpenBucket(ctx, "azblob://bucket?domain=127.0.0.1:10000", WithSignEndpoint("https://cdn.example.com"))
+	if err != nil {
+		t.Fatalf("OpenBucket failed: %v", err)
+	}
+	defer func() { _ = b.Close() }()
+
+	signed, err := b.SignedURL(ctx, "npm/lodash/4.17.21/lodash-4.17.21.tgz", time.Minute)
+	if err != nil {
+		t.Fatalf("SignedURL failed: %v", err)
+	}
+
+	u, err := url.Parse(signed)
+	if err != nil {
+		t.Fatalf("parsing signed URL %q: %v", signed, err)
+	}
+	if u.Scheme != "https" || u.Host != "cdn.example.com" {
+		t.Errorf("signed URL = %q, want https://cdn.example.com", signed)
+	}
+	if u.Query().Get("sig") == "" {
+		t.Errorf("signed URL %q carries no SAS signature", signed)
+	}
+}
+
+func TestRewriteSignedURLHost(t *testing.T) {
+	tests := []struct {
+		name    string
+		signed  string
+		baseURL string
+		want    string
+	}{
+		{
+			"empty base url is no-op",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+			"",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+		},
+		{
+			"replaces scheme and host",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+			"https://cdn.example.com",
+			"https://cdn.example.com/bucket/key?sig=abc",
+		},
+		{
+			"preserves path and query",
+			"http://minio:9000/bucket/npm/lodash/4.17.21/lodash.tgz?X-Amz-Signature=abc&X-Amz-Date=20260101",
+			"https://files.example.com",
+			"https://files.example.com/bucket/npm/lodash/4.17.21/lodash.tgz?X-Amz-Signature=abc&X-Amz-Date=20260101",
+		},
+		{
+			"ignores base url path",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+			"https://cdn.example.com/ignored",
+			"https://cdn.example.com/bucket/key?sig=abc",
+		},
+		{
+			"invalid base url is no-op",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+			"://bad",
+			"http://127.0.0.1:9000/bucket/key?sig=abc",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := rewriteSignedURLHost(tt.signed, tt.baseURL)
+			if got != tt.want {
+				t.Errorf("rewriteSignedURLHost(%q, %q) = %q, want %q", tt.signed, tt.baseURL, got, tt.want)
+			}
+		})
 	}
 }
 
