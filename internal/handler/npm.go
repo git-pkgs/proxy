@@ -553,9 +553,10 @@ func readStored(open func() (io.ReadCloser, error), read func(io.Reader) error) 
 //
 // Every request for a packument uses it, since they share one cache row: a
 // request with another Accept would replace the document the others are
-// served with one in the other format.
+// served with one in the other format. Cooldown profiles share that row too,
+// so cooldown in any of them asks for full metadata in all of them.
 func (h *NPMHandler) packumentAccept() string {
-	if h.proxy.NPMFullMetadata || h.proxy.cooldownEnabled() {
+	if h.proxy.NPMFullMetadata || h.proxy.anyCooldownEnabled() {
 		return contentTypeJSON
 	}
 	return npmAcceptDefault

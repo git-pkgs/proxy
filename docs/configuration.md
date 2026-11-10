@@ -904,11 +904,9 @@ confirmed. A repository the upstream reports missing (404), refuses (401, 403)
 or redirects is not served from the cache, also to requests that skip the ref
 listing and go straight to `git-upload-pack`, until a later check succeeds.
 Redirects are never followed, so point the upstream at a repository's current
-location. A `git-upload-pack` request does not check the upstream itself
-unless the upstream refused the repository at the last check or the copy was
-last checked more than a minute past `stale_max_age` ago, so the requests of a
-clone that follow its ref listing check nothing again; otherwise the
-repository is checked first, as for a ref listing.
+location. A `git-upload-pack` request checks the upstream only when the last
+check refused the repository or the copy was last checked more than a minute
+past `stale_max_age` ago, so a clone checks once, at its ref listing.
 
 The proxy runs `git` 2.31 or newer, which must be installed (the Docker image includes it).
 The `git` processes never reach the network themselves: their fetches go
@@ -1198,7 +1196,7 @@ The prefix works with all package protocol routes. Cooldown has an effect only f
 
 Profile names contain lowercase letters, digits, hyphens and underscores, and start with a letter or digit. Profiles must be configured before startup; an unknown profile returns 404. Nested profiles are rejected. Profile paths expose package protocols only, so `/cooldown/3d/ui/` and `/cooldown/3d/api/` return 404.
 
-Database records, artifacts and upstream metadata are shared. Generated download URLs retain the profile prefix, and filtered metadata and its validators are separated by profile. Changing a registry URL does not rewrite artifact URLs already recorded in a lockfile; regenerate those URLs if the selected policy must cover the whole installation.
+Database records, artifacts and upstream metadata are shared. Generated download URLs retain the profile prefix, and filtered metadata and its validators are separated by profile. Because npm packuments are shared too, cooldown in the global policy or in any profile makes every URL fetch and serve full packuments, as `upstream.npm_full_metadata` does. Changing a registry URL does not rewrite artifact URLs already recorded in a lockfile; regenerate those URLs if the selected policy must cover the whole installation.
 
 ## Cooldown
 

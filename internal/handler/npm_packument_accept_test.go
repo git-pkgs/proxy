@@ -208,3 +208,53 @@ func TestNPMCooldownSkipsAbbreviatedStaleFallback(t *testing.T) {
 		t.Errorf("served the abbreviated packument as a stale copy: %s", w.Body.String())
 	}
 }
+
+// Cooldown profiles share a packument's cache row with the unprefixed URLs.
+// With cooldown on for only some of them, the others must not replace the
+// full packument with the abbreviated one: the next request under cooldown
+// would fetch it again, and have no stale copy when upstream fails.
+func TestNPMCooldownProfilesShareFullPackument(t *testing.T) {
+	for _, tc := range []struct{ name, global, profile string }{
+		{"cooldown in the profile", "0", "7d"},
+		{"cooldown in the global policy", "7d", "0"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			var fail atomic.Bool
+			var fullRequests atomic.Int64
+			upstream := abbreviatedThenFullRegistry(t, &fail, &fullRequests)
+			proxy, db, _, _ := setupTestProxy(t)
+			proxy.CacheMetadata = true
+			proxy.MetadataTTL = time.Nanosecond // every request revalidates
+			proxy.HTTPClient = upstream.Client()
+			proxy.Cooldown = profilePolicy(t, tc.global)
+			global := NewNPMHandler(proxy, "http://proxy.test", upstream.URL)
+			profile := NewNPMHandler(proxy.WithCooldown(profilePolicy(t, tc.profile), 0), "http://proxy.test/cooldown/p", upstream.URL)
+			filtered, unfiltered := profile, global
+			if tc.global != "0" {
+				filtered, unfiltered = global, profile
+			}
+
+			for _, h := range []*NPMHandler{filtered, unfiltered} {
+				if w := serveNPM(t, h, http.MethodGet, "/demo", nil, nil); w.Code != http.StatusOK {
+					t.Fatalf("metadata: status %d: %s", w.Code, w.Body.String())
+				}
+			}
+			entry, err := db.GetMetadataCache("npm", "demo")
+			if err != nil || entry == nil {
+				t.Fatalf("cache row: %v, %v", entry, err)
+			}
+			if entry.ContentType.String != contentTypeJSON {
+				t.Errorf("cached packument Content-Type = %q, want %q", entry.ContentType.String, contentTypeJSON)
+			}
+
+			fail.Store(true)
+			w := serveNPM(t, filtered, http.MethodGet, "/demo", nil, nil)
+			if w.Code != http.StatusOK {
+				t.Fatalf("metadata while upstream fails: status %d, want the stale full packument", w.Code)
+			}
+			if strings.Contains(w.Body.String(), "demo-2.0.0.tgz") {
+				t.Errorf("stale packument lists a version in cooldown: %s", w.Body.String())
+			}
+		})
+	}
+}
