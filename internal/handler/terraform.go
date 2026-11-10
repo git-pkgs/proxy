@@ -89,9 +89,10 @@ type terraformProvider struct {
 	baseURL string
 }
 
-// providerFromRequest returns the provider a request names. ok is false when
-// it has already answered: 404 for a hostname with no registry configured,
-// 400 for an invalid namespace or type.
+// providerFromRequest returns the provider a request names, in lowercase:
+// provider addresses ignore case, and the cache and the denylist must see one
+// spelling. ok is false when it has already answered: 404 for a hostname with
+// no registry configured, 400 for an invalid namespace or type.
 func (h *TerraformHandler) providerFromRequest(w http.ResponseWriter, r *http.Request) (terraformProvider, bool) {
 	hostname := strings.ToLower(r.PathValue("hostname"))
 	baseURL, ok := h.registries[hostname]
@@ -99,7 +100,7 @@ func (h *TerraformHandler) providerFromRequest(w http.ResponseWriter, r *http.Re
 		http.Error(w, "no registry configured for this hostname", http.StatusNotFound)
 		return terraformProvider{}, false
 	}
-	namespace, name := r.PathValue("namespace"), r.PathValue("type")
+	namespace, name := strings.ToLower(r.PathValue("namespace")), strings.ToLower(r.PathValue("type"))
 	if !terraformName.MatchString(namespace) || !terraformName.MatchString(name) {
 		http.Error(w, "invalid provider address", http.StatusBadRequest)
 		return terraformProvider{}, false
@@ -151,7 +152,12 @@ type terraformArchiveEntry struct {
 }
 
 func (h *TerraformHandler) serveIndex(w http.ResponseWriter, r *http.Request, provider terraformProvider) {
-	versions, stale, err := h.versions(r.Context(), provider)
+	providersURL, err := h.providersURL(r.Context(), provider)
+	if err != nil {
+		h.writeError(w, r, provider, err)
+		return
+	}
+	versions, stale, err := h.versions(r.Context(), provider, providersURL)
 	if err != nil {
 		h.writeError(w, r, provider, err)
 		return
@@ -172,7 +178,12 @@ func (h *TerraformHandler) serveIndex(w http.ResponseWriter, r *http.Request, pr
 // lists for it. The archive URLs are relative to the version document, so
 // they resolve to the proxy's {version}/{os}_{arch}.zip.
 func (h *TerraformHandler) serveVersion(w http.ResponseWriter, r *http.Request, provider terraformProvider, version string) {
-	versions, stale, err := h.versions(r.Context(), provider)
+	providersURL, err := h.providersURL(r.Context(), provider)
+	if err != nil {
+		h.writeError(w, r, provider, err)
+		return
+	}
+	versions, stale, err := h.versions(r.Context(), provider, providersURL)
 	if err != nil {
 		h.writeError(w, r, provider, err)
 		return
@@ -200,7 +211,7 @@ func (h *TerraformHandler) serveVersion(w http.ResponseWriter, r *http.Request, 
 	g.SetLimit(terraformDownloadConcurrency)
 	for _, platform := range platforms {
 		g.Go(func() error {
-			download, downloadStale, err := h.download(ctx, provider, version, platform)
+			download, downloadStale, err := h.download(ctx, provider, providersURL, version, platform)
 			if errors.Is(err, ErrUpstreamNotFound) {
 				return nil // listed without an archive; leave it out
 			}
@@ -248,10 +259,10 @@ func (h *TerraformHandler) handleArchive(w http.ResponseWriter, r *http.Request)
 	}
 	goos, arch := match[1], match[2]
 
-	name := provider.address()
+	name := provider.packageName()
 	pkgPURL, versionPURL := provider.purls(version)
 	filename := provider.archiveFilename(version, goos, arch)
-	if h.proxy.versionDenied(terraformEcosystem, name, version) || h.proxy.Denylist.Denied(versionPURL) {
+	if h.proxy.Denylist.Denied(versionPURL) {
 		h.proxy.serveArtifactError(w, fmt.Errorf("%w: %s", ErrVersionDenied, versionPURL), "failed to fetch provider")
 		return
 	}
@@ -261,7 +272,12 @@ func (h *TerraformHandler) handleArchive(w http.ResponseWriter, r *http.Request)
 		return
 	}
 	if cached == nil {
-		download, _, err := h.download(r.Context(), provider, version, goos+"_"+arch)
+		providersURL, err := h.providersURL(r.Context(), provider)
+		if err != nil {
+			h.writeError(w, r, provider, err)
+			return
+		}
+		download, _, err := h.download(r.Context(), provider, providersURL, version, goos+"_"+arch)
 		if err != nil {
 			h.writeError(w, r, provider, err)
 			return
@@ -281,23 +297,17 @@ func (h *TerraformHandler) handleArchive(w http.ResponseWriter, r *http.Request)
 }
 
 // versions fetches the provider's version list through the metadata cache.
-func (h *TerraformHandler) versions(ctx context.Context, provider terraformProvider) (terraformVersions, bool, error) {
-	providersURL, err := h.providersURL(ctx, provider)
-	if err != nil {
-		return terraformVersions{}, false, err
-	}
+// providersURL is the registry's providers.v1 base URL.
+func (h *TerraformHandler) versions(ctx context.Context, provider terraformProvider, providersURL string) (terraformVersions, bool, error) {
 	var versions terraformVersions
 	stale, err := h.fetchDocument(ctx, provider, "versions", providersURL+provider.namespace+"/"+provider.name+"/versions", &versions)
 	return versions, stale, err
 }
 
 // download fetches the download document of one platform of a version
-// through the metadata cache.
-func (h *TerraformHandler) download(ctx context.Context, provider terraformProvider, version, platform string) (terraformDownload, bool, error) {
-	providersURL, err := h.providersURL(ctx, provider)
-	if err != nil {
-		return terraformDownload{}, false, err
-	}
+// through the metadata cache. providersURL is the registry's providers.v1
+// base URL.
+func (h *TerraformHandler) download(ctx context.Context, provider terraformProvider, providersURL, version, platform string) (terraformDownload, bool, error) {
 	goos, arch, _ := strings.Cut(platform, "_")
 	documentKey := version + "/download/" + goos + "/" + arch
 	var download terraformDownload
@@ -375,12 +385,19 @@ func (p terraformProvider) address() string {
 	return p.hostname + "/" + p.namespace + "/" + p.name
 }
 
+// packageName names the provider in the packages table: namespace/type, as
+// its PURL does.
+func (p terraformProvider) packageName() string {
+	return p.namespace + "/" + p.name
+}
+
 // purls returns the package and version PURLs a provider's archives are
-// cached under. There is no PURL type for providers, so they are generic
-// packages named by the provider's source address, which includes the
-// registry hostname.
+// cached under: pkg:terraform/{namespace}/{type}, the type drafted in
+// package-url/purl-spec#889. The PURL leaves the registry out, so a provider
+// is one package on every registry and a denylist entry covers all of them;
+// archiveFilename keeps the registries' archives apart.
 func (p terraformProvider) purls(version string) (pkgPURL, versionPURL string) {
-	pkg := purl.New("generic", "terraform-provider/"+p.hostname+"/"+p.namespace, p.name, "", nil)
+	pkg := purl.New(terraformEcosystem, p.namespace, p.name, "", nil)
 	return pkg.String(), pkg.WithVersion(version).String()
 }
 

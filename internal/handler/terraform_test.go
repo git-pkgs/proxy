@@ -327,3 +327,79 @@ func TestTerraformProviderArchiveCacheDependsOnRegistry(t *testing.T) {
 		t.Errorf("remapped archive = %d %q, want the second registry's archive", w.Code, w.Body.String())
 	}
 }
+
+func TestTerraformProviderDenylistIgnoresAddressCase(t *testing.T) {
+	s := newFakeTerraformRegistry(t)
+	h, proxy := newTerraformTestHandler(t, s)
+	setTestDenylist(t, proxy, "pkg:terraform/hashicorp/random@3.6.0")
+
+	for _, target := range []string{
+		terraformTestProvider + "3.6.0/linux_amd64.zip",
+		"/providers/" + terraformTestHost + "/Hashicorp/Random/3.6.0/linux_amd64.zip",
+	} {
+		if w := serveTerraformRequest(h, target); w.Code != http.StatusForbidden {
+			t.Errorf("%s status = %d, want 403 for a denied version", target, w.Code)
+		}
+	}
+	if got := s.totalRequests(); got != 0 {
+		t.Errorf("upstream requests = %d, want 0 for a denied version", got)
+	}
+	// Other versions of the provider are still served.
+	if w := serveTerraformRequest(h, "/providers/"+terraformTestHost+"/Hashicorp/Random/3.5.1/linux_amd64.zip"); w.Code != http.StatusOK {
+		t.Errorf("3.5.1 status = %d, want 200: %s", w.Code, w.Body.String())
+	}
+}
+
+func TestTerraformProviderAddressCaseSharesCache(t *testing.T) {
+	s := newFakeTerraformRegistry(t)
+	h, proxy := newTerraformTestHandler(t, s)
+
+	for _, target := range []string{
+		"/providers/" + terraformTestHost + "/Hashicorp/Random/3.6.0/linux_amd64.zip",
+		terraformTestProvider + "3.6.0/linux_amd64.zip",
+	} {
+		if w := serveTerraformRequest(h, target); w.Code != http.StatusOK || w.Body.String() != terraformTestArchive {
+			t.Fatalf("%s = %d %q, want the archive", target, w.Code, w.Body.String())
+		}
+	}
+	if got := s.requestCount("files /terraform-provider-random/3.6.0/terraform-provider-random_3.6.0_linux_amd64.zip"); got != 1 {
+		t.Errorf("archive requests = %d, want 1 (one cache entry for both spellings)", got)
+	}
+
+	// The archive is recorded under the provider's pkg:terraform PURL.
+	pkg, err := proxy.DB.GetPackageByPURL("pkg:terraform/hashicorp/random")
+	if err != nil || pkg == nil {
+		t.Fatalf("package pkg:terraform/hashicorp/random = %v, %v, want a record", pkg, err)
+	}
+	if pkg.Ecosystem != terraformEcosystem || pkg.Name != "hashicorp/random" {
+		t.Errorf("package = %s %q, want terraform %q", pkg.Ecosystem, pkg.Name, "hashicorp/random")
+	}
+	if v, err := proxy.DB.GetVersionByPURL("pkg:terraform/hashicorp/random@3.6.0"); err != nil || v == nil {
+		t.Errorf("version pkg:terraform/hashicorp/random@3.6.0 = %v, %v, want a record", v, err)
+	}
+}
+
+func TestTerraformProviderResolvesDiscoveryOncePerRequest(t *testing.T) {
+	s := newFakeTerraformRegistry(t)
+	h, proxy := newTerraformTestHandler(t, s)
+	proxy.CacheMetadata = false
+
+	// 3.6.0 has two platforms: discovery, the version list and one download
+	// document each.
+	if w := serveTerraformRequest(h, terraformTestProvider+"3.6.0.json"); w.Code != http.StatusOK {
+		t.Fatalf("version status = %d: %s", w.Code, w.Body.String())
+	}
+	if got := s.requestCount("/.well-known/terraform.json"); got != 1 {
+		t.Errorf("discovery requests for a version document = %d, want 1", got)
+	}
+	if got := s.totalRequests(); got != 4 {
+		t.Errorf("registry requests for a version document = %d, want 4", got)
+	}
+
+	if w := serveTerraformRequest(h, terraformTestProvider+"3.6.0/linux_amd64.zip"); w.Code != http.StatusOK {
+		t.Fatalf("archive status = %d: %s", w.Code, w.Body.String())
+	}
+	if got := s.requestCount("/.well-known/terraform.json"); got != 2 {
+		t.Errorf("discovery requests after an archive = %d, want 2", got)
+	}
+}

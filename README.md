@@ -939,8 +939,8 @@ isn't configured gets a 404. To install such providers directly, give the
 
 `index.json` and `{version}.json` are built from the registry's version list
 and download documents, which go through the metadata cache. The archives are
-cached as `pkg:generic/terraform-provider/{hostname}/{namespace}/{type}` and
-checked against the registry's `shasum` before they are served. Each
+cached as `pkg:terraform/{namespace}/{type}` and checked against the
+registry's `shasum` before they are served. Each
 `{version}.json` lists that shasum as a `zh:` hash, which Terraform checks and
 records in `.terraform.lock.hcl`. The mirror protocol carries no signatures,
 so Terraform doesn't check the registry's GPG signature for providers
