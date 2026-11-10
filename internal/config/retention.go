@@ -67,6 +67,11 @@ func (c *Config) RetentionRules(reg *retention.Registry) (retention.Rules, error
 		}
 	}
 
+	if r.KeepLatest < 0 {
+		return retention.Rules{}, fmt.Errorf("invalid storage.retention.keep_latest: must not be negative")
+	}
+	rules.KeepLatest = r.KeepLatest
+
 	for _, key := range sortedKeys(r.Ecosystems) {
 		field := "storage.retention.ecosystems." + key
 		if !retention.IsKnown(key) {

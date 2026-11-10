@@ -80,3 +80,27 @@ func TestLastComponent(t *testing.T) {
 		}
 	}
 }
+
+// Module zips are cached under the escaped version of the download URL, so
+// the order for keep_latest unescapes before comparing.
+func TestGolangCompareVersions(t *testing.T) {
+	tests := []struct {
+		a, b string
+		want int
+	}{
+		{"v1.10.0", "v1.9.0", 1},
+		{"v1.0.0", "v1.0.0-!r!c1", 1},
+		{"v1.0.0-!r!c2", "v1.0.0-!r!c1", 1},
+		{"v1.0.0-!r!c1", "v1.0.0-beta", -1},
+		// Compared as stored, "!" would sort the escaped one below "0rc1".
+		{"v1.0.0-!r!c1", "v1.0.0-0rc1", 1},
+		{"v2.0.0+incompatible", "v1.9.0", 1},
+		{"v1.2.3", "v1.2.3", 0},
+	}
+	for _, tt := range tests {
+		got := golangCompareVersions(tt.a, tt.b)
+		if (got > 0) != (tt.want > 0) || (got < 0) != (tt.want < 0) {
+			t.Errorf("golangCompareVersions(%q, %q) = %d, want sign of %d", tt.a, tt.b, got, tt.want)
+		}
+	}
+}

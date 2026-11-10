@@ -429,3 +429,46 @@ func TestArtifactFilenameIndex(t *testing.T) {
 		}
 	})
 }
+
+// CachedVersionPURLs lists each version of a package once while it has a
+// file cached from upstream, and leaves out other packages, cleared files
+// and pushed artifacts.
+func TestCachedVersionPURLs(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now()
+		seed := func(name, version, filename, source string, cached bool) {
+			t.Helper()
+			pkgPURL := "pkg:npm/" + name
+			versionPURL := pkgPURL + "@" + version
+			if err := db.UpsertPackage(&Package{PURL: pkgPURL, Ecosystem: "npm", Name: name}); err != nil {
+				t.Fatalf("UpsertPackage: %v", err)
+			}
+			if err := db.UpsertVersion(&Version{PURL: versionPURL, PackagePURL: pkgPURL}); err != nil {
+				t.Fatalf("UpsertVersion: %v", err)
+			}
+			art := &Artifact{VersionPURL: versionPURL, Filename: filename, UpstreamURL: "https://example.com/" + filename, Source: source}
+			if cached {
+				art.StoragePath = sql.NullString{String: "npm/" + name + "/" + version + "/" + filename, Valid: true}
+				art.FetchedAt = sql.NullTime{Time: now, Valid: true}
+			}
+			if err := db.UpsertArtifact(art); err != nil {
+				t.Fatalf("UpsertArtifact: %v", err)
+			}
+		}
+		seed("lib", "1.0.0", "lib-1.0.0.tgz", "", true)
+		seed("lib", "2.0.0", "lib-2.0.0.tgz", "", true)
+		seed("lib", "2.0.0", "lib-2.0.0-extra.tgz", "", true)
+		seed("lib", "3.0.0", "lib-3.0.0.tgz", "", false)
+		seed("lib", "4.0.0", "lib-4.0.0.tgz", "local", true)
+		seed("other", "9.0.0", "other-9.0.0.tgz", "", true)
+
+		got, err := db.CachedVersionPURLs("pkg:npm/lib")
+		if err != nil {
+			t.Fatalf("CachedVersionPURLs: %v", err)
+		}
+		slices.Sort(got)
+		if want := []string{"pkg:npm/lib@1.0.0", "pkg:npm/lib@2.0.0"}; !slices.Equal(got, want) {
+			t.Errorf("CachedVersionPURLs() = %v, want %v", got, want)
+		}
+	})
+}

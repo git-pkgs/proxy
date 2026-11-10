@@ -57,7 +57,11 @@ type PyPIHandler struct {
 // matches typing-extensions. Dots and runs of separators are kept, so files
 // named zope.interface-* and zope_interface-* end up under two packages.
 func init() {
-	retention.Default.Register(retention.Spec{Key: "pypi", CanonicalPackage: retention.DefaultCanonical("pypi")})
+	retention.Default.Register(retention.Spec{
+		Key:              "pypi",
+		CanonicalPackage: retention.DefaultCanonical("pypi"),
+		CompareVersions:  retention.VersionOrder("pypi"),
+	})
 }
 
 // NewPyPIHandlerWithUpstreams creates a PyPI handler with custom API and

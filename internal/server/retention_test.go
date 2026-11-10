@@ -313,7 +313,8 @@ func TestClearIfExpiredRechecksAgainstItsRule(t *testing.T) {
 		t.Fatalf("RecordArtifactHit: %v", err)
 	}
 
-	if clearIfExpired(db, discardLogger(), retentionRegistry(), rules, now.Add(time.Minute), candidates[0]) {
+	keep := newLatestKeeper(db, discardLogger(), retentionRegistry(), 0)
+	if clearIfExpired(db, discardLogger(), retentionRegistry(), rules, keep, now.Add(time.Minute), candidates[0]) {
 		t.Error("cleared an artifact served after the scan")
 	}
 	if !isCached(t, db, "npm", "racing") {

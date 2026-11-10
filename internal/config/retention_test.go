@@ -1,6 +1,8 @@
 package config
 
 import (
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -69,6 +71,34 @@ func TestRetentionRulesResolves(t *testing.T) {
 	}
 }
 
+// keep_latest is read from the config file and carried into the rules.
+func TestRetentionKeepLatest(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	content := "storage:\n  retention:\n    default: \"30d\"\n    keep_latest: 2\n"
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("WriteFile: %v", err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatalf("Load: %v", err)
+	}
+	rules, err := cfg.RetentionRules(retentionTestRegistry())
+	if err != nil {
+		t.Fatalf("RetentionRules() error = %v", err)
+	}
+	if rules.KeepLatest != 2 {
+		t.Errorf("KeepLatest = %d, want 2", rules.KeepLatest)
+	}
+
+	rules, err = Default().RetentionRules(retentionTestRegistry())
+	if err != nil {
+		t.Fatalf("RetentionRules() error = %v", err)
+	}
+	if rules.KeepLatest != 0 {
+		t.Errorf("KeepLatest = %d by default, want 0", rules.KeepLatest)
+	}
+}
+
 func TestRetentionRulesErrors(t *testing.T) {
 	tests := []struct {
 		name    string
@@ -76,6 +106,7 @@ func TestRetentionRulesErrors(t *testing.T) {
 		wantErr string
 	}{
 		{"bad default", func(r *RetentionConfig) { r.Default = "7x" }, "storage.retention.default"},
+		{"negative keep_latest", func(r *RetentionConfig) { r.KeepLatest = -1 }, "storage.retention.keep_latest: must not be negative"},
 		{"negative default", func(r *RetentionConfig) { r.Default = "-1d" }, "must not be negative"},
 		{"NaN days", func(r *RetentionConfig) { r.Default = "NaNd" }, "out of range"},
 		{"infinite days", func(r *RetentionConfig) { r.Default = "Infd" }, "out of range"},

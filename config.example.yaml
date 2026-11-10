@@ -116,6 +116,9 @@ storage:
     #   "pkg:generic/owner%2Frepo": "90d"
     # How often to look for expired artifacts; at least "1m".
     sweep_interval: "10m"
+    # Keep this many of the newest cached versions of each package from
+    # eviction by age (cargo, golang, npm and pypi). 0 keeps none.
+    # keep_latest: 2
 
   # Store fetched artifacts. Set to false to stream every download from
   # upstream without storing it; metadata filtering, cooldown and the

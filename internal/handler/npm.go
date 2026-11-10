@@ -49,7 +49,11 @@ const (
 // npm tarballs are stored under pkg:npm/{name} as purl builds it, so package
 // rules use the default key mapping.
 func init() {
-	retention.Default.Register(retention.Spec{Key: "npm", CanonicalPackage: retention.DefaultCanonical("npm")})
+	retention.Default.Register(retention.Spec{
+		Key:              "npm",
+		CanonicalPackage: retention.DefaultCanonical("npm"),
+		CompareVersions:  retention.VersionOrder("npm"),
+	})
 }
 
 // NPMHandler handles npm registry protocol requests.
