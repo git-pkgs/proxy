@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/jsonscan"
 	"github.com/git-pkgs/proxy/internal/packageurl"
@@ -438,9 +439,10 @@ func (h *transformer) applyCooldownFiltering(metadata map[string]any, versions m
 	h.updateDistTags(metadata, versions, timeMap, withheld)
 }
 
-// updateDistTags moves dist-tags.latest to the newest remaining version if
-// the current latest was removed by cooldown filtering, and, as the denylist
-// does, drops other tags that name a withheld version.
+// updateDistTags moves dist-tags.latest to a replacement for the version
+// cooldown filtering removed, chosen by semver order rather than publish
+// time, and, as the denylist does, drops other tags that name a withheld
+// version.
 func (h *transformer) updateDistTags(metadata, versions, timeMap map[string]any, withheld map[string]bool) {
 	distTags, ok := metadata["dist-tags"].(map[string]any)
 	if !ok {
@@ -463,7 +465,7 @@ func (h *transformer) updateDistTags(metadata, versions, timeMap map[string]any,
 		return
 	}
 
-	if newLatest := h.findNewestVersion(versions, timeMap); newLatest != "" {
+	if newLatest := findLatestReplacement(versions, timeMap, latest); newLatest != "" {
 		distTags["latest"] = newLatest
 	} else if withheld[latest] {
 		delete(distTags, "latest")
@@ -495,9 +497,47 @@ func AttestationsURL(proxyURL, packageName, version string) string {
 	return fmt.Sprintf("%s/npm/-/npm/v1/attestations/%s@%s", proxyURL, url.PathEscape(packageName), url.PathEscape(version))
 }
 
-// findNewestVersion returns the version string with the most recent timestamp
-// from the remaining versions, using the time map.
-func (h *transformer) findNewestVersion(versions map[string]any, timeMap map[string]any) string {
+// findLatestReplacement returns the version dist-tags.latest moves to after
+// cooldown filtering removed the version it named, removed. Among the
+// remaining versions that parse as semver, it prefers the highest one that
+// sorts below removed, ignoring prereleases unless removed was one, and
+// takes the highest outright when removed is not semver at all. Versions
+// that tie in precedence, differing only in build metadata, are broken by
+// version string, as newestStableNPMVersion does. When nothing qualifies,
+// it falls back to the newest version by publish time, so latest still
+// points at a remaining version whenever one exists.
+func findLatestReplacement(versions map[string]any, timeMap map[string]any, removed string) string {
+	removedSemver, removedErr := semver.StrictNewVersion(removed)
+	keepPrereleases := removedErr == nil && removedSemver.Prerelease() != ""
+
+	var best *semver.Version
+	result := ""
+	for version := range versions {
+		parsed, err := semver.StrictNewVersion(version)
+		if err != nil {
+			continue
+		}
+		if !keepPrereleases && parsed.Prerelease() != "" {
+			continue
+		}
+		if removedErr == nil && !parsed.LessThan(removedSemver) {
+			continue
+		}
+		if best == nil || parsed.GreaterThan(best) || (parsed.Equal(best) && version > result) {
+			best, result = parsed, version
+		}
+	}
+	if result != "" {
+		return result
+	}
+	return findNewestVersion(versions, timeMap)
+}
+
+// findNewestVersion returns the version string with the most recent
+// timestamp from the remaining versions, using the time map. It serves as
+// the fallback when no version qualifies by semver, as a packument whose
+// only recent releases are prereleases has nothing better to point at.
+func findNewestVersion(versions map[string]any, timeMap map[string]any) string {
 	if timeMap == nil {
 		return ""
 	}

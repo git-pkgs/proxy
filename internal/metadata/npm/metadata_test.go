@@ -230,3 +230,159 @@ func TestNPMRewriteCooldownDropsTags(t *testing.T) {
 		})
 	}
 }
+
+// TestNPMRewriteCooldownRetargetsLatestSemver checks that when cooldown
+// filtering removes the version dist-tags.latest named, its replacement
+// follows semver order instead of publish time: the highest semver version
+// below the removed one, ignoring prereleases unless the removed latest was
+// one itself, and falling back to the newest by publish time when nothing
+// qualifies, leaving dist-tags alone while latest still resolves.
+func TestNPMRewriteCooldownRetargetsLatestSemver(t *testing.T) {
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	ts := func(age time.Duration) string { return now.Add(-age).UTC().Format(time.RFC3339) }
+
+	tests := []struct {
+		name     string
+		latest   string
+		versions []struct {
+			version string
+			age     time.Duration
+		}
+		want string
+	}{
+		{
+			// A platform-specific prerelease published after the newest
+			// eligible stable must not become latest.
+			name:   "prerelease published last skipped for stable latest",
+			latest: "0.167.0",
+			versions: []struct {
+				version string
+				age     time.Duration
+			}{{"0.165.0", 300 * time.Hour}, {"0.166.0", 200 * time.Hour}, {"0.167.0-alpha.4-win32-arm64", 100 * time.Hour}},
+			want: "0.166.0",
+		},
+		{
+			// next-shaped: the newest remaining release is a canary, which
+			// a stable latest was never allowed to point at.
+			name:   "newest canary skipped for older stable latest",
+			latest: "16.4.4",
+			versions: []struct {
+				version string
+				age     time.Duration
+			}{{"16.5.0-canary.37", 100 * time.Hour}, {"16.4.3", 500 * time.Hour}, {"16.4.2", 700 * time.Hour}},
+			want: "16.4.3",
+		},
+		{
+			// pnpm-shaped: a backport published after a newer version stays
+			// higher in semver order than one published before it.
+			name:   "newer version published earlier wins over late backport",
+			latest: "12.18.0",
+			versions: []struct {
+				version string
+				age     time.Duration
+			}{{"12.17.0", 400 * time.Hour}, {"11.28.10", 300 * time.Hour}},
+			want: "12.17.0",
+		},
+		{
+			name:   "prerelease latest keeps prereleases eligible",
+			latest: "2.0.0-rc.2",
+			versions: []struct {
+				version string
+				age     time.Duration
+			}{{"2.0.0-rc.1", 300 * time.Hour}, {"1.9.0", 100 * time.Hour}},
+			want: "2.0.0-rc.1",
+		},
+		{
+			name:   "only prereleases remain falls back to publish time",
+			latest: "3.0.0",
+			versions: []struct {
+				version string
+				age     time.Duration
+			}{{"2.0.0-beta.1", 200 * time.Hour}, {"2.0.0-beta.2", 100 * time.Hour}},
+			want: "2.0.0-beta.2",
+		},
+		{
+			name:   "latest still present is left alone",
+			latest: "2.0.0",
+			versions: []struct {
+				version string
+				age     time.Duration
+			}{{"2.0.0", 500 * time.Hour}, {"2.1.0", time.Hour}},
+			want: "2.0.0",
+		},
+		{
+			name:   "removed latest not semver takes highest version",
+			latest: "next-1.2.3",
+			versions: []struct {
+				version string
+				age     time.Duration
+			}{{"1.0.1", 400 * time.Hour}, {"0.9.0", 100 * time.Hour}},
+			want: "1.0.1",
+		},
+		{
+			name:   "equal precedence broken by version string",
+			latest: "2.0.0",
+			versions: []struct {
+				version string
+				age     time.Duration
+			}{{"1.0.0+001", 100 * time.Hour}, {"1.0.0+002", 200 * time.Hour}},
+			want: "1.0.0+002",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			entries := tt.versions
+			present := false
+			for _, e := range entries {
+				present = present || e.version == tt.latest
+			}
+			if !present {
+				// Publish latest an hour ago, so cooldown removes it.
+				entries = append(entries[:len(entries):len(entries)], struct {
+					version string
+					age     time.Duration
+				}{tt.latest, time.Hour})
+			}
+			var versions, times strings.Builder
+			for i, v := range entries {
+				if i > 0 {
+					versions.WriteByte(',')
+					times.WriteByte(',')
+				}
+				fmt.Fprintf(&versions, `%q:{}`, v.version)
+				fmt.Fprintf(&times, `%q:%q`, v.version, ts(v.age))
+			}
+			fmt.Fprintf(&times, `,%q:%q`, "created", ts(1000*time.Hour))
+			legacy := tt.versions[0].version
+			const input = `{"name":"demo","dist-tags":{"latest":%q,"legacy":%q},"versions":{%s},"time":{%s}}`
+
+			rewrite := map[string]func() ([]byte, []string, error){
+				"memory": func() ([]byte, []string, error) {
+					return Rewrite("demo", fmt.Appendf(nil, input, tt.latest, legacy, versions.String(), times.String()), Options{ProxyURL: "http://proxy", EvaluatedAt: now, Cooldown: &cooldown.Config{Default: "3d"}})
+				},
+				"stream": func() ([]byte, []string, error) {
+					return rewriteStream("demo", fmt.Appendf(nil, input, tt.latest, legacy, versions.String(), times.String()), Options{ProxyURL: "http://proxy", EvaluatedAt: now, Cooldown: &cooldown.Config{Default: "3d"}})
+				},
+			}
+			for name, run := range rewrite {
+				t.Run(name, func(t *testing.T) {
+					out, _, err := run()
+					if err != nil {
+						t.Fatal(err)
+					}
+					var doc struct {
+						DistTags map[string]string `json:"dist-tags"`
+					}
+					if err := json.Unmarshal(out, &doc); err != nil {
+						t.Fatalf("output is not JSON: %v\n%s", err, out)
+					}
+					want := map[string]string{"latest": tt.want, "legacy": legacy}
+					if fmt.Sprint(doc.DistTags) != fmt.Sprint(want) {
+						t.Errorf("dist-tags = %v, want %v", doc.DistTags, want)
+					}
+				})
+			}
+		})
+	}
+}
