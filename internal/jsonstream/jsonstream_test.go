@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"slices"
 	"strings"
 	"testing"
 )
@@ -11,7 +12,7 @@ import (
 func copyString(t *testing.T, in string, fn func(*Member) error) (string, error) {
 	t.Helper()
 	var out bytes.Buffer
-	err := CopyObject(json.NewDecoder(strings.NewReader(in)), &out, fn)
+	err := CopyObject(strings.NewReader(in), &out, fn)
 	return out.String(), err
 }
 
@@ -138,5 +139,64 @@ func TestCopyObjectErrors(t *testing.T) {
 	}
 	if _, err := copyString(t, `[1]`, func(*Member) error { return nil }); !errors.Is(err, ErrNotObject) {
 		t.Errorf("err = %v, want ErrNotObject", err)
+	}
+}
+
+// TestCopyObjectReadsJSONAsEncodingJSON checks CopyObject accepts what
+// encoding/json does: repeated names, each passed to fn, and invalid UTF-8.
+// Keys keep their bytes, escapes included, while Key is unquoted.
+func TestCopyObjectReadsJSONAsEncodingJSON(t *testing.T) {
+	var keys []string
+	in := "{\"a\":1,\"a\":2,\"caf\\u00e9\":\"bad \xff byte\",\"skip\":{\"x\":[1,2]}}"
+	got, err := copyString(t, in, func(m *Member) error {
+		keys = append(keys, m.Key)
+		if m.Key == "skip" {
+			return m.Skip()
+		}
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "{\"a\":1,\"a\":2,\"caf\\u00e9\":\"bad \xff byte\"}"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if want := []string{"a", "a", "café", "skip"}; !slices.Equal(keys, want) {
+		t.Errorf("keys %q, want %q", keys, want)
+	}
+}
+
+func TestSkipThenWriteReplaces(t *testing.T) {
+	got, err := copyString(t, `{"a":{"big":[1,2,3]},"b":2}`, func(m *Member) error {
+		if m.Key != "a" {
+			return nil
+		}
+		if err := m.Skip(); err != nil {
+			return err
+		}
+		return m.Write([]byte(`"small"`))
+	})
+	if err != nil || got != `{"a":"small","b":2}` {
+		t.Errorf("got %s, %v", got, err)
+	}
+}
+
+// TestCopyObjectInvalidUTF8Key checks a key with invalid UTF-8 is accepted:
+// Key has U+FFFD in its place, as with encoding/json, and the key is written
+// with its original bytes.
+func TestCopyObjectInvalidUTF8Key(t *testing.T) {
+	var keys []string
+	got, err := copyString(t, "{\"k\xff\":1}", func(m *Member) error {
+		keys = append(keys, m.Key)
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := "{\"k\xff\":1}"; got != want {
+		t.Errorf("got %q, want %q", got, want)
+	}
+	if want := []string{"k�"}; !slices.Equal(keys, want) {
+		t.Errorf("keys %q, want %q", keys, want)
 	}
 }
