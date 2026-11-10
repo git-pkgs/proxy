@@ -200,16 +200,8 @@ func (m *Mirror) Run(ctx context.Context, source Source, onProgress ...ProgressF
 	g.SetLimit(m.workers)
 
 	for _, item := range items {
-		g.Go(func() (err error) {
-			defer func() {
-				if r := recover(); r != nil {
-					m.logger.Error("panic in mirror worker", "recover", r,
-						"ecosystem", item.Ecosystem, "name", item.Name, "version", item.Version)
-					tracker.failed.Add(1)
-					tracker.addError(item.Ecosystem, item.Name, item.Version, fmt.Sprintf("panic: %v", r))
-				}
-			}()
-			m.mirrorOne(gctx, item, tracker)
+		g.Go(func() error {
+			m.mirrorRecovered(gctx, item, tracker)
 			return nil // never fail the group; errors are tracked
 		})
 	}
@@ -239,6 +231,19 @@ func (m *Mirror) RunDryRun(ctx context.Context, source Source) ([]PackageVersion
 	return items, err
 }
 
+// mirrorRecovered is mirrorOne, counting a panic as a failure.
+func (m *Mirror) mirrorRecovered(ctx context.Context, item PackageVersion, tracker *progressTracker) {
+	defer func() {
+		if r := recover(); r != nil {
+			m.logger.Error("panic in mirror worker", "recover", r,
+				"ecosystem", item.Ecosystem, "name", item.Name, "version", item.Version)
+			tracker.failed.Add(1)
+			tracker.addError(item.Ecosystem, item.Name, item.Version, fmt.Sprintf("panic: %v", r))
+		}
+	}()
+	m.mirrorOne(ctx, item, tracker)
+}
+
 func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *progressTracker) {
 	if isImageEcosystem(pv.Ecosystem) && m.Images != nil {
 		m.mirrorImage(ctx, pv, tracker)
@@ -253,6 +258,15 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 		tracker.addError(pv.Ecosystem, pv.Name, pv.Version, m.RefusePackages)
 		m.logger.Warn("mirror refused",
 			"ecosystem", pv.Ecosystem, "name", pv.Name, "version", pv.Version, "reason", m.RefusePackages)
+		return
+	}
+	if pv.fileURL != "" {
+		result, err := m.proxy.GetOrFetchArtifactFromURLWithDigest(ctx, pv.Ecosystem, pv.Name, pv.Version, pv.cacheFilename, pv.fileURL, pv.digest)
+		if err != nil {
+			m.recordFailure(tracker, pv, err)
+			return
+		}
+		m.recordResult(tracker, pv, result)
 		return
 	}
 	if eco, ok := fileEcosystems[pv.Ecosystem]; ok {
