@@ -345,23 +345,41 @@ func (h *PyPIHandler) fetchReleaseTimes(r *http.Request, name string) (map[strin
 		return nil, err
 	}
 
-	var metadata map[string]any
-	if err := json.Unmarshal(body, &metadata); err != nil {
+	return h.parseReleaseTimes(body)
+}
+
+// pypiReleaseFiles is the part of a JSON API document the release times are
+// read from. Decoding into it skips every other field, where a generic
+// map would hold the whole document, several times its size, in memory.
+type pypiReleaseFiles struct {
+	Releases map[string][]struct {
+		UploadTime string `json:"upload_time_iso_8601"`
+	} `json:"releases"`
+}
+
+// parseReleaseTimes returns each release's newest upload time from a JSON
+// API document, zero for a release without one.
+func (h *PyPIHandler) parseReleaseTimes(body []byte) (map[string]time.Time, error) {
+	var metadata pypiReleaseFiles
+	// A value of another type than expected is skipped and the rest is
+	// still decoded, so a file entry without a usable time doesn't count.
+	var mismatch *json.UnmarshalTypeError
+	if err := json.Unmarshal(body, &metadata); err != nil && !errors.As(err, &mismatch) {
 		return nil, fmt.Errorf("parsing pypi json metadata: %w", err)
 	}
-
-	releases, ok := metadata["releases"].(map[string]any)
-	if !ok {
+	if metadata.Releases == nil {
 		return nil, errors.New("pypi json metadata has no releases")
 	}
 
-	times := make(map[string]time.Time, len(releases))
-	for version, files := range releases {
-		filesArr, ok := files.([]any)
-		if !ok {
-			continue
+	times := make(map[string]time.Time, len(metadata.Releases))
+	for version, files := range metadata.Releases {
+		var newest time.Time
+		for _, file := range files {
+			if t, err := time.Parse(time.RFC3339, file.UploadTime); err == nil && t.After(newest) {
+				newest = t
+			}
 		}
-		times[version] = h.newestUploadTime(filesArr)
+		times[version] = newest
 	}
 	return times, nil
 }

@@ -242,11 +242,12 @@ func (h *MavenHandler) serveCooldownMetadata(w http.ResponseWriter, r *http.Requ
 		return false
 	}
 	metadataPath := path.Join(path.Dir(urlPath), mavenMetadataFile)
-	body, contentType, cacheKey, err := h.fetchMetadata(r.Context(), source, metadataPath)
-	if err != nil {
-		h.writeMetadataError(w, err)
+	res, cacheKey := h.fetchMetadata(r.Context(), source, metadataPath)
+	if res.err != nil {
+		h.writeMetadataError(w, res.err)
 		return true
 	}
+	body, contentType := res.body, res.contentType
 
 	m, err := h.proxy.cachedRewrite(r.Context(), "maven", h.proxyURL, cacheKey, body, "", func(in []byte) ([]byte, []string, error) {
 		// The rewrite is shared by requests waiting on it and cached, so it
@@ -273,7 +274,7 @@ func (h *MavenHandler) serveCooldownMetadata(w http.ResponseWriter, r *http.Requ
 		if contentType == "" || contentType == contentTypeJSON {
 			contentType = "text/xml"
 		}
-		markStale(w, h.proxy.lookupCachedMeta("maven", cacheKey).stale)
+		markStale(w, res.stale)
 		serveRewrittenMetadataAs(w, r, m, contentType)
 	case mavenChecksums[suffix] != nil:
 		sum := mavenChecksums[suffix]()

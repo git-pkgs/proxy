@@ -61,7 +61,7 @@ func TestWithCooldownCopiesProxyFields(t *testing.T) {
 		switch name {
 		case "Cooldown", "ShortestCooldown", "shared":
 			continue
-		case "fetchMu", "inFlight", "detachSlots", "metaMu", "inFlightMeta", "publishIndexes", "cooldownWatch":
+		case "fetchMu", "inFlight", "detachSlots", "metaMu", "inFlightMeta", "publishIndexes", "cooldownWatch", "viewCooldown":
 			if !after.IsZero() {
 				t.Errorf("view field %s is not empty", name)
 			}

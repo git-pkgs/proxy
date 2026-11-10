@@ -73,7 +73,7 @@ func (h *NuGetHandler) readNuGetMetadata(ctx context.Context, path string, decod
 		}
 		return decode(body)
 	}
-	_, _, _, err := h.proxy.fetchOrCacheMetadata(ctx, "nuget", key, target, "", validate)
+	_, _, err := h.proxy.fetchOrCacheMetadata(ctx, "nuget", key, target, "", validate)
 	return err
 }
 

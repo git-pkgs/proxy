@@ -383,7 +383,9 @@ func (h *GoHandler) proxySumDB(w http.ResponseWriter, r *http.Request, name, ups
 	// the upstream timeout before the fetch falls back to it.
 	if h.sumDBOffline && h.sumDBProbes.recentlyFailed(name) {
 		if entry, body, contentType, ok := h.readCachedSumDB(r.Context(), cacheKey, check); ok {
-			p.writeMetadataCachedResponseWithEncoding(w, r, goEcosystem, cacheKey, body, contentType, entry.ContentEncoding.String)
+			cm := p.cachedMetaFor(entry)
+			cm.stale = true // upstream was not asked
+			writeMetadataBody(w, r, cm, body, contentType, entry.ContentEncoding.String)
 			return
 		}
 	}
@@ -416,7 +418,7 @@ func (h *GoHandler) proxySumDB(w http.ResponseWriter, r *http.Request, name, ups
 		return
 	}
 
-	p.writeMetadataCachedResponseWithEncoding(w, r, goEcosystem, cacheKey, res.body, res.contentType, res.contentEncoding)
+	writeMetadataResult(w, r, res)
 }
 
 // fetchSumDB fetches a checksum database response through the metadata

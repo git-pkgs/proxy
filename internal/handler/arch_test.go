@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"database/sql"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -647,4 +648,56 @@ func serveArchRequest(h *ArchHandler, method, target string, header http.Header)
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 	return w
+}
+
+// TestArchHandler_DatabaseValidatorsDescribeBody checks a fetched database
+// goes out with its own Last-Modified, not that of the cache row, which
+// another instance may have rewritten while the signature was fetched.
+func TestArchHandler_DatabaseValidatorsDescribeBody(t *testing.T) {
+	const dbPath, sigPath = "/core/os/x86_64/core.db", "/core/os/x86_64/core.db.sig"
+	fetched := time.Date(2026, 10, 1, 12, 0, 0, 0, time.UTC)
+	rewritten := fetched.Add(time.Hour)
+	upstream := newArchUpstream(t, map[string][]byte{dbPath: []byte("core-db-v1"), sigPath: []byte("sig")})
+	upstream.modified[dbPath] = fetched
+	proxy := newArchTestProxy(t, upstream)
+	h := NewArchHandler(proxy, "http://proxy.example", map[string]string{"archlinux": upstream.URL})
+	key := h.metadataCacheKey("archlinux", upstream.URL, "core/os/x86_64/core.db")
+	upstream.served = func(path string) {
+		if path != sigPath {
+			return
+		}
+		entry, err := proxy.DB.GetMetadataCache(archEcosystem, key)
+		if err != nil || entry == nil {
+			t.Errorf("database row while fetching the signature: %v", err)
+			return
+		}
+		entry.LastModified = sql.NullTime{Time: rewritten, Valid: true}
+		if err := proxy.DB.UpsertMetadataCache(entry); err != nil {
+			t.Error(err)
+		}
+	}
+
+	w := serveArchRequest(h, http.MethodGet, "/archlinux"+dbPath, nil)
+	assertArchBody(t, w, "database", []byte("core-db-v1"))
+	if got := w.Header().Get("Last-Modified"); got != fetched.Format(http.TimeFormat) {
+		t.Errorf("Last-Modified = %q, want the fetched database's %q", got, fetched.Format(http.TimeFormat))
+	}
+}
+
+// TestArchHandler_StaleDatabaseMarkedWithoutTTL checks the stale fallback
+// carries the Warning header with metadata_ttl 0.
+func TestArchHandler_StaleDatabaseMarkedWithoutTTL(t *testing.T) {
+	db := []byte("core-db-bytes")
+	upstream := newArchUpstream(t, map[string][]byte{"/core/os/x86_64/core.db": db})
+	proxy := newArchTestProxy(t, upstream)
+	proxy.MetadataTTL = 0
+	h := NewArchHandler(proxy, "http://proxy.example", map[string]string{"archlinux": upstream.URL})
+
+	assertArchBody(t, serveArchRequest(h, http.MethodGet, "/archlinux/core/os/x86_64/core.db", nil), "seed", db)
+	upstream.available.Store(false)
+	w := serveArchRequest(h, http.MethodGet, "/archlinux/core/os/x86_64/core.db", nil)
+	assertArchBody(t, w, "stale", db)
+	if got := w.Header().Get("Warning"); got != staleWarning {
+		t.Errorf("Warning = %q, want %q", got, staleWarning)
+	}
 }

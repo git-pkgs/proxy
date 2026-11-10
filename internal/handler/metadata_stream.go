@@ -35,6 +35,12 @@ func (p *Proxy) serveStoredMetadata(w http.ResponseWriter, r *http.Request, ecos
 	if entry == nil {
 		return false
 	}
+	return p.serveMetadataEntry(w, r, ecosystem, cacheKey, entry, immutable)
+}
+
+// serveMetadataEntry is serveStoredMetadata for entry, a row
+// storedMetadataEntry or streamableMetadata accepted.
+func (p *Proxy) serveMetadataEntry(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, entry *database.MetadataCacheEntry, immutable bool) bool {
 	body, err := p.openMetadataEntry(r.Context(), ecosystem, cacheKey, entry)
 	if err != nil {
 		return false
@@ -88,14 +94,20 @@ func (p *Proxy) storedMetadataEntry(ecosystem, cacheKey string, immutable bool) 
 	if !immutable && time.Since(entry.FetchedAt.Time) >= p.MetadataTTL {
 		return nil
 	}
+	if !p.streamableMetadata(entry) {
+		return nil
+	}
+	return entry
+}
+
+// streamableMetadata reports whether entry records a sha256 digest and a
+// size within the metadata size limit, so its document can be streamed.
+func (p *Proxy) streamableMetadata(entry *database.MetadataCacheEntry) bool {
 	limit := p.MetadataMaxSize
 	if limit <= 0 {
 		limit = defaultMetadataMaxSize
 	}
-	if !entry.ContentDigest.Valid || !strings.HasPrefix(entry.ContentDigest.String, "sha256:") || !entry.Size.Valid || entry.Size.Int64 > limit {
-		return nil
-	}
-	return entry
+	return entry.ContentDigest.Valid && strings.HasPrefix(entry.ContentDigest.String, "sha256:") && entry.Size.Valid && entry.Size.Int64 <= limit
 }
 
 // openMetadataEntry opens the stored document of a row freshMetadataEntry

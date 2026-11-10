@@ -741,6 +741,7 @@ func TestContainerHandler_BlobHead_CacheHitSkipsUpstreamAndAuth(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodHead, "/library/nginx/blobs/"+digest, nil)
+	req = req.WithContext(ServingHead(req.Context()))
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 
@@ -764,7 +765,7 @@ func TestContainerHandler_BlobHead_CacheHitSkipsUpstreamAndAuth(t *testing.T) {
 	}
 }
 
-func TestContainerHandler_BlobHead_DirectServeRedirects(t *testing.T) {
+func TestContainerHandler_BlobHead_DirectServeAnswersFromCache(t *testing.T) {
 	proxy, db, store, fetcher := setupTestProxy(t)
 	digest := "sha256:abc123def456abc123def456abc123def456abc123def456abc123def456abcd"
 	seedPackage(t, db, store, "oci", "library/nginx", digest, digest, "cached blob")
@@ -778,14 +779,21 @@ func TestContainerHandler_BlobHead_DirectServeRedirects(t *testing.T) {
 	}
 
 	req := httptest.NewRequest(http.MethodHead, "/library/nginx/blobs/"+digest, nil)
+	req = req.WithContext(ServingHead(req.Context()))
 	w := httptest.NewRecorder()
 	h.Routes().ServeHTTP(w, req)
 
-	if w.Code != http.StatusFound {
-		t.Fatalf("status = %d, want %d", w.Code, http.StatusFound)
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d", w.Code, http.StatusOK)
 	}
-	if got := w.Header().Get("Location"); got != store.signedURL {
-		t.Errorf("Location = %q, want %q", got, store.signedURL)
+	if got := w.Header().Get("Location"); got != "" {
+		t.Errorf("Location = %q, want empty", got)
+	}
+	if got := w.Header().Get("Docker-Content-Digest"); got != digest {
+		t.Errorf("Docker-Content-Digest = %q, want %q", got, digest)
+	}
+	if got := w.Header().Get("Content-Length"); got != "11" {
+		t.Errorf("Content-Length = %q, want %q", got, "11")
 	}
 	wantETag := `"` + sha256Hex("cached blob") + `"`
 	if got := w.Header().Get("ETag"); got != wantETag {
