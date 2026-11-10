@@ -556,6 +556,12 @@ func (p *Proxy) readStored(ctx context.Context, pkgPURL, versionPURL, filename s
 		storagePath: artifact.StoragePath,
 	}
 
+	if servingHead(ctx) {
+		result.rangeable = readsSeekable(p.Storage)
+		p.recordCacheHit(artifact.Ecosystem, versionPURL, filename)
+		return result, nil
+	}
+
 	if p.DirectServe {
 		signed, err := p.Storage.SignedURL(ctx, artifact.StoragePath, p.DirectServeTTL)
 		if err == nil {
@@ -567,12 +573,6 @@ func (p *Proxy) readStored(ctx context.Context, pkgPURL, versionPURL, filename s
 			p.Logger.Warn("failed to sign storage URL, falling back to streaming",
 				"path", artifact.StoragePath, "error", err)
 		}
-	}
-
-	if servingHead(ctx) {
-		result.rangeable = readsSeekable(p.Storage)
-		p.recordCacheHit(artifact.Ecosystem, versionPURL, filename)
-		return result, nil
 	}
 
 	start := time.Now()
