@@ -117,7 +117,9 @@ storage:
     # How often to look for expired artifacts; at least "1m".
     sweep_interval: "10m"
     # Keep this many of the newest cached versions of each package from
-    # eviction by age (cargo, golang, npm and pypi). 0 keeps none.
+    # eviction by age (cargo, golang, npm and pypi). For oci it keeps the
+    # blobs of this many images per repository, those a tag most recently
+    # pointed at. 0 keeps none.
     # keep_latest: 2
 
   # Store fetched artifacts. Set to false to stream every download from

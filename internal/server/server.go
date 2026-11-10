@@ -304,6 +304,7 @@ func (s *Server) serve(listener net.Listener) error {
 		return fmt.Errorf("configuring scanners: %w", err)
 	}
 	configureMetadata(proxy, s.cfg)
+	proxy.KeepLatestImages = keepLatestImages(s.cfg)
 	proxy.GradleReadOnly = s.cfg.Gradle.BuildCache.ReadOnly
 	proxy.HostedEnabled = s.cfg.Hosted.Enabled
 	proxy.HostedNPMScopes = s.cfg.Hosted.NPMScopes

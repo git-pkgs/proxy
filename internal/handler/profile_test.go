@@ -35,6 +35,7 @@ func TestWithCooldownCopiesProxyFields(t *testing.T) {
 	p.DirectServe = true
 	p.DirectServeTTL = time.Minute
 	p.DirectServeBaseURL = "https://storage.example.com"
+	p.KeepLatestImages = 2
 	p.RateLimits = registryclient.NewRateLimitGate(http.DefaultTransport)
 	p.HostedNPMScopes = []string{"@example"}
 	p.HostedComposerVendors = []string{"example"}
