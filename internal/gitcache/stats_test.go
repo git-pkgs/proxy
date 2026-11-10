@@ -126,9 +126,6 @@ func TestRepositoryState(t *testing.T) {
 	}
 }
 
-// TestRepositoryStateRetriesAFailedRead checks a read that fails, here on
-// a branch whose commit is missing, is reported as an error and read again
-// a while later even if the upstream isn't checked in between.
 // TestRepositoryStateFoldsCase checks that, where keys are folded, a
 // repository's state is found under any spelling of its key.
 func TestRepositoryStateFoldsCase(t *testing.T) {
@@ -146,6 +143,32 @@ func TestRepositoryStateFoldsCase(t *testing.T) {
 	}
 }
 
+// TestRepositoriesKeepCaseWhereKeysAreFolded checks that, where keys are
+// folded, a repository is listed under its directory's spelling, not the
+// folded key, so its upstream and path match the configuration and the
+// upstream's names.
+func TestRepositoriesKeepCaseWhereKeysAreFolded(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("Repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.mu.Lock()
+	tc.foldCase = true
+	tc.mu.Unlock()
+	tc.clone(t, "Repo")
+	waitIdle(t, tc.Cache)
+
+	got := tc.Repositories()
+	if len(got) != 1 || got[0].Key != "up/Repo.git" {
+		t.Fatalf("repositories %+v, want up/Repo.git", got)
+	}
+	if _, err := tc.RepositoryState(context.Background(), got[0].Key); err != nil {
+		t.Errorf("RepositoryState(%s): %v", got[0].Key, err)
+	}
+}
+
+// TestRepositoryStateRetriesAFailedRead checks a read that fails, here on
+// a branch whose commit is missing, is reported as an error and read again
+// a while later even if the upstream isn't checked in between.
 func TestRepositoryStateRetriesAFailedRead(t *testing.T) {
 	upstream := newFakeUpstream(t)
 	upstream.newRepo("repo")

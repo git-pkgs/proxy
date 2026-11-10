@@ -963,15 +963,18 @@ for an upstream whose repositories differ only in case.
 The web UI lists the cached repositories at `/ui/git`, linked as "Git" in the
 navigation: each one's upstream, clone URL, size, the newest commit of the
 branch HEAD names (ID, subject and age), how many branches and tags it has,
-when the upstream was last checked and a client last read it, how many clones and fetches it served,
+when the upstream was last checked and a client last read it, how many
+times clients read its refs (each clone, fetch and `git ls-remote` does),
 and, while the last refresh failed, the kind of error (such as
 `fetch_failed` or `too_large`). A repository the upstream refused shows no
 commit, and one the `repos` allowlist no longer allows isn't listed, as `/git`
 serves neither. The request counts and errors are kept in memory and start over
-when the proxy restarts. Like the rest of the UI the
-page has no authentication, so it shows the names of repositories from
-upstreams with credentials to everyone who can reach it, as `/git` lets them
-clone those. The `proxy_git_cache_size_bytes` and
+when the proxy restarts. Like the rest of the UI the page has no
+authentication, so it shows everyone who can reach it the names, default
+branches and newest commit subjects of repositories from upstreams with
+credentials. `/git` lets the same people clone them, but where `/ui` and
+`/git` sit behind different access rules, the page shows more than `/git`
+does. The `proxy_git_cache_size_bytes` and
 `proxy_git_cached_repositories` gauges report the git cache's size and
 repository count, apart from the artifact gauges, and clones and fetches
 count as cache hits or misses under `ecosystem="git"`.

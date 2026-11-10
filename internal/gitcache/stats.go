@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"os/exec"
+	"path/filepath"
 	"slices"
 	"strconv"
 	"strings"
@@ -14,13 +15,16 @@ import (
 // RepositoryStats describes a cached repository.
 type RepositoryStats struct {
 	// Key is the repository's path in the cache, such as
-	// github-1a2b3c4d/acme/widgets.git.
+	// github-1a2b3c4d/acme/widgets.git. It is spelled as the directory is,
+	// also where the cache folds keys, so it keeps the case of the clone
+	// that created it.
 	Key  string
 	Size int64
 	// LastChecked is when the upstream's refs were last compared, and
 	// LastUsed when a client last read the repository.
 	LastChecked, LastUsed time.Time
-	// Requests counts clones and fetches since the cache was opened.
+	// Requests counts the times clients read the repository's refs, which
+	// each clone, fetch and ls-remote does, since the cache was opened.
 	Requests int64
 	// LastError names the kind of error the last refresh failed with, such
 	// as fetch_failed or too_large, and LastErrorAt when. Both are empty
@@ -55,7 +59,7 @@ func (c *Cache) Repositories() []RepositoryStats {
 			continue
 		}
 		s := RepositoryStats{
-			Key:         rp.key,
+			Key:         c.dirKey(rp),
 			Size:        rp.size.Load(),
 			LastChecked: unixNanoTime(rp.lastChecked.Load()),
 			LastUsed:    unixNanoTime(rp.lastUsed.Load()),
@@ -69,6 +73,16 @@ func (c *Cache) Repositories() []RepositoryStats {
 	}
 	slices.SortFunc(out, func(a, b RepositoryStats) int { return strings.Compare(a.Key, b.Key) })
 	return out
+}
+
+// dirKey is the key of rp spelled as its directory is, which rp.key is not
+// where keys are folded.
+func (c *Cache) dirKey(rp *repo) string {
+	rel, err := filepath.Rel(c.dir, rp.dir)
+	if err != nil {
+		return rp.key
+	}
+	return filepath.ToSlash(rel)
 }
 
 func unixNanoTime(n int64) time.Time {
