@@ -147,6 +147,11 @@ func (h *GenericHandler) Routes() http.Handler {
 		}
 
 		if artifact, ok := h.parseArtifact(repository, rest); ok {
+			if artifact.releaseAsset && r.URL.RawQuery != "" {
+				// Each distinct query would be fetched and stored again.
+				http.Error(w, "a release asset takes no query string", http.StatusBadRequest)
+				return
+			}
 			h.handleArtifact(w, r, repository, upstreamURL, rest, artifact)
 			return
 		}
@@ -192,6 +197,8 @@ type genericArtifact struct {
 	name     string
 	version  string
 	filename string
+	// releaseAsset is set for a GitHub release asset, which takes no query.
+	releaseAsset bool
 }
 
 // parseArtifact returns the identity of a version-pinned download path: one
@@ -204,9 +211,10 @@ func (h *GenericHandler) parseArtifact(repository, path string) (genericArtifact
 	}
 	if asset, ok := parseGitHubReleaseAsset(path); ok {
 		return genericArtifact{
-			name:     asset.owner + "/" + asset.repo,
-			version:  asset.tag,
-			filename: asset.filename,
+			name:         asset.owner + "/" + asset.repo,
+			version:      asset.tag,
+			filename:     asset.filename,
+			releaseAsset: true,
 		}, true
 	}
 	return genericArtifact{}, false

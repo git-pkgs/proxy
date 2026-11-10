@@ -470,7 +470,8 @@ its patterns match; any other path answers 404. The patterns use the syntax of
 `upstream.git` `repos`: `path.Match`, where `*` does not cross a `/`, and a
 pattern ending in `/**` also matches every path nested below its prefix. A
 path containing `%`, `?`, `#` or a backslash is refused for an upstream with
-`generic_paths`. An upstream without `generic_paths` serves every path.
+`generic_paths`. The patterns only check the path; the query string is passed
+on as it is. An upstream without `generic_paths` serves every path.
 
 When `upstream.auth` has credentials for a generic upstream, `generic_paths`
 is required and the proxy refuses to start without it: everyone who can reach
@@ -481,7 +482,8 @@ other token but cannot read anything private, even through an allowed path.
 Paths shaped like `{owner}/{repo}/releases/download/{tag}/{asset}` are
 version-pinned GitHub release assets: they are stored in the artifact cache
 and served from it without revalidation, including while the upstream is
-down.
+down. A release asset takes no query string; a request for one with a query
+answers 400.
 
 Upstreams pointed at these hosts get version-pinned paths built in, whatever
 the upstream is named:
@@ -510,7 +512,9 @@ upstream:
 ```
 
 Only list paths whose content never changes for a given version: a match is
-never revalidated.
+never revalidated. The query string is passed on and is part of the cache
+key, so each distinct query is fetched and stored as a copy of its own. Only
+`storage.max_size` or a `generic` retention rule removes them.
 
 Every other path is served through the metadata cache (`cache_metadata`
 must be enabled for offline fallback): fresh within `metadata_ttl`, then
