@@ -64,12 +64,14 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"math"
 	"net"
 	"net/url"
 	"os"
 	"path"
 	"path/filepath"
 	"regexp"
+	"slices"
 	"sort"
 	"strconv"
 	"strings"
@@ -436,7 +438,53 @@ func (s *ScannerConfig) Validate() error {
 	default:
 		return fmt.Errorf("invalid mode %q (must be block or monitor)", s.Mode)
 	}
+	for i, eco := range s.Ecosystems {
+		key, err := ScannerEcosystemKey(eco)
+		if err != nil {
+			return err
+		}
+		s.Ecosystems[i] = key
+	}
 	return nil
+}
+
+// scannerEcosystems are the ecosystem keys handlers pass to scanners: the
+// retention keys plus the handlers retention does not cover, and git for
+// Git LFS objects.
+var scannerEcosystems = func() []string {
+	keys := append(slices.Clone(retention.KnownKeys), "arch", "chef", "git")
+	slices.Sort(keys)
+	return keys
+}()
+
+// scannerEcosystemAliases maps common ecosystem names to handler keys.
+var scannerEcosystemAliases = map[string]string{
+	"apk":       "alpine",
+	"debian":    "deb",
+	"docker":    "oci",
+	"go":        "golang",
+	"packagist": "composer",
+	"rubygems":  "gem",
+}
+
+// NormalizeScannerEcosystem returns the handler key for a
+// scanning.scanners[].ecosystems entry, resolving case and common aliases.
+func NormalizeScannerEcosystem(eco string) string {
+	eco = strings.ToLower(strings.TrimSpace(eco))
+	if key, ok := scannerEcosystemAliases[eco]; ok {
+		return key
+	}
+	return eco
+}
+
+// ScannerEcosystemKey is NormalizeScannerEcosystem that also rejects
+// names no handler uses.
+func ScannerEcosystemKey(eco string) (string, error) {
+	key := NormalizeScannerEcosystem(eco)
+	if !slices.Contains(scannerEcosystems, key) {
+		return "", fmt.Errorf("unknown ecosystem %q (valid: %s)", eco, strings.Join(scannerEcosystems, ", "))
+	}
+	return key, nil
 }
 
 // StorageConfig configures artifact storage.
@@ -1390,11 +1438,33 @@ func setEnvString(dst *string, key string) {
 	}
 }
 
-// setEnvBool is setEnvString for boolean fields, parsed via envBool.
-func setEnvBool(dst *bool, key string) {
-	if v := os.Getenv(key); v != "" {
-		*dst = envBool(v)
+// parseEnvBool accepts what strconv.ParseBool does plus yes/no/on/off,
+// ignoring case and surrounding space.
+func parseEnvBool(v string) (bool, bool) {
+	v = strings.ToLower(strings.TrimSpace(v))
+	switch v {
+	case "yes", "on":
+		return true, true
+	case "no", "off":
+		return false, true
 	}
+	b, err := strconv.ParseBool(v)
+	return b, err == nil
+}
+
+// setEnvBool is setEnvString for boolean fields, parsed via parseEnvBool.
+// Any other value leaves *dst unchanged and is reported via EnvWarnings.
+func (c *Config) setEnvBool(dst *bool, key string) {
+	v := os.Getenv(key)
+	if v == "" {
+		return
+	}
+	b, ok := parseEnvBool(v)
+	if !ok {
+		c.envWarnings = append(c.envWarnings, fmt.Sprintf("ignoring %s=%q: not a boolean, keeping %t", key, v, *dst))
+		return
+	}
+	*dst = b
 }
 
 // setGradleReadOnlyFromEnv parses strictly: an unrecognised value keeps
@@ -1405,8 +1475,8 @@ func (c *Config) setGradleReadOnlyFromEnv() {
 	if v == "" {
 		return
 	}
-	readOnly, err := strconv.ParseBool(strings.TrimSpace(v))
-	if err != nil {
+	readOnly, ok := parseEnvBool(v)
+	if !ok {
 		c.Gradle.BuildCache.ReadOnly = true
 		c.envWarnings = append(c.envWarnings, fmt.Sprintf("ignoring %s=%q: not a boolean, keeping the Gradle build cache read-only", key, v))
 		return
@@ -1454,16 +1524,16 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Listen, "PROXY_LISTEN")
 	setEnvString(&c.BaseURL, "PROXY_BASE_URL")
 	setEnvString(&c.UIBaseURL, "PROXY_UI_URL")
-	setEnvBool(&c.TrustForwardedFor, "PROXY_TRUST_FORWARDED_FOR")
-	setEnvBool(&c.UIRequestSources, "PROXY_UI_REQUEST_SOURCES")
-	setEnvBool(&c.UIFailureDetails, "PROXY_UI_FAILURE_DETAILS")
+	c.setEnvBool(&c.TrustForwardedFor, "PROXY_TRUST_FORWARDED_FOR")
+	c.setEnvBool(&c.UIRequestSources, "PROXY_UI_REQUEST_SOURCES")
+	c.setEnvBool(&c.UIFailureDetails, "PROXY_UI_FAILURE_DETAILS")
 	setEnvString(&c.Storage.URL, "PROXY_STORAGE_URL")
 	setEnvString(&c.Storage.Path, "PROXY_STORAGE_PATH")
 	setEnvString(&c.Storage.MaxSize, "PROXY_STORAGE_MAX_SIZE")
-	setEnvBool(&c.Storage.DirectServe, "PROXY_STORAGE_DIRECT_SERVE")
+	c.setEnvBool(&c.Storage.DirectServe, "PROXY_STORAGE_DIRECT_SERVE")
 	setEnvString(&c.Storage.DirectServeTTL, "PROXY_STORAGE_DIRECT_SERVE_TTL")
 	setEnvString(&c.Storage.DirectServeBaseURL, "PROXY_STORAGE_DIRECT_SERVE_BASE_URL")
-	setEnvBool(&c.Storage.CacheArtifacts, "PROXY_STORAGE_CACHE_ARTIFACTS")
+	c.setEnvBool(&c.Storage.CacheArtifacts, "PROXY_STORAGE_CACHE_ARTIFACTS")
 	setEnvString(&c.Storage.Retention.Default, "PROXY_STORAGE_RETENTION_DEFAULT")
 	setEnvString(&c.Storage.Retention.SweepInterval, "PROXY_STORAGE_RETENTION_SWEEP_INTERVAL")
 	setEnvString(&c.Database.Driver, "PROXY_DATABASE_DRIVER")
@@ -1474,11 +1544,11 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Log.Format, "PROXY_LOG_FORMAT")
 	setEnvString(&c.AccessLog.Path, "PROXY_ACCESS_LOG_PATH")
 	setEnvStringSlice(&c.Upstream.AllowPrivateHosts, "PROXY_UPSTREAM_ALLOW_PRIVATE_HOSTS")
-	setEnvBool(&c.Upstream.AllowLoopback, "PROXY_UPSTREAM_ALLOW_LOOPBACK")
+	c.setEnvBool(&c.Upstream.AllowLoopback, "PROXY_UPSTREAM_ALLOW_LOOPBACK")
 	setEnvString(&c.Upstream.NPM, "PROXY_UPSTREAM_NPM")
-	setEnvBool(&c.Upstream.NPMFullMetadata, "PROXY_UPSTREAM_NPM_FULL_METADATA")
-	setEnvBool(&c.Upstream.NPMChangeFeed, "PROXY_UPSTREAM_NPM_CHANGE_FEED")
-	setEnvBool(&c.Upstream.GoSumDBsOffline, "PROXY_UPSTREAM_GO_SUMDBS_OFFLINE")
+	c.setEnvBool(&c.Upstream.NPMFullMetadata, "PROXY_UPSTREAM_NPM_FULL_METADATA")
+	c.setEnvBool(&c.Upstream.NPMChangeFeed, "PROXY_UPSTREAM_NPM_CHANGE_FEED")
+	c.setEnvBool(&c.Upstream.GoSumDBsOffline, "PROXY_UPSTREAM_GO_SUMDBS_OFFLINE")
 	setEnvString(&c.Upstream.Cargo, "PROXY_UPSTREAM_CARGO")
 	setEnvString(&c.Upstream.CargoDownload, "PROXY_UPSTREAM_CARGO_DOWNLOAD")
 	setEnvString(&c.Upstream.Gem, "PROXY_UPSTREAM_GEM")
@@ -1495,7 +1565,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Upstream.NuGetSearch, "PROXY_UPSTREAM_NUGET_SEARCH")
 	setEnvString(&c.Upstream.Composer, "PROXY_UPSTREAM_COMPOSER")
 	setEnvString(&c.Upstream.ComposerRepository, "PROXY_UPSTREAM_COMPOSER_REPOSITORY")
-	setEnvBool(&c.Upstream.ComposerChangeFeed, "PROXY_UPSTREAM_COMPOSER_CHANGE_FEED")
+	c.setEnvBool(&c.Upstream.ComposerChangeFeed, "PROXY_UPSTREAM_COMPOSER_CHANGE_FEED")
 	setEnvString(&c.Upstream.Conan, "PROXY_UPSTREAM_CONAN")
 	setEnvString(&c.Upstream.Chef, "PROXY_UPSTREAM_CHEF")
 	setEnvString(&c.Upstream.Conda, "PROXY_UPSTREAM_CONDA")
@@ -1509,20 +1579,20 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Upstream.HomebrewAPI, "PROXY_UPSTREAM_HOMEBREW_API")
 	setEnvString(&c.Upstream.HomebrewArtifact, "PROXY_UPSTREAM_HOMEBREW_ARTIFACT")
 	setEnvString(&c.Cooldown.Default, "PROXY_COOLDOWN_DEFAULT")
-	setEnvBool(&c.Scanning.Enabled, "PROXY_SCANNING_ENABLED")
-	setEnvBool(&c.Scanning.FailOpen, "PROXY_SCANNING_FAIL_OPEN")
+	c.setEnvBool(&c.Scanning.Enabled, "PROXY_SCANNING_ENABLED")
+	c.setEnvBool(&c.Scanning.FailOpen, "PROXY_SCANNING_FAIL_OPEN")
 	setEnvString(&c.Scanning.Timeout, "PROXY_SCANNING_TIMEOUT")
 	setEnvString(&c.Scanning.SigningKey, "PROXY_SCANNING_SIGNING_KEY")
 	setEnvString(&c.Scanning.FetchBaseURL, "PROXY_SCANNING_FETCH_BASE_URL")
-	setEnvBool(&c.CacheMetadata, "PROXY_CACHE_METADATA")
-	setEnvBool(&c.MirrorAPI, "PROXY_MIRROR_API")
-	setEnvBool(&c.CacheDelete, "PROXY_CACHE_DELETE")
-	setEnvBool(&c.Hosted.Enabled, "PROXY_HOSTED_ENABLED")
+	c.setEnvBool(&c.CacheMetadata, "PROXY_CACHE_METADATA")
+	c.setEnvBool(&c.MirrorAPI, "PROXY_MIRROR_API")
+	c.setEnvBool(&c.CacheDelete, "PROXY_CACHE_DELETE")
+	c.setEnvBool(&c.Hosted.Enabled, "PROXY_HOSTED_ENABLED")
 	setEnvString(&c.Hosted.Token, "PROXY_HOSTED_TOKEN")
 	setEnvString(&c.Hosted.MaxUploadSize, "PROXY_HOSTED_MAX_UPLOAD_SIZE")
 	setEnvStringSlice(&c.Hosted.NPMScopes, "PROXY_HOSTED_NPM_SCOPES")
 	setEnvStringSlice(&c.Hosted.ComposerVendors, "PROXY_HOSTED_COMPOSER_VENDORS")
-	setEnvBool(&c.Projects.Enabled, "PROXY_PROJECTS_ENABLED")
+	c.setEnvBool(&c.Projects.Enabled, "PROXY_PROJECTS_ENABLED")
 	setEnvString(&c.Projects.Token, "PROXY_PROJECTS_TOKEN")
 	setEnvString(&c.Projects.MaxAge, "PROXY_PROJECTS_MAX_AGE")
 	setEnvString(&c.MetadataTTL, "PROXY_METADATA_TTL")
@@ -1610,8 +1680,8 @@ func (c *Config) Validate() error {
 
 	// Validate direct serve TTL if specified
 	if c.Storage.DirectServeTTL != "" {
-		if _, err := time.ParseDuration(c.Storage.DirectServeTTL); err != nil {
-			return fmt.Errorf("invalid storage.direct_serve_ttl %q: %w", c.Storage.DirectServeTTL, err)
+		if _, err := parseNonNegativeDuration("storage.direct_serve_ttl", c.Storage.DirectServeTTL); err != nil {
+			return err
 		}
 	}
 
@@ -1628,8 +1698,8 @@ func (c *Config) Validate() error {
 
 	// Validate metadata TTL if specified
 	if c.MetadataTTL != "" && c.MetadataTTL != "0" {
-		if _, err := time.ParseDuration(c.MetadataTTL); err != nil {
-			return fmt.Errorf("invalid metadata_ttl %q: %w", c.MetadataTTL, err)
+		if _, err := parseNonNegativeDuration("metadata_ttl", c.MetadataTTL); err != nil {
+			return err
 		}
 	}
 
@@ -1661,6 +1731,8 @@ func (c *Config) validateCacheArtifacts() error {
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror_api: mirrored artifacts would never be served")
 	case len(c.Mirror.Schedules) > 0:
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror.schedules: mirrored artifacts would never be served")
+	case c.Mirror.Refresh != nil:
+		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror.refresh: mirrored artifacts would never be served")
 	case c.Hosted.Enabled:
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with hosted.enabled: pushed packages would never be served")
 	}
@@ -2127,7 +2199,16 @@ func ParseSize(s string) (int64, error) {
 			if err != nil {
 				return 0, fmt.Errorf("invalid number %q", numStr)
 			}
-			return int64(num * float64(s2.mult)), nil
+			// The comparisons also reject NaN.
+			size := num * float64(s2.mult)
+			if !(size >= 0 && size < math.MaxInt64) {
+				return 0, fmt.Errorf("invalid size %q: must be between 0 and %d bytes", s, int64(math.MaxInt64))
+			}
+			// max_size 0 means unlimited, so don't let a tiny size become 0.
+			if num != 0 && int64(size) == 0 {
+				return 0, fmt.Errorf("invalid size %q: less than one byte", s)
+			}
+			return int64(size), nil
 		}
 	}
 
@@ -2135,6 +2216,9 @@ func ParseSize(s string) (int64, error) {
 	num, err := strconv.ParseInt(s, 10, 64)
 	if err != nil {
 		return 0, fmt.Errorf("invalid size %q", s)
+	}
+	if num < 0 {
+		return 0, fmt.Errorf("invalid size %q: must not be negative", s)
 	}
 	return num, nil
 }
@@ -2175,8 +2259,4 @@ func (a *AuthConfig) Header() (name, value string) {
 // expandEnv expands ${VAR_NAME} references in a string.
 func expandEnv(s string) string {
 	return os.Expand(s, os.Getenv)
-}
-
-func envBool(v string) bool {
-	return v == "true" || v == "1"
 }

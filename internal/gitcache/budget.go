@@ -2,6 +2,7 @@ package gitcache
 
 import (
 	"context"
+	"errors"
 	"sync/atomic"
 	"time"
 )
@@ -29,7 +30,14 @@ type reservation struct {
 	// cut, guarded by c.mu, marks a fetch stopped because the cache could
 	// not make room for it.
 	cut bool
+	// ended, guarded by c.mu, marks a reservation given back. A read
+	// relayed after that, by a git helper the fetch left behind, reserves
+	// nothing.
+	ended bool
 }
+
+// errReservationEnded is returned by cover once the fetch has ended.
+var errReservationEnded = errors.New("fetch has ended")
 
 func (c *Cache) newReservation() *reservation {
 	return &reservation{c: c}
@@ -48,6 +56,10 @@ func (r *reservation) cover(ctx context.Context, relayed int64) error {
 	var timeout <-chan time.Time
 	for {
 		c.mu.Lock()
+		if r.ended {
+			c.mu.Unlock()
+			return errReservationEnded
+		}
 		if r.cut {
 			c.mu.Unlock()
 			return ErrCacheFull
@@ -113,6 +125,7 @@ func (r *reservation) release() {
 
 func (r *reservation) releaseLocked() {
 	c := r.c
+	r.ended = true
 	n := r.reserved.Swap(0)
 	if r.cut {
 		r.cut = false

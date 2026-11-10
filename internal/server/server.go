@@ -71,6 +71,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -447,7 +448,7 @@ func (s *Server) serve(listener net.Listener) error {
 		"ui_url", s.cfg.UIBaseURL,
 		"storage", storageURL,
 		"database", s.cfg.Database.String())
-	for _, warning := range s.cfg.EnvWarnings() {
+	for _, warning := range slices.Concat(s.cfg.EnvWarnings(), s.cfg.Warnings()) {
 		s.logger.Warn(warning)
 	}
 	s.background.Go(func() { s.updateCacheStatsMetrics(bgCtx) })

@@ -1,10 +1,12 @@
 package storage
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
+	"fmt"
 	"io"
 	"io/fs"
 	"net/http"
@@ -910,5 +912,31 @@ func TestBlobStoreFailedCopyLeavesNoObject(t *testing.T) {
 	}
 	if exists {
 		t.Error("failed Store left a partial object behind")
+	}
+}
+
+// Storing a small object must not allocate a large copy buffer: a Go version
+// list under cooldown stores one small .info file per version.
+func TestBlobStoreSmallObjectAllocatesLittle(t *testing.T) {
+	b := createTestBlob(t)
+	ctx := context.Background()
+	content := []byte(`{"Version":"v1.0.0","Time":"2024-01-01T00:00:00Z"}`)
+
+	const stores = 32
+	const maxBytesPerStore = 128 << 10
+
+	var before, after runtime.MemStats
+	runtime.ReadMemStats(&before)
+	for i := range stores {
+		path := fmt.Sprintf("_metadata/golang/example.com/mod/v1.0.%d.info", i)
+		if _, _, err := b.Store(ctx, path, bytes.NewReader(content)); err != nil {
+			t.Fatalf("Store failed: %v", err)
+		}
+	}
+	runtime.ReadMemStats(&after)
+
+	perStore := (after.TotalAlloc - before.TotalAlloc) / stores
+	if perStore > maxBytesPerStore {
+		t.Errorf("Store allocated %d bytes per small object, want at most %d", perStore, maxBytesPerStore)
 	}
 }

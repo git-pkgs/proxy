@@ -432,8 +432,18 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-// condaTimestampDivisor converts Conda's millisecond timestamps to seconds.
-const condaTimestampDivisor = 1000
+// condaMaxSecondsTimestamp is the last second of year 9999. Like conda, a
+// larger repodata timestamp is read as milliseconds and a smaller one as
+// seconds, which some older entries use.
+const condaMaxSecondsTimestamp = 253402300799
+
+// condaTime returns the time a repodata timestamp names.
+func condaTime(timestamp float64) time.Time {
+	if timestamp > condaMaxSecondsTimestamp {
+		return time.UnixMilli(int64(timestamp)).Truncate(time.Second)
+	}
+	return time.Unix(int64(timestamp), 0)
+}
 
 const (
 	repodataWriteBuffer = 64 << 10
@@ -451,7 +461,7 @@ func (h *CondaHandler) filterRepodata(r io.Reader, w io.Writer) error {
 
 // filterRepodataWith is filterRepodata deciding by filter.
 func (h *CondaHandler) filterRepodataWith(r io.Reader, w io.Writer, filter *repodataFilter) error {
-	return jsonstream.CopyObject(json.NewDecoder(r), w, func(m *jsonstream.Member) error {
+	return jsonstream.CopyObject(r, w, func(m *jsonstream.Member) error {
 		if m.Key != "packages" && m.Key != "packages.conda" {
 			return m.Copy()
 		}
@@ -503,7 +513,7 @@ func (f *repodataFilter) inCooldown(filename string, raw []byte) bool {
 	if entry.Name == "" || entry.Timestamp == 0 {
 		return false
 	}
-	publishedAt := time.Unix(int64(entry.Timestamp)/condaTimestampDivisor, 0)
+	publishedAt := condaTime(entry.Timestamp)
 	decision := f.h.proxy.cooldown().Evaluate("conda", canonicalPackagePURL("conda", entry.Name), publishedAt, f.now)
 	if decision.Allowed {
 		return false
@@ -520,14 +530,14 @@ func (f *repodataFilter) inCooldown(filename string, raw []byte) bool {
 	return true
 }
 
-// recordInCooldown reports whether a package record with a millisecond
+// recordInCooldown reports whether a package record with a repodata
 // timestamp was published too recently. Records without a name or
 // timestamp are kept.
 func (h *CondaHandler) recordInCooldown(filename, name, version string, timestamp float64) bool {
 	if name == "" || timestamp == 0 {
 		return false
 	}
-	publishedAt := time.Unix(int64(timestamp)/condaTimestampDivisor, 0)
+	publishedAt := condaTime(timestamp)
 	if h.proxy.cooldown().IsAllowed("conda", canonicalPackagePURL("conda", name), publishedAt) {
 		return false
 	}
@@ -609,7 +619,7 @@ func (h *CondaHandler) streamRepodataIndex(r *http.Request, upstreamURL string) 
 // is not limited by metadata_max_size.
 func readRepodataIndex(r io.Reader) (map[string]time.Time, error) {
 	index := make(map[string]time.Time)
-	err := jsonstream.CopyObject(json.NewDecoder(io.LimitReader(r, maxRepodataSize)), io.Discard, func(m *jsonstream.Member) error {
+	err := jsonstream.CopyObject(io.LimitReader(r, maxRepodataSize), io.Discard, func(m *jsonstream.Member) error {
 		if m.Key != "packages" && m.Key != "packages.conda" {
 			return m.Copy()
 		}
@@ -620,7 +630,7 @@ func readRepodataIndex(r io.Reader) (map[string]time.Time, error) {
 			}
 			var e repodataEntry
 			if json.Unmarshal(raw, &e) == nil && e.Timestamp != 0 {
-				index[entry.Key] = time.Unix(int64(e.Timestamp)/condaTimestampDivisor, 0)
+				index[entry.Key] = condaTime(e.Timestamp)
 			}
 			return nil
 		})

@@ -57,7 +57,7 @@ func (h *GoHandler) handleVulnDB(w http.ResponseWriter, r *http.Request, path st
 		p.writeMetadataFetchError(w, res.err)
 		return
 	}
-	p.writeMetadataCachedResponseWithEncoding(w, r, goEcosystem, cacheKey, res.body, res.contentType, res.contentEncoding)
+	writeMetadataResult(w, r, res)
 }
 
 // validGoVulnDBPath reports whether path is a file the vulnerability

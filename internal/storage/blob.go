@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -34,11 +35,22 @@ const osWindows = "windows"
 const (
 	uploadBufferSize  = 5 << 20
 	uploadConcurrency = 2
-
-	// attrsExt is fileblob's sidecar suffix, kept only to clear sidecars an
-	// earlier version wrote.
-	attrsExt = ".attrs"
 )
+
+// storeCopyBufferSize is the size of the buffers Store copies with, the size
+// io.Copy uses itself.
+const storeCopyBufferSize = 32 << 10
+
+var storeCopyBuffers = sync.Pool{ //nolint:gochecknoglobals // shared across stores
+	New: func() any {
+		buffer := make([]byte, storeCopyBufferSize)
+		return &buffer
+	},
+}
+
+// attrsExt is fileblob's sidecar suffix, kept only to clear sidecars an
+// earlier version wrote.
+const attrsExt = ".attrs"
 
 // Blob implements Storage using gocloud.dev/blob.
 // Supports local filesystem (file://) and S3 (s3://) URLs.
@@ -313,7 +325,11 @@ func (b *Blob) Store(ctx context.Context, path string, r io.Reader) (int64, stri
 		return 0, "", fmt.Errorf("creating writer: %w", err)
 	}
 
-	size, err := io.Copy(w, tee)
+	// Hide the writer's ReadFrom, which allocates a 1 MiB buffer on every
+	// call, however small the object, so the copy uses a pooled buffer.
+	buffer := storeCopyBuffers.Get().(*[]byte)
+	defer storeCopyBuffers.Put(buffer)
+	size, err := io.CopyBuffer(struct{ io.Writer }{w}, tee, *buffer)
 	if err != nil {
 		abort()
 		_ = w.Close()
@@ -380,7 +396,6 @@ func (b *Blob) Delete(ctx context.Context, path string) error {
 	return nil
 }
 
-// SignedURL returns a presigned URL granting time-limited GET access to path.
 func (b *Blob) SignedURL(ctx context.Context, path string, expiry time.Duration) (string, error) {
 	signed, err := b.bucket.SignedURL(ctx, path, &blob.SignedURLOptions{
 		Method: http.MethodGet,

@@ -58,11 +58,12 @@ func (h *CondaHandler) handleShardIndex(w http.ResponseWriter, r *http.Request) 
 	upstreamURL := h.upstreamURL + r.URL.Path
 	cacheKey := h.metadataCacheKey(r.URL.Path)
 
-	body, contentType, contentEncoding, err := h.proxy.fetchOrCacheMetadata(r.Context(), "conda", cacheKey, upstreamURL, "identity", nil, "*/*")
-	if err != nil {
-		h.proxy.writeMetadataFetchError(w, err)
+	res := h.proxy.lookupMetadata(r.Context(), "conda", cacheKey, upstreamURL, "*/*", "identity", nil)
+	if res.err != nil {
+		h.proxy.writeMetadataFetchError(w, res.err)
 		return
 	}
+	body := res.body
 
 	if !h.cooldownEnabled() {
 		index, err := decodeCondaShardIndex(body)
@@ -74,7 +75,7 @@ func (h *CondaHandler) handleShardIndex(w http.ResponseWriter, r *http.Request) 
 			http.NotFound(w, r)
 			return
 		}
-		h.proxy.writeMetadataCachedResponseWithEncoding(w, r, "conda", cacheKey, body, contentType, contentEncoding)
+		writeMetadataResult(w, r, res)
 		return
 	}
 
@@ -121,7 +122,7 @@ func (h *CondaHandler) handleCooldownShard(w http.ResponseWriter, r *http.Reques
 	}
 	upstreamPath := "/" + channel + "/" + arch + "/" + dir + hex.EncodeToString(masked) + condaShardSuffix
 
-	body, _, _, err := h.proxy.fetchOrCacheMetadata(r.Context(), "conda", h.metadataCacheKey(upstreamPath), h.upstreamURL+upstreamPath, "identity", nil, "*/*")
+	body, _, err := h.proxy.fetchOrCacheMetadata(r.Context(), "conda", h.metadataCacheKey(upstreamPath), h.upstreamURL+upstreamPath, "identity", nil, "*/*")
 	if err != nil {
 		h.proxy.writeMetadataFetchError(w, err)
 		return
@@ -378,7 +379,8 @@ func rewriteCondaShardIndex(body []byte, indexURL string, mask [condaShardHashLe
 }
 
 // condaShardRecord holds the fields cooldown needs from a shard record.
-// Timestamps are milliseconds, encoded as an integer or a float.
+// Timestamps are an integer or a float, in seconds or milliseconds as
+// condaTime reads them.
 type condaShardRecord struct {
 	Name      string `msgpack:"name"`
 	Version   string `msgpack:"version"`

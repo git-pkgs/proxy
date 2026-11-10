@@ -2,6 +2,8 @@
 
 The proxy can be configured via command line flags, environment variables, or a configuration file. Command line flags take precedence over environment variables, which take precedence over the configuration file.
 
+Boolean environment variables accept `true`, `t`, `1`, `yes` or `on`, and `false`, `f`, `0`, `no` or `off`, in any case. Any other value, such as a typo, is ignored: the setting keeps its value from the configuration file or default, and the proxy logs a warning at startup.
+
 ## Configuration File
 
 Create a YAML or JSON file and pass it with `-config`:
@@ -65,7 +67,7 @@ storage:
 |--------|-------------|------|-------------|
 | `storage.url` | `PROXY_STORAGE_URL` | `-storage-url` | Storage URL (file:// or s3://) |
 | `storage.path` | `PROXY_STORAGE_PATH` | `-storage-path` | Local path (deprecated, use url) |
-| `storage.max_size` | `PROXY_STORAGE_MAX_SIZE` | - | Max cache size (e.g., "10GB") |
+| `storage.max_size` | `PROXY_STORAGE_MAX_SIZE` | - | Max cache size (e.g., "10GB"). Negative or out-of-range sizes are rejected at startup |
 | `storage.cache_artifacts` | `PROXY_STORAGE_CACHE_ARTIFACTS` | - | Store fetched artifacts (default: true); `false` streams them from upstream |
 | `storage.retention.default` | `PROXY_STORAGE_RETENTION_DEFAULT` | - | Evict artifacts not served for this long (e.g. "30d"); see [Retention](#retention) |
 | `storage.retention.sweep_interval` | `PROXY_STORAGE_RETENTION_SWEEP_INTERVAL` | - | How often expired artifacts are looked for (default: "10m", at least "1m") |
@@ -91,7 +93,7 @@ storage:
 
 Every download is a fresh upstream fetch, and concurrent requests for the same artifact are not combined. Artifacts with a digest known up front (OCI blobs, Swift archives, Helm charts) are verified while streaming: the response is sent chunked, and on a mismatch the connection is aborted before the response completes so the client never receives a tampered artifact as a good one. The same happens when the upstream connection fails mid-download.
 
-`cache_artifacts: false` cannot be combined with `scanning.enabled`, `storage.direct_serve`, `mirror_api` or `mirror.schedules`, which all need stored artifacts, and the `mirror` command refuses to run with it.
+`cache_artifacts: false` cannot be combined with `scanning.enabled`, `storage.direct_serve`, `mirror_api`, `mirror.schedules` or `mirror.refresh`, which all need stored artifacts, and the `mirror` command refuses to run with it.
 
 ### Retention
 
@@ -899,8 +901,12 @@ commits, the request waits for their fetch, so a clone right after a push gets
 them; if the fetch fails or stalls, the cached copy is served. A
 `stale_max_age` of `0` never serves a copy the upstream has not just
 confirmed. A repository the upstream reports missing (404), refuses (401, 403)
-or redirects is not served from the cache. Redirects are never followed, so
-point the upstream at a repository's current location.
+or redirects is not served from the cache, also to requests that skip the ref
+listing and go straight to `git-upload-pack`, until a later check succeeds.
+Redirects are never followed, so point the upstream at a repository's current
+location. A `git-upload-pack` request checks the upstream only when the last
+check refused the repository or the copy was last checked more than a minute
+past `stale_max_age` ago, so a clone checks once, at its ref listing.
 
 The proxy runs `git` 2.31 or newer, which must be installed (the Docker image includes it).
 The `git` processes never reach the network themselves: their fetches go
@@ -945,6 +951,12 @@ directories of upstreams no longer configured are only logged, so remove
 those yourself. The proxy locks `cache_dir` while it runs, through a
 `.gitcache-lock` file in it, so a second process given the same directory,
 such as another replica on a shared volume, fails to start; give each its own.
+
+Each repository's directory is named by its path as requested. Where
+`cache_dir` ignores case in file names, as on macOS and Windows by default,
+paths that differ only in case (`acme/widgets` and `acme/WIDGETS`) share one
+directory and are treated as one repository. Use a case-sensitive file system
+for an upstream whose repositories differ only in case.
 
 Git LFS objects are cached in the artifact cache, so they use the configured
 storage backend and retention rather than `cache_dir`. git-lfs finds the LFS
@@ -1004,6 +1016,13 @@ one doesn't fall back to the Gradle Plugin Portal. Files are cached per
 repository, so the same coordinates in two repositories never share a cache
 entry.
 
+In every repository, a file the proxy would cache (an artifact, checksum or
+signature) whose group directories contain a dot or colon
+(`org.foo/bar/1.0/bar-1.0.jar`), or whose artifact contains a colon, is not in
+the Maven layout and gets 404 without an upstream request. Its group would read
+the same as `org/foo`'s. Other paths there, such as `maven-metadata.xml` or a
+directory listing, are handled as anywhere else.
+
 `upstream.maven_repositories` is additive. `/maven/…` keeps serving
 `upstream.maven` with unchanged cache identities. A repository name is matched
 before the default repository, so it hides every group ID whose first segment
@@ -1020,6 +1039,18 @@ a group ID, such as `grails` or `company-releases`.
 A repository's files are cached under its name and a hash of its upstream URL,
 so pointing a repository at a different URL stops serving what the old one
 sent.
+
+In every Maven repository, `maven-metadata.xml` follows `metadata_ttl`, and
+its `.md5`, `.sha1`, `.sha256` and `.sha512` files are computed from the
+cached metadata rather than fetched, so they always match it. Other files are
+cached for good, except SNAPSHOT files named with `SNAPSHOT` rather than a
+build timestamp (`lib-1.0-SNAPSHOT.jar`, as JitPack and non-unique snapshot
+repositories publish them), which each build replaces: those are fetched
+again for every `GET`, through the denylist, cooldown, scanning and the
+Plugin Portal fallback like any other file. The new copy replaces the cached
+one once stored; while upstream can't be reached the cached copy is served,
+and `HEAD` is answered from cache. Timestamped SNAPSHOT files
+(`lib-1.0-20240101.120000-1.jar`) never change and are cached.
 
 This field has no environment variable, as with the other named upstream maps.
 `PROXY_UPSTREAM_MAVEN` still sets `upstream.maven`.
@@ -1177,7 +1208,7 @@ The prefix works with all package protocol routes. Cooldown has an effect only f
 
 Profile names contain lowercase letters, digits, hyphens and underscores, and start with a letter or digit. Profiles must be configured before startup; an unknown profile returns 404. Nested profiles are rejected. Profile paths expose package protocols only, so `/cooldown/3d/ui/` and `/cooldown/3d/api/` return 404.
 
-Database records, artifacts and upstream metadata are shared. Generated download URLs retain the profile prefix, and filtered metadata and its validators are separated by profile. Changing a registry URL does not rewrite artifact URLs already recorded in a lockfile; regenerate those URLs if the selected policy must cover the whole installation.
+Database records, artifacts and upstream metadata are shared. Generated download URLs retain the profile prefix, and filtered metadata and its validators are separated by profile. Because npm packuments are shared too, cooldown in the global policy or in any profile makes every URL fetch and serve full packuments, as `upstream.npm_full_metadata` does. Changing a registry URL does not rewrite artifact URLs already recorded in a lockfile; regenerate those URLs if the selected policy must cover the whole installation.
 
 ## Cooldown
 
@@ -1221,7 +1252,7 @@ Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyG
 
 Go has no publish time. The module proxy's `.info` gives the commit time of the revision a version points at, so a version tagged on an old commit counts as old. The proxy reads each listed version's `.info` once, stores the time, and leaves versions in cooldown out of `@v/list` and `@latest`. When upstream's `@latest` is in cooldown, it serves the newest release out of cooldown instead. Requests for a version in cooldown, including its `.info`, `.mod` and `.zip`, and a branch or commit query that resolves to one, get 403 rather than 404, because the go command moves on to the next `GOPROXY` entry, such as `direct`, after a 404. If a version's `.info` can't be fetched, the list or download fails with 502 instead of letting the version through.
 
-Maven metadata has no publish time per version. The proxy uses the `Last-Modified` header of each version's `.pom`, which on Maven Central is the time the version was deployed. It reads the header once per version and stores the time, for each repository under `upstream.maven_repositories` separately: from the response when the `.pom` or Gradle `.module` itself is downloaded, which clients do before a version's other files, and otherwise with a `HEAD` request. A `.pom` or `.module` refused this way is still cached, so it counts toward `max_size` before the version leaves cooldown. To keep requests to the upstream down, it only checks versions that can still be in cooldown: none when the metadata's `<lastUpdated>` is older than the cooldown, and otherwise the versions from the end of the list back to the first one that is old enough. Versions in cooldown are left out of `maven-metadata.xml`, `<latest>` and `<release>` are set to the last versions left, and the metadata's `.md5`, `.sha1`, `.sha256` and `.sha512` files are computed from what is served. Requests for any file of a version in cooldown get 403, as for a version on the denylist. If a `.pom` can't be checked, the metadata or download fails with 502 instead of letting the version through, or with 503 and `Retry-After` when the upstream rate-limits the proxy; a version without a `.pom` is let through.
+Maven metadata has no publish time per version. The proxy uses the `Last-Modified` header of each version's `.pom`, which on Maven Central is the time the version was deployed. It reads the header once per version and stores the time, for each repository under `upstream.maven_repositories` separately: from the response when the `.pom` or Gradle `.module` itself is downloaded, which clients do before a version's other files, and otherwise with a `HEAD` request. A `.pom` or `.module` refused this way is still cached, so it counts toward `max_size` before the version leaves cooldown. To keep requests to the upstream down, it only checks versions that can still be in cooldown: none when the metadata's `<lastUpdated>` is older than the cooldown, and otherwise the versions from the end of the list back to the first one that is old enough. Versions in cooldown are left out of `maven-metadata.xml`, `<latest>` and `<release>` are set to the last versions left, and the metadata's `.md5`, `.sha1`, `.sha256` and `.sha512` files are computed from what is served, as they are without cooldown. Requests for any file of a version in cooldown get 403, as for a version on the denylist. If a `.pom` can't be checked, the metadata or download fails with 502 instead of letting the version through, or with 503 and `Retry-After` when the upstream rate-limits the proxy; a version without a `.pom` is let through.
 
 Maven caveats:
 
@@ -1232,7 +1263,7 @@ Maven caveats:
 
 Helm uses each release's `created` time from the repository's `index.yaml`. Releases in cooldown are left out of the index the proxy serves, and their archives aren't served; a release without `created` is let through. Charts pulled over OCI have no publish time and aren't held back.
 
-Cargo, RubyGems, Hex, pub.dev, Conda and Helm check artifact downloads against cooldown, including files cached before the policy changed. When a publish-time lookup fails, an already-cached file is still served; an uncached download fails with 502, or 503 with `Retry-After` when the rate-limit gate holds the request. Conda checks timestamps per file because builds of one version can have different publish times.
+Cargo, RubyGems, Hex, pub.dev, Conda and Helm check artifact downloads against cooldown, including files cached before the policy changed. When a publish-time lookup fails, an already-cached file is still served; an uncached download fails with 502, or 503 with `Retry-After` when the rate-limit gate holds the request. Conda checks timestamps per file because builds of one version can have different publish times. As in conda, a repodata `timestamp` is read as milliseconds when it is above 253402300799 (the end of year 9999 in seconds) and as seconds otherwise, since some older entries use seconds.
 
 Conda repodata and Helm indexes are parsed once per cached document for download checks. With `cache_metadata` off, the parsed index is kept for one minute, including the fetch, so an install can reuse it across files. Conda streams repodata when its compressed copy exceeds `metadata_max_size`, under the same decompressed size bound as the metadata filter.
 
@@ -1240,7 +1271,9 @@ RubyGems, Hex and PyPI keep their publish times outside the metadata clients rea
 
 For RubyGems and Hex, both documents go through the metadata cache. With [`cache_metadata`](#metadata-caching) they are served from it within `metadata_ttl` without asking the upstream, revalidated with their ETags after it, and filtered from the last cached copies, marked stale, while the upstream is down; without it they are still fetched once for concurrent requests. Each document has its own TTL, so the compact index or Hex package can be newer than the cached times and list a version they don't have. The times are then fetched again before filtering, and if that fails, such versions are left out until the times can be read. The filtered index or package carries an ETag of its own, so Bundler and Mix revalidate it with `304 Not Modified`. Publish times are compared with the current time on each request, and the filtered result is kept until the first version it held back leaves cooldown (see [rewritten metadata cache](#rewritten-metadata-cache)); a newly published version shows up within `metadata_ttl`, as with other cached metadata. Upstream errors are answered as for other cached metadata (404, or 502) rather than relayed.
 
-With cooldown on, the proxy asks npm for full packuments, since the abbreviated ones it uses otherwise carry no publish times. Abbreviated packuments cached before cooldown was turned on are fetched again in full rather than served, including as a stale copy when the upstream is down. When `latest` is in cooldown, the packument tags the newest version out of cooldown instead, and `npm dist-tag ls` shows the same tags.
+With cooldown on, the proxy asks npm for full packuments, since the abbreviated ones it uses otherwise carry no publish times. Abbreviated packuments cached before cooldown was turned on are fetched again in full rather than served, including as a stale copy when the upstream is down. When `latest` is in cooldown, the packument tags the newest version out of cooldown instead; other tags that name a version in cooldown are removed, as for the denylist, and `npm dist-tag ls` shows the same tags. A tarball request for a version the cached packument doesn't list yet fetches the packument again, within `metadata_ttl` or not, and is decided on what the upstream lists now; if the packument can't be fetched, the download is not let through, as when a publish time can't be read.
+
+In pub.dev package metadata, when `latest` is in cooldown it names the newest stable version out of cooldown instead, or the newest prerelease when no stable version is left, and it is left out when every version is in cooldown.
 
 Conda cooldown covers `repodata.json`, `current_repodata.json`, `repodata_from_packages.json` and sharded repodata (CEP 16). Other forms of the repodata, such as `repodata.json.zst`, `repodata.json.bz2` and `repodata.jlap` patches, would list versions still in cooldown, so with cooldown on they are answered 404 and conda and mamba fall back to `repodata.json`. With `cache_metadata`, `repodata.json` is read through the metadata cache as it is without cooldown: within `metadata_ttl` the stored copy is filtered as it is read from storage, after it the upstream is asked with its ETag, and while the upstream is down the stale copy is filtered. Once a document has been filtered, the proxy remembers the ETag of the result until the first entry it left out leaves cooldown, so a client revalidating with `If-None-Match` gets `304 Not Modified` without the document being filtered or sent again. The first response for each document has no ETag, as it is sent while it is filtered. Without `cache_metadata`, `repodata.json` is fetched and filtered on every request. Clients cache shards by the hash in the shard index, so with cooldown on the proxy serves a rewritten index whose shard hashes change every hour and filters each shard as it is fetched. Versions leaving cooldown show up within the hour, and clients fetch the shards they need again once an hour. If a channel's shard index points packages or shards somewhere the proxy doesn't route, the proxy answers 404 for it and clients fall back to `repodata.json`.
 
@@ -1268,6 +1301,13 @@ Names and versions are compared the way each ecosystem treats them:
 - PyPI names ignore case, and runs of `-`, `_` and `.` are equivalent (PEP 503),
   so `pkg:pypi/zope.interface@6.0` also covers `zope_interface-6.0-*.whl`.
 - NuGet ids and versions ignore case.
+- Debian, RPM, Alpine, Arch and FreeBSD entries ignore the distribution
+  namespace: `pkg:deb/debian/curl@8.5.0-2` and `pkg:deb/curl@8.5.0-2` are the
+  same entry.
+- Debian and RPM filenames leave out the epoch, so an entry with one also
+  covers the version without it: `pkg:deb/foo@1:2.3-1` denies
+  `foo_2.3-1_amd64.deb`. An entry without an epoch only matches a version
+  without one.
 - A RubyGems entry also covers that version's platform gems:
   `pkg:gem/nokogiri@1.16.0` denies `nokogiri-1.16.0-x86_64-linux.gem`.
 - Composer versions ignore a leading `v`, which Packagist keeps from the tag:
@@ -1296,7 +1336,7 @@ Names and versions are compared the way each ecosystem treats them:
   channel only.
 
 Denied versions are removed from npm packuments, Cargo sparse indexes, and PyPI
-simple HTML/JSON and release metadata, including responses served from cached
+simple HTML/JSON (files and the JSON `versions` list) and release metadata, including responses served from cached
 metadata during an upstream outage. No publication timestamp or enabled cooldown
 is required. npm tags pointing at denied versions are removed; `latest` is moved
 to the highest remaining stable version when available. Other tags are not
@@ -1398,7 +1438,7 @@ scanning:
 | `scanning.scanners[].name` | - | Identifies this scanner in logs and metrics |
 | `scanning.scanners[].url` | - | Endpoint the proxy POSTs scan notifications to |
 | `scanning.scanners[].mode` | - | `block` (default) or `monitor` |
-| `scanning.scanners[].ecosystems` | - | Restricts this scanner to specific ecosystems (e.g. `npm`, `pypi`). Empty means all ecosystems |
+| `scanning.scanners[].ecosystems` | - | Restricts this scanner to specific ecosystems (e.g. `npm`, `pypi`). Empty means all ecosystems. Valid names: `alpine`, `arch`, `cargo`, `chef`, `composer`, `conan`, `conda`, `cran`, `deb`, `freebsd`, `gem`, `generic`, `git` (Git LFS objects), `golang`, `helm`, `hex`, `julia`, `maven`, `npm`, `nuget`, `oci`, `pub`, `pypi`, `rpm`, `swift`. The aliases `go`, `docker`, `rubygems`, `packagist`, `debian` and `apk` are accepted too; any other name stops the proxy at startup |
 | `scanning.scanners[].headers` | - | Extra HTTP headers sent with every scan request (e.g. for authenticating to the scanner service). Values support `${VAR_NAME}` expansion |
 
 ### How caching defers to a scan verdict
@@ -1479,7 +1519,7 @@ cache_metadata: true
 
 Or via environment variable: `PROXY_CACHE_METADATA=true`.
 
-Some metadata never changes once published, and is cached like an artifact, with or without `cache_metadata`, and served without revalidation whatever `metadata_ttl` says: a Go module's `.mod` and `.info` for a canonical version (a release, pre-release, pseudo-version or `+incompatible` version; the checksum database fixes their content), and RPM repodata files named after their own checksum (`repodata/<sha256>-primary.xml.gz`). A stored copy is checked against the digest recorded for it and fetched again if it doesn't match. Go branch and commit queries, `@v/list` and `@latest`, and RPM `repomd.xml` and plainly named repodata files follow `metadata_ttl` as before. A checksum-named repodata file over `metadata_max_size` is streamed from upstream uncached.
+Some metadata never changes once published, and is cached like an artifact, with or without `cache_metadata`, and served without revalidation whatever `metadata_ttl` says: a Go module's `.mod` and `.info` for a canonical version (a release, pre-release, pseudo-version or `+incompatible` version; the checksum database fixes their content), and RPM repodata files named after their own checksum (`repodata/<sha256>-primary.xml.gz`). A stored copy is checked against the digest recorded for it and fetched again if it doesn't match. Go branch and commit queries, `@v/list` and `@latest`, and RPM `repomd.xml` follow `metadata_ttl` as before; plainly named repodata files follow the cached `repomd.xml` (see [Metadata TTL](#metadata-ttl)). A checksum-named repodata file over `metadata_max_size` is streamed from upstream uncached.
 
 Composer archive downloads look up their upstream URL in the same cached metadata, so an archive is resolved without asking Packagist again and stays installable while it is down. Only a version or file the cached metadata does not list yet is looked up upstream. With or without `cache_metadata`, a cached archive of a tagged release from the default repository is served without any metadata lookup; with cooldown enabled it is checked against the publish time recorded when the archive was first resolved. Branch (dev) versions, routed packages and archives picked by a query string such as `?sha=` are always resolved from the metadata.
 
@@ -1499,7 +1539,9 @@ Or via environment variable: `PROXY_METADATA_TTL=10m`.
 
 Set to `"0"` to always revalidate with upstream (ETag-based conditional requests still avoid re-downloading unchanged content).
 
-When upstream is unreachable and the cached entry is past its TTL, the proxy serves the stale cached copy with a `Warning: 110 - "Response is Stale"` header so clients can tell the data may be outdated.
+When upstream is unreachable and the cached entry is past its TTL (with a `metadata_ttl` of `"0"`, on every such request), the proxy serves the stale cached copy with a `Warning: 110 - "Response is Stale"` header so clients can tell the data may be outdated. The `ETag` and `Last-Modified` sent with a document are always those of the bytes served, so a document fetched from upstream but not stored, for example because storage failed, carries the upstream's validators rather than the older cached copy's.
+
+APT and RPM clients fetch a release file first (`InRelease` or `Release`, `repomd.xml`) and reject an index file whose checksum doesn't match it. So an index file the cached release file lists (`Packages`, `Sources`, a plainly named `primary.xml.gz`, …) does not follow its own `metadata_ttl`: its cached copy is served while it matches the cached release file's sha256, however old, and otherwise it is fetched from upstream. If upstream's copy doesn't match either, the repository has changed since the release file was cached; that copy is served and the release file is expired, so the next `apt update` or `dnf makecache` gets a matching pair. Where a suite has both `InRelease` and `Release` cached, the one fetched last decides. The release file itself follows `metadata_ttl`. Index files it doesn't list, such as `by-hash` paths, follow `metadata_ttl` too.
 
 ### Change feeds
 
@@ -1643,6 +1685,7 @@ Pushed versions are listed in the package metadata clients resolve against, with
 - Pushed versions are added next to the upstream ones and are never held back by cooldown. npm `dist-tags` stay as the upstream has them, also in `npm dist-tag ls`.
 - A package the upstream doesn't know is served from its pushed versions alone. Its npm `latest` tag is the highest pushed version.
 - Pushed Composer dev versions (`dev-*`, `*-dev`) are listed in the `~dev` metadata file.
+- Pushed Composer versions carry an empty `notification-url`, as routed packages do, so Composer does not report their installs to the default upstream's `notify-batch` endpoint. A pushed `composer.json` that sets its own `notification-url` keeps it, and Composer then reports installs there.
 - npm entries carry the archive's sha512 as `dist.integrity`. Composer entries carry its sha256 as `dist.reference` and leave `shasum` empty.
 
 Metadata of packages with pushed versions is rewritten on every request instead of being cached, so a push or delete shows up on the next request.
@@ -1820,7 +1863,7 @@ curl -X DELETE http://localhost:8080/api/cache/maven/com.google.guava:guava/32.1
 curl -X DELETE 'http://localhost:8080/api/cache/maven/com.google.guava:guava/32.1.3-jre?filename=guava-32.1.3-jre.jar'
 ```
 
-The name is the package name the UI shows, for example `group:artifact` for Maven. The response lists the deleted files. The next request for a deleted file fetches it from the upstream again. The stored bytes are removed after the same delay as a replaced artifact, so downloads already in progress can finish.
+The name is the package name the UI shows, for example `group:artifact` for Maven. An RPM package's `filename` is its path under `upstream.rpm` (`updates/40/Everything/x86_64/Packages/c/curl-8.6.0-10.fc40.x86_64.rpm`), since repositories under one upstream can ship different files under one name. The response lists the deleted files. The next request for a deleted file fetches it from the upstream again. The stored bytes are removed after the same delay as a replaced artifact, so downloads already in progress can finish.
 
 Pushed archives are not touched: a whole-version delete skips them, and naming one answers 409. Delete those through the [hosted API](#hosted-packages).
 
@@ -1910,16 +1953,18 @@ proxy mirror --platform linux/arm64 pkg:brew/hello@2.12.3 pkg:brew/openssl%403
 
 ### Git repositories
 
-`pkg:git` PURLs mirror a repository of an [`upstream.git`](#git-repositories) host into the git cache, so a clone through `/git` is served from it, also when the upstream is unreachable. The PURL names the repository by host and path, and the version is a full commit ID:
+`pkg:git` PURLs mirror a repository of an [`upstream.git`](#git-repositories) host into the git cache, so a clone through `/git` is served from it, also when the upstream is unreachable. The PURL names the repository by host and path, and the version is a full commit ID or a tag:
 
 ```bash
 proxy mirror pkg:git/github.com/git-pkgs/purl@0123456789abcdef0123456789abcdef01234567
+proxy mirror pkg:git/github.com/git-pkgs/purl@v0.2.1
 proxy mirror pkg:git/github.com/git-pkgs/purl
 ```
 
 - The repository is served by the `upstream.git` host whose URL its host and path start with, the longest one if several do, and has to match that host's `repos`. Others fail.
 - The repository's branches and tags are cached, as a clone through the proxy caches them. A commit on none of them is fetched by ID and kept, like one a client fetches by ID, until a branch or tag includes it, or for seven days from the last mirror run that named it, as long as `git.max_size` doesn't evict the repository. Where `upstream.auth` has credentials for the host, commits aren't fetched by ID, and one on no branch or tag that isn't cached yet fails.
-- Without a version the repository's branches and tags are mirrored. A tag or branch name as the version fails; give the commit ID.
+- Without a version the repository's branches and tags are mirrored. A tag as the version has to be one of them, so a tag the upstream doesn't have fails. When the upstream can't be reached, a cached tag is mirrored at the commit it last pointed to, with a warning in the log. A branch name or an abbreviated commit ID as the version fails too; give the full commit ID.
+- With a version, the submodules that commit records are mirrored at the commits it pins, with their submodules in turn. A relative submodule URL is resolved against the repository's, and an `ssh://`, `git://` or `git@host:path` URL names the repository by its host and path. A submodule no `upstream.git` host serves is skipped with a warning in the log, as are all of a commit's submodules when git can't read its `.gitmodules`.
 - The git cache is used by one process. While the server runs, the command can't open `git.cache_dir`, so `pkg:git` items fail and the rest are mirrored; use the mirror API instead.
 
 ### Scheduled refresh
@@ -1948,6 +1993,37 @@ Each run checks the tag with a HEAD request. If the tag still points to the cach
 - Docker Hub does not count HEAD requests against its pull limit, but every changed manifest is a pull. Set `platforms` and `upstream.auth` for `registry-1.docker.io` to stay under the anonymous limit.
 - Mirrored layers are scanned when `scanning.enabled` is set. A blocked layer fails the run and keeps the previous image.
 - Schedules are read at startup; changes need a restart. They do not need `mirror_api`.
+
+### Refreshing the most used packages
+
+For packages, the cache learns about a new release only when a client asks for it, and that first install waits on the upstream or fails while it is down. `mirror.refresh` mirrors new releases of the packages clients download most, so they are cached before anyone asks:
+
+```yaml
+mirror:
+  refresh:
+    interval: 24h
+    top: 50
+    since: 14d
+    max_versions: 200
+    max_bytes: 2GB
+```
+
+| Setting | Env | Description |
+|---------|-----|-------------|
+| `mirror.refresh.interval` | - | How often the refresh runs, at least `1m` |
+| `mirror.refresh.top` | - | Packages per ecosystem to refresh, the ones with the most downloads among those downloaded within `since`. Default: `50` |
+| `mirror.refresh.since` | - | How recently a package must have been downloaded, with a `d` suffix for days. Default: `14d` |
+| `mirror.refresh.max_versions` | - | Stop a run after mirroring this many new versions. Default: no cap |
+| `mirror.refresh.max_bytes` | - | Stop a run once it has downloaded this much, such as `2GB`. It is checked before each version, so the last one can go over it. Default: no cap |
+
+For each of those packages a run lists the releases on the configured upstream and mirrors, for each major line a version is cached on, the newest release of that line. A major line is the major version, or `0.minor` below 1.0. Versions numbered by year, such as certifi's `2025.1.31`, are all one line. Prereleases and yanked, retracted or deprecated releases are skipped, and so are releases cooldown still withholds or the denylist names, so a run mirrors what clients would be served rather than the newest published. A release that leaves cooldown later is mirrored by a later run.
+
+- PyPI and conda versions publish many files. Only the kinds clients fetched of earlier versions are mirrored: wheels with the same python and ABI tags for the same OS and architecture, whatever glibc or macOS version they need (and, for `abi3` wheels, whatever minimum Python version), and the sdist, or conda packages of the same subdir, build variant (such as `py312` or `_cpython`) and file type.
+- Debian, Alpine and RPM clients find new versions in repository indexes. A run fetches the `InRelease`, `APKINDEX.tar.gz` and `repomd.xml` files clients fetched within `since` again from upstream, which doesn't count as a client fetching them, reads the `Packages` and primary indexes they point at for the components and architectures of the cached packages, and mirrors the newest file each index lists of a package and architecture when it isn't cached but an older version is. Suites sharing a pool, such as bookworm and trixie, are refreshed each on its own that way. Files are checked against the SHA-256 the index lists, where it lists one. Indexes are found by the URL the metadata cache records with them, which caches from before this release lack until they are next revalidated. This requires `cache_metadata`; without it the proxy logs a warning at startup and refreshes the other ecosystems only.
+- Container images are not refreshed; list the tags to follow in `mirror.schedules`. Arch Linux and FreeBSD packages, Julia packages, which are cached by tree hash, and other ecosystems the mirror can't list versions of are left out too.
+- Hit counts are kept per file since it was cached, so `top` ranks by all downloads of the files used within `since`. A file a run mirrored counts as used only once a client downloads it, so a package nobody fetches drops out after `since`.
+- Runs are spread and shared between instances like schedules: the first run comes within ten minutes of startup, later ones every `interval` ±10 %, and instances sharing a PostgreSQL database take turns. A run fetches one version at a time.
+- What a run mirrors is evicted by `storage.max_size` and retention like any other file. With `max_versions` and `max_bytes` a run stays bounded when many packages release at once.
 
 ## Docker
 

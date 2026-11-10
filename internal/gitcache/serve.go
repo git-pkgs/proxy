@@ -6,6 +6,7 @@ import (
 	"context"
 	"errors"
 	"io"
+	"math"
 	"net/http"
 	"os"
 	"path/filepath"
@@ -13,6 +14,7 @@ import (
 	"slices"
 	"strings"
 	"sync/atomic"
+	"time"
 )
 
 // gitProtocolPattern is what a Git-Protocol header may hold, such as
@@ -42,6 +44,11 @@ type OpenOptions struct {
 	// commits the client may not read through this repository, such as
 	// GitHub forks with credentials configured.
 	FetchWants bool
+	// NoCheck leaves a cached repository as it is, for a caller that
+	// refreshes it itself. Otherwise a cached repository is refused when the
+	// last refresh found it gone or refused upstream, and refreshed first
+	// when it was not checked within StaleMaxAge.
+	NoCheck bool
 }
 
 // Open returns a lease on the repository cached under key, a relative path
@@ -53,13 +60,55 @@ func (c *Cache) Open(ctx context.Context, key, repoURL string, opts OpenOptions)
 	}
 	rp := c.acquire(key)
 	hit := rp.exists()
-	if opts.Refresh || !hit {
-		if err := c.ensureFresh(ctx, rp, repoURL); err != nil {
-			c.release(rp)
-			return nil, err
+	var err error
+	switch {
+	case opts.Refresh || !hit:
+		err = c.ensureFresh(ctx, rp, repoURL)
+		if err == nil && hit && !opts.NoCheck {
+			// A refresh still running or failed serves the cached copy,
+			// but not one the upstream refused since and no check has
+			// cleared.
+			err = c.refusal(rp)
 		}
+	case !opts.NoCheck:
+		err = c.checkServable(ctx, rp, repoURL)
+	}
+	if err != nil {
+		c.release(rp)
+		return nil, err
 	}
 	return &Lease{cache: c, repo: rp, repoURL: repoURL, hit: hit, fetchWants: opts.FetchWants}, nil
+}
+
+// uploadPackGrace is how long past StaleMaxAge a copy is still served
+// without a check to the upload-pack requests that follow a client's
+// info/refs, so a clone checks the upstream once.
+const uploadPackGrace = time.Minute
+
+// checkServable refreshes a cached repository first when the last refresh
+// found it gone or refused upstream, or it was not checked recently, and
+// refuses it while that refusal stands.
+func (c *Cache) checkServable(ctx context.Context, rp *repo, repoURL string) error {
+	// The sum saturates rather than overflow for a huge StaleMaxAge.
+	maxAge := c.opts.StaleMaxAge + uploadPackGrace
+	if maxAge < c.opts.StaleMaxAge {
+		maxAge = math.MaxInt64
+	}
+	if c.refusal(rp) == nil && time.Since(time.Unix(0, rp.lastChecked.Load())) <= maxAge {
+		return nil
+	}
+	if err := c.ensureFresh(ctx, rp, repoURL); err != nil {
+		return err
+	}
+	return c.refusal(rp)
+}
+
+// refusal returns the error of the last refresh that found the repository
+// gone or refused upstream, until a ref check succeeds.
+func (c *Cache) refusal(rp *repo) error {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return rp.refused
 }
 
 // Hit reports whether the repository was already cached when it was opened.

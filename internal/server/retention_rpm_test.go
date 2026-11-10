@@ -20,8 +20,8 @@ import (
 const (
 	rpmCurlPath = "/updates/40/Everything/x86_64/Packages/c/curl-8.6.0-10.fc40.x86_64.rpm"
 	rpmNMPath   = "/updates/40/Everything/x86_64/Packages/n/NetworkManager-1.46.2-1.fc40.x86_64.rpm"
-	rpmCurlFile = "curl-8.6.0-10.fc40.x86_64.rpm"
-	rpmNMFile   = "NetworkManager-1.46.2-1.fc40.x86_64.rpm"
+	rpmCurlFile = "updates/40/Everything/x86_64/Packages/c/curl-8.6.0-10.fc40.x86_64.rpm"
+	rpmNMFile   = "updates/40/Everything/x86_64/Packages/n/NetworkManager-1.46.2-1.fc40.x86_64.rpm"
 )
 
 // rpmRetentionUpstream serves package files the way a Fedora mirror does,

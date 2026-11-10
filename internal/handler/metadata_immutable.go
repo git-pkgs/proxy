@@ -40,9 +40,8 @@ func (p *Proxy) proxyImmutable(w http.ResponseWriter, r *http.Request, upstreamU
 		p.writeMetadataFetchError(w, res.err)
 		return
 	}
-	cm := p.lookupCachedMeta(ecosystem, cacheKey)
-	cm.stale = false
-	writeMetadataBody(w, r, cm, res.body, res.contentType, res.contentEncoding)
+	res.stale = false
+	writeMetadataResult(w, r, res)
 }
 
 // fetchImmutableMetadata returns an immutable metadata document from the
@@ -74,7 +73,7 @@ func (p *Proxy) fetchImmutableMetadata(ctx context.Context, ecosystem, cacheKey,
 			return metadataResult{err: err}
 		}
 		digest := p.cacheMetadataBlob(fetchCtx, ecosystem, cacheKey, metadataStoragePath(ecosystem, cacheKey), meta)
-		return metadataResult{body: meta.body, contentType: meta.contentType, contentEncoding: meta.contentEncoding, digest: digest}
+		return fetchedResult(meta, digest)
 	})
 	return res
 }

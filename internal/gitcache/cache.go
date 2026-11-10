@@ -95,6 +95,9 @@ type Cache struct {
 	refCheckTimeout time.Duration
 	lowSpeedTime    int
 	maxRequestBody  int64
+	// foldCase is set where the cache directory ignores case, so keys that
+	// differ only in case, which name one directory, are one repository.
+	foldCase bool
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -121,14 +124,17 @@ type Cache struct {
 	failedWants map[string]time.Time
 }
 
-// repo is a cached repository, or one being cloned. users, refreshing and
-// the map entry itself are guarded by Cache.mu.
+// repo is a cached repository, or one being cloned. users, refreshing,
+// refused and the map entry itself are guarded by Cache.mu.
 type repo struct {
 	key string
 	dir string
 
 	users      int
 	refreshing *refreshCall
+	// refused is the error of the last refresh when the upstream reported
+	// the repository missing or refused it, until a ref check succeeds.
+	refused error
 	// writes serializes git fetches into the repository.
 	writes chan struct{}
 
@@ -214,6 +220,7 @@ func New(opts Options) (*Cache, error) {
 		tooLarge:        make(map[string]time.Time),
 		failedWants:     make(map[string]time.Time),
 		freed:           make(chan struct{}),
+		foldCase:        caseInsensitive(dir),
 	}
 	if opts.refCheckTimeout > 0 {
 		c.refCheckTimeout = opts.refCheckTimeout
@@ -284,7 +291,7 @@ func (c *Cache) load() error {
 				return err
 			}
 			rel, _ := filepath.Rel(c.dir, path)
-			rp := newRepo(filepath.ToSlash(rel), path)
+			rp := newRepo(c.repoKey(filepath.ToSlash(rel)), path)
 			rp.size.Store(dirSize(path))
 			rp.lastChecked.Store(stampTime(path, checkedStamp))
 			rp.lastUsed.Store(stampTime(path, usedStamp))
@@ -352,13 +359,23 @@ func (c *Cache) removeRepointed() {
 func (c *Cache) acquire(key string) *repo {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	rp := c.repos[key]
+	rk := c.repoKey(key)
+	rp := c.repos[rk]
 	if rp == nil {
-		rp = newRepo(key, filepath.Join(c.dir, filepath.FromSlash(key)))
-		c.repos[key] = rp
+		rp = newRepo(rk, filepath.Join(c.dir, filepath.FromSlash(key)))
+		c.repos[rk] = rp
 	}
 	rp.users++
 	return rp
+}
+
+// repoKey is the key a repository is tracked under: key itself, or key
+// lowercased where the cache directory ignores case.
+func (c *Cache) repoKey(key string) string {
+	if c.foldCase {
+		return strings.ToLower(key)
+	}
+	return key
 }
 
 func (c *Cache) release(rp *repo) {
@@ -510,4 +527,18 @@ func touch(dir, name string, t time.Time) {
 			_ = os.Chtimes(path, t, t)
 		}
 	}
+}
+
+// caseInsensitive reports whether the file system holding dir ignores case
+// in names, as macOS and Windows do by default.
+func caseInsensitive(dir string) bool {
+	f, err := os.CreateTemp(dir, ".gitcache-case-")
+	if err != nil {
+		return false
+	}
+	name := f.Name()
+	_ = f.Close()
+	defer func() { _ = os.Remove(name) }()
+	_, err = os.Stat(filepath.Join(dir, strings.ToUpper(filepath.Base(name))))
+	return err == nil
 }

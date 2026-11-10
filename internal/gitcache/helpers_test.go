@@ -75,8 +75,10 @@ type fakeUpstream struct {
 	root   string
 	server *httptest.Server
 
-	// status, when set, is returned instead of serving the request.
-	status atomic.Int32
+	// status, when set, is returned instead of serving the request, and
+	// fetchStatus instead of serving git's own upload-pack requests.
+	status      atomic.Int32
+	fetchStatus atomic.Int32
 	// requireAuth, when set, is the Authorization every request must carry.
 	requireAuth string
 	// v0Only drops Git-Protocol, so only protocol v0 is spoken.
@@ -178,22 +180,7 @@ func newFakeUpstream(t *testing.T) *fakeUpstream {
 		if u.v0Only {
 			r.Header.Del("Git-Protocol")
 		}
-		if r.UserAgent() != gitUserAgent && r.Method == http.MethodPost {
-			u.holdMu.Lock()
-			fetchHold, fetchArrived, fetchOnce := u.fetchHold, u.fetchArrived, u.fetchOnce
-			u.holdMu.Unlock()
-			if fetchHold != nil {
-				fetchOnce.Do(func() { close(fetchArrived) })
-				<-fetchHold
-			}
-		}
-		if delay := u.delayFetches.Load(); delay > 0 && r.UserAgent() != gitUserAgent && r.Method == http.MethodPost {
-			time.Sleep(time.Duration(delay))
-		}
-		if u.stallFetches.Load() && r.UserAgent() != gitUserAgent && r.Method == http.MethodPost {
-			// The server notices the client leaving only once the body is read.
-			_, _ = io.Copy(io.Discard, r.Body)
-			<-r.Context().Done()
+		if r.UserAgent() != gitUserAgent && r.Method == http.MethodPost && u.interceptFetch(w, r) {
 			return
 		}
 		if r.Method == http.MethodPost {
@@ -203,6 +190,33 @@ func newFakeUpstream(t *testing.T) *fakeUpstream {
 	}))
 	t.Cleanup(u.server.Close)
 	return u
+}
+
+// interceptFetch applies the fetch knobs to one of git's own upload-pack
+// requests, and reports whether it answered the request.
+func (u *fakeUpstream) interceptFetch(w http.ResponseWriter, r *http.Request) bool {
+	u.holdMu.Lock()
+	fetchHold, fetchArrived, fetchOnce := u.fetchHold, u.fetchArrived, u.fetchOnce
+	u.holdMu.Unlock()
+	if fetchHold != nil {
+		fetchOnce.Do(func() { close(fetchArrived) })
+		<-fetchHold
+	}
+	if delay := u.delayFetches.Load(); delay > 0 {
+		time.Sleep(time.Duration(delay))
+	}
+	if u.stallFetches.Load() {
+		// The server notices the client leaving only once the body is read.
+		_, _ = io.Copy(io.Discard, r.Body)
+		<-r.Context().Done()
+		return true
+	}
+	if status := u.fetchStatus.Load(); status != 0 {
+		w.Header().Set("Location", u.server.URL+"/elsewhere")
+		http.Error(w, "unavailable", int(status))
+		return true
+	}
+	return false
 }
 
 // holdFetches holds git's own upload-pack requests until release is called.
@@ -302,6 +316,7 @@ func (u *fakeUpstream) bare() string {
 type testCache struct {
 	*Cache
 	server *httptest.Server
+	logs   *lockedBuffer
 }
 
 func newTestCache(t *testing.T, upstreamURL string, configure func(*Options)) *testCache {
@@ -333,7 +348,7 @@ func newTestCache(t *testing.T, upstreamURL string, configure func(*Options)) *t
 		server.Close()
 		_ = c.Close()
 	})
-	return &testCache{Cache: c, server: server}
+	return &testCache{Cache: c, server: server, logs: logs}
 }
 
 // testFront serves /git/up/{repo}/info/refs and git-upload-pack from c, as

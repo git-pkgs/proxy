@@ -3,6 +3,7 @@ package handler
 import (
 	"fmt"
 	"net/http"
+	pathpkg "path"
 	"regexp"
 	"strings"
 
@@ -78,7 +79,7 @@ func (h *RPMHandler) Routes() http.Handler {
 		switch {
 		case strings.HasSuffix(path, ".rpm"):
 			// Package downloads - cache these
-			h.handlePackageDownload(w, r, path)
+			h.handlePackageDownload(w, r, cleanRPMPath(path))
 		case strings.Contains(path, "/repodata/"):
 			// Repository metadata
 			h.handleMetadata(w, r, path)
@@ -89,10 +90,20 @@ func (h *RPMHandler) Routes() http.Handler {
 	}))
 }
 
+// cleanRPMPath drops empty and "." segments from a relative path, so each
+// package has one cache key. ".." segments are rejected before this.
+func cleanRPMPath(p string) string {
+	return strings.TrimPrefix(pathpkg.Clean("/"+p), "/")
+}
+
 // handlePackageDownload fetches and caches .rpm packages.
 // Path format varies by repo structure, e.g.:
 //   - releases/39/Everything/x86_64/os/Packages/n/nginx-1.24.0-1.fc39.x86_64.rpm
 //   - updates/39/Everything/x86_64/Packages/n/nginx-1.24.0-2.fc39.x86_64.rpm
+//
+// The cache key is the full path, since repositories under one upstream
+// (Rocky and Alma on one mirror, say) can ship different bytes under one
+// filename.
 func (h *RPMHandler) handlePackageDownload(w http.ResponseWriter, r *http.Request, path string) {
 	// Parse the path to extract package info
 	name, version, arch := h.parseRPMPath(path)
@@ -102,14 +113,13 @@ func (h *RPMHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	filename := path[strings.LastIndex(path, "/")+1:]
 	downloadURL := fmt.Sprintf("%s/%s", h.upstreamURL, path)
 
 	h.proxy.Logger.Info("rpm package download",
-		"name", name, "version", version, "arch", arch, "filename", filename)
+		"name", name, "version", version, "arch", arch, "path", path)
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(
-		r.Context(), "rpm", name, version, filename, downloadURL)
+		r.Context(), "rpm", name, version, path, downloadURL)
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to fetch package")
 		return
@@ -122,14 +132,27 @@ func (h *RPMHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 // handleMetadata proxies repository metadata files (repomd.xml,
 // primary.xml.gz, etc.). repomd.xml changes with every repository update and
 // follows the metadata TTL. The files it points at are usually named after
-// their own checksum and so never change; those are kept for good.
+// their own checksum and so never change; those are kept for good. Plainly
+// named ones follow the cached repomd.xml (see proxyListedIndex).
 func (h *RPMHandler) handleMetadata(w http.ResponseWriter, r *http.Request, path string) {
 	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, path)
 	if rpmContentAddressed(path) {
 		h.proxy.proxyImmutable(w, r, upstreamURL, "rpm", h.metadataCacheKey(path), "*/*")
 		return
 	}
-	h.proxy.ProxyCached(w, r, upstreamURL, "rpm", h.metadataCacheKey(path), "*/*")
+	i := strings.LastIndex(path, "/repodata/")
+	if strings.HasPrefix(path[i:], "/repodata/repomd.xml") {
+		h.proxy.ProxyCached(w, r, upstreamURL, "rpm", h.metadataCacheKey(path), "*/*")
+		return
+	}
+	// Plainly named files (createrepo --simple-md-filenames) follow the
+	// cached repomd.xml that lists them.
+	repomd := h.proxy.readCachedRelease(r.Context(), "rpm", h.metadataCacheKey(path[:i]+"/repodata/repomd.xml"))
+	var want string
+	if repomd != nil {
+		want = repomdSHA256(repomd.body, path[i+1:])
+	}
+	h.proxy.proxyListedIndex(w, r, upstreamURL, "rpm", h.metadataCacheKey(path), repomd, want)
 }
 
 // rpmChecksumPrefix matches a repodata filename that createrepo prefixed

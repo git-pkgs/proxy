@@ -985,3 +985,26 @@ func TestGoSumDB_ClientRoundTrip(t *testing.T) {
 		t.Fatalf("lookup from the proxy cache with the database down: %v", err)
 	}
 }
+
+// TestGoSumDB_OfflineCopyMarkedStaleWithoutTTL: with metadata_ttl 0 the
+// cached copy offline mode serves while the database is unreachable still
+// carries the Warning header.
+func TestGoSumDB_OfflineCopyMarkedStaleWithoutTTL(t *testing.T) {
+	const lookup = "/lookup/golang.org/x/text@v0.14.0"
+	db := newFakeSumDB(t, map[string]string{lookup: testSumDBRecord})
+	h := newSumDBTestHandler(t, db.server.URL, true, 0)
+	h.sumDBOffline = true
+
+	if w := serveGoRequest(h, "/sumdb/sum.example"+lookup); w.Code != http.StatusOK {
+		t.Fatalf("online: status = %d, want 200", w.Code)
+	}
+	db.down.Store(true)
+	serveGoRequest(h, "/sumdb/sum.example"+lookup)
+	if !h.sumDBProbes.recentlyFailed(testSumDBName) {
+		t.Fatal("the failure was not remembered")
+	}
+	w := serveGoRequest(h, "/sumdb/sum.example"+lookup)
+	if w.Code != http.StatusOK || w.Header().Get("Warning") != staleWarning {
+		t.Errorf("offline copy = %d Warning %q, want 200 %q", w.Code, w.Header().Get("Warning"), staleWarning)
+	}
+}

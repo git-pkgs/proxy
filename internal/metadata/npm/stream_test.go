@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"reflect"
 	"slices"
 	"strings"
 	"testing"
@@ -221,5 +222,33 @@ func TestLookupVersion(t *testing.T) {
 	}
 	if _, err := LookupVersion(strings.NewReader(`{"versions":{}`), "1.0.0"); err == nil {
 		t.Error("expected an error for truncated JSON")
+	}
+}
+
+// TestStreamReadsJSONAsEncodingJSON checks what the streaming readers accept
+// matches what Rewrite's encoding/json does: names repeated at any depth,
+// invalid UTF-8 in strings, and a version entry's bytes kept as they are.
+func TestStreamReadsJSONAsEncodingJSON(t *testing.T) {
+	entry := "{ \"name\" : \"demo\",\n  \"x\":1, \"x\":2, \"note\":\"caf\xe9\" }"
+	doc := "{\"readme\":\"bad \xff byte\",\"meta\":{\"k\":1,\"k\":2},\"dist-tags\":{\"latest\":\"0.9.0\",\"latest\":\"1.0.0\"}," +
+		"\"versions\":{\"1.0.0\":" + entry + "},\"time\":{\"1.0.0\":\"2020-01-01T00:00:00Z\"}}\n"
+	if !json.Valid([]byte(strings.ToValidUTF8(doc, "?"))) {
+		t.Fatal("test document isn't JSON")
+	}
+
+	scan, err := ScanPackument(strings.NewReader(doc))
+	if err != nil {
+		t.Fatalf("ScanPackument: %v", err)
+	}
+	if !slices.Equal(scan.versions, []string{"1.0.0"}) || !reflect.DeepEqual(scan.distTags, map[string]any{"latest": "1.0.0"}) {
+		t.Errorf("scan versions %v, dist-tags %v", scan.versions, scan.distTags)
+	}
+
+	got, err := LookupVersion(strings.NewReader(doc), "1.0.0")
+	if err != nil {
+		t.Fatalf("LookupVersion: %v", err)
+	}
+	if string(got.Entry) != entry || got.Published != "2020-01-01T00:00:00Z" {
+		t.Errorf("entry %q, published %q; want the entry's bytes %q", got.Entry, got.Published, entry)
 	}
 }
