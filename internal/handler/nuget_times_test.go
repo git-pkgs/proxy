@@ -138,6 +138,56 @@ func TestNuGetVersionListCooldown(t *testing.T) {
 	}
 }
 
+// The version list and the download check read a registration's members as
+// the registration endpoints do: by exact name, and not when one that decides
+// the cooldown is repeated.
+func TestNuGetCooldownReadsMembersExactly(t *testing.T) {
+	old := time.Now().Add(-30 * 24 * time.Hour).Format(time.RFC3339)
+	recent := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
+	const versions = "/v3-flatcontainer/testpkg/index.json"
+	const index = nugetTestRegistration + "index.json"
+	const leaf = nugetTestRegistration + "2.0.0.json"
+	const download = "/v3-flatcontainer/testpkg/2.0.0/testpkg.2.0.0.nupkg"
+
+	for _, tt := range []struct {
+		name, path, registration, document string
+		status                             int
+		want                               string
+	}{
+		{
+			"version list, Published", versions, index,
+			`{"items":[{"items":[{"catalogEntry":{"version":"2.0.0","published":"` + recent + `","Published":"` + old + `"}}]}]}`,
+			http.StatusOK, `{"versions":["1.0.0"]}`,
+		},
+		{
+			"version list, items twice", versions, index,
+			`{"items":[{"items":[{"catalogEntry":{"published":"` + old + `"}}]}],"items":[{"items":[{"version":"2.0.0","published":"` + recent + `"}]}]}`,
+			http.StatusBadGateway, "",
+		},
+		{"download, Published", download, leaf, `{"published":"` + recent + `","Published":"` + old + `"}`, http.StatusNotFound, ""},
+		{
+			"download, catalogEntry twice", download, leaf,
+			`{"catalogEntry":{"published":"` + old + `"},"catalogEntry":"https://example.test/c.json","published":"` + recent + `"}`,
+			http.StatusBadGateway, "",
+		},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream := nugetDocumentUpstream(t, map[string]string{versions: `{"versions":["1.0.0","2.0.0"]}`, tt.registration: tt.document})
+			p, _, _, fetcher := setupTestProxy(t)
+			p.Cooldown = &cooldown.Config{Default: "14d"}
+			fetcher.artifact = &fetch.Artifact{Body: io.NopCloser(strings.NewReader("package")), ContentType: "application/octet-stream"}
+			h := NewNuGetHandlerWithUpstreams(p, "http://proxy.test", upstream.URL, upstream.URL)
+			w := nugetGet(t, h.Routes(), tt.path, tt.status)
+			if got := strings.TrimSpace(w.Body.String()); tt.want != "" && got != tt.want {
+				t.Errorf("response = %s, want %s", got, tt.want)
+			}
+			if fetcher.fetchCalled {
+				t.Error("the package was fetched")
+			}
+		})
+	}
+}
+
 func TestNuGetVersionListRejectsBrokenRegistration(t *testing.T) {
 	const page = nugetTestRegistration + "page/1.0.0/2.0.0.json"
 	linked := `{"items":[{"@id":"` + page + `"}]}`

@@ -7,8 +7,10 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
+	"encoding/json/jsontext"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"net/url"
 	"slices"
@@ -86,15 +88,17 @@ func decodeNuGetDocument(body []byte) (map[string]any, error) {
 	return document, nil
 }
 
-// nugetTimes holds the fields of a registration index, page or leaf that decide
-// which versions are in cooldown. Decoding into it skips everything else, which
-// is nearly all of a registration.
+// nugetTimes holds the members of a registration index, page or leaf that
+// decide which versions are in cooldown. Reading only them skips nearly all of
+// a registration.
 type nugetTimes struct {
-	ID           string            `json:"@id"`
-	Version      string            `json:"version"`
-	Published    string            `json:"published"`
-	CatalogEntry nugetCatalogTimes `json:"catalogEntry"`
-	Items        []nugetTimes      `json:"items"`
+	// ID is the node's link. It is kept for the pages of an index only.
+	ID           string
+	Version      string
+	Published    string
+	CatalogEntry nugetCatalogTimes
+	// Items is nil unless the node has an items array.
+	Items []nugetTimes
 }
 
 // nugetCatalogTimes is the catalogEntry of a registration leaf. It stays unset
@@ -103,22 +107,6 @@ type nugetCatalogTimes struct {
 	set       bool
 	version   string
 	published string
-}
-
-func (e *nugetCatalogTimes) UnmarshalJSON(data []byte) error {
-	if !bytes.HasPrefix(data, []byte("{")) {
-		return nil
-	}
-	var fields struct {
-		Version   string `json:"version"`
-		Published string `json:"published"`
-	}
-	var mismatch *json.UnmarshalTypeError
-	if err := json.Unmarshal(data, &fields); err != nil && !errors.As(err, &mismatch) {
-		return err
-	}
-	*e = nugetCatalogTimes{set: true, version: fields.Version, published: fields.Published}
-	return nil
 }
 
 // release returns the version and publish time of a leaf. A leaf embedded in a
@@ -153,20 +141,146 @@ func (h *NuGetHandler) nugetTimesDocument(ctx context.Context, path string) (*nu
 	return document, body, nil
 }
 
-// decodeNuGetTimes accepts the documents decodeNuGetDocument does. A field of
-// an unexpected type is left empty, as it is when read from the generic document.
+// decodeNuGetTimes reads a registration document the way writeNuGetRegistration
+// copies it, so that what is decided here holds for what is written there:
+// with the same decoder, members by their exact names, and a member of an
+// unexpected type left empty. A node that has one of these members twice is
+// refused, as which of the two counts would be the reader's choice.
 func decodeNuGetTimes(body []byte) (*nugetTimes, error) {
-	var document *nugetTimes
-	if err := json.Unmarshal(body, &document); err != nil {
-		var mismatch *json.UnmarshalTypeError
-		if !errors.As(err, &mismatch) || mismatch.Field == "" {
-			return nil, fmt.Errorf("parsing NuGet metadata: %w", err)
-		}
-	}
-	if document == nil {
+	dec := newNuGetDecoder(body)
+	if dec.PeekKind() == 'n' {
 		return nil, fmt.Errorf("empty NuGet metadata")
 	}
-	return document, nil
+	document := &nugetTimes{}
+	var scratch []byte
+	var err error
+	if dec.PeekKind() == '{' {
+		err = document.decode(dec, 0, &scratch)
+	} else if _, err = dec.ReadValue(); err == nil {
+		err = errors.New("not an object")
+	}
+	if err == nil {
+		// Nothing may follow the document.
+		if _, err = dec.ReadToken(); errors.Is(err, io.EOF) {
+			return document, nil
+		} else if err == nil {
+			err = errors.New("data after the document")
+		}
+	}
+	return nil, fmt.Errorf("parsing NuGet metadata: %w", err)
+}
+
+// decode reads the node dec is at, which is depth levels below the document.
+func (t *nugetTimes) decode(dec *jsontext.Decoder, depth int, scratch *[]byte) error {
+	if _, err := dec.ReadToken(); err != nil {
+		return err
+	}
+	seen := 0
+	for dec.PeekKind() != '}' {
+		kind, err := readNuGetMember(dec, &seen, scratch)
+		if err != nil {
+			return err
+		}
+		switch value := dec.PeekKind(); {
+		case kind == nugetMemberItems && value == '[':
+			err = t.decodeItems(dec, depth, scratch)
+		case kind == nugetMemberCatalogEntry && value == '{':
+			err = t.CatalogEntry.decode(dec, scratch)
+		case kind == nugetMemberID && value == '"' && depth == 1:
+			t.ID, err = readNuGetString(dec, scratch)
+		case kind == nugetMemberVersion && value == '"':
+			t.Version, err = readNuGetString(dec, scratch)
+		case kind == nugetMemberPublished && value == '"':
+			t.Published, err = readNuGetString(dec, scratch)
+		default:
+			err = dec.SkipValue()
+		}
+		if err != nil {
+			return err
+		}
+	}
+	_, err := dec.ReadToken()
+	return err
+}
+
+// decodeItems reads the items array dec is at. A child that is not an object
+// is an empty node.
+func (t *nugetTimes) decodeItems(dec *jsontext.Decoder, depth int, scratch *[]byte) error {
+	if _, err := dec.ReadToken(); err != nil {
+		return err
+	}
+	t.Items = []nugetTimes{}
+	for dec.PeekKind() != ']' {
+		t.Items = append(t.Items, nugetTimes{})
+		var err error
+		if dec.PeekKind() == '{' {
+			err = t.Items[len(t.Items)-1].decode(dec, depth+1, scratch)
+		} else {
+			err = dec.SkipValue()
+		}
+		if err != nil {
+			return err
+		}
+	}
+	_, err := dec.ReadToken()
+	return err
+}
+
+func (e *nugetCatalogTimes) decode(dec *jsontext.Decoder, scratch *[]byte) error {
+	if _, err := dec.ReadToken(); err != nil {
+		return err
+	}
+	e.set = true
+	seen := 0
+	for dec.PeekKind() != '}' {
+		kind, err := readNuGetMember(dec, &seen, scratch)
+		if err != nil {
+			return err
+		}
+		switch value := dec.PeekKind(); {
+		case kind == nugetMemberVersion && value == '"':
+			e.version, err = readNuGetString(dec, scratch)
+		case kind == nugetMemberPublished && value == '"':
+			e.published, err = readNuGetString(dec, scratch)
+		default:
+			err = dec.SkipValue()
+		}
+		if err != nil {
+			return err
+		}
+	}
+	_, err := dec.ReadToken()
+	return err
+}
+
+// nugetDecidingMembers are the members that decide what a node is and whether
+// its release is in cooldown.
+const nugetDecidingMembers = 1<<nugetMemberID | 1<<nugetMemberItems | 1<<nugetMemberCatalogEntry |
+	1<<nugetMemberVersion | 1<<nugetMemberPublished
+
+// readNuGetMember reads the name of the next member of an object and returns
+// its kind. seen collects the deciding members the object has had.
+func readNuGetMember(dec *jsontext.Decoder, seen *int, scratch *[]byte) (int, error) {
+	raw, err := dec.ReadValue()
+	if err != nil {
+		return nugetMemberOther, err
+	}
+	kind := nugetMemberKind(nugetUnquote(scratch, raw))
+	if bit := 1 << kind; bit&nugetDecidingMembers != 0 {
+		if *seen&bit != 0 {
+			return kind, fmt.Errorf("member %s is repeated", raw)
+		}
+		*seen |= bit
+	}
+	return kind, nil
+}
+
+func readNuGetString(dec *jsontext.Decoder, scratch *[]byte) (string, error) {
+	raw, err := dec.ReadValue()
+	if err != nil {
+		return "", err
+	}
+	return string(nugetUnquote(scratch, raw)), nil
 }
 
 // Prefer semver2, but a configured source may advertise only an older hive.

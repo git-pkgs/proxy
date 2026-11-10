@@ -225,13 +225,18 @@ func (rw *nugetRegistrationWriter) flush() error {
 
 // unquote returns the text of a JSON string. It is valid until the next call.
 func (rw *nugetRegistrationWriter) unquote(raw []byte) []byte {
+	return nugetUnquote(&rw.text, raw)
+}
+
+// nugetUnquote returns the text of a JSON string, in raw or in scratch.
+func nugetUnquote(scratch *[]byte, raw []byte) []byte {
 	if bytes.IndexByte(raw, '\\') < 0 {
 		return raw[1 : len(raw)-1]
 	}
 	// The decoder has checked the string, so the only error left is invalid
 	// UTF-8, which is replaced as encoding/json replaces it.
-	rw.text, _ = jsontext.AppendUnquote(rw.text[:0], raw)
-	return rw.text
+	*scratch, _ = jsontext.AppendUnquote((*scratch)[:0], raw)
+	return *scratch
 }
 
 // readName reads the name of the next member and keeps it for writeName.

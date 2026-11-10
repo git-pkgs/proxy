@@ -130,7 +130,7 @@ func TestNuGetRegistrationDocumentCooldown(t *testing.T) {
 		{
 			name:     "escaped member names",
 			path:     page,
-			document: `{"items":[{"catalogEntry":{"published":"` + recent + `"}},{"@id":"` + leaf + `"}]}`,
+			document: `{"\u0069tems":[{"catalog\u0045ntry":{"publ\u0069shed":"` + recent + `"}},{"\u0040id":"` + leaf + `"}]}`,
 			status:   http.StatusOK,
 			want:     `{"count":1,"items":[{"@id":"` + base + leaf + `"}]}`,
 		},
@@ -227,6 +227,94 @@ func TestNuGetRegistrationRejectsBrokenPages(t *testing.T) {
 				t.Errorf("response is not only an error: %s", body)
 			}
 		})
+	}
+}
+
+// What decides the cooldown is read once and the document copied by other
+// code, and both have to read the same document. So members go by their exact
+// names, as the generic decoding before did and encoding/json into a struct
+// does not, and a document that repeats one of the deciding members, which
+// one reader may take the first of and the other the last, is refused.
+func TestNuGetRegistrationReadsMembersExactly(t *testing.T) {
+	old := time.Now().Add(-30 * 24 * time.Hour).Format(time.RFC3339)
+	recent := time.Now().Add(-24 * time.Hour).Format(time.RFC3339)
+	const index = nugetTestRegistration + "index.json"
+	const page = nugetTestRegistration + "page/1.0.0/3.0.0.json"
+	const leaf = nugetTestRegistration + "9.9.9.json"
+	inCooldown := `{"catalogEntry":{"version":"9.9.9","published":"` + recent + `"}}`
+
+	for _, tt := range []struct {
+		name, path, document string
+		status               int
+		want                 string
+	}{
+		{"index with Items", index, `{"Items":[{"@id":"` + page + `","Items":[` + inCooldown + `]}]}`, http.StatusBadGateway, ""},
+		{"leaf with Items", leaf, `{"Items":[],"version":"9.9.9","published":"` + recent + `"}`, http.StatusNotFound, ""},
+		{"leaf with Published", leaf, `{"published":"` + recent + `","Published":"` + old + `"}`, http.StatusNotFound, ""},
+		{"leaf with catalogEntrY", leaf, `{"published":"` + recent + `","catalogEntrY":{"published":"` + old + `"}}`, http.StatusNotFound, ""},
+		{"leaf with only publiShed", leaf, `{"publiShed":"` + recent + `"}`, http.StatusOK, `{"publiShed":"` + recent + `"}`},
+		{
+			"page with a leaf's Published", page, `{"items":[{"catalogEntry":{"version":"9.9.9","published":"` + recent + `","Published":"` + old + `"}}]}`,
+			http.StatusOK, `{"items":[],"count":0}`,
+		},
+		{"items twice", page, `{"items":[` + inCooldown + `],"items":[]}`, http.StatusBadGateway, ""},
+		{"items twice in a page", index, `{"items":[{"items":[{}],"items":"x","catalogEntry":{"version":"9.9.9","published":"` + recent + `"}}]}`, http.StatusBadGateway, ""},
+		{
+			"catalogEntry twice", page, `{"items":[{"catalogEntry":{"published":"` + old + `"},"catalogEntry":"x","published":"` + recent + `"}]}`,
+			http.StatusBadGateway, "",
+		},
+		{"published twice", leaf, `{"published":"` + recent + `","published":"` + old + `"}`, http.StatusBadGateway, ""},
+		{"published twice, once escaped", leaf, `{"published":"` + recent + `","publi\u0073hed":"` + old + `"}`, http.StatusBadGateway, ""},
+		{"published twice in catalogEntry", page, `{"items":[{"catalogEntry":{"published":"` + recent + `","published":"` + old + `"}}]}`, http.StatusBadGateway, ""},
+		{"version twice in catalogEntry", page, `{"items":[{"catalogEntry":{"version":"1.0.0","version":"2.0.0"}}]}`, http.StatusBadGateway, ""},
+		{"@id twice", index, `{"items":[{"@id":"` + page + `","@id":"` + page + `"}]}`, http.StatusBadGateway, ""},
+		{"another member twice", leaf, `{"listed":false,"listed":true,"published":"` + old + `"}`, http.StatusOK, `{"listed":true,"published":"` + old + `"}`},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			documents := map[string]string{page: `{"items":[` + inCooldown + `]}`}
+			documents[tt.path] = tt.document
+			routes := nugetRegistrationRoutes(t, &cooldown.Config{Default: "14d"}, documents)
+			body := nugetGet(t, routes, tt.path, tt.status).Body.String()
+			if tt.status == http.StatusOK {
+				assertNuGetJSON(t, body, tt.want)
+			} else if !strings.HasPrefix(body, `{"error":`) || strings.Contains(body, "9.9.9") {
+				t.Errorf("response is not only an error: %s", body)
+			}
+		})
+	}
+}
+
+// A page that the cooldown fetched the leaves of is a page the copy inlines
+// them into, also when the page has something that only looks like leaves
+// and comes after more of the index than is held back before it is sent.
+func TestNuGetRegistrationInlinesWhatWasFetched(t *testing.T) {
+	old := time.Now().Add(-30 * 24 * time.Hour).Format(time.RFC3339)
+	const index = nugetTestRegistration + "index.json"
+	const inlined = nugetTestRegistration + "page/1.0.0/1.0.99.json"
+	const linked = nugetTestRegistration + "page/2.0.0/2.0.0.json"
+	var leaves []string
+	for i := range 100 {
+		leaves = append(leaves, nugetTestLeaf("", fmt.Sprintf("1.0.%d", i), old))
+	}
+	document := `{"items":[{"@id":"` + inlined + `","items":[` + strings.Join(leaves, ",") + `]},{"@id":"` + linked + `","Items":[]}]}`
+	if len(document) <= nugetFlushSize {
+		t.Fatalf("index of %d bytes is sent in one piece", len(document))
+	}
+	routes := nugetRegistrationRoutes(t, &cooldown.Config{Default: "14d"}, map[string]string{
+		index: document, linked: `{"items":[` + nugetTestLeaf("", "2.0.0", old) + `]}`,
+	})
+
+	var registration struct {
+		Items []struct {
+			Count int `json:"count"`
+		} `json:"items"`
+	}
+	body := nugetGet(t, routes, index, http.StatusOK).Body.Bytes()
+	if err := json.Unmarshal(body, &registration); err != nil {
+		t.Fatalf("response of %d bytes is not JSON: %v", len(body), err)
+	}
+	if len(registration.Items) != 2 || registration.Items[0].Count != 100 || registration.Items[1].Count != 1 {
+		t.Errorf("pages = %+v, want one of 100 leaves and one of 1", registration.Items)
 	}
 }
 
