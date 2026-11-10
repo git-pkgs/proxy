@@ -44,7 +44,7 @@ func (h *NuGetHandler) nugetMetadata(ctx context.Context, path string) (map[stri
 		document, err = h.decodeNuGetMetadata(body)
 		return err
 	}
-	_, _, _, err := h.proxy.fetchOrCacheMetadata(ctx, "nuget", key, target, "", validate)
+	_, _, err := h.proxy.fetchOrCacheMetadata(ctx, "nuget", key, target, "", validate)
 	if err != nil {
 		return nil, err
 	}

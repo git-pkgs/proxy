@@ -1040,6 +1040,18 @@ A repository's files are cached under its name and a hash of its upstream URL,
 so pointing a repository at a different URL stops serving what the old one
 sent.
 
+In every Maven repository, `maven-metadata.xml` follows `metadata_ttl`, and
+its `.md5`, `.sha1`, `.sha256` and `.sha512` files are computed from the
+cached metadata rather than fetched, so they always match it. Other files are
+cached for good, except SNAPSHOT files named with `SNAPSHOT` rather than a
+build timestamp (`lib-1.0-SNAPSHOT.jar`, as JitPack and non-unique snapshot
+repositories publish them), which each build replaces: those are fetched
+again for every `GET`, through the denylist, cooldown, scanning and the
+Plugin Portal fallback like any other file. The new copy replaces the cached
+one once stored; while upstream can't be reached the cached copy is served,
+and `HEAD` is answered from cache. Timestamped SNAPSHOT files
+(`lib-1.0-20240101.120000-1.jar`) never change and are cached.
+
 This field has no environment variable, as with the other named upstream maps.
 `PROXY_UPSTREAM_MAVEN` still sets `upstream.maven`.
 
@@ -1240,7 +1252,7 @@ Currently supported for npm, PyPI, pub.dev, Composer, Cargo, NuGet, Conda, RubyG
 
 Go has no publish time. The module proxy's `.info` gives the commit time of the revision a version points at, so a version tagged on an old commit counts as old. The proxy reads each listed version's `.info` once, stores the time, and leaves versions in cooldown out of `@v/list` and `@latest`. When upstream's `@latest` is in cooldown, it serves the newest release out of cooldown instead. Requests for a version in cooldown, including its `.info`, `.mod` and `.zip`, and a branch or commit query that resolves to one, get 403 rather than 404, because the go command moves on to the next `GOPROXY` entry, such as `direct`, after a 404. If a version's `.info` can't be fetched, the list or download fails with 502 instead of letting the version through.
 
-Maven metadata has no publish time per version. The proxy uses the `Last-Modified` header of each version's `.pom`, which on Maven Central is the time the version was deployed. It reads the header once per version and stores the time, for each repository under `upstream.maven_repositories` separately: from the response when the `.pom` or Gradle `.module` itself is downloaded, which clients do before a version's other files, and otherwise with a `HEAD` request. A `.pom` or `.module` refused this way is still cached, so it counts toward `max_size` before the version leaves cooldown. To keep requests to the upstream down, it only checks versions that can still be in cooldown: none when the metadata's `<lastUpdated>` is older than the cooldown, and otherwise the versions from the end of the list back to the first one that is old enough. Versions in cooldown are left out of `maven-metadata.xml`, `<latest>` and `<release>` are set to the last versions left, and the metadata's `.md5`, `.sha1`, `.sha256` and `.sha512` files are computed from what is served. Requests for any file of a version in cooldown get 403, as for a version on the denylist. If a `.pom` can't be checked, the metadata or download fails with 502 instead of letting the version through, or with 503 and `Retry-After` when the upstream rate-limits the proxy; a version without a `.pom` is let through.
+Maven metadata has no publish time per version. The proxy uses the `Last-Modified` header of each version's `.pom`, which on Maven Central is the time the version was deployed. It reads the header once per version and stores the time, for each repository under `upstream.maven_repositories` separately: from the response when the `.pom` or Gradle `.module` itself is downloaded, which clients do before a version's other files, and otherwise with a `HEAD` request. A `.pom` or `.module` refused this way is still cached, so it counts toward `max_size` before the version leaves cooldown. To keep requests to the upstream down, it only checks versions that can still be in cooldown: none when the metadata's `<lastUpdated>` is older than the cooldown, and otherwise the versions from the end of the list back to the first one that is old enough. Versions in cooldown are left out of `maven-metadata.xml`, `<latest>` and `<release>` are set to the last versions left, and the metadata's `.md5`, `.sha1`, `.sha256` and `.sha512` files are computed from what is served, as they are without cooldown. Requests for any file of a version in cooldown get 403, as for a version on the denylist. If a `.pom` can't be checked, the metadata or download fails with 502 instead of letting the version through, or with 503 and `Retry-After` when the upstream rate-limits the proxy; a version without a `.pom` is let through.
 
 Maven caveats:
 
@@ -1507,7 +1519,7 @@ cache_metadata: true
 
 Or via environment variable: `PROXY_CACHE_METADATA=true`.
 
-Some metadata never changes once published, and is cached like an artifact, with or without `cache_metadata`, and served without revalidation whatever `metadata_ttl` says: a Go module's `.mod` and `.info` for a canonical version (a release, pre-release, pseudo-version or `+incompatible` version; the checksum database fixes their content), and RPM repodata files named after their own checksum (`repodata/<sha256>-primary.xml.gz`). A stored copy is checked against the digest recorded for it and fetched again if it doesn't match. Go branch and commit queries, `@v/list` and `@latest`, and RPM `repomd.xml` and plainly named repodata files follow `metadata_ttl` as before. A checksum-named repodata file over `metadata_max_size` is streamed from upstream uncached.
+Some metadata never changes once published, and is cached like an artifact, with or without `cache_metadata`, and served without revalidation whatever `metadata_ttl` says: a Go module's `.mod` and `.info` for a canonical version (a release, pre-release, pseudo-version or `+incompatible` version; the checksum database fixes their content), and RPM repodata files named after their own checksum (`repodata/<sha256>-primary.xml.gz`). A stored copy is checked against the digest recorded for it and fetched again if it doesn't match. Go branch and commit queries, `@v/list` and `@latest`, and RPM `repomd.xml` follow `metadata_ttl` as before; plainly named repodata files follow the cached `repomd.xml` (see [Metadata TTL](#metadata-ttl)). A checksum-named repodata file over `metadata_max_size` is streamed from upstream uncached.
 
 Composer archive downloads look up their upstream URL in the same cached metadata, so an archive is resolved without asking Packagist again and stays installable while it is down. Only a version or file the cached metadata does not list yet is looked up upstream. With or without `cache_metadata`, a cached archive of a tagged release from the default repository is served without any metadata lookup; with cooldown enabled it is checked against the publish time recorded when the archive was first resolved. Branch (dev) versions, routed packages and archives picked by a query string such as `?sha=` are always resolved from the metadata.
 
@@ -1527,7 +1539,9 @@ Or via environment variable: `PROXY_METADATA_TTL=10m`.
 
 Set to `"0"` to always revalidate with upstream (ETag-based conditional requests still avoid re-downloading unchanged content).
 
-When upstream is unreachable and the cached entry is past its TTL, the proxy serves the stale cached copy with a `Warning: 110 - "Response is Stale"` header so clients can tell the data may be outdated.
+When upstream is unreachable and the cached entry is past its TTL (with a `metadata_ttl` of `"0"`, on every such request), the proxy serves the stale cached copy with a `Warning: 110 - "Response is Stale"` header so clients can tell the data may be outdated. The `ETag` and `Last-Modified` sent with a document are always those of the bytes served, so a document fetched from upstream but not stored, for example because storage failed, carries the upstream's validators rather than the older cached copy's.
+
+APT and RPM clients fetch a release file first (`InRelease` or `Release`, `repomd.xml`) and reject an index file whose checksum doesn't match it. So an index file the cached release file lists (`Packages`, `Sources`, a plainly named `primary.xml.gz`, …) does not follow its own `metadata_ttl`: its cached copy is served while it matches the cached release file's sha256, however old, and otherwise it is fetched from upstream. If upstream's copy doesn't match either, the repository has changed since the release file was cached; that copy is served and the release file is expired, so the next `apt update` or `dnf makecache` gets a matching pair. Where a suite has both `InRelease` and `Release` cached, the one fetched last decides. The release file itself follows `metadata_ttl`. Index files it doesn't list, such as `by-hash` paths, follow `metadata_ttl` too.
 
 ### Change feeds
 
