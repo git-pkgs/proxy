@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/git-pkgs/proxy/internal/retention"
@@ -79,6 +80,11 @@ func (h *ConanHandler) handleRecipeFile(w http.ResponseWriter, r *http.Request) 
 	revision := r.PathValue("revision")
 	filename := r.PathValue("filename")
 
+	if conanPartHasSlash(user, channel, revision, filename) {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
 	// Only the archives are artifacts; the rest goes through the metadata cache.
 	if !h.shouldCacheFile(filename) {
 		h.proxyCached(w, r)
@@ -117,6 +123,11 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 	pkgrev := r.PathValue("pkgrev")
 	filename := r.PathValue("filename")
 
+	if conanPartHasSlash(user, channel, revision, pkgref, pkgrev, filename) {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
 	// Only the archives are artifacts; the rest goes through the metadata cache.
 	if !h.shouldCacheFile(filename) {
 		h.proxyCached(w, r)
@@ -146,11 +157,17 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 
 // conanStorageFilename names a cached archive. Archives are stored under
 // pkg:conan/{name}@{version}, so the file name carries user, channel and the
-// revisions, to keep every recipe and binary apart. The parts are path
-// segments, which can't contain a slash, so joining them with one keeps
-// different references apart.
+// revisions, to keep every recipe and binary apart. The handlers refuse a
+// part that contains a slash, so joining them with one keeps different
+// references apart.
 func conanStorageFilename(user, channel string, parts ...string) string {
 	return strings.Join(append([]string{user, channel}, parts...), "/")
+}
+
+// conanPartHasSlash reports whether a path value contains a slash, which it
+// can only get from an encoded one (%2F) in the request.
+func conanPartHasSlash(parts ...string) bool {
+	return slices.ContainsFunc(parts, func(part string) bool { return strings.Contains(part, "/") })
 }
 
 // conanLegacyStorageFilename is the name archives were cached under before

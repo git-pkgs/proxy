@@ -723,3 +723,33 @@ func TestConanLegacyFileEntryServedForItsURL(t *testing.T) {
 		t.Errorf("recipe file with the upstream down = %d %q, want the legacy entry", w.Code, w.Body.String())
 	}
 }
+
+// A path value is decoded, so one holding an encoded slash could spell the
+// cache key of another reference. Those requests are refused.
+func TestConanFileRoutesRefuseEncodedSlash(t *testing.T) {
+	var available atomic.Bool
+	available.Store(true)
+	upstream := conanPathEchoServer(t, &available)
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.Fetcher = fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	h := NewConanHandlerWithUpstream(proxy, testProxyURL, upstream.URL)
+
+	if w := serveConanRequest(h, conanPackageFile); w.Code != http.StatusOK || w.Body.String() != conanPackageFile {
+		t.Fatalf("GET %s = %d %q, want its own file", conanPackageFile, w.Code, w.Body.String())
+	}
+
+	const recipe, pkg = "/v2/conans/zlib/1.3/_/_/revisions/", "/v2/conans/zlib/1.3/_/_/revisions/R/packages/"
+	for field, target := range map[string]string{
+		"revision spelling a package file": recipe + "R%2Fpackages%2FP%2FQ/files/conan_package.tgz",
+		"user":                             "/v2/conans/zlib/1.3/a%2Fb/_/revisions/R/files/conan_package.tgz",
+		"channel":                          "/v2/conans/zlib/1.3/_/a%2Fb/revisions/R/files/conan_package.tgz",
+		"recipe filename":                  recipe + "R/files/a%2Fconan_package.tgz",
+		"package reference":                pkg + "P%2FX/revisions/Q/files/conan_package.tgz",
+		"package revision":                 pkg + "P/revisions/Q%2FX/files/conan_package.tgz",
+		"package filename":                 pkg + "P/revisions/Q/files/a%2Fconan_package.tgz",
+	} {
+		if w := serveConanRequest(h, target); w.Code != http.StatusBadRequest {
+			t.Errorf("%s: GET %s = %d %q, want 400", field, target, w.Code, w.Body.String())
+		}
+	}
+}
