@@ -95,8 +95,6 @@ func TestOpenBucketGCSRoundTripWithEmulator(t *testing.T) {
 	}
 }
 
-// TestGCSSignedURLSignEndpoint verifies that GCS presigned URLs have their
-// scheme and host rewritten to the configured sign endpoint.
 func TestGCSSignedURLSignEndpoint(t *testing.T) {
 	key, err := rsa.GenerateKey(rand.Reader, 2048)
 	if err != nil {

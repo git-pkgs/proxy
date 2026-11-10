@@ -18,8 +18,6 @@ import (
 	registryclient "github.com/git-pkgs/registries/client"
 )
 
-// TestWithCooldownCopiesProxyFields verifies that WithCooldown copies all
-// non-isolated Proxy fields onto the returned view.
 func TestWithCooldownCopiesProxyFields(t *testing.T) {
 	p, _, _, _ := setupTestProxy(t)
 	p.RouteFor = func(string, string) *ArtifactRoute { return nil }

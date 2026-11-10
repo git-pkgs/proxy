@@ -1740,8 +1740,6 @@ func TestNewServer_StorageConnectivityCheck(t *testing.T) {
 	_ = srv.db.Close()
 }
 
-// TestNewServer_DirectServeBaseURL verifies that New passes DirectServeBaseURL
-// to storage.OpenBucket when DirectServe is enabled.
 func TestNewServer_DirectServeBaseURL(t *testing.T) {
 	tempDir := t.TempDir()
 	awsConfigFile := filepath.Join(tempDir, "aws-config")

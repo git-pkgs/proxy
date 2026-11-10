@@ -283,7 +283,6 @@ func (s *Server) configureGitCache(client *http.Client) error {
 	return nil
 }
 
-// serve wires up HTTP routes, background workers, and serves requests on listener.
 func (s *Server) serve(listener net.Listener) error {
 	metadataClient, artifactClient := s.newUpstreamClients(s.cfg.ParseArtifactTimeout())
 

@@ -266,8 +266,6 @@ func TestBlobSignedURLUnsupported(t *testing.T) {
 	}
 }
 
-// TestBlobSignedURLSignEndpoint verifies that S3 presigned URLs are signed for
-// the configured public host while preserving the storage URL's path style.
 func TestBlobSignedURLSignEndpoint(t *testing.T) {
 	awsDir := t.TempDir()
 	awsConfigFile := filepath.Join(awsDir, "config")
@@ -385,8 +383,6 @@ func assertSigV4Signature(t *testing.T, u *url.URL, region string, creds aws.Cre
 	}
 }
 
-// TestAzureSignedURLSignEndpoint verifies that Azure presigned URLs have their
-// scheme and host rewritten to the configured sign endpoint.
 func TestAzureSignedURLSignEndpoint(t *testing.T) {
 	t.Setenv("AZURE_STORAGE_SAS_TOKEN", "")
 	t.Setenv("AZURE_STORAGE_ACCOUNT", "devstoreaccount1")
@@ -418,7 +414,6 @@ func TestAzureSignedURLSignEndpoint(t *testing.T) {
 	}
 }
 
-// TestRewriteSignedURLHost verifies scheme and host substitution on signed URLs.
 func TestRewriteSignedURLHost(t *testing.T) {
 	tests := []struct {
 		name    string

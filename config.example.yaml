@@ -135,7 +135,13 @@ storage:
 
   # Public base URL for presigned URLs. Set this when the proxy reaches
   # storage at an internal address (127.0.0.1, a Docker service name, or
-  # VPC DNS) but clients must use a public hostname or CDN.
+  # VPC DNS) but clients must use a public hostname. Only scheme and host
+  # are used. For S3/MinIO the URL is signed for this host, so the server
+  # there must receive that Host header: a reverse proxy or CDN that sends
+  # the internal or bucket host to the origin fails signature validation.
+  # With virtual-hosted addressing (no use_path_style) the URL carries no
+  # bucket name, so this must be the bucket's own hostname. For GCS and
+  # Azure the host is replaced after signing.
   # direct_serve_base_url: "https://minio.example.com"
 
 # Database configuration
