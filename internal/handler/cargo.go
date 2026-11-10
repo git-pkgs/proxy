@@ -28,7 +28,11 @@ const (
 // they are, so package rules use the default key mapping and have to match
 // that name exactly.
 func init() {
-	retention.Default.Register(retention.Spec{Key: "cargo", CanonicalPackage: retention.DefaultCanonical("cargo")})
+	retention.Default.Register(retention.Spec{
+		Key:              "cargo",
+		CanonicalPackage: retention.DefaultCanonical("cargo"),
+		CompareVersions:  retention.VersionOrder("cargo"),
+	})
 }
 
 // CargoHandler handles cargo registry protocol requests.

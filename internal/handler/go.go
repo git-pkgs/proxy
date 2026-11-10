@@ -23,7 +23,28 @@ const (
 )
 
 func init() {
-	retention.Default.Register(retention.Spec{Key: "golang", CanonicalPackage: golangRetentionKey})
+	retention.Default.Register(retention.Spec{
+		Key:              "golang",
+		CanonicalPackage: golangRetentionKey,
+		CompareVersions:  golangCompareVersions,
+	})
+}
+
+// golangCompareVersions orders two module versions as the zips are cached,
+// which is in the escaped form of the download URL (v1.0.0-!r!c1 for
+// v1.0.0-RC1).
+func golangCompareVersions(a, b string) int {
+	order := retention.VersionOrder("golang")
+	return order(unescapedGoVersion(a), unescapedGoVersion(b))
+}
+
+// unescapedGoVersion returns the version an escaped one stands for, or the
+// input when it is not a valid escaped version.
+func unescapedGoVersion(escaped string) string {
+	if version, err := gomodule.UnescapeVersion(escaped); err == nil {
+		return version
+	}
+	return escaped
 }
 
 func golangRetentionKey(p *purl.PURL) (string, bool) {

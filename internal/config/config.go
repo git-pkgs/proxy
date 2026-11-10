@@ -559,6 +559,10 @@ type RetentionConfig struct {
 	// SweepInterval is how often expired artifacts are looked for, at least
 	// one minute. Default: "10m".
 	SweepInterval string `json:"sweep_interval" yaml:"sweep_interval"`
+
+	// KeepLatest is how many of the highest cached versions of each package
+	// are never evicted by age, in the ecosystems that support it. Default: 0.
+	KeepLatest int `json:"keep_latest" yaml:"keep_latest"`
 }
 
 // GradleConfig configures Gradle-specific features.

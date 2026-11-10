@@ -71,6 +71,7 @@ storage:
 | `storage.cache_artifacts` | `PROXY_STORAGE_CACHE_ARTIFACTS` | - | Store fetched artifacts (default: true); `false` streams them from upstream |
 | `storage.retention.default` | `PROXY_STORAGE_RETENTION_DEFAULT` | - | Evict artifacts not served for this long (e.g. "30d"); see [Retention](#retention) |
 | `storage.retention.sweep_interval` | `PROXY_STORAGE_RETENTION_SWEEP_INTERVAL` | - | How often expired artifacts are looked for (default: "10m", at least "1m") |
+| `storage.retention.keep_latest` | - | - | Keep this many of the newest cached versions of each package from eviction by age (default: 0); see [Retention](#retention) |
 
 `storage.max_size` counts cached artifacts and cached metadata documents (`cache_metadata`). When the total goes over the limit, the least recently served entries of either kind are evicted first; an evicted metadata document is fetched from upstream again on the next request for it. Pushed artifacts are not counted or evicted. An artifact replaced by a refetch stays in storage for at least an hour, or `storage.direct_serve_ttl` if longer, so requests already reading it can finish, and storage use can exceed the limit by what was replaced in that time.
 
@@ -116,6 +117,17 @@ storage:
 Each cached file ages on its own, counted from the last time the proxy served it, or from when it was fetched if it has not been served since. The blobs of an image that `mirror.schedules` keeps current also count from the last run that found them cached, so the schedule keeps them; for `max_size` eviction such a run doesn't count as use. A newer release of the same package does not shorten the life of older versions. Durations take a `d` suffix for days, and `"0"` or an empty value means never evict by age. With no retention configured, artifacts stay until `max_size` evicts them. `sweep_interval` must be at least `1m`.
 
 A package rule wins over an ecosystem rule, which wins over `default`. Package rules are keyed by package PURL without a version, written in one of the forms the table below lists for the ecosystem. The ecosystems and package rules can only name ecosystems that support retention in the running version; anything else, including a typo, stops the proxy at startup with an error naming the setting. `default` applies only to supported ecosystems, except `generic`, which requires an explicit rule. Support is added one ecosystem at a time, so a later release can make an existing `default` cover more ecosystems. On startup the proxy logs which ecosystems retention supports (`covered`) and which ones `default` does not reach (`default_not_applied`), including `generic`.
+
+`keep_latest` keeps the newest versions of each package, however long ago they were served:
+
+```yaml
+storage:
+  retention:
+    default: "30d"
+    keep_latest: 2
+```
+
+With this, the files of the two highest cached versions of a package are never evicted by age, and older versions expire by their rule as before. Versions are ordered by the ecosystem's version rules, not by when they were fetched, and a prerelease counts like any other version. Only versions in the cache count, not those upstream, so the kept ones need not be the latest releases. `keep_latest` applies to `cargo`, `golang`, `npm` and `pypi`; the other ecosystems ignore it, since many of them cache files under a digest or a build rather than a version. On startup the proxy logs the ecosystems it reaches (`keep_latest_covered`). `storage.max_size` can still evict a kept version.
 
 Generic retention is opt-in because release assets may disappear upstream and cannot then be downloaded again after eviction. An existing `default` never starts evicting generic downloads. Set `ecosystems.generic: "30d"` to cover all generic artifacts, or configure only selected GitHub repositories:
 
