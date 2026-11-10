@@ -135,6 +135,7 @@ To know which blobs an image needs, the proxy records what each manifest it serv
 
 - An image only counts once its tag was pulled or mirrored with `keep_latest` set, and its blobs are known once its platform manifest was pulled too. Until then they expire by their rule as before.
 - An image pulled only by digest is not counted and not kept.
+- A multi-platform tag counts as one image, also when a client that accepts no image index was served one platform's manifest for it.
 - Homebrew bottles and Helm charts pulled over OCI are images here: the newest versions of a bottle or chart are those whose tags were last asked for.
 
 Generic retention is opt-in because release assets may disappear upstream and cannot then be downloaded again after eviction. An existing `default` never starts evicting generic downloads. Set `ecosystems.generic: "30d"` to cover all generic artifacts, or configure only selected GitHub repositories:

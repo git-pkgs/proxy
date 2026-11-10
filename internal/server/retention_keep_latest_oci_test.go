@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"io"
+	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
@@ -279,6 +280,18 @@ func TestKeepLatestImagesNeedsAnOCIRule(t *testing.T) {
 				t.Errorf("keepLatestImages() = %d, want %d", got, tt.want)
 			}
 		})
+	}
+}
+
+// proxy mirror runs in a process of its own and has to record the images it
+// mirrors as serve does, or the sweep would not know their blobs.
+func TestMirrorProxyRecordsImagesForKeepLatest(t *testing.T) {
+	cfg := config.Default()
+	cfg.Storage.Retention.Ecosystems = map[string]string{"oci": "1d"}
+	cfg.Storage.Retention.KeepLatest = 2
+	proxy, _ := NewMirrorProxy(cfg, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
+	if proxy.KeepLatestImages != 2 {
+		t.Errorf("KeepLatestImages = %d, want 2", proxy.KeepLatestImages)
 	}
 }
 

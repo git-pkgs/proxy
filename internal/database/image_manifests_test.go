@@ -56,6 +56,44 @@ func TestNewestImageDigestsFollowsReferences(t *testing.T) {
 	})
 }
 
+// A registry may serve a tag as an index to one client and as one platform's
+// manifest to a client that accepts no index. Both are then tagged, and
+// count as one image, with the time the tag was last seen through either.
+func TestNewestImageDigestsCountsATagsRepresentationsOnce(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now()
+		recordImage(t, db, testImageRepo, "sha256:index-other", now.Add(-2*time.Hour), "sha256:arm-other")
+		recordImage(t, db, testImageRepo, "sha256:index", now.Add(-3*time.Hour), "sha256:arm", "sha256:amd")
+		recordImage(t, db, testImageRepo, "sha256:arm", time.Time{}, "sha256:layer-arm")
+		recordImage(t, db, testImageRepo, "sha256:amd", now.Add(-time.Hour), "sha256:layer-amd")
+
+		want := []string{"sha256:amd", "sha256:arm", "sha256:index", "sha256:layer-amd", "sha256:layer-arm"}
+		if got := newestImageDigests(t, db, testImageRepo, 1); !slices.Equal(got, want) {
+			t.Errorf("newest 1 = %v, want the whole index %v", got, want)
+		}
+		if got := newestImageDigests(t, db, testImageRepo, 2); len(got) != 7 {
+			t.Errorf("newest 2 = %v, want all 7 digests of both images", got)
+		}
+	})
+}
+
+// A platform manifest two indexes share lends both its tag time, and the
+// index tagged later is then the newer image.
+func TestNewestImageDigestsOrdersImagesSharingAManifest(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now()
+		// The digests are named so that a tie would pick the old index.
+		recordImage(t, db, testImageRepo, "sha256:a-index-old", now.Add(-3*time.Hour), "sha256:arm", "sha256:amd-old")
+		recordImage(t, db, testImageRepo, "sha256:b-index-new", now.Add(-2*time.Hour), "sha256:arm", "sha256:amd-new")
+		recordImage(t, db, testImageRepo, "sha256:arm", now.Add(-time.Hour), "sha256:layer-arm")
+
+		want := []string{"sha256:amd-new", "sha256:arm", "sha256:b-index-new", "sha256:layer-arm"}
+		if got := newestImageDigests(t, db, testImageRepo, 1); !slices.Equal(got, want) {
+			t.Errorf("newest 1 = %v, want %v", got, want)
+		}
+	})
+}
+
 // A manifest only asked for by digest is not an image of its own.
 func TestNewestImageDigestsIgnoresUntaggedManifests(t *testing.T) {
 	runWithBothDatabases(t, func(t *testing.T, db *DB) {

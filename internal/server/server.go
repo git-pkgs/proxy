@@ -633,6 +633,7 @@ func NewMirrorProxy(cfg *config.Config, db *database.DB, store storage.Storage, 
 	configureMirrorResolvers(proxy, cfg.Upstream)
 	proxy.HTTPClient = metadataClient
 	proxy.RateLimits = s.rateLimits
+	proxy.KeepLatestImages = keepLatestImages(cfg)
 	return proxy, s.newContainerHandler(proxy)
 }
 

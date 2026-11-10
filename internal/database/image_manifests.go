@@ -1,9 +1,12 @@
 package database
 
 import (
+	"cmp"
 	"database/sql"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 	"time"
 
@@ -32,8 +35,13 @@ type ImageManifest struct {
 }
 
 type imageManifestRow struct {
-	Digest string `db:"digest"`
-	Refs   string `db:"refs"`
+	Digest   string `db:"digest"`
+	Refs     string `db:"refs"`
+	TaggedAt int64  `db:"tagged_at"`
+}
+
+func (r imageManifestRow) refs() []string {
+	return strings.Fields(r.Refs)
 }
 
 // RecordImageManifest stores a manifest's references. For one recorded
@@ -112,13 +120,7 @@ func (db *DB) walkNewestImages(packagePURL string, n int) (map[string]struct{}, 
 	if n <= 0 {
 		return digests, nil, nil
 	}
-	var rows []imageManifestRow
-	err := db.Select(&rows, db.Rebind(`
-		SELECT digest, refs FROM image_manifests
-		WHERE package_purl = ? AND tagged_at > 0
-		ORDER BY tagged_at DESC, digest
-		LIMIT ?
-	`), packagePURL, n)
+	rows, err := db.newestImages(packagePURL, n)
 	if err != nil {
 		return nil, nil, err
 	}
@@ -131,8 +133,8 @@ func (db *DB) walkNewestImages(packagePURL string, n int) (map[string]struct{}, 
 		var next []string
 		for _, row := range rows {
 			manifests = append(manifests, row.Digest)
-			for _, ref := range strings.Split(row.Refs, "\n") {
-				if _, seen := digests[ref]; seen || ref == "" {
+			for _, ref := range row.refs() {
+				if _, seen := digests[ref]; seen {
 					continue
 				}
 				digests[ref] = struct{}{}
@@ -147,6 +149,58 @@ func (db *DB) walkNewestImages(packagePURL string, n int) (map[string]struct{}, 
 		}
 	}
 	return digests, manifests, nil
+}
+
+// newestImages returns the n tagged manifests of a repository whose tag was
+// seen last. A registry serves a tag as an index to one client and as one
+// platform's manifest to a client that accepts no index, so a tagged
+// manifest that another tagged one references is that image seen another
+// way: it is no image of its own and lends the other its tag time.
+func (db *DB) newestImages(packagePURL string, n int) ([]imageManifestRow, error) {
+	var rows []imageManifestRow
+	err := db.Select(&rows, db.Rebind(`
+		SELECT digest, refs, tagged_at FROM image_manifests
+		WHERE package_purl = ? AND tagged_at > 0
+	`), packagePURL)
+	if err != nil {
+		return nil, err
+	}
+
+	tagged := make(map[string]int64, len(rows))
+	for _, row := range rows {
+		tagged[row.Digest] = row.TaggedAt
+	}
+	seen := maps.Clone(tagged)
+	referenced := map[string]struct{}{}
+	for _, row := range rows {
+		for _, ref := range row.refs() {
+			at, ok := tagged[ref]
+			if !ok || ref == row.Digest {
+				continue
+			}
+			referenced[ref] = struct{}{}
+			seen[row.Digest] = max(seen[row.Digest], at)
+		}
+	}
+
+	images := rows[:0:0]
+	for _, row := range rows {
+		if _, ok := referenced[row.Digest]; !ok {
+			images = append(images, row)
+		}
+	}
+	if len(images) == 0 {
+		// Manifests that only reference each other; no registry serves these.
+		images = rows
+	}
+	slices.SortFunc(images, func(a, b imageManifestRow) int {
+		return cmp.Or(
+			cmp.Compare(seen[b.Digest], seen[a.Digest]),
+			cmp.Compare(b.TaggedAt, a.TaggedAt),
+			cmp.Compare(a.Digest, b.Digest),
+		)
+	})
+	return images[:min(n, len(images))], nil
 }
 
 // imageManifestRows returns the recorded manifests among digests.
