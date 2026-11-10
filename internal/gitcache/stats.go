@@ -114,19 +114,20 @@ const headFields = 3
 const stateRetryDelay = time.Minute
 
 // cachedState is a repository's state, or the error reading it failed
-// with, as read after the check at checked. A failed read is kept until
-// retryAt.
+// with, as read when the repository's refs had been written written times.
+// A failed read is kept until retryAt.
 type cachedState struct {
-	checked int64
+	written int64
 	state   RepositoryState
 	err     error
 	retryAt time.Time
 }
 
 // RepositoryState reads the state of the repository cached under key. It is
-// read again only after the repository's next check of the upstream, so a
-// page listing many repositories runs git for those that changed. A read
-// that failed is kept for stateRetryDelay.
+// read again only once the repository's refs or HEAD were written, not after
+// a check of the upstream that found nothing new, so a page listing many
+// repositories runs git for those that changed. A read that failed is kept
+// for stateRetryDelay.
 //
 // One read runs at a time, however many callers ask, so listing a large
 // cache doesn't start git processes without bound. A caller whose ctx ends
@@ -155,21 +156,23 @@ func (c *Cache) RepositoryState(ctx context.Context, key string) (RepositoryStat
 	if cached := rp.knownState(); cached != nil {
 		return cached.state, cached.err
 	}
-	checked := rp.lastChecked.Load()
+	// Counted before the read: a write during it leaves this state stale,
+	// and it is then read again.
+	written := rp.refsWritten.Load()
 	state, err := c.readState(ctx, rp.dir)
 	if err != nil && ctx.Err() != nil {
 		// A read the caller gave up on says nothing about the repository.
 		return RepositoryState{}, ctx.Err()
 	}
-	rp.state.Store(&cachedState{checked: checked, state: state, err: err, retryAt: time.Now().Add(stateRetryDelay)})
+	rp.state.Store(&cachedState{written: written, state: state, err: err, retryAt: time.Now().Add(stateRetryDelay)})
 	return state, err
 }
 
-// knownState is the state read since rp's last check of the upstream, or nil
-// if it has to be read.
+// knownState is the state read since rp's refs were last written, or nil if
+// it has to be read.
 func (rp *repo) knownState() *cachedState {
 	cached := rp.state.Load()
-	if cached == nil || cached.checked != rp.lastChecked.Load() ||
+	if cached == nil || cached.written != rp.refsWritten.Load() ||
 		(cached.err != nil && !time.Now().Before(cached.retryAt)) {
 		return nil
 	}

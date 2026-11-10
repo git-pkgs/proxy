@@ -51,8 +51,12 @@ func (s *Server) handleGitRepositories(w http.ResponseWriter, r *http.Request) {
 	pending := 0
 	state := func(key string) (gitcache.RepositoryState, bool) {
 		st, err := s.git.RepositoryState(ctx, key)
-		if errors.Is(err, context.DeadlineExceeded) || errors.Is(err, context.Canceled) {
+		switch {
+		case err == nil:
+		case errors.Is(err, context.DeadlineExceeded), errors.Is(err, context.Canceled):
 			pending++
+		default:
+			s.logger.Warn("failed to read git repository state", "repository", key, "error", err)
 		}
 		return st, err == nil
 	}

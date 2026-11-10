@@ -149,8 +149,12 @@ type repo struct {
 	// restarts.
 	requests  atomic.Int64
 	lastError atomic.Pointer[refreshError]
-	// state is the last RepositoryState read.
-	state atomic.Pointer[cachedState]
+	// state is the last RepositoryState read, and refsWritten counts the
+	// times the repository's refs or HEAD were written: by a clone, a fetch,
+	// a fetch of wanted commits and a change of the default branch. A state
+	// is current while the count is the one it was read at.
+	state       atomic.Pointer[cachedState]
+	refsWritten atomic.Int64
 }
 
 var errLocked = errors.New("locked by another process")

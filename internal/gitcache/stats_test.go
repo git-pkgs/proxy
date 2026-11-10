@@ -126,6 +126,63 @@ func TestRepositoryState(t *testing.T) {
 	}
 }
 
+// TestRepositoryStateIsKeptWhileRefsStay checks a check of the upstream that
+// finds nothing new leaves the state as read, so a repository clients keep
+// cloning isn't read again on every view, and that a new default branch,
+// which moves HEAD but no ref, has it read again.
+func TestRepositoryStateIsKeptWhileRefsStay(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	runGit(t, work, "push", "--quiet", "origin", "main:trunk")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	rp := tc.repo("up/repo.git")
+	if st, err := tc.RepositoryState(context.Background(), "up/repo.git"); err != nil || st.Branch != "main" {
+		t.Fatalf("state %+v, %v; want main", st, err)
+	}
+	read, checked := rp.state.Load(), rp.lastChecked.Load()
+
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	if rp.lastChecked.Load() == checked {
+		t.Fatal("the second clone did not check the upstream")
+	}
+	if rp.knownState() != read {
+		t.Error("a check that found no change dropped the state")
+	}
+
+	runGit(t, upstream.bare(), "symbolic-ref", "HEAD", "refs/heads/trunk")
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	if st, err := tc.RepositoryState(context.Background(), "up/repo.git"); err != nil || st.Branch != "trunk" {
+		t.Errorf("state after the default branch changed = %+v, %v; want trunk", st, err)
+	}
+}
+
+// TestRepositoryStateIsReadAgainAfterAWantedFetch checks a commit fetched by
+// ID, which writes a ref too, has the state read again.
+func TestRepositoryStateIsReadAgainAfterAWantedFetch(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	runGit(t, upstream.bare(), "config", "uploadpack.allowAnySHA1InWant", "true")
+	sha := upstream.pushPullRequest(work, 1, nil)
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	if _, err := tc.RepositoryState(context.Background(), "up/repo.git"); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := fetchByID(t, tc.url("repo"), sha); err != nil {
+		t.Fatalf("fetch by ID: %v", err)
+	}
+	waitIdle(t, tc.Cache)
+	if tc.repo("up/repo.git").knownState() != nil {
+		t.Error("state kept over a fetch of a wanted commit")
+	}
+}
+
 // TestRepositoryStateFoldsCase checks that, where keys are folded, a
 // repository's state is found under any spelling of its key.
 func TestRepositoryStateFoldsCase(t *testing.T) {

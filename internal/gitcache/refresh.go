@@ -227,7 +227,7 @@ func (c *Cache) clone(ctx context.Context, rp *repo, repoURL string, remote remo
 	if err := c.fetch(ctx, tmp, repoURL, c.opts.MaxRepoSize, res, refreshFlags, branchesAndTags...); err != nil {
 		return err
 	}
-	if err := c.setHead(ctx, tmp, remote, ""); err != nil {
+	if _, err := c.setHead(ctx, tmp, remote, ""); err != nil {
 		return err
 	}
 	size := dirSize(tmp)
@@ -240,6 +240,7 @@ func (c *Cache) clone(ctx context.Context, rp *repo, repoURL string, remote remo
 	if err := os.Rename(tmp, rp.dir); err != nil {
 		return fmt.Errorf("moving clone into place: %w", err)
 	}
+	rp.refsWritten.Add(1)
 	res.settle(rp, size)
 	c.logger.Info("git cache: cloned repository", "repository", rp.key, "size", size)
 	return nil
@@ -266,6 +267,7 @@ func (c *Cache) update(ctx context.Context, rp *repo, repoURL string, remote rem
 		}
 		res := c.newReservation()
 		err = c.fetch(ctx, rp.dir, repoURL, limit, res, refreshFlags, branchesAndTags...)
+		rp.refsWritten.Add(1)
 		res.settle(rp, dirSize(rp.dir))
 		if err != nil {
 			return err
@@ -275,7 +277,11 @@ func (c *Cache) update(ctx context.Context, rp *repo, repoURL string, remote rem
 		c.logger.Warn("git cache: pruning wanted refs failed", "repository", rp.key, "error", err)
 	}
 	head, _ := c.run(ctx, rp.dir, "symbolic-ref", "--quiet", "HEAD")
-	return c.setHead(ctx, rp.dir, remote, strings.TrimSpace(head))
+	moved, err := c.setHead(ctx, rp.dir, remote, strings.TrimSpace(head))
+	if moved {
+		rp.refsWritten.Add(1)
+	}
+	return err
 }
 
 // branchesAndTags are the refspecs of a refresh. A bare clone has none of its
@@ -340,16 +346,17 @@ func (c *Cache) fetch(ctx context.Context, dir, repoURL string, limit int64, res
 }
 
 // setHead points HEAD at the upstream's default branch, when the upstream
-// names one and it is among the cached branches.
-func (c *Cache) setHead(ctx context.Context, dir string, remote remoteRefs, current string) error {
+// names one and it is among the cached branches. It reports whether it
+// wrote HEAD.
+func (c *Cache) setHead(ctx context.Context, dir string, remote remoteRefs, current string) (bool, error) {
 	if remote.head == "" || remote.head == current {
-		return nil
+		return false, nil
 	}
 	if _, ok := remote.refs[remote.head]; !ok {
-		return nil
+		return false, nil
 	}
 	_, err := c.run(ctx, dir, "symbolic-ref", "HEAD", remote.head)
-	return err
+	return err == nil, err
 }
 
 // localRefs lists the cached branches and tags, and the names of the wanted

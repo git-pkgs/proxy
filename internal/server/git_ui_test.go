@@ -1,11 +1,13 @@
 package server
 
 import (
+	"bytes"
 	"context"
 	"io"
 	"log/slog"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -86,6 +88,42 @@ func TestGitRepositoriesPageSaysWhatIsNotReadYet(t *testing.T) {
 	body = view(context.Background())
 	if !strings.Contains(body, "0 branches, 0 tags") || strings.Contains(body, "not read yet") {
 		t.Errorf("page with time shows no state, or says one is missing:\n%s", body)
+	}
+}
+
+// TestGitRepositoriesPageLogsAStateItCannotRead checks a repository git
+// fails to read is still listed, and the log says why it shows no commit.
+func TestGitRepositoriesPageLogsAStateItCannotRead(t *testing.T) {
+	cacheDir := t.TempDir()
+	upstreamDir := gitcache.UpstreamDir("up", "https://example.com")
+	repoDir := filepath.Join(cacheDir, upstreamDir, "team", "broken.git")
+	gitCommand(t, "", "init", "--quiet", "--bare", "--initial-branch=main", repoDir)
+	// A branch naming a commit the repository doesn't have.
+	if err := os.WriteFile(filepath.Join(repoDir, "refs", "heads", "main"), []byte(strings.Repeat("1", 40)+"\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	var logs bytes.Buffer
+	logger := slog.New(slog.NewTextHandler(&logs, nil))
+	cache, err := gitcache.New(gitcache.Options{
+		CacheDir: cacheDir, RefreshWait: time.Second, StaleMaxAge: time.Hour,
+		Client: &http.Client{}, Logger: logger, Upstreams: map[string]string{"up": upstreamDir},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = cache.Close() })
+	s := &Server{cfg: &config.Config{BaseURL: "http://proxy.example"}, git: cache, logger: logger, templates: &Templates{}}
+	s.cfg.Upstream.Git = map[string]config.GitUpstream{"up": {URL: "https://example.com"}}
+
+	w := httptest.NewRecorder()
+	s.handleGitRepositories(w, httptest.NewRequest(http.MethodGet, "/ui/git", nil))
+	if body := w.Body.String(); !strings.Contains(body, "team/broken") || strings.Contains(body, "not read yet") {
+		t.Errorf("page doesn't list the repository, or says it has yet to read it:\n%s", body)
+	}
+	for _, want := range []string{"level=WARN", "repository=" + upstreamDir + "/team/broken.git", "error="} {
+		if !strings.Contains(logs.String(), want) {
+			t.Errorf("log lacks %q:\n%s", want, logs.String())
+		}
 	}
 }
 

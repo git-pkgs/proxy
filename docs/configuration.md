@@ -969,9 +969,9 @@ and, while the last refresh failed, the kind of error (such as
 `fetch_failed` or `too_large`). A repository the upstream refused shows no
 commit, and one the `repos` allowlist no longer allows isn't listed, as `/git`
 serves neither. Branches and commits are read with git, one repository at a
-time and for at most two seconds per view, and kept until the repository's
-next check of the upstream; the page says how many it hasn't read yet, and
-each reload reads more. The request counts and errors are kept in memory and start over
+time and for at most two seconds per view, and kept until a fetch changes
+the repository; the page says how many it hasn't read yet, and each reload
+reads more. The request counts and errors are kept in memory and start over
 when the proxy restarts. Like the rest of the UI the page has no
 authentication, so it shows everyone who can reach it the names, default
 branches and newest commit subjects of repositories from upstreams with
