@@ -305,6 +305,10 @@ type Proxy struct {
 	// holds back; see cooldown_expiry.go.
 	cooldownWatch cooldownWatch
 	shared        *Proxy
+
+	// viewCooldown is set on the shared proxy once a view of it has cooldown
+	// on; see anyCooldownEnabled.
+	viewCooldown atomic.Bool
 }
 
 // cooldownEcosystems are the ecosystems whose handlers apply cooldown. Others

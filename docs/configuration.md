@@ -1198,7 +1198,7 @@ The prefix works with all package protocol routes. Cooldown has an effect only f
 
 Profile names contain lowercase letters, digits, hyphens and underscores, and start with a letter or digit. Profiles must be configured before startup; an unknown profile returns 404. Nested profiles are rejected. Profile paths expose package protocols only, so `/cooldown/3d/ui/` and `/cooldown/3d/api/` return 404.
 
-Database records, artifacts and upstream metadata are shared. Generated download URLs retain the profile prefix, and filtered metadata and its validators are separated by profile. Changing a registry URL does not rewrite artifact URLs already recorded in a lockfile; regenerate those URLs if the selected policy must cover the whole installation.
+Database records, artifacts and upstream metadata are shared. Generated download URLs retain the profile prefix, and filtered metadata and its validators are separated by profile. Because npm packuments are shared too, cooldown in the global policy or in any profile makes every URL fetch and serve full packuments, as `upstream.npm_full_metadata` does. Changing a registry URL does not rewrite artifact URLs already recorded in a lockfile; regenerate those URLs if the selected policy must cover the whole installation.
 
 ## Cooldown
 
