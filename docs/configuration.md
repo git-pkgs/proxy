@@ -1888,7 +1888,7 @@ cache_delete: true
 
 Or via environment variable: `PROXY_CACHE_DELETE=true`.
 
-The endpoint has no authentication. Before enabling it, restrict `/api/cache` and `/ui` to trusted users at your ingress or reverse proxy. The UI sends its deletes to `/ui/api/cache`, so whatever protects `/ui` protects those too.
+The endpoints have no authentication. Before enabling them, restrict `/api/cache`, `/api/git` and `/ui` to trusted users at your ingress or reverse proxy. The UI sends its deletes to `/ui/api/cache` and `/ui/api/git`, so whatever protects `/ui` protects those too.
 
 Delete every cached file of a version, or only the one named by `filename`:
 
@@ -1900,6 +1900,14 @@ curl -X DELETE 'http://localhost:8080/api/cache/maven/com.google.guava:guava/32.
 The name is the package name the UI shows, for example `group:artifact` for Maven. An RPM package's `filename` is its path under `upstream.rpm` (`updates/40/Everything/x86_64/Packages/c/curl-8.6.0-10.fc40.x86_64.rpm`), since repositories under one upstream can ship different files under one name. The response lists the deleted files. The next request for a deleted file fetches it from the upstream again. The stored bytes are removed after the same delay as a replaced artifact, so downloads already in progress can finish.
 
 Pushed archives are not touched: a whole-version delete skips them, and naming one answers 409. Delete those through the [hosted API](#hosted-packages).
+
+With `upstream.git` set, `DELETE /api/git/{upstream}/{repo}` removes one repository from the [git cache](#git-repositories), and the `/ui/git` page gets a Delete button per repository:
+
+```bash
+curl -X DELETE http://localhost:8080/api/git/github/acme/widgets.git
+```
+
+`{upstream}` is the name under `upstream.git`, and `{repo}` the repository path with or without `.git`. The response names the repository and the bytes freed (`freed_bytes`). The next clone fetches it from the upstream again. A repository that a clone, a fetch or a client is using at that moment answers 409; try again once it is done. Git LFS objects are deleted through `/api/cache` like other artifacts.
 
 ## Mirror Command
 

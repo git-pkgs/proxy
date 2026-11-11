@@ -389,6 +389,9 @@ func (s *Server) serve(listener net.Listener) error {
 		s.mountProjectUI(ui)
 		if s.git != nil {
 			ui.Get("/git", s.handleGitRepositories)
+			if s.cfg.CacheDelete {
+				ui.Delete("/api/git/*", s.handleGitDelete)
+			}
 		}
 	})
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
@@ -396,6 +399,9 @@ func (s *Server) serve(listener net.Listener) error {
 	})
 	if s.cfg.CacheDelete {
 		r.Delete("/api/cache/{ecosystem}/*", s.handleCacheDelete)
+		if s.git != nil {
+			r.Delete("/api/git/*", s.handleGitDelete)
+		}
 	}
 
 	s.mountEnrichmentAPI(r)

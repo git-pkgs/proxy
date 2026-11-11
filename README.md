@@ -1381,6 +1381,7 @@ Registered when `cache_delete` is set. It has no authentication of its own.
 | Endpoint | Description |
 |----------|-------------|
 | `DELETE /api/cache/{ecosystem}/{name}/{version}` | Delete a version's cached files, or only `?filename=` |
+| `DELETE /api/git/{upstream}/{repo}` | Delete a repository from the git cache |
 
 ### Enrichment API
 
