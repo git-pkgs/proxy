@@ -6,7 +6,6 @@ import (
 	"strings"
 
 	"github.com/git-pkgs/proxy/internal/gitcache"
-	"github.com/go-chi/chi/v5"
 )
 
 // GitDeleteResponse names the cached Git repository removed and the space
@@ -28,7 +27,10 @@ type GitDeleteResponse struct {
 // @Failure 409 {object} ErrorResponse
 // @Router /api/git/{upstream}/{repo} [delete]
 func (s *Server) handleGitDelete(w http.ResponseWriter, r *http.Request) {
-	name, repo, _ := strings.Cut(chi.URLParam(r, "*"), "/")
+	// From the decoded path, as the clone handler reads it: chi's wildcard
+	// is still encoded when the request escapes a character such as "/".
+	_, path, _ := strings.Cut(r.URL.Path, "/api/git/")
+	name, repo, _ := strings.Cut(path, "/")
 	repo = strings.TrimSuffix(repo, ".git")
 	upstream, ok := s.cfg.Upstream.Git[name]
 	if !ok || repo == "" {

@@ -71,3 +71,47 @@ func TestRemoveUnknownRepository(t *testing.T) {
 		}
 	}
 }
+
+// A repository whose first clone is still running is in use, not missing.
+func TestRemoveRefusesARepositoryBeingCloned(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	arrived, release := upstream.holdFetches()
+	cloned := make(chan error, 1)
+	go func() {
+		_, err := tryGit(t, "", "clone", "--quiet", tc.url("repo"), filepath.Join(t.TempDir(), "clone"))
+		cloned <- err
+	}()
+	<-arrived
+	if _, err := tc.Remove("up/repo.git"); !errors.Is(err, ErrInUse) {
+		t.Errorf("Remove during the first clone: %v, want ErrInUse", err)
+	}
+	release()
+	if err := <-cloned; err != nil {
+		t.Fatalf("clone: %v", err)
+	}
+}
+
+// Wants a removed repository could not get may fit once it is cloned again,
+// so removing it clears them, and only them.
+func TestRemoveForgetsTheRepositorysFailedWants(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	oid := "0123456789abcdef0123456789abcdef01234567"
+	tc.recordFailedWants("up/repo.git", []string{oid}, ErrTooLarge)
+	tc.recordFailedWants("up/other.git", []string{oid}, ErrTooLarge)
+
+	if _, err := tc.Remove("up/repo.git"); err != nil {
+		t.Fatalf("Remove: %v", err)
+	}
+	if got := tc.withoutFailedWants("up/repo.git", []string{oid}); len(got) != 1 {
+		t.Error("the removed repository's failed want is still held back")
+	}
+	if got := tc.withoutFailedWants("up/other.git", []string{oid}); len(got) != 0 {
+		t.Error("another repository's failed want was cleared")
+	}
+}

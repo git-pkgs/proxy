@@ -28,7 +28,9 @@ func TestGitRepositoryDelete(t *testing.T) {
 				t.Errorf("the git page has no delete control:\n%s", body)
 			}
 
-			status, body := request(t, http.MethodDelete, cfg.BaseURL+prefix+"up/team/repo.git", "", nil)
+			// An encoded separator names the repository the clone handler
+			// does, team/repo.
+			status, body := request(t, http.MethodDelete, cfg.BaseURL+prefix+"up/team%2Frepo.git", "", nil)
 			if status != http.StatusOK {
 				t.Fatalf("DELETE: status %d\n%s", status, body)
 			}
@@ -43,7 +45,7 @@ func TestGitRepositoryDelete(t *testing.T) {
 				t.Errorf("the repository is still listed:\n%s", body)
 			}
 
-			for _, path := range []string{"up/team/repo.git", "up/team/repo", "other/team/repo.git", "up/"} {
+			for _, path := range []string{"up/team/repo.git", "up/team/repo", "other/team/repo.git", "up/", "up/team%252Frepo.git"} {
 				if status, body := request(t, http.MethodDelete, cfg.BaseURL+prefix+path, "", nil); status != http.StatusNotFound {
 					t.Errorf("DELETE %s: status %d, want 404\n%s", path, status, body)
 				}

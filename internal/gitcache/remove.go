@@ -4,6 +4,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 )
 
 var (
@@ -22,13 +23,19 @@ var (
 func (c *Cache) Remove(key string) (int64, error) {
 	c.mu.Lock()
 	rp := c.repos[c.repoKey(key)]
-	if rp == nil || !rp.exists() {
+	if rp == nil {
 		c.mu.Unlock()
 		return 0, ErrNotCached
 	}
+	// Before the directory check: a first clone is built elsewhere and
+	// moved into place once done.
 	if rp.users > 0 {
 		c.mu.Unlock()
 		return 0, ErrInUse
+	}
+	if !rp.exists() {
+		c.mu.Unlock()
+		return 0, ErrNotCached
 	}
 	// Moved aside under the lock, so a request that comes after it clones
 	// the repository again instead of reading it while it is deleted.
@@ -45,6 +52,12 @@ func (c *Cache) Remove(key string) (int64, error) {
 	}
 	delete(c.repos, rp.key)
 	delete(c.tooLarge, rp.key)
+	// A want the old copy could not fit may fit in the next clone.
+	for k := range c.failedWants {
+		if strings.HasPrefix(k, rp.key+" ") {
+			delete(c.failedWants, k)
+		}
+	}
 	size := rp.size.Load()
 	c.mu.Unlock()
 
