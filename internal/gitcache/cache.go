@@ -46,8 +46,8 @@ const (
 	ecosystem           = "git"
 	upstreamHashLen     = 8
 	checkedStamp        = "proxy-checked"
-	// urlFile holds the upstream URL a client last reached the repository
-	// at, for background refreshes.
+	// urlFile holds the upstream URL the last successful refresh used, for
+	// background refreshes.
 	urlFile             = "proxy-url"
 	usedStamp           = "proxy-used"
 	dirPermissions      = 0o750
@@ -162,12 +162,12 @@ type repo struct {
 	// is current while the count is the one it was read at.
 	state       atomic.Pointer[cachedState]
 	refsWritten atomic.Int64
-	// url is the upstream URL a client last reached the repository at.
+	// url is the upstream URL the last successful refresh used.
 	url atomic.Pointer[string]
 }
 
-// repoURL returns the upstream URL a client last reached the repository at,
-// or "" if none has since it was loaded.
+// repoURL returns the upstream URL the last successful refresh used, or ""
+// if none is recorded.
 func (rp *repo) repoURL() string {
 	if u := rp.url.Load(); u != nil {
 		return *u
@@ -175,8 +175,8 @@ func (rp *repo) repoURL() string {
 	return ""
 }
 
-// rememberURL records repoURL as the one a client reached the repository
-// at, on disk too once the repository is cached.
+// rememberURL records repoURL as the one a refresh succeeded with, on disk
+// too once the repository is cached.
 func (rp *repo) rememberURL(repoURL string) {
 	if rp.repoURL() == repoURL || !rp.exists() {
 		return

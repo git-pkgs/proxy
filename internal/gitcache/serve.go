@@ -80,7 +80,6 @@ func (c *Cache) Open(ctx context.Context, key, repoURL string, opts OpenOptions)
 		c.release(rp)
 		return nil, err
 	}
-	rp.rememberURL(repoURL)
 	return &Lease{cache: c, repo: rp, repoURL: repoURL, hit: hit, fetchWants: opts.FetchWants}, nil
 }
 

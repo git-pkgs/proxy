@@ -926,7 +926,7 @@ servable through an outage even when nobody cloned it for a day. A repository
 that a client used within `warm_max_idle` (default `30d`) is checked again
 once half of `stale_max_age` has passed since its last successful check, at
 most every 10 minutes, and fetched if its branches or tags moved. It is
-checked at the URL a client last reached it at. After a
+checked at the URL its last successful check used. After a
 failed check it waits the same interval. Checks run one at a time and do not
 count as use, so they neither keep a repository from expiring out of
 `warm_max_idle` nor change which one `max_size` evicts first. Repositories

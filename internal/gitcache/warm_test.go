@@ -233,3 +233,24 @@ func TestWarmPassUsesTheURLAClientUsed(t *testing.T) {
 		t.Errorf("reloaded URL = %q, want %q", got, upstream.server.URL+"/repo")
 	}
 }
+
+// Only a URL a refresh succeeded with is kept: a request served from the
+// cache without a check proves nothing about the URL it named.
+func TestRememberedURLIsOneARefreshSucceededWith(t *testing.T) {
+	upstream, _, tc, _ := warmTestCache(t, nil)
+	rp := tc.repo("up/repo.git")
+	rp.lastChecked.Store(time.Now().UnixNano())
+	want := upstream.server.URL + "/repo"
+	if got := rp.repoURL(); got != want {
+		t.Fatalf("remembered URL = %q, want %q", got, want)
+	}
+
+	lease, err := tc.Open(context.Background(), "up/repo.git", upstream.server.URL+"/missing", OpenOptions{})
+	if err != nil {
+		t.Fatalf("Open: %v", err)
+	}
+	lease.Release()
+	if got := rp.repoURL(); got != want {
+		t.Errorf("a cache-only open changed the remembered URL to %q", got)
+	}
+}

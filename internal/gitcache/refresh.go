@@ -165,6 +165,9 @@ func (c *Cache) startRefreshLocked(rp *repo, repoURL string, background bool) *r
 		switch {
 		case call.err == nil:
 			rp.lastError.Store(nil)
+			// The upstream answered at this URL, so background refreshes
+			// use it.
+			rp.rememberURL(repoURL)
 		case c.ctx.Err() == nil:
 			metrics.RecordUpstreamError(ecosystem, errorType(call.err), metrics.FailureDetail{URL: repoURL, Err: call.err})
 			c.logger.Warn("git cache: refresh failed", "repository", rp.key, "error", call.err)
