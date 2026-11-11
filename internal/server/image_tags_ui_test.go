@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -114,5 +115,49 @@ func TestVersionShowPageListsImageTagsContainingTheBlob(t *testing.T) {
 	body := w.Body.String()
 	if !strings.Contains(body, "Tags:") || !strings.Contains(body, ">latest<") || !strings.Contains(body, ">2026.11.0<") {
 		t.Error("version page does not name the tags containing the blob")
+	}
+}
+
+// matchOldest finds only the tag "oldest" in a blob's image.
+type matchOldest struct{}
+
+func (matchOldest) ImageTagsContaining(_ context.Context, _, _ string, tags []database.ImageTag) []string {
+	for _, tag := range tags {
+		if tag.Tag == "oldest" {
+			return []string{"oldest"}
+		}
+	}
+	return nil
+}
+
+// The tags searched for a blob are not cut to the ones the image's page
+// lists, so a blob of an old tag still names it.
+func TestVersionShowPageSearchesPastTheListedTags(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+	ts.server.images = matchOldest{}
+
+	pkg := &database.Package{PURL: "pkg:oci/team/app", Ecosystem: "oci", Name: "team/app"}
+	if err := ts.db.UpsertPackage(pkg); err != nil {
+		t.Fatal(err)
+	}
+	const layer = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
+	if err := ts.db.UpsertVersion(&database.Version{PURL: pkg.PURL + "@" + layer, PackagePURL: pkg.PURL}); err != nil {
+		t.Fatal(err)
+	}
+	now := time.Now()
+	if err := ts.db.RecordImageTag(pkg.PURL, "oldest", "sha256:old", now.Add(-time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	for i := range maxImageTagsShown + 1 {
+		if err := ts.db.RecordImageTag(pkg.PURL, fmt.Sprintf("v%d", i), "sha256:new", now); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	w := httptest.NewRecorder()
+	ts.handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ui/package/oci/team/app/"+layer, nil))
+	if !strings.Contains(w.Body.String(), ">oldest<") {
+		t.Errorf("status %d: version page does not name the oldest tag", w.Code)
 	}
 }

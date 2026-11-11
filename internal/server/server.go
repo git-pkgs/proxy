@@ -1228,8 +1228,14 @@ func (s *Server) handlePackagePath(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
-// maxImageTagsShown is how many tags a container image's page lists.
-const maxImageTagsShown = 100
+const (
+	// maxImageTagsShown is how many tags a container image's page lists.
+	maxImageTagsShown = 100
+	// maxImageTagsSearched is how many tags, the most recently seen first,
+	// a blob's page looks through for those whose image contains it. Tags
+	// pointing at the same image share one read of its manifests.
+	maxImageTagsSearched = 1000
+)
 
 func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, name string) {
 	pkg, err := s.db.GetPackageByEcosystemName(ecosystem, name)
@@ -1320,7 +1326,7 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 
 	var imageTags []string
 	if pkg.Ecosystem == "oci" && s.images != nil {
-		tags, err := s.db.ImageTags(pkg.PURL, maxImageTagsShown)
+		tags, err := s.db.ImageTags(pkg.PURL, maxImageTagsSearched)
 		if err != nil {
 			s.logger.Error("failed to get image tags", "error", err)
 		}
