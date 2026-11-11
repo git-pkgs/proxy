@@ -27,6 +27,10 @@ var metricSurface = map[string]string{
 	"proxy_cached_artifacts_total":       "Cached artifacts tile",
 	"proxy_metadata_cache_size_bytes":    "Metadata cache card",
 	"proxy_metadata_cache_entries":       "Metadata cache card",
+	// Not on /ui/analytics: the git page's summary shows these figures for
+	// the repositories it lists.
+	"proxy_git_cache_size_bytes":    "/ui/git summary",
+	"proxy_git_cached_repositories": "/ui/git summary",
 
 	// Request-path counters.
 	"proxy_response_bytes_total":        "Runtime: Served",
