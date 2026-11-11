@@ -1217,6 +1217,9 @@ func (s *Server) handlePackagePath(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+// maxImageTagsShown is how many tags a container image's page lists.
+const maxImageTagsShown = 100
+
 func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, name string) {
 	pkg, err := s.db.GetPackageByEcosystemName(ecosystem, name)
 	if err != nil {
@@ -1259,6 +1262,11 @@ func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, 
 		Cooldown:        s.cooldown.forPackage(pkg.Ecosystem, pkg.Name),
 	}
 	data.UsedBy = s.packageUsedBy(pkg, versions)
+	if pkg.Ecosystem == "oci" {
+		if data.Tags, err = s.db.ImageTags(pkg.PURL, maxImageTagsShown); err != nil {
+			s.logger.Error("failed to get image tags", "error", err)
+		}
+	}
 
 	if err := s.templates.Render(w, "package_show", data); err != nil {
 		s.logger.Error("failed to render package show", "error", err)

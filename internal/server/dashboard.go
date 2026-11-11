@@ -74,6 +74,8 @@ type PackageShowData struct {
 	UsedBy []VersionUsage
 	// Cooldown is nil with cooldown off.
 	Cooldown *PackageCooldown
+	// Tags lists a container image's tags, the most recently seen first.
+	Tags []database.ImageTag
 }
 
 // VersionShowData contains data for rendering the version show page.

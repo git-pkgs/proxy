@@ -63,14 +63,14 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 	}
 	cached, _ := h.loadContainerManifestForAccept(r.Context(), registryURL, name, reference, req.accept, req.cacheAccept)
 	if cached != nil && (req.immutable() || h.containerManifestFresh(cached)) {
-		h.writeManifest(w, r, cacheName, cached, false)
+		h.writeManifest(w, r, cacheName, reference, cached, false)
 		return
 	}
 
 	outcome := h.coalescedManifest(r.Context(), req)
 	switch {
 	case outcome.manifest != nil:
-		h.writeManifest(w, r, cacheName, outcome.manifest, false)
+		h.writeManifest(w, r, cacheName, reference, outcome.manifest, false)
 	case outcome.relay != nil:
 		outcome.relay.write(h.proxy, w, r)
 	case outcome.digestInvalid:
@@ -83,7 +83,7 @@ func (h *ContainerHandler) serveManifest(w http.ResponseWriter, r *http.Request,
 func (h *ContainerHandler) serveStaleManifestOrError(w http.ResponseWriter, r *http.Request, cacheName, reference string, cached *cachedContainerManifest, err error) {
 	if cached != nil {
 		h.proxy.Logger.Warn("upstream manifest fetch failed, serving stale cache", "error", err)
-		h.writeManifest(w, r, cacheName, cached, true)
+		h.writeManifest(w, r, cacheName, reference, cached, true)
 		return
 	}
 	if referrersTagPattern.MatchString(reference) {
@@ -110,10 +110,11 @@ func (h *ContainerHandler) manifestDenied(w http.ResponseWriter, cacheName, refe
 }
 
 // writeManifest writes manifest unless the denylist names its digest.
-func (h *ContainerHandler) writeManifest(w http.ResponseWriter, r *http.Request, cacheName string, manifest *cachedContainerManifest, stale bool) {
+func (h *ContainerHandler) writeManifest(w http.ResponseWriter, r *http.Request, cacheName, reference string, manifest *cachedContainerManifest, stale bool) {
 	if h.manifestDenied(w, cacheName, manifest.contentDigest) {
 		return
 	}
+	h.recordImageTag(cacheName, reference, manifest, stale)
 	writeContainerManifest(w, r, manifest, stale)
 }
 
