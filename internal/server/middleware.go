@@ -83,9 +83,7 @@ func (s *Server) LoggerMiddleware(next http.Handler) http.Handler {
 				"remote", r.RemoteAddr,
 				"remote_ip", addr)
 
-			// Scrapes of /metrics would otherwise attribute themselves,
-			// burying real callers under whatever polls the proxy most often.
-			if r.URL.Path != "/metrics" {
+			if countsAsTraffic(r.URL.Path) {
 				metrics.RecordRequest(ecosystem, rw.status, duration)
 				metrics.RecordResponse(ecosystem, client, rw.bytes)
 				s.sources.Record(addr, client, rw.bytes)
@@ -113,6 +111,16 @@ func (s *Server) LoggerMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(rw, r)
 	})
+}
+
+// countsAsTraffic reports whether a request belongs in the runtime request
+// and byte counters. Scrapes of /metrics would otherwise attribute themselves,
+// burying real callers under whatever polls the proxy most often. The web UI
+// is left out for the same reason: each page load pulls ~800 KB of vendored
+// scripts, so a few visits to the analytics page outweigh the package traffic
+// it is there to report on.
+func countsAsTraffic(path string) bool {
+	return path != "/metrics" && path != "/ui" && !strings.HasPrefix(path, "/ui/")
 }
 
 // requestEcosystem names the ecosystem a request path belongs to.
