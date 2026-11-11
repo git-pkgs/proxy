@@ -136,6 +136,11 @@ func (c *Cache) startRefresh(rp *repo, repoURL string) *refreshCall {
 func (c *Cache) startRefreshAs(rp *repo, repoURL string, background bool) *refreshCall {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.startRefreshLocked(rp, repoURL, background)
+}
+
+// startRefreshLocked is startRefreshAs with c.mu held.
+func (c *Cache) startRefreshLocked(rp *repo, repoURL string, background bool) *refreshCall {
 	if rp.refreshing != nil {
 		return rp.refreshing
 	}

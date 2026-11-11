@@ -155,3 +155,81 @@ func TestWarmIntervalHasAFloor(t *testing.T) {
 		}
 	}
 }
+
+// warmPass works from a list taken before its first refresh. A repository
+// evicted meanwhile, or one a client checked meanwhile, is left alone.
+func TestWarmRefreshRechecksEachRepositoryWhenItsTurnComes(t *testing.T) {
+	for _, tt := range []struct {
+		name   string
+		change func(*testCache, *repo)
+	}{
+		{"evicted", func(tc *testCache, rp *repo) {
+			tc.mu.Lock()
+			delete(tc.repos, rp.key)
+			tc.mu.Unlock()
+		}},
+		{"checked by a client", func(_ *testCache, rp *repo) {
+			rp.lastChecked.Store(time.Now().UnixNano())
+		}},
+		{"failed for a client", func(_ *testCache, rp *repo) {
+			rp.lastError.Store(&refreshError{kind: "fetch_failed", at: time.Now()})
+		}},
+		{"refused for a client", func(tc *testCache, rp *repo) {
+			tc.mu.Lock()
+			rp.refused = ErrRefused
+			tc.mu.Unlock()
+		}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			upstream, _, tc, resolve := warmTestCache(t, nil)
+			due := tc.warmDue(time.Now())
+			if len(due) != 1 {
+				t.Fatalf("due = %d repositories, want 1", len(due))
+			}
+			tt.change(tc, due[0])
+			requests := upstream.requests.Load()
+			url, _ := resolve("up/repo.git")
+			if call := tc.startWarmRefresh(due[0], url); call != nil {
+				<-call.done
+				t.Error("started a background refresh")
+			}
+			if got := upstream.requests.Load(); got != requests {
+				t.Errorf("made %d upstream requests, want none", got-requests)
+			}
+		})
+	}
+}
+
+// A background check fetches from the URL a client last reached the
+// repository at, kept across restarts, since an upstream may serve a
+// repository at only one spelling of its path.
+func TestWarmPassUsesTheURLAClientUsed(t *testing.T) {
+	upstream, work, tc, _ := warmTestCache(t, nil)
+	wrong := func(string) (string, bool) { return upstream.server.URL + "/missing", true }
+	head := upstream.commit(work, "second")
+	runGit(t, work, "push", "--quiet", "origin", "main")
+
+	if got := tc.warmPass(context.Background(), wrong); got != 1 {
+		t.Fatalf("warmPass refreshed %d repositories, want 1", got)
+	}
+	if refs := tc.cachedRefs(t); !strings.Contains(refs, head+" refs/heads/main") {
+		t.Errorf("cached refs:\n%s\nwant main at %s", refs, head)
+	}
+
+	if err := tc.Close(); err != nil {
+		t.Fatal(err)
+	}
+	reloaded, err := New(Options{
+		Upstreams:   map[string]string{"up": "up"},
+		CacheDir:    tc.dir,
+		StaleMaxAge: time.Hour,
+		Client:      &http.Client{},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = reloaded.Close() }()
+	if got := reloaded.repos["up/repo.git"].repoURL(); got != upstream.server.URL+"/repo" {
+		t.Errorf("reloaded URL = %q, want %q", got, upstream.server.URL+"/repo")
+	}
+}

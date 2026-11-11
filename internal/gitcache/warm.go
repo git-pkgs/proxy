@@ -86,7 +86,15 @@ func (c *Cache) warmPass(ctx context.Context, resolve func(dir string) (string, 
 		if !ok {
 			continue
 		}
-		call := c.startRefreshAs(rp, repoURL, true)
+		// An upstream may serve a repository at only one spelling of its
+		// path, so the one a client reached it at wins.
+		if used := rp.repoURL(); used != "" {
+			repoURL = used
+		}
+		call := c.startWarmRefresh(rp, repoURL)
+		if call == nil {
+			continue
+		}
 		select {
 		case <-call.done:
 		case <-ctx.Done():
@@ -99,32 +107,53 @@ func (c *Cache) warmPass(ctx context.Context, resolve func(dir string) (string, 
 	return refreshed
 }
 
+// startWarmRefresh starts a background refresh of rp, unless by now it is
+// no longer the cache's entry for its key or no longer due: a pass works
+// from a list taken before its first refresh, and evictions and requests
+// go on meanwhile.
+func (c *Cache) startWarmRefresh(rp *repo, repoURL string) *refreshCall {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed || c.repos[rp.key] != rp || !c.warmDueLocked(rp, time.Now()) {
+		return nil
+	}
+	return c.startRefreshLocked(rp, repoURL, true)
+}
+
 // warmDue returns the cached repositories due for a background check, the
-// longest unchecked first: used by a client within WarmMaxIdle, neither
-// checked nor failed within warmInterval, and not refused upstream or
-// waiting after passing git.max_repo_size.
+// longest unchecked first.
 func (c *Cache) warmDue(now time.Time) []*repo {
-	interval := c.warmInterval()
 	c.mu.Lock()
 	var due []*repo
 	for _, rp := range c.repos {
-		used := rp.lastUsed.Load()
-		last := rp.lastChecked.Load()
-		if failed := rp.lastError.Load(); failed != nil {
-			last = max(last, failed.at.UnixNano())
+		if c.warmDueLocked(rp, now) {
+			due = append(due, rp)
 		}
-		if rp.refused != nil || rp.refreshing != nil || used == 0 ||
-			now.Sub(time.Unix(0, used)) > c.opts.WarmMaxIdle ||
-			now.Sub(time.Unix(0, last)) < interval {
-			continue
-		}
-		due = append(due, rp)
 	}
 	c.mu.Unlock()
-
-	due = slices.DeleteFunc(due, func(rp *repo) bool { return !rp.exists() || c.isTooLarge(rp.key) })
 	slices.SortFunc(due, func(a, b *repo) int {
 		return cmp.Compare(a.lastChecked.Load(), b.lastChecked.Load())
 	})
 	return due
+}
+
+// warmDueLocked reports whether rp is due for a background check: cached,
+// used by a client within WarmMaxIdle, neither checked nor failed within
+// warmInterval, not refreshing, and not refused upstream or waiting after
+// passing git.max_repo_size. c.mu must be held.
+func (c *Cache) warmDueLocked(rp *repo, now time.Time) bool {
+	used := rp.lastUsed.Load()
+	last := rp.lastChecked.Load()
+	if failed := rp.lastError.Load(); failed != nil {
+		last = max(last, failed.at.UnixNano())
+	}
+	if rp.refused != nil || rp.refreshing != nil || used == 0 ||
+		now.Sub(time.Unix(0, used)) > c.opts.WarmMaxIdle ||
+		now.Sub(time.Unix(0, last)) < c.warmInterval() {
+		return false
+	}
+	if since, ok := c.tooLarge[rp.key]; ok && now.Sub(since) < tooLargeRetryAfter {
+		return false
+	}
+	return rp.exists()
 }

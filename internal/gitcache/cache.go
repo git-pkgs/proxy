@@ -46,6 +46,9 @@ const (
 	ecosystem           = "git"
 	upstreamHashLen     = 8
 	checkedStamp        = "proxy-checked"
+	// urlFile holds the upstream URL a client last reached the repository
+	// at, for background refreshes.
+	urlFile             = "proxy-url"
 	usedStamp           = "proxy-used"
 	dirPermissions      = 0o750
 	lockFilePermissions = 0o600
@@ -159,6 +162,27 @@ type repo struct {
 	// is current while the count is the one it was read at.
 	state       atomic.Pointer[cachedState]
 	refsWritten atomic.Int64
+	// url is the upstream URL a client last reached the repository at.
+	url atomic.Pointer[string]
+}
+
+// repoURL returns the upstream URL a client last reached the repository at,
+// or "" if none has since it was loaded.
+func (rp *repo) repoURL() string {
+	if u := rp.url.Load(); u != nil {
+		return *u
+	}
+	return ""
+}
+
+// rememberURL records repoURL as the one a client reached the repository
+// at, on disk too once the repository is cached.
+func (rp *repo) rememberURL(repoURL string) {
+	if rp.repoURL() == repoURL || !rp.exists() {
+		return
+	}
+	rp.url.Store(&repoURL)
+	_ = os.WriteFile(filepath.Join(rp.dir, urlFile), []byte(repoURL+"\n"), lockFilePermissions)
 }
 
 var errLocked = errors.New("locked by another process")
@@ -314,6 +338,11 @@ func (c *Cache) load() error {
 			rp.lastChecked.Store(stampTime(path, checkedStamp))
 			rp.lastUsed.Store(stampTime(path, usedStamp))
 			rp.usedWritten.Store(rp.lastUsed.Load())
+			if data, err := os.ReadFile(filepath.Join(path, urlFile)); err == nil {
+				if u := strings.TrimSpace(string(data)); u != "" {
+					rp.url.Store(&u)
+				}
+			}
 			c.repos[rp.key] = rp
 			return filepath.SkipDir
 		})
