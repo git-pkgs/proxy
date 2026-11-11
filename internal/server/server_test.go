@@ -869,6 +869,35 @@ func TestStaticFiles(t *testing.T) {
 	}
 }
 
+func TestStaticFilesRevalidate(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	req := httptest.NewRequest("GET", "/ui/static/vendor/tailwind.js", nil)
+	w := httptest.NewRecorder()
+	ts.handler.ServeHTTP(w, req)
+
+	etag := w.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("expected an ETag on a static file")
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("Cache-Control = %q, want no-cache", got)
+	}
+
+	req = httptest.NewRequest("GET", "/ui/static/vendor/tailwind.js", nil)
+	req.Header.Set("If-None-Match", etag)
+	w = httptest.NewRecorder()
+	ts.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotModified {
+		t.Errorf("revalidation status = %d, want 304", w.Code)
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("revalidation body = %d bytes, want none", w.Body.Len())
+	}
+}
+
 func TestCategorizeLicenseCSS(t *testing.T) {
 	tests := []struct {
 		license  string
