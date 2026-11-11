@@ -132,11 +132,19 @@ func TestGitConfigDefaults(t *testing.T) {
 		t.Fatalf("Validate: %v", err)
 	}
 	if g.CacheDir != defaultGitCacheDir || g.MaxSizeBytes() != 0 || g.MaxRepoSizeBytes() != 5<<30 ||
-		g.RefreshWaitDuration() != 5*time.Second || g.StaleMaxAgeDuration() != 24*time.Hour {
+		g.RefreshWaitDuration() != 5*time.Second || g.StaleMaxAgeDuration() != 24*time.Hour ||
+		g.WarmMaxIdleDuration() != 30*24*time.Hour {
 		t.Errorf("defaults = %+v", g)
 	}
 
-	for _, bad := range []GitConfig{{MaxSize: "lots"}, {RefreshWait: "soon"}, {StaleMaxAge: "-1h"}} {
+	for value, want := range map[string]time.Duration{"90d": 90 * 24 * time.Hour, "12h": 12 * time.Hour, "0": 0} {
+		g := GitConfig{WarmMaxIdle: value}
+		if err := g.Validate(); err != nil || g.WarmMaxIdleDuration() != want {
+			t.Errorf("warm_max_idle %q = %v, %v; want %v", value, g.WarmMaxIdleDuration(), err, want)
+		}
+	}
+
+	for _, bad := range []GitConfig{{MaxSize: "lots"}, {RefreshWait: "soon"}, {StaleMaxAge: "-1h"}, {WarmMaxIdle: "-1d"}, {WarmMaxIdle: "often"}} {
 		if err := bad.Validate(); err == nil {
 			t.Errorf("Validate(%+v) accepted it", bad)
 		}

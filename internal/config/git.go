@@ -15,6 +15,7 @@ const (
 	defaultGitMaxRepoSize = "5GB"
 	defaultGitRefreshWait = "5s"
 	defaultGitStaleMaxAge = "24h"
+	defaultGitWarmMaxIdle = "30d"
 )
 
 // GitUpstream is an upstream.git entry: a Git server's base URL and,
@@ -104,10 +105,17 @@ type GitConfig struct {
 	// Default: 24h.
 	StaleMaxAge string `json:"stale_max_age" yaml:"stale_max_age"`
 
+	// WarmMaxIdle is how long after a client last used a repository the
+	// proxy keeps checking it in the background, so the cached copy stays
+	// within StaleMaxAge through an upstream outage. Accepts a "d" suffix.
+	// "0" turns the background checks off. Default: 30d.
+	WarmMaxIdle string `json:"warm_max_idle" yaml:"warm_max_idle"`
+
 	maxSize     int64
 	maxRepoSize int64
 	refreshWait time.Duration
 	staleMaxAge time.Duration
+	warmMaxIdle time.Duration
 }
 
 // MaxSizeBytes returns the parsed MaxSize, 0 for no limit. Validate must run first.
@@ -121,6 +129,9 @@ func (g *GitConfig) RefreshWaitDuration() time.Duration { return g.refreshWait }
 
 // StaleMaxAgeDuration returns the parsed StaleMaxAge. Validate must run first.
 func (g *GitConfig) StaleMaxAgeDuration() time.Duration { return g.staleMaxAge }
+
+// WarmMaxIdleDuration returns the parsed WarmMaxIdle, 0 for off. Validate must run first.
+func (g *GitConfig) WarmMaxIdleDuration() time.Duration { return g.warmMaxIdle }
 
 // Validate checks the Git cache settings, applying defaults where unset.
 func (g *GitConfig) Validate() error {
@@ -136,6 +147,9 @@ func (g *GitConfig) Validate() error {
 	if g.StaleMaxAge == "" {
 		g.StaleMaxAge = defaultGitStaleMaxAge
 	}
+	if g.WarmMaxIdle == "" {
+		g.WarmMaxIdle = defaultGitWarmMaxIdle
+	}
 
 	var err error
 	if g.maxSize, err = parseNonNegativeSize("git.max_size", g.MaxSize); err != nil {
@@ -148,6 +162,9 @@ func (g *GitConfig) Validate() error {
 		return err
 	}
 	if g.staleMaxAge, err = parseNonNegativeDuration("git.stale_max_age", g.StaleMaxAge); err != nil {
+		return err
+	}
+	if g.warmMaxIdle, err = parseRetentionDuration("git.warm_max_idle", g.WarmMaxIdle); err != nil {
 		return err
 	}
 	return nil

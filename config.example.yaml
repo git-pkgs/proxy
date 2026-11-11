@@ -423,6 +423,7 @@ upstream:
 #   max_repo_size: 5GB       # refuse a repository that grows past this
 #   refresh_wait: 5s         # then serve the cached copy if the upstream check is slow
 #   stale_max_age: 24h       # never serve a copy not checked for this long
+#   warm_max_idle: 30d       # keep checking repositories used within this
 
 # Gradle HttpBuildCache configuration
 gradle:

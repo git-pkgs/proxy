@@ -272,6 +272,7 @@ func (s *Server) configureGitCache(client *http.Client) error {
 		MaxRepoSize: s.cfg.Git.MaxRepoSizeBytes(),
 		RefreshWait: s.cfg.Git.RefreshWaitDuration(),
 		StaleMaxAge: s.cfg.Git.StaleMaxAgeDuration(),
+		WarmMaxIdle: s.cfg.Git.WarmMaxIdleDuration(),
 		Client:      client,
 		Logger:      s.logger,
 		Upstreams:   upstreamDirs,
@@ -460,6 +461,10 @@ func (s *Server) serve(listener net.Listener) error {
 	s.background.Go(func() { s.startRetentionLoop(bgCtx, retentionResolvers) })
 	s.background.Go(func() { s.startAPKSnapshotPruning(bgCtx) })
 	s.background.Go(func() { s.startReclaimLoop(bgCtx) })
+	if s.git != nil {
+		// Stops when the cache is closed.
+		s.git.Warm(handler.NewGitHandler(proxy, s.git, s.cfg.Upstream).RepositoryURL)
+	}
 
 	if listener != nil {
 		return s.http.Serve(listener)

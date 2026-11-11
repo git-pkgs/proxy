@@ -62,6 +62,9 @@ type Options struct {
 	// processes the cache runs. Redirects are never followed.
 	Client *http.Client
 	Logger *slog.Logger
+	// WarmMaxIdle, with StaleMaxAge, lets Warm refresh the repositories
+	// clients used within it before StaleMaxAge runs out. 0 turns that off.
+	WarmMaxIdle time.Duration
 	// Upstreams maps each configured upstream's name to its directory in
 	// CacheDir, as UpstreamDir names it. Only those directories are loaded
 	// at startup. A directory UpstreamDir would name for one of these names
@@ -69,10 +72,11 @@ type Options struct {
 	// else in CacheDir is touched, so it may hold other data.
 	Upstreams map[string]string
 
-	// refCheckTimeout, lowSpeedTime, maxRequestBody, maxUploadPacks and
-	// maxRefListings override their defaults in tests, and refreshWaitOver,
-	// when set, replaces the RefreshWait timer.
+	// refCheckTimeout, lowSpeedTime, maxRequestBody, maxUploadPacks,
+	// maxRefListings and warmTick override their defaults in tests, and
+	// refreshWaitOver, when set, replaces the RefreshWait timer.
 	refCheckTimeout time.Duration
+	warmTick        time.Duration
 	refreshWaitOver <-chan time.Time
 	lowSpeedTime    int
 	maxRequestBody  int64
@@ -392,15 +396,20 @@ func (c *Cache) repoKey(key string) string {
 	return key
 }
 
+// release ends a use of the repository by a client, recording it as used.
 func (c *Cache) release(rp *repo) {
 	now := time.Now()
 	rp.lastUsed.Store(now.UnixNano())
-	exists := rp.exists()
-	if exists && now.Sub(time.Unix(0, rp.usedWritten.Load())) >= usedStampInterval {
+	if rp.exists() && now.Sub(time.Unix(0, rp.usedWritten.Load())) >= usedStampInterval {
 		rp.usedWritten.Store(now.UnixNano())
 		touch(rp.dir, usedStamp, now)
 	}
+	c.drop(rp)
+}
 
+// drop ends a use of the repository without recording it as used.
+func (c *Cache) drop(rp *repo) {
+	exists := rp.exists()
 	c.mu.Lock()
 	rp.users--
 	idle := rp.users == 0 && c.repos[rp.key] == rp
