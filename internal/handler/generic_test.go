@@ -494,6 +494,52 @@ func TestGenericHandler_ServesReleaseAssetCachedUnderUnhashedKey(t *testing.T) {
 	}
 }
 
+// A configured artifact cached under the unhashed key before hashed keys is
+// served only for the query it was fetched with, not for another one.
+func TestGenericHandler_ServesConfiguredArtifactCachedUnderUnhashedKeyOnlyForItsQuery(t *testing.T) {
+	asset := []byte("tool bytes")
+	var available atomic.Bool
+	available.Store(true)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !available.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write(asset)
+	}))
+	defer upstream.Close()
+
+	proxy, _, store, _ := setupTestProxy(t)
+	store.seekable = true
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+
+	const path = "/releases/tool/1.0.0/linux/tool.tar.gz"
+	result, err := proxy.GetOrFetchArtifactFromURL(context.Background(), genericEcosystem,
+		"tool", "1.0.0", "downloads/tool.tar.gz", upstream.URL+path+"?variant=a")
+	if err != nil {
+		t.Fatalf("priming legacy entry: %v", err)
+	}
+	if result.Reader != nil {
+		_ = result.Reader.Close()
+	}
+	available.Store(false)
+
+	h := NewGenericHandler(proxy,
+		map[string]string{"downloads": upstream.URL},
+		map[string][]string{"downloads": {`releases/(?P<name>tool)/(?P<version>[^/]+)/linux/(?P<file>[^/]+)`}})
+	w := serveGenericRequest(h, "/downloads"+path+"?variant=a")
+	if w.Code != http.StatusOK || w.Body.String() != string(asset) {
+		t.Fatalf("same query: status = %d, body = %q; want 200 %q", w.Code, w.Body.String(), asset)
+	}
+	for _, query := range []string{"?variant=b", ""} {
+		if w := serveGenericRequest(h, "/downloads"+path+query); w.Code != http.StatusBadGateway {
+			t.Errorf("query %q: status = %d, want 502", query, w.Code)
+		}
+	}
+}
+
 func TestGenericHandler_ReleaseAssetNotFoundIsNotCached(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		http.NotFound(w, r)
