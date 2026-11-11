@@ -924,15 +924,18 @@ past `stale_max_age` ago, so a clone checks once, at its ref listing.
 The proxy also checks cached repositories in the background, so a copy stays
 servable through an outage even when nobody cloned it for a day. A repository
 that a client used within `warm_max_idle` (default `30d`) is checked again
-once half of `stale_max_age` has passed since its last successful check, at
-most every 10 minutes, and fetched if its branches or tags moved. It is
-checked at the URL its last successful check used. After a
-failed check it waits the same interval. Checks run one at a time and do not
-count as use, so they neither keep a repository from expiring out of
-`warm_max_idle` nor change which one `max_size` evicts first. Repositories
-the upstream refused, and those the configuration no longer serves, are
-skipped. `warm_max_idle: 0` or `stale_max_age: 0` turns the background checks
-off. They run in `proxy serve` only, each process for its own `cache_dir`.
+once half of `stale_max_age` has passed since its last successful check,
+and fetched if its branches or tags moved. It is checked at the URL its last
+successful check used, so a repository cached by an older version waits for
+a client to refresh it once. After a failed check it waits a quarter of that
+interval, at least 10 minutes, so a few retries fit before the copy goes
+stale. Checks run one at a time and do not count as use, so they neither keep
+a repository from expiring out of `warm_max_idle` nor change which one
+`max_size` evicts first. Repositories the upstream refused, and those the
+configuration no longer serves, are skipped. `warm_max_idle: 0`, or a
+`stale_max_age` under `20m` (which includes `0`), turns the background
+checks off. They run in `proxy serve` only, each process for its own
+`cache_dir`.
 
 The proxy runs `git` 2.31 or newer, which must be installed (the Docker image includes it).
 The `git` processes never reach the network themselves: their fetches go

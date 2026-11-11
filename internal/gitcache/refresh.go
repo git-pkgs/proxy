@@ -128,18 +128,13 @@ func servesStale(err error) bool {
 // startRefresh starts a refresh of the repository, or joins the one running.
 // The refresh holds a use of the repository until it ends.
 func (c *Cache) startRefresh(rp *repo, repoURL string) *refreshCall {
-	return c.startRefreshAs(rp, repoURL, false)
-}
-
-// startRefreshAs is startRefresh. A refresh started in the background does
-// not count as a use of the repository when it ends.
-func (c *Cache) startRefreshAs(rp *repo, repoURL string, background bool) *refreshCall {
 	c.mu.Lock()
 	defer c.mu.Unlock()
-	return c.startRefreshLocked(rp, repoURL, background)
+	return c.startRefreshLocked(rp, repoURL, false)
 }
 
-// startRefreshLocked is startRefreshAs with c.mu held.
+// startRefreshLocked is startRefresh with c.mu held. A refresh started in
+// the background does not count as a use of the repository when it ends.
 func (c *Cache) startRefreshLocked(rp *repo, repoURL string, background bool) *refreshCall {
 	if rp.refreshing != nil {
 		return rp.refreshing
@@ -180,7 +175,7 @@ func (c *Cache) startRefreshLocked(rp *repo, repoURL string, background bool) *r
 		}
 		c.mu.Unlock()
 		if background {
-			c.drop(rp)
+			c.drop(rp, rp.exists())
 		} else {
 			c.release(rp)
 		}

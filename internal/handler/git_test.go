@@ -72,32 +72,30 @@ func TestParseGitRequest(t *testing.T) {
 	}
 }
 
-// TestGitRepositoryURL checks the URL a background refresh fetches a cached
-// repository from, and that a repository the configuration no longer serves
-// is left alone.
-func TestGitRepositoryURL(t *testing.T) {
+// TestGitServesRepository checks that a background refresh leaves alone a
+// cached repository the configuration no longer serves.
+func TestGitServesRepository(t *testing.T) {
 	h := NewGitHandler(nil, nil, config.UpstreamConfig{Git: map[string]config.GitUpstream{
 		"up":      {URL: "https://git.example/r/"},
 		"limited": {URL: "https://git.example", Repos: []string{"allowed/*"}},
 	}})
 	up, limited := h.upstreams["up"].dir, h.upstreams["limited"].dir
 	for _, tt := range []struct {
-		dir, want string
-		ok        bool
+		dir string
+		ok  bool
 	}{
-		{up + "/repo.git", "https://git.example/r/repo.git", true},
-		{up + "/a/b c.git", "https://git.example/r/a/b%20c.git", true},
-		{limited + "/allowed/repo.git", "https://git.example/allowed/repo.git", true},
+		{up + "/repo.git", true},
+		{up + "/a/b c.git", true},
+		{limited + "/allowed/repo.git", true},
 		// No longer in the repos allowlist.
-		{limited + "/other/repo.git", "", false},
+		{limited + "/other/repo.git", false},
 		// The directory of an upstream since repointed or removed.
-		{"up-00000000/repo.git", "", false},
-		{up, "", false},
-		{up + "/a/../b.git", "", false},
+		{"up-00000000/repo.git", false},
+		{up, false},
+		{up + "/a/../b.git", false},
 	} {
-		got, ok := h.RepositoryURL(tt.dir)
-		if got != tt.want || ok != tt.ok {
-			t.Errorf("RepositoryURL(%q) = %q, %v; want %q, %v", tt.dir, got, ok, tt.want, tt.ok)
+		if got := h.ServesRepository(tt.dir); got != tt.ok {
+			t.Errorf("ServesRepository(%q) = %v, want %v", tt.dir, got, tt.ok)
 		}
 	}
 }

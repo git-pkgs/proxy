@@ -429,16 +429,17 @@ func (c *Cache) repoKey(key string) string {
 func (c *Cache) release(rp *repo) {
 	now := time.Now()
 	rp.lastUsed.Store(now.UnixNano())
-	if rp.exists() && now.Sub(time.Unix(0, rp.usedWritten.Load())) >= usedStampInterval {
+	exists := rp.exists()
+	if exists && now.Sub(time.Unix(0, rp.usedWritten.Load())) >= usedStampInterval {
 		rp.usedWritten.Store(now.UnixNano())
 		touch(rp.dir, usedStamp, now)
 	}
-	c.drop(rp)
+	c.drop(rp, exists)
 }
 
-// drop ends a use of the repository without recording it as used.
-func (c *Cache) drop(rp *repo) {
-	exists := rp.exists()
+// drop ends a use of the repository without recording it as used. exists
+// is whether the repository is cloned.
+func (c *Cache) drop(rp *repo, exists bool) {
 	c.mu.Lock()
 	rp.users--
 	idle := rp.users == 0 && c.repos[rp.key] == rp
