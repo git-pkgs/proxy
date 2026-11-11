@@ -1780,6 +1780,8 @@ Images for linux/amd64 and linux/arm64 are published to `ghcr.io/git-pkgs/proxy`
 docker run -p 8080:8080 -v proxy-data:/data ghcr.io/git-pkgs/proxy:latest
 ```
 
+Each merge to `main` is also published, tagged `main` and `sha-<short commit>`, to try a change before the next release. They are not releases: `latest` only moves with a release.
+
 To build the image from the repo instead:
 
 ```bash
