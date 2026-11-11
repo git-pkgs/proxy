@@ -46,22 +46,23 @@ func (h *ContainerHandler) recordImageManifest(cacheName, reference string, mani
 	}
 
 	packagePURL := canonicalPackagePURL("oci", cacheName)
-	known, recorded, err := h.proxy.DB.ImageManifestTaggedAt(packagePURL, digest)
+	known, _, hasRefs, err := h.proxy.DB.ImageManifestState(packagePURL, digest)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to read image manifest record", "package_purl", packagePURL, "digest", digest, "error", err)
 		return
 	}
-	// Tag times are stored in milliseconds.
-	if recorded && tagged.UnixMilli() <= known.UnixMilli() {
-		return
-	}
 	var refs []string
-	if !recorded {
+	if !hasRefs {
 		// The answer to a HEAD for a manifest that is not cached has no
-		// body to read references from.
-		if refs = imageManifestRefs(manifest.body); len(refs) == 0 {
-			return
-		}
+		// body to read references from. A tag seen that way is recorded
+		// without them, and the pull of the manifest by digest that follows
+		// fills them in.
+		refs = imageManifestRefs(manifest.body)
+	}
+	// Tag times are stored in milliseconds.
+	newerTag := tagged.UnixMilli() > known.UnixMilli()
+	if !newerTag && len(refs) == 0 {
+		return
 	}
 	record := database.ImageManifest{PackagePURL: packagePURL, Digest: digest, Refs: refs, TaggedAt: tagged}
 	if err := h.proxy.DB.RecordImageManifest(record); err != nil {

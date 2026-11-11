@@ -147,6 +147,24 @@ func pullImage(t *testing.T, proxyURL, tag string, image keepImage) {
 	ociGet(t, base+"/blobs/"+image.layer.digest())
 }
 
+// headPullImage pulls a tag the way Docker and containerd do: a HEAD of the
+// tag for its digest, then the index, the platform manifest and the blobs by
+// digest.
+func headPullImage(t *testing.T, proxyURL, tag string, image keepImage) {
+	t.Helper()
+	base := proxyURL + "/" + keepImagesRepo
+	resp, err := http.Head(base + "/manifests/" + tag)
+	if err != nil {
+		t.Fatalf("HEAD %s: %v", tag, err)
+	}
+	_ = resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		t.Fatalf("HEAD %s = %d, want 200", tag, resp.StatusCode)
+	}
+	ociGet(t, base+"/manifests/"+image.index)
+	pullImage(t, proxyURL, image.index, image)
+}
+
 // ageImages makes every cached blob, every record and every tag sighting
 // look old, with the images given first seen longest ago.
 func ageImages(t *testing.T, db *database.DB, now time.Time, images ...keepImage) {
@@ -310,5 +328,29 @@ func TestSweepRetentionKeepLatestIgnoresImagesPulledByDigest(t *testing.T) {
 
 	if imageCached(t, db, image) {
 		t.Error("blobs of an image pulled only by digest were kept")
+	}
+}
+
+// Docker and containerd learn a tag's digest with a HEAD and fetch the
+// manifests by digest. The HEAD alone makes the image one of the newest.
+func TestSweepRetentionKeepsBlobsOfImagesPulledByHead(t *testing.T) {
+	registry := newKeepImagesRegistry(t)
+	srv, db := newKeepImagesProxy(t, registry, 1)
+	images := []keepImage{registry.addImage(t, "first"), registry.addImage(t, "second")}
+	for _, image := range images {
+		registry.tag("beta", image)
+		headPullImage(t, srv.URL, "beta", image)
+	}
+	now := time.Now()
+	ageImages(t, db, now, images...)
+
+	rules := retention.Rules{Ecosystems: map[string]time.Duration{"oci": retentionDay}, KeepLatest: 1}
+	sweepRetention(context.Background(), db, discardLogger(), retention.Default, rules, now)
+
+	if imageCached(t, db, images[0]) {
+		t.Error("blobs of the older image were kept")
+	}
+	if !imageCached(t, db, images[1]) {
+		t.Error("blobs of the newest image were evicted")
 	}
 }

@@ -134,6 +134,30 @@ func TestRecordImageManifestKeepsLatestTagTime(t *testing.T) {
 	})
 }
 
+// A tag seen through a HEAD is recorded before its manifest is read. The
+// pull by digest that follows fills in what it references and keeps the
+// tag time.
+func TestRecordImageManifestFillsInReferences(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now().Truncate(time.Millisecond)
+		recordImage(t, db, testImageRepo, "sha256:a", now)
+		if _, _, hasRefs, err := db.ImageManifestState(testImageRepo, "sha256:a"); err != nil || hasRefs {
+			t.Fatalf("ImageManifestState(a) hasRefs = %v, %v; want false, nil", hasRefs, err)
+		}
+
+		recordImage(t, db, testImageRepo, "sha256:a", time.Time{}, "sha256:layer-a")
+		at, ok, hasRefs, err := db.ImageManifestState(testImageRepo, "sha256:a")
+		if err != nil || !ok || !hasRefs || !at.Equal(now) {
+			t.Fatalf("ImageManifestState(a) = %v, %v, %v, %v; want %v, true, true, nil", at, ok, hasRefs, err, now)
+		}
+		// Known references are kept.
+		recordImage(t, db, testImageRepo, "sha256:a", now.Add(time.Minute), "sha256:other")
+		if got, want := newestImageDigests(t, db, testImageRepo, 1), []string{"sha256:a", "sha256:layer-a"}; !slices.Equal(got, want) {
+			t.Errorf("newest 1 = %v, want %v", got, want)
+		}
+	})
+}
+
 // A manifest that references itself, or a chain longer than any real index,
 // ends the walk instead of looping.
 func TestNewestImageDigestsStopsOnCycles(t *testing.T) {

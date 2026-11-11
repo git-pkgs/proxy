@@ -45,7 +45,9 @@ func (r imageManifestRow) refs() []string {
 }
 
 // RecordImageManifest stores a manifest's references. For one recorded
-// before it only moves the tag time forward.
+// before it moves the tag time forward, and fills in the references if none
+// were known: a tag seen through a HEAD is recorded before its manifest is
+// read.
 func (db *DB) RecordImageManifest(m ImageManifest) error {
 	tagged := int64(0)
 	if !m.TaggedAt.IsZero() {
@@ -53,8 +55,10 @@ func (db *DB) RecordImageManifest(m ImageManifest) error {
 	}
 	_, err := db.Exec(db.Rebind(`
 		INSERT INTO image_manifests (package_purl, digest, refs, tagged_at, recorded_at) VALUES (?, ?, ?, ?, ?)
-		ON CONFLICT (package_purl, digest) DO UPDATE SET tagged_at = excluded.tagged_at
-		WHERE image_manifests.tagged_at < excluded.tagged_at
+		ON CONFLICT (package_purl, digest) DO UPDATE SET
+			tagged_at = CASE WHEN excluded.tagged_at > image_manifests.tagged_at THEN excluded.tagged_at ELSE image_manifests.tagged_at END,
+			refs = CASE WHEN image_manifests.refs = '' THEN excluded.refs ELSE image_manifests.refs END
+		WHERE image_manifests.tagged_at < excluded.tagged_at OR (image_manifests.refs = '' AND excluded.refs <> '')
 	`), m.PackagePURL, m.Digest, strings.Join(m.Refs, "\n"), tagged, time.Now().UnixMilli())
 	return err
 }
@@ -62,17 +66,27 @@ func (db *DB) RecordImageManifest(m ImageManifest) error {
 // ImageManifestTaggedAt returns when a tag was last found to point at a
 // manifest, zero if none was, and whether the manifest is recorded at all.
 func (db *DB) ImageManifestTaggedAt(packagePURL, digest string) (time.Time, bool, error) {
-	var tagged int64
-	err := db.Get(&tagged, db.Rebind(`
-		SELECT tagged_at FROM image_manifests WHERE package_purl = ? AND digest = ?
+	tagged, recorded, _, err := db.ImageManifestState(packagePURL, digest)
+	return tagged, recorded, err
+}
+
+// ImageManifestState is ImageManifestTaggedAt that also reports whether the
+// manifest's references are known.
+func (db *DB) ImageManifestState(packagePURL, digest string) (tagged time.Time, recorded, hasRefs bool, err error) {
+	var row imageManifestRow
+	err = db.Get(&row, db.Rebind(`
+		SELECT digest, refs, tagged_at FROM image_manifests WHERE package_purl = ? AND digest = ?
 	`), packagePURL, digest)
 	if errors.Is(err, sql.ErrNoRows) {
-		return time.Time{}, false, nil
+		return time.Time{}, false, false, nil
 	}
-	if err != nil || tagged == 0 {
-		return time.Time{}, err == nil, err
+	if err != nil {
+		return time.Time{}, false, false, err
 	}
-	return time.UnixMilli(tagged), true, nil
+	if row.TaggedAt != 0 {
+		tagged = time.UnixMilli(row.TaggedAt)
+	}
+	return tagged, true, row.Refs != "", nil
 }
 
 // NewestImageDigests returns the digests of the n images of a repository
