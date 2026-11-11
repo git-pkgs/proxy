@@ -1,6 +1,7 @@
 package server
 
 import (
+	"context"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -70,5 +71,48 @@ func TestPackageShowPageHasNoTagsOutsideOCI(t *testing.T) {
 	ts.handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ui/package/npm/no-tags", nil))
 	if strings.Contains(w.Body.String(), "Tags (") {
 		t.Error("npm package page has a Tags section")
+	}
+}
+
+type fakeImageTags struct {
+	cacheName, digest string
+	tags              []database.ImageTag
+}
+
+func (f *fakeImageTags) ImageTagsContaining(_ context.Context, cacheName, digest string, tags []database.ImageTag) []string {
+	f.cacheName, f.digest, f.tags = cacheName, digest, tags
+	return []string{"latest", "2026.11.0"}
+}
+
+// The page of an image's blob names the tags whose image contains it.
+func TestVersionShowPageListsImageTagsContainingTheBlob(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+	finder := &fakeImageTags{}
+	ts.server.images = finder
+
+	pkg := &database.Package{PURL: "pkg:oci/pihole/pihole", Ecosystem: "oci", Name: "pihole/pihole"}
+	if err := ts.db.UpsertPackage(pkg); err != nil {
+		t.Fatalf("UpsertPackage: %v", err)
+	}
+	const layer = "sha256:7373c5bccb12b43ec422ccd65b3cc9b55ee6e86ad3cee28189322c6419a72b02"
+	if err := ts.db.UpsertVersion(&database.Version{PURL: pkg.PURL + "@" + layer, PackagePURL: pkg.PURL}); err != nil {
+		t.Fatalf("UpsertVersion: %v", err)
+	}
+	if err := ts.db.RecordImageTag(pkg.PURL, "latest", "sha256:66c798d79a95c2691f280329c3611dba1746117c61c9f331907ca35a06a52778", time.Now()); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	ts.handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/ui/package/oci/pihole/pihole/"+layer, nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d: %s", w.Code, w.Body.String())
+	}
+	if finder.cacheName != "pihole/pihole" || finder.digest != layer || len(finder.tags) != 1 {
+		t.Errorf("looked up %q %q with %d tags, want pihole/pihole, the layer and 1 tag", finder.cacheName, finder.digest, len(finder.tags))
+	}
+	body := w.Body.String()
+	if !strings.Contains(body, "Tags:") || !strings.Contains(body, ">latest<") || !strings.Contains(body, ">2026.11.0<") {
+		t.Error("version page does not name the tags containing the blob")
 	}
 }

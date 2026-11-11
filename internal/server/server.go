@@ -134,6 +134,9 @@ type Server struct {
 	scheduler   *mirror.Scheduler
 	git         *gitcache.Cache
 	cooldown    *cooldownView
+	// images finds the tags whose image contains a blob, for the version
+	// page of a container image. Nil until the protocol handlers are mounted.
+	images imageTagFinder
 
 	// browseLimits overrides defaultBrowseLimits when set; tests use it.
 	browseLimits archives.StreamOptions
@@ -470,10 +473,17 @@ func (s *Server) serve(listener net.Listener) error {
 // mountProtocolHandlers constructs every ecosystem handler and mounts it on
 // r under its protocol prefix.
 func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
-	s.mountProtocolHandlersAt(r, proxy, s.cfg.BaseURL)
+	s.images = s.mountProtocolHandlersAt(r, proxy, s.cfg.BaseURL)
 }
 
-func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, baseURL string) {
+// imageTagFinder is what the version page needs of the container handler.
+type imageTagFinder interface {
+	ImageTagsContaining(ctx context.Context, cacheName, digest string, tags []database.ImageTag) []string
+}
+
+// mountProtocolHandlersAt mounts every ecosystem handler, and returns the
+// container handler.
+func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, baseURL string) *handler.ContainerHandler {
 	npmHandler := handler.NewNPMHandler(proxy, baseURL, s.cfg.Upstream.NPM).
 		WithPackageRoutes(s.cfg.Upstream.NPMRoutes)
 	cargoHandler := handler.NewCargoHandler(
@@ -573,6 +583,7 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 		gitHandler := handler.NewGitHandler(proxy, s.git, s.cfg.Upstream).WithBaseURL(baseURL)
 		r.Mount("/git", http.StripPrefix("/git", gitHandler.Routes()))
 	}
+	return containerHandler
 }
 
 // configureScanning builds the scanner group from cfg and wires it into
@@ -1307,6 +1318,17 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 	// browsed, so it must not be advertised as cached.
 	hasCached := firstBrowsableArtifact(artifacts) != nil
 
+	var imageTags []string
+	if pkg.Ecosystem == "oci" && s.images != nil {
+		tags, err := s.db.ImageTags(pkg.PURL, maxImageTagsShown)
+		if err != nil {
+			s.logger.Error("failed to get image tags", "error", err)
+		}
+		if len(tags) > 0 {
+			imageTags = s.images.ImageTagsContaining(r.Context(), pkg.Name, version, tags)
+		}
+	}
+
 	data := VersionShowData{
 		Layout:               s.layoutFor(r),
 		Package:              pkg,
@@ -1317,6 +1339,7 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 		LicenseCategory:      categorizeLicense(ver.License),
 		HasCachedArtifact:    hasCached,
 		HasDeletableArtifact: hasDeletableArtifact(artifacts),
+		ImageTags:            imageTags,
 	}
 
 	if err := s.templates.Render(w, "version_show", data); err != nil {

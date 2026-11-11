@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"slices"
+	"strings"
 	"testing"
 	"time"
 
@@ -103,5 +105,52 @@ func TestMirrorImageRecordsImageTags(t *testing.T) {
 	}
 	if got := imageTags(t, h)["multi"]; got.Digest != image.indexDigest {
 		t.Errorf("tag multi after a mirror run = %+v, want %s", got, image.indexDigest)
+	}
+}
+
+// A blob's page names the tags whose cached image contains it: the manifest
+// the tag points at, the platform manifests it lists, and their configs and
+// layers, as far as clients pulled them.
+func TestImageTagsContaining(t *testing.T) {
+	h, _, image := imageTagsHandler(t)
+	// containerd: a GET of the tag, then the platform manifest by digest.
+	requestTagManifest(t, h, http.MethodGet, "multi")
+	requestTagManifest(t, h, http.MethodGet, image.arm64Digest)
+	// Docker: a HEAD of the tag, then the manifest by digest.
+	requestTagManifest(t, h, http.MethodHead, "single")
+	requestTagManifest(t, h, http.MethodGet, image.singleDigest)
+	tags, err := h.proxy.DB.ImageTags(canonicalPackagePURL("oci", imageTagsRepo), 100)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	db := h.proxy.DB
+	if _, err := db.Exec("UPDATE metadata_cache SET last_accessed_at = NULL"); err != nil {
+		t.Fatal(err)
+	}
+	for name, tt := range map[string]struct {
+		digest string
+		want   []string
+	}{
+		"index":          {image.indexDigest, []string{"multi"}},
+		"platform":       {image.arm64Digest, []string{"multi"}},
+		"layer":          {image.arm64Layer, []string{"multi"}},
+		"single layer":   {image.singleLayer, []string{"single"}},
+		"unpulled layer": {image.amd64Layer, nil},
+		"unknown":        {"sha256:" + strings.Repeat("0", 64), nil},
+	} {
+		got := h.ImageTagsContaining(context.Background(), imageTagsRepo, tt.digest, tags)
+		if !slices.Equal(got, tt.want) {
+			t.Errorf("%s: tags = %v, want %v", name, got, tt.want)
+		}
+	}
+
+	// Looking does not count as a use of the cached manifests.
+	var touched int
+	if err := db.Get(&touched, "SELECT COUNT(*) FROM metadata_cache WHERE last_accessed_at IS NOT NULL"); err != nil {
+		t.Fatal(err)
+	}
+	if touched != 0 {
+		t.Errorf("%d cached manifests were marked as used", touched)
 	}
 }
