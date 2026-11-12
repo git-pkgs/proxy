@@ -10,7 +10,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/ecr v1.67.1
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.111.0
 	github.com/aws/smithy-go v1.28.7
-	github.com/git-pkgs/archives v0.10.0
+	github.com/git-pkgs/archives v0.11.0
 	github.com/git-pkgs/artifacts v0.2.1
 	github.com/git-pkgs/cooldown v0.3.1
 	github.com/git-pkgs/enrichment v0.7.5
