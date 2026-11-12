@@ -10,10 +10,10 @@ import (
 // back, so the package page can list it with when it becomes available,
 // also for a package nobody has downloaded yet. name is the package name as
 // the ecosystem's downloads store it, so both land on the same package row.
-// A version without a name or a known time is skipped, and a failed write is
-// only logged: the metadata is served either way.
+// A version without a package name, a version or a known time is skipped,
+// and a failed write is only logged: the metadata is served either way.
 func (p *Proxy) recordWithheld(ecosystem, name, version string, publishedAt time.Time) {
-	if p.DB == nil || version == "" || publishedAt.IsZero() {
+	if p.DB == nil || name == "" || version == "" || publishedAt.IsZero() {
 		return
 	}
 	packagePURL, versionPURL, err := packagePURLStrings(ecosystem, name, version)

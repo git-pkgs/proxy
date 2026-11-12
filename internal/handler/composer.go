@@ -409,7 +409,11 @@ func (h *ComposerHandler) shouldFilterVersion(packagePURL, packageName, version 
 	if !h.proxy.cooldown().IsAllowed("composer", packagePURL, publishedAt) {
 		h.proxy.Logger.Info("cooldown: filtering composer version",
 			"package", packageName, "version", version)
-		h.proxy.recordWithheld("composer", packageName, version, publishedAt)
+		// A routed package's times are the route's, and aren't stored under
+		// the default registry's PURLs (see releaseTimeStored).
+		if _, routed := h.routes.match(packageName); !routed {
+			h.proxy.recordWithheld("composer", packageName, version, publishedAt)
+		}
 		return true
 	}
 

@@ -442,7 +442,11 @@ func (h *NuGetHandler) handleRegistration(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if applyCooldown && document.Items == nil {
-		if version, published := document.release(); !h.nugetPublishedAllowed(id, version, published) {
+		version, published := document.release()
+		if version == "" {
+			version = nugetRegistrationLeafVersion(r.URL.Path)
+		}
+		if !h.nugetPublishedAllowed(id, version, published) {
 			JSONError(w, http.StatusNotFound, "version not found")
 			return
 		}
@@ -471,6 +475,25 @@ func nugetRegistrationID(path string) string {
 			id, _, _ := strings.Cut(rest, "/")
 			return id
 		}
+	}
+	return ""
+}
+
+// nugetRegistrationLeafVersion returns the version a registration leaf's
+// path names ({prefix}{id}/{version}.json), or "" for any other path. A leaf
+// as nuget.org serves it carries no version of its own.
+func nugetRegistrationLeafVersion(path string) string {
+	for _, prefix := range nugetRegistrationPrefixes {
+		rest, ok := strings.CutPrefix(path, prefix)
+		if !ok {
+			continue
+		}
+		_, leaf, _ := strings.Cut(rest, "/")
+		version, isJSON := strings.CutSuffix(leaf, ".json")
+		if !isJSON || version == "" || version == "index" || strings.Contains(version, "/") {
+			return ""
+		}
+		return version
 	}
 	return ""
 }

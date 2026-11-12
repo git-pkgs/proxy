@@ -278,3 +278,101 @@ func TestNuGetMetadataRecordsWithheldVersions(t *testing.T) {
 		})
 	}
 }
+
+// Without a name the PURLs would name no package, such as pkg:cargo/.
+func TestRecordWithheldSkipsPackagesWithoutAName(t *testing.T) {
+	proxy, db, _, recent := withheldTestProxy(t)
+	proxy.recordWithheld("cargo", "", "1.0.0", recent)
+	if pkg, err := db.GetPackageByEcosystemName("cargo", ""); err != nil || pkg != nil {
+		t.Errorf("package = %v, %v; want nothing recorded without a name", pkg, err)
+	}
+}
+
+// A routed package's times come from its route and are never stored under
+// the default registry's PURLs, so the filter doesn't record them either.
+func TestNPMMetadataOfRoutedPackageRecordsNothing(t *testing.T) {
+	proxy, db, old, recent := withheldTestProxy(t)
+	h := &NPMHandler{proxy: proxy, proxyURL: "http://localhost:8080",
+		routes: newPackageRoutes(map[string]string{"@corp/*": "https://npm.corp.example"})}
+	input := `{"name":"@corp/lib","dist-tags":{"latest":"2.0.0"},
+		"time":{"1.0.0":"` + old.Format(time.RFC3339) + `","2.0.0":"` + recent.Format(time.RFC3339) + `"},
+		"versions":{
+			"1.0.0":{"name":"@corp/lib","version":"1.0.0","dist":{"tarball":"https://npm.corp.example/@corp/lib/-/lib-1.0.0.tgz"}},
+			"2.0.0":{"name":"@corp/lib","version":"2.0.0","dist":{"tarball":"https://npm.corp.example/@corp/lib/-/lib-2.0.0.tgz"}}}}`
+	if _, _, err := h.rewriteMetadataKeeping("@corp/lib", []byte(input)); err != nil {
+		t.Fatalf("rewriteMetadataKeeping: %v", err)
+	}
+	assertNotRecorded(t, db, "npm", "@corp/lib", "2.0.0")
+}
+
+func TestComposerMetadataOfRoutedPackageRecordsNothing(t *testing.T) {
+	proxy, db, old, recent := withheldTestProxy(t)
+	h := &ComposerHandler{proxy: proxy, proxyURL: "http://localhost:8080",
+		routes: newPackageRoutes(map[string]string{"corp/*": "https://composer.corp.example"})}
+	input := `{"packages":{"corp/lib":[
+		{"version":"5.0.0","time":"` + old.Format(time.RFC3339) + `","dist":{"url":"https://composer.corp.example/5.0.0.zip","type":"zip"}},
+		{"version":"6.0.0","time":"` + recent.Format(time.RFC3339) + `","dist":{"url":"https://composer.corp.example/6.0.0.zip","type":"zip"}}]}}`
+	if _, _, err := h.rewriteMetadataKeeping([]byte(input)); err != nil {
+		t.Fatalf("rewriteMetadataKeeping: %v", err)
+	}
+	assertNotRecorded(t, db, "composer", "corp/lib", "6.0.0")
+}
+
+// Go keeps publish times under the escaped module path, which differs from
+// the module path downloads are stored under when it has capitals. Recording
+// such a module would give one release two version rows, so it is skipped.
+func TestGoListOfModuleWithCapitalsRecordsNoSecondRow(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/example.com/!mod/@v/list":
+			_, _ = w.Write([]byte("v1.1.0\n"))
+		case "/example.com/!mod/@v/v1.1.0.info":
+			_ = json.NewEncoder(w).Encode(goInfo{Version: "v1.1.0", Time: now.Add(-time.Hour)})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, db, _, _ := setupTestProxy(t)
+	proxy.Cooldown = &cooldown.Config{Default: "3d"}
+	h := NewGoHandlerWithUpstream(proxy, "http://localhost:8080", upstream.URL).Routes()
+	if w := goGet(h, "/example.com/!mod/@v/list"); w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body)
+	}
+	if ver, err := db.GetVersionByPURL(canonicalVersionPURL("golang", "example.com/!mod", "v1.1.0")); err != nil || ver == nil {
+		t.Fatalf("time under the escaped path = %v, %v; want it stored", ver, err)
+	}
+	assertNotRecorded(t, db, "golang", "example.com/Mod", "v1.1.0")
+}
+
+// A registration leaf carries no version of its own; it is the one its path
+// names.
+func TestNuGetRegistrationLeafRecordsWithheldVersion(t *testing.T) {
+	proxy, db, _, _ := setupTestProxy(t)
+	proxy.Cooldown = &cooldown.Config{Default: "14d"}
+	metadataRequests := 0
+	upstream := newNuGetCooldownUpstream(t, &metadataRequests)
+	defer upstream.Close()
+	h := NewNuGetHandlerWithUpstreams(proxy, "http://proxy.test", upstream.URL, upstream.URL)
+	nugetGet(t, http.StripPrefix("/nuget", h.Routes()), "/nuget"+nugetRegistrationPath+"testpkg/2.0.0.json", http.StatusNotFound)
+
+	ver, err := db.GetVersionByPURL(canonicalVersionPURL("nuget", "testpkg", "2.0.0"))
+	if err != nil || ver == nil || !ver.PublishedAt.Valid {
+		t.Fatalf("2.0.0 = %+v, %v; want a row with its publish time", ver, err)
+	}
+}
+
+func TestNuGetRegistrationLeafVersion(t *testing.T) {
+	for path, want := range map[string]string{
+		nugetRegistrationPath + "testpkg/2.0.0.json":            "2.0.0",
+		nugetRegistrationPath + "testpkg/index.json":            "",
+		nugetRegistrationPath + "testpkg/page/1.0.0/2.0.0.json": "",
+		nugetRegistrationPath + "testpkg/2.0.0":                 "",
+		"/other/testpkg/2.0.0.json":                             "",
+	} {
+		if got := nugetRegistrationLeafVersion(path); got != want {
+			t.Errorf("nugetRegistrationLeafVersion(%q) = %q, want %q", path, got, want)
+		}
+	}
+}

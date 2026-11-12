@@ -192,10 +192,21 @@ func (h *GoHandler) allowedVersions(ctx context.Context, escapedModule, module s
 			allowed = append(allowed, v)
 		} else {
 			h.proxy.Logger.Info("cooldown: filtering go module version", "module", module, "version", v)
-			h.proxy.recordWithheld("golang", module, v, times[i])
+			h.recordWithheld(module, v, times[i])
 		}
 	}
 	return allowed, nil
+}
+
+// recordWithheld records a version the list filter held back. Publish times
+// are stored under the escaped module path and downloads under the module
+// path, so a module whose path has capitals, and the two differ, is skipped
+// rather than given a second row for the same release.
+func (h *GoHandler) recordWithheld(module, version string, published time.Time) {
+	if escaped, err := gomodule.EscapePath(module); err != nil || escaped != module {
+		return
+	}
+	h.proxy.recordWithheld("golang", module, version, published)
 }
 
 // serveCooldownList serves @v/list without versions in cooldown.
