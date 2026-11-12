@@ -20,7 +20,7 @@ require (
 	github.com/git-pkgs/purl v0.2.1
 	github.com/git-pkgs/registries v0.13.0
 	github.com/git-pkgs/sbom v0.1.9
-	github.com/git-pkgs/spdx v0.3.3
+	github.com/git-pkgs/spdx v0.3.6
 	github.com/git-pkgs/vers v0.7.2
 	github.com/go-chi/chi/v5 v5.5.0
 	github.com/jmoiron/sqlx v1.4.0
@@ -77,7 +77,7 @@ require (
 	github.com/facebookgo/clock v0.0.0-20150410010913-600d898af40a // indirect
 	github.com/git-pkgs/pom v0.1.8 // indirect
 	github.com/git-pkgs/vulns v0.2.4 // indirect
-	github.com/github/go-spdx/v2 v2.7.0 // indirect
+	github.com/github/go-spdx/v2 v2.8.0 // indirect
 	github.com/go-logr/logr v1.4.4 // indirect
 	github.com/go-logr/stdr v1.2.2 // indirect
 	github.com/go-openapi/jsonpointer v0.19.5 // indirect
