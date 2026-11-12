@@ -36,7 +36,7 @@ func (h *ContainerHandler) recordImageTag(cacheName, reference string, manifest 
 func (h *ContainerHandler) recordImageManifestReferences(cacheName string, manifest *cachedContainerManifest) {
 	// The first record of a digest stands, so only a body that hashes to it
 	// is recorded.
-	if h.proxy.DB == nil || sha256Digest(manifest.body) != manifest.contentDigest {
+	if h.proxy.DB == nil || verifyDigest(manifest.contentDigest, manifest.body) != nil {
 		return
 	}
 	references := imageManifestReferences(manifest.body)
