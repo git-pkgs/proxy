@@ -212,9 +212,10 @@ type Config struct {
 	// Mirror configures scheduled mirroring.
 	Mirror MirrorConfig `json:"mirror" yaml:"mirror"`
 
-	// CacheDelete enables DELETE /api/cache for removing cached artifacts, and
-	// the delete buttons on the UI's version page. It has no authentication of
-	// its own, so restrict /api/cache and /ui at the ingress when enabling it.
+	// CacheDelete enables DELETE /api/cache and DELETE /api/git for removing
+	// cached artifacts and git repositories, and the delete buttons on the
+	// UI's version and git pages. It has no authentication of its own, so
+	// restrict /api/cache, /api/git and /ui at the ingress when enabling it.
 	CacheDelete bool `json:"cache_delete" yaml:"cache_delete"`
 
 	// Hosted configures pushing packages to the proxy (/api/hosted).

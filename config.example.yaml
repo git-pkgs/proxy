@@ -22,9 +22,10 @@ base_url: "http://localhost:8080"
 # scanning. Set to "0" to disable. Default: "5m". Does not limit proxy mirror.
 # artifact_timeout: "5m"
 
-# Register DELETE /api/cache and show Delete buttons on the UI's version page,
-# for removing cached artifacts so they are fetched again. Has no
-# authentication: restrict /api/cache and /ui at the ingress first.
+# Register DELETE /api/cache and, with upstream.git set, DELETE /api/git, and
+# show Delete buttons on the UI's version and git pages, for removing cached
+# artifacts and repositories so they are fetched again. Has no authentication:
+# restrict /api/cache, /api/git and /ui at the ingress first.
 # cache_delete: false
 
 # Largest upstream artifact to fetch (e.g. "2GB"). Larger ones are refused
