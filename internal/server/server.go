@@ -335,7 +335,7 @@ func (s *Server) serve(listener net.Listener) error {
 	r.Use(middleware.Recoverer)
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/metrics" {
+			if countsAsTraffic(r.URL.Path) {
 				metrics.IncrementActiveRequests()
 				defer metrics.DecrementActiveRequests()
 			}

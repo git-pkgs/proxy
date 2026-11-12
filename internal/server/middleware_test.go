@@ -189,22 +189,49 @@ func histogramSampleCount(t *testing.T, observer prometheus.Observer) uint64 {
 	return value.GetHistogram().GetSampleCount()
 }
 
-func TestLoggerMiddlewareSkipsMetricsEndpointMetrics(t *testing.T) {
-	before := testutil.ToFloat64(metrics.RequestsTotal.WithLabelValues("other", "200"))
+func TestLoggerMiddlewareSkipsUncountedPaths(t *testing.T) {
+	for _, path := range []string{"/metrics", "/ui", "/ui/analytics", "/ui/static/vendor/tailwind.js"} {
+		t.Run(path, func(t *testing.T) {
+			beforeRequests := testutil.ToFloat64(metrics.RequestsTotal.WithLabelValues("other", "200"))
+			beforeBytes := testutil.ToFloat64(metrics.ResponseBytes.WithLabelValues("other"))
 
-	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
-	s := &Server{logger: logger}
-	handler := s.LoggerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		w.WriteHeader(http.StatusOK)
-	}))
+			logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+			s := &Server{logger: logger}
+			handler := s.LoggerMiddleware(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+				_, _ = w.Write([]byte("body"))
+			}))
 
-	req := httptest.NewRequest(http.MethodGet, "/metrics", nil)
-	rec := httptest.NewRecorder()
-	handler.ServeHTTP(rec, req)
+			req := httptest.NewRequest(http.MethodGet, path, nil)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
 
-	after := testutil.ToFloat64(metrics.RequestsTotal.WithLabelValues("other", "200"))
-	if got := after - before; got != 0 {
-		t.Errorf("request counter delta = %.0f, want 0", got)
+			afterRequests := testutil.ToFloat64(metrics.RequestsTotal.WithLabelValues("other", "200"))
+			if got := afterRequests - beforeRequests; got != 0 {
+				t.Errorf("request counter delta = %.0f, want 0", got)
+			}
+			afterBytes := testutil.ToFloat64(metrics.ResponseBytes.WithLabelValues("other"))
+			if got := afterBytes - beforeBytes; got != 0 {
+				t.Errorf("response bytes delta = %.0f, want 0", got)
+			}
+		})
+	}
+}
+
+func TestCountsAsTraffic(t *testing.T) {
+	tests := map[string]bool{
+		"/metrics":                      false,
+		"/ui":                           false,
+		"/ui/":                          false,
+		"/ui/static/vendor/tailwind.js": false,
+		"/npm/lodash":                   true,
+		"/uikit/x":                      true,
+		"/health":                       true,
+		"/":                             true,
+	}
+	for path, want := range tests {
+		if got := countsAsTraffic(path); got != want {
+			t.Errorf("countsAsTraffic(%q) = %v, want %v", path, got, want)
+		}
 	}
 }
 
