@@ -24,6 +24,10 @@ func TestGitRepositoryDelete(t *testing.T) {
 			})
 			gitCommand(t, "", "clone", "--quiet", cfg.BaseURL+"/git/up/team/repo.git", filepath.Join(t.TempDir(), "clone"))
 
+			// A literal %2F names no cached repository, and leaves team/repo.
+			if status, body := request(t, http.MethodDelete, cfg.BaseURL+prefix+"up/team%252Frepo.git", "", nil); status != http.StatusNotFound {
+				t.Errorf("DELETE up/team%%252Frepo.git: status %d, want 404\n%s", status, body)
+			}
 			if _, body := request(t, http.MethodGet, cfg.BaseURL+"/ui/git", "", nil); !strings.Contains(body, `data-cache-url="/ui/api/git/up/team/repo.git"`) {
 				t.Errorf("the git page has no delete control:\n%s", body)
 			}
@@ -45,7 +49,7 @@ func TestGitRepositoryDelete(t *testing.T) {
 				t.Errorf("the repository is still listed:\n%s", body)
 			}
 
-			for _, path := range []string{"up/team/repo.git", "up/team/repo", "other/team/repo.git", "up/", "up/team%252Frepo.git"} {
+			for _, path := range []string{"up/team/repo.git", "up/team/repo", "other/team/repo.git", "up/"} {
 				if status, body := request(t, http.MethodDelete, cfg.BaseURL+prefix+path, "", nil); status != http.StatusNotFound {
 					t.Errorf("DELETE %s: status %d, want 404\n%s", path, status, body)
 				}
