@@ -225,6 +225,43 @@ func (db *DB) SetVersionPublishedAt(versionPURL, packagePURL string, publishedAt
 	return nil
 }
 
+// RecordWithheldVersion records a version a cooldown filter held back: its
+// publish time, and a row for its package so the package page exists before
+// anything is downloaded. It only adds what is missing. An existing package
+// row is left as it is, and a stored publish time is not overwritten, so the
+// filters can call it for every version they hold back without reading
+// first.
+func (db *DB) RecordWithheldVersion(pkg *Package, versionPURL string, publishedAt time.Time) error {
+	now := time.Now()
+	tx, err := db.Beginx()
+	if err != nil {
+		return fmt.Errorf("recording withheld version: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	if _, err := tx.Exec(db.Rebind(`
+		INSERT INTO packages (purl, ecosystem, name, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(purl) DO NOTHING
+	`), pkg.PURL, pkg.Ecosystem, pkg.Name, now, now); err != nil {
+		return fmt.Errorf("recording withheld version's package: %w", err)
+	}
+	if _, err := tx.Exec(db.Rebind(`
+		INSERT INTO versions (purl, package_purl, published_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(purl) DO UPDATE SET
+			published_at = excluded.published_at,
+			updated_at = excluded.updated_at
+		WHERE versions.published_at IS NULL
+	`), versionPURL, pkg.PURL, publishedAt.UTC(), now, now); err != nil {
+		return fmt.Errorf("recording withheld version: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("recording withheld version: %w", err)
+	}
+	return nil
+}
+
 // GetFetchedVersionPURLs returns the versions of a package that have an
 // artifact row, cached now or evicted since. Versions without one were only
 // seen in metadata.

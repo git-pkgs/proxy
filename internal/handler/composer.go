@@ -409,6 +409,7 @@ func (h *ComposerHandler) shouldFilterVersion(packagePURL, packageName, version 
 	if !h.proxy.cooldown().IsAllowed("composer", packagePURL, publishedAt) {
 		h.proxy.Logger.Info("cooldown: filtering composer version",
 			"package", packageName, "version", version)
+		h.proxy.recordWithheld("composer", packageName, version, publishedAt)
 		return true
 	}
 

@@ -180,6 +180,7 @@ func (h *CargoHandler) applyCooldownFiltering(downstreamResponse http.ResponseWr
 			h.proxy.Logger.Info("cooldown: filtering cargo version",
 				"crate", crate.Name, "version", crate.Version,
 				"published", crate.PublishTime)
+			h.proxy.recordWithheld("cargo", crate.Name, crate.Version, publishedAt)
 			continue
 		}
 

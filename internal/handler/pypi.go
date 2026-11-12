@@ -326,6 +326,7 @@ func (h *PyPIHandler) fetchFilteredVersions(r *http.Request, name string) (map[s
 	for version, publishedAt := range times {
 		if !publishedAt.IsZero() && !h.proxy.cooldown().IsAllowed("pypi", packagePURL, publishedAt) {
 			filtered[version] = true
+			h.proxy.recordWithheld("pypi", name, version, publishedAt)
 		}
 	}
 

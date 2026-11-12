@@ -736,6 +736,9 @@ func (h *NPMHandler) npmRewriteOptions(packageName string, local []npmLocalEntry
 		OnCooldownFilter: func(version, publishedAt string) {
 			h.proxy.Logger.Info("cooldown: filtering npm version", "package", packageName, "version", version,
 				"published", publishedAt)
+			if at, err := time.Parse(time.RFC3339, publishedAt); err == nil {
+				h.proxy.recordWithheld("npm", packageName, version, at)
+			}
 		},
 	}
 }
