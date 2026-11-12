@@ -113,12 +113,8 @@ func (s *Server) LoggerMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// countsAsTraffic reports whether a request belongs in the runtime request
-// and byte counters. Scrapes of /metrics would otherwise attribute themselves,
-// burying real callers under whatever polls the proxy most often. The web UI
-// is left out for the same reason: each page load pulls ~800 KB of vendored
-// scripts, so a few visits to the analytics page outweigh the package traffic
-// it is there to report on.
+// The UI and /metrics scrapes are left out of the request and byte counters
+// so that viewing the numbers does not change them.
 func countsAsTraffic(path string) bool {
 	return path != "/metrics" && path != "/ui" && !strings.HasPrefix(path, "/ui/")
 }
