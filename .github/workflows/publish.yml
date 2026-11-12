@@ -3,14 +3,11 @@ name: Publish Docker image
 on:
   workflow_dispatch:
   push:
-    # Each merge to main is published as main and sha-<short sha>, so a fix
-    # can be tried before the next release. Docs-only changes are skipped;
-    # path filters don't apply to tag pushes.
+    # Path filters don't apply to tag pushes, so releases always build.
     branches:
       - main
     paths-ignore:
       - "**.md"
-      - "docs/**"
     tags:
       - "v*"
   # A draft release made by monthly-release.yml is published by hand. Releases
