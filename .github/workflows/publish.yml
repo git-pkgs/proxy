@@ -3,6 +3,11 @@ name: Publish Docker image
 on:
   workflow_dispatch:
   push:
+    # Path filters don't apply to tag pushes, so releases always build.
+    branches:
+      - main
+    paths-ignore:
+      - "**.md"
     tags:
       - "v*"
   # A draft release made by monthly-release.yml is published by hand. Releases
@@ -49,6 +54,13 @@ jobs:
         uses: docker/metadata-action@dc802804100637a589fabce1cb79ff13a1411302
         with:
           images: ghcr.io/${{ github.repository }}
+          # The action's default tags, plus sha-<short sha> for main.
+          tags: |
+            type=schedule
+            type=ref,event=branch
+            type=ref,event=tag
+            type=ref,event=pr
+            type=sha,enable={{is_default_branch}}
 
       - uses: sigstore/cosign-installer@6f9f17788090df1f26f669e9d70d6ae9567deba6 # v4.1.2
 
