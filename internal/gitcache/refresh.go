@@ -219,6 +219,7 @@ func (c *Cache) refresh(ctx context.Context, rp *repo, repoURL string, checked f
 	now := time.Now()
 	rp.lastChecked.Store(now.UnixNano())
 	touch(rp.dir, checkedStamp, now)
+	c.scheduleMaintain(rp)
 	return nil
 }
 

@@ -178,3 +178,35 @@ git:
 		t.Errorf("loaded %+v and %+v", cfg.Upstream.Git, cfg.Git)
 	}
 }
+
+func TestGitMaintenanceConfig(t *testing.T) {
+	var g GitConfig
+	if err := g.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if !g.MaintenanceEnabled() || g.MaintenanceIntervalDuration() != time.Hour {
+		t.Errorf("defaults: maintenance on %v, interval %v", g.MaintenanceEnabled(), g.MaintenanceIntervalDuration())
+	}
+
+	g = GitConfig{MaintenanceInterval: "0"}
+	if err := g.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if !g.MaintenanceEnabled() || g.MaintenanceIntervalDuration() != 0 {
+		t.Errorf("'0': maintenance on %v, interval %v", g.MaintenanceEnabled(), g.MaintenanceIntervalDuration())
+	}
+
+	g = GitConfig{MaintenanceInterval: "off"}
+	if err := g.Validate(); err != nil {
+		t.Fatalf("Validate: %v", err)
+	}
+	if g.MaintenanceEnabled() {
+		t.Error("'off' left maintenance on")
+	}
+
+	for _, bad := range []GitConfig{{MaintenanceInterval: "never"}, {MaintenanceInterval: "-1h"}} {
+		if err := bad.Validate(); err == nil {
+			t.Errorf("Validate(%+v) accepted it", bad)
+		}
+	}
+}

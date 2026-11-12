@@ -33,6 +33,14 @@ var gitConfig = [][2]string{
 	// started it, and sizes are measured after it.
 	{"gc.autoDetach", "false"},
 	{"maintenance.autoDetach", "false"},
+	// Git 2.56 ends fetches in "git maintenance run --auto" under a
+	// geometric strategy, which merges the packs whose sizes are within
+	// a factor of two, however large, rewriting the packs a repository
+	// was fetched as and dropping the reachability bitmaps maintenance
+	// writes. The incremental strategy keeps what a Git server has
+	// always done after a fetch: gc, and only once its own thresholds
+	// are crossed.
+	{"maintenance.strategy", "incremental"},
 	{"init.defaultBranch", "main"},
 	// Keep every fetched pack as a pack. index-pack writes it to a
 	// temporary file and moves it into place only once complete, whereas a

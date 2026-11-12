@@ -48,8 +48,15 @@ const (
 	checkedStamp        = "proxy-checked"
 	// urlFile holds the upstream URL the last successful refresh used, for
 	// background refreshes.
-	urlFile             = "proxy-url"
-	usedStamp           = "proxy-used"
+	urlFile   = "proxy-url"
+	usedStamp = "proxy-used"
+	// midxName and commitGraphName name the serving indexes maintenance
+	// writes: a multi-pack index in objects/pack, with reachability bitmaps
+	// beside it, and a commit-graph in objects/info, layered in the
+	// commitGraphsName directory when written --split.
+	midxName            = "multi-pack-index"
+	commitGraphName     = "commit-graph"
+	commitGraphsName    = "commit-graphs"
 	dirPermissions      = 0o750
 	lockFilePermissions = 0o600
 )
@@ -61,6 +68,18 @@ type Options struct {
 	MaxRepoSize int64
 	RefreshWait time.Duration
 	StaleMaxAge time.Duration
+	// Maintenance turns on the serving indexes kept for each repository
+	// after every fetch that changes it: an incremental commit-graph, and a
+	// multi-pack index with reachability bitmaps, which turn the object
+	// enumeration of a clone from a walk of the whole history into bitmap
+	// lookups. The indexes are rebuilt from the packs, so they are not
+	// counted in MaxSize or MaxRepoSize.
+	Maintenance bool
+	// MaintenanceInterval is the least time between the bitmap writes of
+	// one repository, which walk all of its objects. Zero rewrites them
+	// whenever a fetch changes the repository. The commit-graph is written
+	// on every maintenance run either way; it is incremental and cheap.
+	MaintenanceInterval time.Duration
 	// Client makes every upstream request, including those of the git
 	// processes the cache runs. Redirects are never followed.
 	Client *http.Client
@@ -110,6 +129,9 @@ type Cache struct {
 	reftable bool
 	// stateReads lets one RepositoryState read run git at a time.
 	stateReads chan struct{}
+	// maintains lets only maxConcurrentMaintains repositories write their
+	// serving indexes at once.
+	maintains chan struct{}
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -167,6 +189,13 @@ type repo struct {
 	refsWritten atomic.Int64
 	// url is the upstream URL the last successful refresh used.
 	url atomic.Pointer[string]
+	// maintainedAt is the refsWritten count the repository's serving
+	// indexes cover. It is stored only when they were written, so a failed
+	// maintenance run is retried by the next fetch. maintainedAt is written
+	// alone; maintaining and maintainPending are guarded by Cache.mu.
+	maintainedAt    atomic.Int64
+	maintaining     bool
+	maintainPending bool
 }
 
 // repoURL returns the upstream URL the last successful refresh used, or ""
@@ -258,6 +287,7 @@ func New(opts Options) (*Cache, error) {
 		uploadPacks:     make(chan struct{}, uploadPacks),
 		refListings:     make(chan struct{}, refListings),
 		stateReads:      make(chan struct{}, 1),
+		maintains:       make(chan struct{}, maxConcurrentMaintains),
 		refCheckTimeout: defaultRefCheckTimeout,
 		lowSpeedTime:    defaultLowSpeedTime,
 		maxRequestBody:  defaultMaxRequestBody,
@@ -596,10 +626,25 @@ func (c *Cache) removeEvicted(removed []string) {
 	}
 }
 
+// dirSize measures the bytes a repository takes on disk. The serving
+// indexes maintenance writes are left out: they are rebuilt from the
+// packs, so counting them could hold a repository above its max_repo_size,
+// for it then to be evicted and cloned again, only to grow the same
+// indexes once more.
 func dirSize(dir string) int64 {
 	var size int64
 	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
-		if err == nil && d.Type().IsRegular() {
+		if err != nil {
+			return nil
+		}
+		if d.IsDir() {
+			// The split commit-graph lives in a directory of its own.
+			if d.Name() == commitGraphsName {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		if d.Type().IsRegular() && !isIndexFile(d.Name()) {
 			if info, err := d.Info(); err == nil {
 				size += info.Size()
 			}
@@ -607,6 +652,15 @@ func dirSize(dir string) int64 {
 		return nil
 	})
 	return size
+}
+
+// isIndexFile reports whether name is a serving index file, written by
+// maintenance and rebuilt from the packs: a multi-pack index with the
+// reachability bitmaps beside it, a single-pack bitmap, or a commit-graph.
+func isIndexFile(name string) bool {
+	return strings.HasPrefix(name, midxName) ||
+		name == commitGraphName || name == commitGraphName+".lock" ||
+		strings.HasSuffix(name, ".bitmap")
 }
 
 // Stamps are empty files whose modification time records an event, so it

@@ -856,12 +856,13 @@ upstream:
       repos: ["mediawiki/core", "mediawiki/extensions/**"]  # optional allowlist
 
 git:
-  cache_dir: /data/git   # local disk, used by this process only
-  max_size: 50GB         # evict least recently used repositories past this
-  max_repo_size: 5GB     # refuse a repository that grows past this
-  refresh_wait: 5s       # then serve the cached copy if the upstream check is slow
-  stale_max_age: 24h     # never serve a copy not checked for this long
-  warm_max_idle: 30d     # keep checking repositories used within this
+  cache_dir: /data/git       # local disk, used by this process only
+  max_size: 50GB             # evict least recently used repositories past this
+  max_repo_size: 5GB         # refuse a repository that grows past this
+  refresh_wait: 5s           # then serve the cached copy if the upstream check is slow
+  stale_max_age: 24h         # never serve a copy not checked for this long
+  warm_max_idle: 30d         # keep checking repositories used within this
+  maintenance_interval: 1h   # how often the reachability bitmaps are rewritten, or "off"
 ```
 
 Clients reach the proxy through Git's `insteadOf` setting, which rewrites the
@@ -988,6 +989,18 @@ index files and garbage collection can take the cache a little past
 A transfer that receives nothing for 10 minutes is abandoned. Git's automatic
 garbage collection runs as part of fetches, and files over 8MB are kept
 without delta compression, so one large file does not take a fetch's memory.
+
+After a fetch changes a repository, its serving indexes are rewritten in the
+background: an incremental commit-graph, which speeds the commit walks of
+the web UI and of the negotiation of every fetch, and a multi-pack index
+with reachability bitmaps when the one it has is older than
+`maintenance_interval` (an hour by default), which turn the object
+enumeration at the head of a clone from a walk of the whole history into
+bitmap lookups. `maintenance_interval: 0` rewrites the bitmaps after every
+fetch, and `off` turns the maintenance off. At most two repositories are
+maintained at once, packs are never rewritten, and no request is ever held
+for a run. The indexes are rebuilt from the packs, so they are not counted
+by `max_size` or `max_repo_size`.
 
 With `git` 2.56 or newer, repositories are cached with reftable reference
 storage, which writes a fetch's reference updates to one table rather than
