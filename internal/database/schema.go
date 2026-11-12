@@ -159,6 +159,14 @@ CREATE TABLE IF NOT EXISTS image_tags (
 	PRIMARY KEY (package_purl, tag)
 );
 
+CREATE TABLE IF NOT EXISTS image_manifest_references (
+	package_purl TEXT NOT NULL,
+	manifest_digest TEXT NOT NULL,
+	reference_digest TEXT NOT NULL,
+	PRIMARY KEY (package_purl, manifest_digest, reference_digest)
+);
+CREATE INDEX IF NOT EXISTS idx_image_manifest_references_reference ON image_manifest_references(package_purl, reference_digest);
+
 CREATE TABLE IF NOT EXISTS upstream_holds (
 	host TEXT NOT NULL PRIMARY KEY,
 	until_ms INTEGER NOT NULL
@@ -345,6 +353,14 @@ CREATE TABLE IF NOT EXISTS image_tags (
 	seen_at BIGINT NOT NULL,
 	PRIMARY KEY (package_purl, tag)
 );
+
+CREATE TABLE IF NOT EXISTS image_manifest_references (
+	package_purl TEXT NOT NULL,
+	manifest_digest TEXT NOT NULL,
+	reference_digest TEXT NOT NULL,
+	PRIMARY KEY (package_purl, manifest_digest, reference_digest)
+);
+CREATE INDEX IF NOT EXISTS idx_image_manifest_references_reference ON image_manifest_references(package_purl, reference_digest);
 
 CREATE TABLE IF NOT EXISTS upstream_holds (
 	host TEXT NOT NULL PRIMARY KEY,
@@ -563,6 +579,7 @@ var migrations = []migration{
 	{"022_add_artifact_mirrored_at", migrateAddArtifactMirroredAt},
 	{"023_add_metadata_upstream_url", migrateAddMetadataUpstreamURL},
 	{"024_add_image_tags", migrateAddImageTags},
+	{"025_add_image_manifest_references", migrateAddImageManifestReferences},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -1063,6 +1080,25 @@ func migrateAddImageTags(db *DB) error {
 	)`, millis)
 	if _, err := db.Exec(query); err != nil {
 		return fmt.Errorf("creating image_tags table: %w", err)
+	}
+	return nil
+}
+
+// migrateAddImageManifestReferences creates the table of the digests each
+// cached image manifest references, which finds the tags whose image
+// contains a blob.
+func migrateAddImageManifestReferences(db *DB) error {
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS image_manifest_references (
+		package_purl TEXT NOT NULL,
+		manifest_digest TEXT NOT NULL,
+		reference_digest TEXT NOT NULL,
+		PRIMARY KEY (package_purl, manifest_digest, reference_digest)
+	)`); err != nil {
+		return fmt.Errorf("creating image_manifest_references table: %w", err)
+	}
+	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_image_manifest_references_reference
+		ON image_manifest_references(package_purl, reference_digest)`); err != nil {
+		return fmt.Errorf("creating image_manifest_references index: %w", err)
 	}
 	return nil
 }

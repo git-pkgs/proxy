@@ -134,9 +134,6 @@ type Server struct {
 	scheduler   *mirror.Scheduler
 	git         *gitcache.Cache
 	cooldown    *cooldownView
-	// images finds the tags whose image contains a blob, for the version
-	// page of a container image. Nil until the protocol handlers are mounted.
-	images imageTagFinder
 
 	// browseLimits overrides defaultBrowseLimits when set; tests use it.
 	browseLimits archives.StreamOptions
@@ -479,17 +476,10 @@ func (s *Server) serve(listener net.Listener) error {
 // mountProtocolHandlers constructs every ecosystem handler and mounts it on
 // r under its protocol prefix.
 func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
-	s.images = s.mountProtocolHandlersAt(r, proxy, s.cfg.BaseURL)
+	s.mountProtocolHandlersAt(r, proxy, s.cfg.BaseURL)
 }
 
-// imageTagFinder is what the version page needs of the container handler.
-type imageTagFinder interface {
-	ImageTagsContaining(ctx context.Context, cacheName, digest string, tags []database.ImageTag) []string
-}
-
-// mountProtocolHandlersAt mounts every ecosystem handler, and returns the
-// container handler.
-func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, baseURL string) *handler.ContainerHandler {
+func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, baseURL string) {
 	npmHandler := handler.NewNPMHandler(proxy, baseURL, s.cfg.Upstream.NPM).
 		WithPackageRoutes(s.cfg.Upstream.NPMRoutes)
 	cargoHandler := handler.NewCargoHandler(
@@ -589,7 +579,6 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 		gitHandler := handler.NewGitHandler(proxy, s.git, s.cfg.Upstream).WithBaseURL(baseURL)
 		r.Mount("/git", http.StripPrefix("/git", gitHandler.Routes()))
 	}
-	return containerHandler
 }
 
 // configureScanning builds the scanner group from cfg and wires it into
@@ -1235,12 +1224,9 @@ func (s *Server) handlePackagePath(w http.ResponseWriter, r *http.Request) {
 }
 
 const (
-	// maxImageTagsShown is how many tags a container image's page lists.
+	// maxImageTagsShown is how many tags a container image's page lists,
+	// and how many a blob's page names.
 	maxImageTagsShown = 100
-	// maxImageTagsSearched is how many tags, the most recently seen first,
-	// a blob's page looks through for those whose image contains it. Tags
-	// pointing at the same image share one read of its manifests.
-	maxImageTagsSearched = 1000
 )
 
 func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, name string) {
@@ -1331,13 +1317,9 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 	hasCached := firstBrowsableArtifact(artifacts) != nil
 
 	var imageTags []string
-	if pkg.Ecosystem == "oci" && s.images != nil {
-		tags, err := s.db.ImageTags(pkg.PURL, maxImageTagsSearched)
-		if err != nil {
+	if pkg.Ecosystem == "oci" {
+		if imageTags, err = s.db.ImageTagsContaining(pkg.PURL, version, maxImageTagsShown); err != nil {
 			s.logger.Error("failed to get image tags", "error", err)
-		}
-		if len(tags) > 0 {
-			imageTags = s.images.ImageTagsContaining(r.Context(), pkg.Name, version, tags)
 		}
 	}
 

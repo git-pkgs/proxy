@@ -1,7 +1,6 @@
 package server
 
 import (
-	"context"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -75,22 +74,10 @@ func TestPackageShowPageHasNoTagsOutsideOCI(t *testing.T) {
 	}
 }
 
-type fakeImageTags struct {
-	cacheName, digest string
-	tags              []database.ImageTag
-}
-
-func (f *fakeImageTags) ImageTagsContaining(_ context.Context, cacheName, digest string, tags []database.ImageTag) []string {
-	f.cacheName, f.digest, f.tags = cacheName, digest, tags
-	return []string{"latest", "2026.11.0"}
-}
-
 // The page of an image's blob names the tags whose image contains it.
 func TestVersionShowPageListsImageTagsContainingTheBlob(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
-	finder := &fakeImageTags{}
-	ts.server.images = finder
 
 	pkg := &database.Package{PURL: "pkg:oci/pihole/pihole", Ecosystem: "oci", Name: "pihole/pihole"}
 	if err := ts.db.UpsertPackage(pkg); err != nil {
@@ -100,8 +87,15 @@ func TestVersionShowPageListsImageTagsContainingTheBlob(t *testing.T) {
 	if err := ts.db.UpsertVersion(&database.Version{PURL: pkg.PURL + "@" + layer, PackagePURL: pkg.PURL}); err != nil {
 		t.Fatalf("UpsertVersion: %v", err)
 	}
-	if err := ts.db.RecordImageTag(pkg.PURL, "latest", "sha256:66c798d79a95c2691f280329c3611dba1746117c61c9f331907ca35a06a52778", time.Now()); err != nil {
+	const image = "sha256:66c798d79a95c2691f280329c3611dba1746117c61c9f331907ca35a06a52778"
+	if err := ts.db.RecordImageManifestReferences(pkg.PURL, image, []string{layer}); err != nil {
 		t.Fatal(err)
+	}
+	now := time.Now()
+	for tag, digest := range map[string]string{"latest": image, "2026.11.0": image, "2026.10.0": "sha256:other"} {
+		if err := ts.db.RecordImageTag(pkg.PURL, tag, digest, now); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	w := httptest.NewRecorder()
@@ -109,25 +103,13 @@ func TestVersionShowPageListsImageTagsContainingTheBlob(t *testing.T) {
 	if w.Code != http.StatusOK {
 		t.Fatalf("status %d: %s", w.Code, w.Body.String())
 	}
-	if finder.cacheName != "pihole/pihole" || finder.digest != layer || len(finder.tags) != 1 {
-		t.Errorf("looked up %q %q with %d tags, want pihole/pihole, the layer and 1 tag", finder.cacheName, finder.digest, len(finder.tags))
-	}
 	body := w.Body.String()
 	if !strings.Contains(body, "Tags:") || !strings.Contains(body, ">latest<") || !strings.Contains(body, ">2026.11.0<") {
 		t.Error("version page does not name the tags containing the blob")
 	}
-}
-
-// matchOldest finds only the tag "oldest" in a blob's image.
-type matchOldest struct{}
-
-func (matchOldest) ImageTagsContaining(_ context.Context, _, _ string, tags []database.ImageTag) []string {
-	for _, tag := range tags {
-		if tag.Tag == "oldest" {
-			return []string{"oldest"}
-		}
+	if strings.Contains(body, ">2026.10.0<") {
+		t.Error("version page names a tag whose image lacks the blob")
 	}
-	return nil
 }
 
 // The tags searched for a blob are not cut to the ones the image's page
@@ -135,7 +117,6 @@ func (matchOldest) ImageTagsContaining(_ context.Context, _, _ string, tags []da
 func TestVersionShowPageSearchesPastTheListedTags(t *testing.T) {
 	ts := newTestServer(t)
 	defer ts.close()
-	ts.server.images = matchOldest{}
 
 	pkg := &database.Package{PURL: "pkg:oci/team/app", Ecosystem: "oci", Name: "team/app"}
 	if err := ts.db.UpsertPackage(pkg); err != nil {
@@ -143,6 +124,9 @@ func TestVersionShowPageSearchesPastTheListedTags(t *testing.T) {
 	}
 	const layer = "sha256:1111111111111111111111111111111111111111111111111111111111111111"
 	if err := ts.db.UpsertVersion(&database.Version{PURL: pkg.PURL + "@" + layer, PackagePURL: pkg.PURL}); err != nil {
+		t.Fatal(err)
+	}
+	if err := ts.db.RecordImageManifestReferences(pkg.PURL, "sha256:old", []string{layer}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()

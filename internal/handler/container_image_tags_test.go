@@ -108,10 +108,11 @@ func TestMirrorImageRecordsImageTags(t *testing.T) {
 	}
 }
 
-// A blob's page names the tags whose cached image contains it: the manifest
-// the tag points at, the platform manifests it lists, and their configs and
-// layers, as far as clients pulled them.
-func TestImageTagsContaining(t *testing.T) {
+// Pulled manifests record what they reference, so a blob's page finds the
+// tags whose image contains it: the manifest the tag points at, the platform
+// manifests it lists, and their configs and layers, as far as clients pulled
+// them.
+func TestContainerPullRecordsWhatImagesContain(t *testing.T) {
 	h, _, image := imageTagsHandler(t)
 	// containerd: a GET of the tag, then the platform manifest by digest.
 	requestTagManifest(t, h, http.MethodGet, "multi")
@@ -119,15 +120,7 @@ func TestImageTagsContaining(t *testing.T) {
 	// Docker: a HEAD of the tag, then the manifest by digest.
 	requestTagManifest(t, h, http.MethodHead, "single")
 	requestTagManifest(t, h, http.MethodGet, image.singleDigest)
-	tags, err := h.proxy.DB.ImageTags(canonicalPackagePURL("oci", imageTagsRepo), 100)
-	if err != nil {
-		t.Fatal(err)
-	}
 
-	db := h.proxy.DB
-	if _, err := db.Exec("UPDATE metadata_cache SET last_accessed_at = NULL"); err != nil {
-		t.Fatal(err)
-	}
 	for name, tt := range map[string]struct {
 		digest string
 		want   []string
@@ -139,18 +132,39 @@ func TestImageTagsContaining(t *testing.T) {
 		"unpulled layer": {image.amd64Layer, nil},
 		"unknown":        {"sha256:" + strings.Repeat("0", 64), nil},
 	} {
-		got := h.ImageTagsContaining(context.Background(), imageTagsRepo, tt.digest, tags)
+		got, err := h.proxy.DB.ImageTagsContaining(canonicalPackagePURL("oci", imageTagsRepo), tt.digest, 10)
+		if err != nil {
+			t.Fatal(err)
+		}
 		if !slices.Equal(got, tt.want) {
 			t.Errorf("%s: tags = %v, want %v", name, got, tt.want)
 		}
 	}
+}
 
-	// Looking does not count as a use of the cached manifests.
-	var touched int
-	if err := db.Get(&touched, "SELECT COUNT(*) FROM metadata_cache WHERE last_accessed_at IS NOT NULL"); err != nil {
-		t.Fatal(err)
+// A mirror run reads the manifests through the handler, so it records what
+// they reference like a pull.
+func TestMirrorImageRecordsWhatImagesContain(t *testing.T) {
+	h, _, image := imageTagsHandler(t)
+	ref := ImageRef{Name: imageTagsRepo, References: []string{"multi"}}
+	if _, err := h.MirrorImage(context.Background(), ref, nil); err != nil {
+		t.Fatalf("MirrorImage: %v", err)
 	}
-	if touched != 0 {
-		t.Errorf("%d cached manifests were marked as used", touched)
+	got, err := h.proxy.DB.ImageTagsContaining(canonicalPackagePURL("oci", imageTagsRepo), image.amd64Layer, 10)
+	if err != nil || !slices.Equal(got, []string{"multi"}) {
+		t.Errorf("tags containing the amd64 layer after a mirror run = %v, %v; want multi", got, err)
+	}
+}
+
+// The first record of a manifest stands, so a body that is not the one its
+// digest names is not recorded under that digest.
+func TestImageManifestReferencesNeedTheBodyTheDigestNames(t *testing.T) {
+	h, _, image := imageTagsHandler(t)
+	body := []byte(`{"schemaVersion":2,"layers":[{"digest":"sha256:` + strings.Repeat("1", 64) + `"}]}`)
+	h.recordImageManifestReferences(imageTagsRepo, &cachedContainerManifest{body: body, contentDigest: image.singleDigest})
+	requestTagManifest(t, h, http.MethodGet, "single")
+	got, err := h.proxy.DB.ImageTagsContaining(canonicalPackagePURL("oci", imageTagsRepo), image.singleLayer, 10)
+	if err != nil || !slices.Equal(got, []string{"single"}) {
+		t.Errorf("tags containing the single layer = %v, %v; want single", got, err)
 	}
 }

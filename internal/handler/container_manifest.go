@@ -13,8 +13,6 @@ import (
 	"strconv"
 	"strings"
 	"time"
-
-	"github.com/git-pkgs/proxy/internal/database"
 )
 
 const (
@@ -116,6 +114,7 @@ func (h *ContainerHandler) writeManifest(w http.ResponseWriter, r *http.Request,
 	if h.manifestDenied(w, cacheName, manifest.contentDigest) {
 		return
 	}
+	h.recordImageManifestReferences(cacheName, manifest)
 	h.recordImageTag(cacheName, reference, manifest, stale)
 	writeContainerManifest(w, r, manifest, stale)
 }
@@ -223,32 +222,23 @@ func (h *ContainerHandler) storeContainerManifestLegacyEntries(ctx context.Conte
 }
 
 func (h *ContainerHandler) loadContainerManifest(ctx context.Context, cacheKey string) (*cachedContainerManifest, error) {
-	manifest, entry, err := h.readContainerManifest(ctx, cacheKey)
-	if manifest != nil {
-		h.proxy.recordMetadataRead(entry)
-	}
-	return manifest, err
-}
-
-// readContainerManifest is loadContainerManifest without counting the read
-// as a use of the cached entry.
-func (h *ContainerHandler) readContainerManifest(ctx context.Context, cacheKey string) (*cachedContainerManifest, *database.MetadataCacheEntry, error) {
 	if h.proxy.DB == nil || h.proxy.Storage == nil {
-		return nil, nil, nil
+		return nil, nil
 	}
 	entry, err := h.proxy.DB.GetMetadataCache(containerManifestCacheEcosystem, cacheKey)
 	if err != nil || entry == nil {
-		return nil, nil, err
+		return nil, err
 	}
 	reader, err := h.proxy.Storage.Open(ctx, entry.StoragePath)
 	if err != nil {
-		return nil, nil, nil
+		return nil, nil
 	}
 	defer func() { _ = reader.Close() }()
 	body, err := h.proxy.ReadMetadata(reader)
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
+	h.proxy.recordMetadataRead(entry)
 
 	manifest := &cachedContainerManifest{body: body, size: int64(len(body))}
 	if entry.ContentType.Valid {
@@ -271,7 +261,7 @@ func (h *ContainerHandler) readContainerManifest(ctx context.Context, cacheKey s
 	if entry.FetchedAt.Valid {
 		manifest.fetchedAt = entry.FetchedAt.Time
 	}
-	return manifest, entry, nil
+	return manifest, nil
 }
 
 func (h *ContainerHandler) storeContainerManifest(ctx context.Context, cacheKey string, manifest *cachedContainerManifest) error {

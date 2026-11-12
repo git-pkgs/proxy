@@ -1,13 +1,10 @@
 package handler
 
 import (
-	"context"
 	"encoding/json"
 	"regexp"
 	"slices"
 	"time"
-
-	"github.com/git-pkgs/proxy/internal/database"
 )
 
 // imageSubjectTagsPattern matches the tags that hold what refers to an
@@ -33,56 +30,23 @@ func (h *ContainerHandler) recordImageTag(cacheName, reference string, manifest 
 	}
 }
 
-// imageTagWalkDepth is how many levels below a tag's manifest
-// ImageTagsContaining looks: an index, its platform manifests, and their
-// configs and layers.
-const imageTagWalkDepth = 2
-
-// ImageTagsContaining returns those of tags whose image, as cached under
-// cacheName, contains digest: the manifest the tag points at, a platform
-// manifest it lists, or a config or layer of one. Only manifests clients or
-// mirror runs pulled are known. Reading them does not count as a use of the
-// cache.
-func (h *ContainerHandler) ImageTagsContaining(ctx context.Context, cacheName, digest string, tags []database.ImageTag) []string {
-	registryURL, upstreamName, _, ok := h.registryForName(cacheName)
-	if !ok {
-		return nil
+// recordImageManifestReferences notes the digests a served manifest
+// references, which finds the tags whose image contains a blob. A digest
+// fixes the content, so a stale copy is as good as a fresh one.
+func (h *ContainerHandler) recordImageManifestReferences(cacheName string, manifest *cachedContainerManifest) {
+	// The first record of a digest stands, so only a body that hashes to it
+	// is recorded.
+	if h.proxy.DB == nil || sha256Digest(manifest.body) != manifest.contentDigest {
+		return
 	}
-	// The manifests a walk read, by digest, with the digests they reference.
-	refs := map[string][]string{}
-	references := func(d string) []string {
-		if known, done := refs[d]; done {
-			return known
-		}
-		// A manifest fetched by tag is cached under its digest too.
-		manifest, _, err := h.readContainerManifest(ctx, h.containerManifestSharedCacheKey(registryURL, upstreamName, d, ""))
-		if err == nil && manifest != nil && manifest.contentDigest == d {
-			refs[d] = imageManifestReferences(manifest.body)
-		} else {
-			refs[d] = nil
-		}
-		return refs[d]
+	references := imageManifestReferences(manifest.body)
+	if len(references) == 0 {
+		return
 	}
-
-	var found []string
-	for _, tag := range tags {
-		level := []string{tag.Digest}
-		for depth := 0; len(level) > 0 && !slices.Contains(level, digest); depth++ {
-			if depth == imageTagWalkDepth {
-				level = nil
-				break
-			}
-			var next []string
-			for _, d := range level {
-				next = append(next, references(d)...)
-			}
-			level = next
-		}
-		if slices.Contains(level, digest) {
-			found = append(found, tag.Tag)
-		}
+	packagePURL := canonicalPackagePURL("oci", cacheName)
+	if err := h.proxy.DB.RecordImageManifestReferences(packagePURL, manifest.contentDigest, references); err != nil {
+		h.proxy.Logger.Warn("failed to record image manifest references", "package_purl", packagePURL, "digest", manifest.contentDigest, "error", err)
 	}
-	return found
 }
 
 // imageManifestReferences returns the digests an index or image manifest
