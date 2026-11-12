@@ -1387,6 +1387,7 @@ Registered when `cache_delete` is set. It has no authentication of its own.
 | Endpoint | Description |
 |----------|-------------|
 | `DELETE /api/cache/{ecosystem}/{name}/{version}` | Delete a version's cached files, or only `?filename=` |
+| `DELETE /api/git/{upstream}/{repo}` | Delete a repository from the git cache |
 
 ### Enrichment API
 
@@ -1623,7 +1624,7 @@ The proxy exposes Prometheus metrics at `GET /metrics`. All metric names are pre
 | `proxy_client_requests_total` | counter | `client` | Requests by client tool, from the User-Agent. |
 | `proxy_client_response_bytes_total` | counter | `client` | Response bytes by client tool. |
 
-The `ecosystem` label on `proxy_requests_total` and `proxy_request_duration_seconds` is the mounted route a request arrived on, not the ecosystem recorded against the package it served: `/gem` reports as `rubygems`, `/go` as `golang`, `/composer` as `packagist`, `/apk` as `alpine` and `/v2` as `oci`. Anything outside a package route -- the UI, `/health`, `/metrics`, `/stats` -- reports as `other`, and so did `/apk`, `/helm`, `/homebrew`, `/generic` and `/swift` before they were listed; traffic on those five routes now appears under its own name instead.
+The `ecosystem` label on `proxy_requests_total` and `proxy_request_duration_seconds` is the mounted route a request arrived on, not the ecosystem recorded against the package it served: `/gem` reports as `rubygems`, `/go` as `golang`, `/composer` as `packagist`, `/apk` as `alpine` and `/v2` as `oci`. Requests to the UI and to `/metrics` are not counted. Anything else outside a package route, such as `/health` and `/stats`, reports as `other`, and so did `/apk`, `/helm`, `/homebrew`, `/generic` and `/swift` before they were listed; traffic on those five routes now appears under its own name instead.
 
 Cache size, artifact count and the per-ecosystem gauges are refreshed every 60 seconds, from a single pass over the database. Circuit breaker state is read from the fetcher on each scrape of `/metrics` and each `/health` request, so `proxy_circuit_breaker_trips_total` counts the trips visible between those reads — a breaker that opens and recovers entirely between two scrapes is not counted. The remaining metrics update on each request.
 
@@ -1785,6 +1786,8 @@ Images for linux/amd64 and linux/arm64 are published to `ghcr.io/git-pkgs/proxy`
 ```bash
 docker run -p 8080:8080 -v proxy-data:/data ghcr.io/git-pkgs/proxy:latest
 ```
+
+Each merge to `main` is also published, tagged `main` and `sha-<short commit>`, to try a change before the next release. They are not releases: `latest` only moves with a release.
 
 To build the image from the repo instead:
 

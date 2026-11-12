@@ -9,9 +9,10 @@
 
 {{if .Rows}}
 <div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
+    {{if .CacheDelete}}<p id="cache-delete-error" class="hidden px-6 py-3 text-sm text-red-700 dark:text-red-400 border-b border-gray-200 dark:border-gray-800"></p>{{end}}
     <div class="divide-y divide-gray-200 dark:divide-gray-800">
         {{range .Rows}}
-        <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
+        <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-2"{{if $.CacheDelete}} data-cache-url="{{.DeleteURL}}"{{end}}>
             <div class="min-w-0">
                 <div class="font-medium break-all"><span class="text-gray-500 dark:text-gray-400">{{.Upstream}}</span> / {{.Repo}}</div>
                 <div class="text-sm text-gray-500 dark:text-gray-400 font-mono break-all">{{.CloneURL}}</div>
@@ -28,6 +29,7 @@
                 <span class="tabular-nums">{{.Requests}}</span>
                 {{if .LastChecked}}<span title="Upstream last checked">checked {{.LastChecked}}</span>{{end}}
                 {{if .LastUsed}}<span title="Last read by a client">used {{.LastUsed}}</span>{{end}}
+                {{if $.CacheDelete}}<button type="button" class="cache-delete text-xs px-2 py-1 rounded border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950" data-label="Delete">Delete</button>{{end}}
             </div>
         </div>
         {{end}}
@@ -37,5 +39,8 @@
 <div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 p-12 text-center">
     <p class="text-gray-500 dark:text-gray-400">No repository is cached yet</p>
 </div>
+{{end}}
+{{if and .CacheDelete .Rows}}
+<script src="/ui/static/cache-delete.js" defer></script>
 {{end}}
 {{end}}

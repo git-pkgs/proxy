@@ -28,9 +28,11 @@ type GitRepositoriesData struct {
 // GitRepositoryRow is one cached repository on the git page.
 type GitRepositoryRow struct {
 	Upstream, Repo, CloneURL string
-	Size                     string
-	Requests                 string
-	LastChecked, LastUsed    string
+	// DeleteURL is where the UI sends a delete of the repository.
+	DeleteURL             string
+	Size                  string
+	Requests              string
+	LastChecked, LastUsed string
 	// LastError names the kind of error the last refresh failed with.
 	LastError, LastErrorAt string
 	// Branch, Commit, Subject and CommitAge describe the newest commit of
@@ -98,6 +100,7 @@ func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, 
 			Upstream:    name,
 			Repo:        strings.TrimSuffix(path, ".git"),
 			CloneURL:    strings.TrimSuffix(baseURL, "/") + "/git/" + escapePath(name+"/"+path),
+			DeleteURL:   "/ui/api/git/" + escapePath(name+"/"+path),
 			Size:        formatSize(repo.Size),
 			Requests:    plural(int(repo.Requests), "request", "requests"),
 			LastChecked: formatTimeAgo(repo.LastChecked),

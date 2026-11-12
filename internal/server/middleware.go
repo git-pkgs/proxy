@@ -83,9 +83,7 @@ func (s *Server) LoggerMiddleware(next http.Handler) http.Handler {
 				"remote", r.RemoteAddr,
 				"remote_ip", addr)
 
-			// Scrapes of /metrics would otherwise attribute themselves,
-			// burying real callers under whatever polls the proxy most often.
-			if r.URL.Path != "/metrics" {
+			if countsAsTraffic(r.URL.Path) {
 				metrics.RecordRequest(ecosystem, rw.status, duration)
 				metrics.RecordResponse(ecosystem, client, rw.bytes)
 				s.sources.Record(addr, client, rw.bytes)
@@ -113,6 +111,12 @@ func (s *Server) LoggerMiddleware(next http.Handler) http.Handler {
 
 		next.ServeHTTP(rw, r)
 	})
+}
+
+// The UI and /metrics scrapes are left out of the request and byte counters
+// so that viewing the numbers does not change them.
+func countsAsTraffic(path string) bool {
+	return path != "/metrics" && path != "/ui" && !strings.HasPrefix(path, "/ui/")
 }
 
 // requestEcosystem names the ecosystem a request path belongs to.
