@@ -415,6 +415,42 @@ func TestGenericHandler_ReleaseAssetIsCachedAndServedWhenUpstreamDown(t *testing
 	}
 }
 
+// A GitHub release asset never needs a query, and each distinct one would be
+// fetched and stored again, so one with a query is refused before it reaches
+// the upstream.
+func TestGenericHandler_RefusesAQueryOnAReleaseAsset(t *testing.T) {
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte("jq binary bytes"))
+	}))
+	defer upstream.Close()
+
+	proxy, _, store, _ := setupTestProxy(t)
+	store.seekable = true
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+	h := NewGenericHandler(proxy, map[string]string{"github": upstream.URL})
+
+	for _, query := range []string{"?a=1", "?a=2", "?"} {
+		w := serveGenericRequest(h, "/github"+testReleaseAssetPath+query)
+		if query == "?" {
+			// An empty query is no query; it is served from the same entry.
+			if w.Code != http.StatusOK {
+				t.Errorf("%q: status = %d, want 200", query, w.Code)
+			}
+			continue
+		}
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%q: status = %d, want 400", query, w.Code)
+		}
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("upstream requests = %d, want 1", got)
+	}
+}
+
 func TestGenericHandler_ServesReleaseAssetCachedUnderUnhashedKey(t *testing.T) {
 	asset := []byte("jq binary bytes")
 	var available atomic.Bool
@@ -451,15 +487,56 @@ func TestGenericHandler_ServesReleaseAssetCachedUnderUnhashedKey(t *testing.T) {
 		t.Fatalf("legacy entry: status = %d, body = %q; want 200 %q", w.Code, w.Body.String(), asset)
 	}
 
-	w = serveGenericRequest(h, "/github"+testReleaseAssetPath+"?x=1")
-	if w.Code != http.StatusBadGateway {
-		t.Errorf("with query: status = %d, want 502", w.Code)
-	}
-
 	repointed := NewGenericHandler(proxy, map[string]string{"github": upstream.URL + "/mirror"})
 	w = serveGenericRequest(repointed, "/github"+testReleaseAssetPath)
 	if w.Code != http.StatusBadGateway {
 		t.Errorf("repointed upstream: status = %d, want 502", w.Code)
+	}
+}
+
+// A configured artifact cached under the unhashed key before hashed keys is
+// served only for the query it was fetched with, not for another one.
+func TestGenericHandler_ServesConfiguredArtifactCachedUnderUnhashedKeyOnlyForItsQuery(t *testing.T) {
+	asset := []byte("tool bytes")
+	var available atomic.Bool
+	available.Store(true)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !available.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write(asset)
+	}))
+	defer upstream.Close()
+
+	proxy, _, store, _ := setupTestProxy(t)
+	store.seekable = true
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+
+	const path = "/releases/tool/1.0.0/linux/tool.tar.gz"
+	result, err := proxy.GetOrFetchArtifactFromURL(context.Background(), genericEcosystem,
+		"tool", "1.0.0", "downloads/tool.tar.gz", upstream.URL+path+"?variant=a")
+	if err != nil {
+		t.Fatalf("priming legacy entry: %v", err)
+	}
+	if result.Reader != nil {
+		_ = result.Reader.Close()
+	}
+	available.Store(false)
+
+	h := NewGenericHandler(proxy,
+		map[string]string{"downloads": upstream.URL},
+		map[string][]string{"downloads": {`releases/(?P<name>tool)/(?P<version>[^/]+)/linux/(?P<file>[^/]+)`}})
+	w := serveGenericRequest(h, "/downloads"+path+"?variant=a")
+	if w.Code != http.StatusOK || w.Body.String() != string(asset) {
+		t.Fatalf("same query: status = %d, body = %q; want 200 %q", w.Code, w.Body.String(), asset)
+	}
+	for _, query := range []string{"?variant=b", ""} {
+		if w := serveGenericRequest(h, "/downloads"+path+query); w.Code != http.StatusBadGateway {
+			t.Errorf("query %q: status = %d, want 502", query, w.Code)
+		}
 	}
 }
 
