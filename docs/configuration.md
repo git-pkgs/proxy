@@ -951,6 +951,13 @@ A transfer that receives nothing for 10 minutes is abandoned. Git's automatic
 garbage collection runs as part of fetches, and files over 8MB are kept
 without delta compression, so one large file does not take a fetch's memory.
 
+With `git` 2.56 or newer, repositories are cached with reftable reference
+storage, which writes a fetch's reference updates to one table rather than
+a file per reference, so repositories with many branches clone and refresh
+faster, most of all on network file systems. Repositories cached in the
+files format are converted at startup; one that fails to convert is served
+as it is. With an older `git`, repositories keep the files format.
+
 Packs for clients are built by at most two `upload-pack` processes per CPU
 the proxy may use, each with one delta-search thread and 64MB of delta
 window, and further clones wait for one to finish; listing refs does not

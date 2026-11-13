@@ -6,7 +6,6 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
-	"strings"
 	"testing"
 	"time"
 )
@@ -233,18 +232,17 @@ func TestRepositoryStateRetriesAFailedRead(t *testing.T) {
 	tc.clone(t, "repo")
 	waitIdle(t, tc.Cache)
 	rp := tc.repo("up/repo.git")
-	ref := filepath.Join(rp.dir, "refs", "heads", "main")
 	head := runGit(t, rp.dir, "rev-parse", "main")
-	if err := os.WriteFile(ref, []byte(strings.Repeat("1", len(head))+"\n"), 0o600); err != nil {
+	missing := runGit(t, rp.dir, "commit-tree", "-p", head, "-m", "missing", head+"^{tree}")
+	runGit(t, rp.dir, "update-ref", "refs/heads/main", missing)
+	if err := os.Remove(filepath.Join(rp.dir, "objects", missing[:2], missing[2:])); err != nil {
 		t.Fatal(err)
 	}
 
 	if st, err := tc.RepositoryState(context.Background(), "up/repo.git"); err == nil {
 		t.Fatalf("state %+v of a branch with no commit, want an error", st)
 	}
-	if err := os.WriteFile(ref, []byte(head+"\n"), 0o600); err != nil {
-		t.Fatal(err)
-	}
+	runGit(t, rp.dir, "update-ref", "refs/heads/main", head)
 	if _, err := tc.RepositoryState(context.Background(), "up/repo.git"); err == nil {
 		t.Error("failed read not kept for a while")
 	}
