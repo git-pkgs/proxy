@@ -14,7 +14,7 @@ func (p *Proxy) WithCooldown(policy CooldownPolicy, shortest time.Duration) *Pro
 		GradleReadOnly: p.GradleReadOnly, HostedEnabled: p.HostedEnabled,
 		GradleMaxUploadSize: p.GradleMaxUploadSize, NPMFullMetadata: p.NPMFullMetadata,
 		DirectServe: p.DirectServe, DirectServeTTL: p.DirectServeTTL,
-		HTTPClient: p.HTTPClient,
+		HTTPClient: p.HTTPClient, KeepLatestImages: p.KeepLatestImages,
 		RateLimits: p.RateLimits, HostedNPMScopes: p.HostedNPMScopes,
 		HostedComposerVendors: p.HostedComposerVendors, StreamArtifacts: p.StreamArtifacts,
 		Scanners: p.Scanners, ScanSigningKey: p.ScanSigningKey, ScanFetchBaseURL: p.ScanFetchBaseURL,

@@ -71,7 +71,7 @@ storage:
 | `storage.cache_artifacts` | `PROXY_STORAGE_CACHE_ARTIFACTS` | - | Store fetched artifacts (default: true); `false` streams them from upstream |
 | `storage.retention.default` | `PROXY_STORAGE_RETENTION_DEFAULT` | - | Evict artifacts not served for this long (e.g. "30d"); see [Retention](#retention) |
 | `storage.retention.sweep_interval` | `PROXY_STORAGE_RETENTION_SWEEP_INTERVAL` | - | How often expired artifacts are looked for (default: "10m", at least "1m") |
-| `storage.retention.keep_latest` | - | - | Keep this many of the newest cached versions of each package from eviction by age (default: 0); see [Retention](#retention) |
+| `storage.retention.keep_latest` | - | - | Keep this many of the newest cached versions of each package, or images of each repository, from eviction by age (default: 0); see [Retention](#retention) |
 
 `storage.max_size` counts cached artifacts and cached metadata documents (`cache_metadata`). When the total goes over the limit, the least recently served entries of either kind are evicted first; an evicted metadata document is fetched from upstream again on the next request for it. Pushed artifacts are not counted or evicted. An artifact replaced by a refetch stays in storage for at least an hour, or `storage.direct_serve_ttl` if longer, so requests already reading it can finish, and storage use can exceed the limit by what was replaced in that time.
 
@@ -127,7 +127,16 @@ storage:
     keep_latest: 2
 ```
 
-With this, the files of the two highest cached versions of a package are never evicted by age, and older versions expire by their rule as before. Versions are ordered by the ecosystem's version rules, not by when they were fetched, and a prerelease counts like any other version. Only versions in the cache count, not those upstream, so the kept ones need not be the latest releases. `keep_latest` applies to `cargo`, `golang`, `npm` and `pypi`; the other ecosystems ignore it, since many of them cache files under a digest or a build rather than a version. On startup the proxy logs the ecosystems it reaches (`keep_latest_covered`). `storage.max_size` can still evict a kept version.
+With this, the files of the two highest cached versions of a package are never evicted by age, and older versions expire by their rule as before. Versions are ordered by the ecosystem's version rules, not by when they were fetched, and a prerelease counts like any other version. Only versions in the cache count, not those upstream, so the kept ones need not be the latest releases. `keep_latest` applies to `cargo`, `golang`, `npm`, `pypi` and, by image, `oci`; the other ecosystems ignore it, since many of them cache files under a digest or a build rather than a version. On startup the proxy logs the ecosystems it reaches (`keep_latest_covered`). `storage.max_size` can still evict a kept version.
+
+For `oci` there are no versions to order, so `keep_latest` counts images instead: it keeps the blobs of the images of a repository that a tag most recently pointed at. With `keep_latest: 2` and one tag such as `beta` in use, that is the image `beta` points at now and the one it pointed at before. The count is per repository, not per tag, so with several tags in use set it at least that high. A blob that a kept image shares with an older one stays.
+
+To know which blobs an image needs, the proxy records what each manifest it serves references, in the `image_manifests` table, while `keep_latest` is set and a retention rule applies to `oci`. This has a few consequences:
+
+- An image only counts once its tag was pulled or mirrored with `keep_latest` set, and its blobs are known once its platform manifest was pulled too. Until then they expire by their rule as before.
+- An image pulled only by digest is not counted and not kept.
+- A multi-platform tag counts as one image, also when a client that accepts no image index was served one platform's manifest for it.
+- Homebrew bottles and Helm charts pulled over OCI are images here: the newest versions of a bottle or chart are those whose tags were last asked for.
 
 Generic retention is opt-in because release assets may disappear upstream and cannot then be downloaded again after eviction. An existing `default` never starts evicting generic downloads. Set `ecosystems.generic: "30d"` to cover all generic artifacts, or configure only selected GitHub repositories:
 

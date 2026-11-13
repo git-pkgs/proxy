@@ -244,6 +244,12 @@ type Proxy struct {
 	DirectServeTTL  time.Duration
 	HTTPClient      *http.Client
 
+	// KeepLatestImages is storage.retention.keep_latest where a retention
+	// rule applies to container images. Above zero, the container handler
+	// records what each served manifest references, so retention can keep
+	// the blobs of that many images per repository.
+	KeepLatestImages int
+
 	// RateLimits is the gate under the upstream clients. Artifact fetches
 	// check it before calling Fetcher, so held hosts never reach its breaker.
 	RateLimits UpstreamHolds

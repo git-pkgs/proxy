@@ -205,9 +205,20 @@ metadata_dates (
     last_modified INTEGER NOT NULL,   -- Unix seconds; BIGINT on Postgres
     PRIMARY KEY (ecosystem, proxy_url, name)
 )
+
+image_manifests (
+    package_purl  TEXT NOT NULL,      -- the repository, as its blobs are cached
+    digest        TEXT NOT NULL,
+    refs          TEXT NOT NULL,      -- digests it references, one per line
+    tagged_at     INTEGER NOT NULL,   -- Unix ms a tag last pointed at it, 0 if none did; BIGINT on Postgres
+    recorded_at   INTEGER NOT NULL,   -- Unix ms; BIGINT on Postgres
+    PRIMARY KEY (package_purl, digest)
+)
 ```
 
 `metadata_dates` holds the `Last-Modified` served with rewritten metadata, such as npm packuments, Composer documents, PyPI simple pages and Helm indexes. A package's date is the second it started serving its current representation, and a new representation is only dated in a later second. Keeping it in the database means replicas sharing one serve the same date, and never give one representation's date to another, so `If-Modified-Since` cannot return 304 for a body the client does not have.
+
+`image_manifests` is filled only with `storage.retention.keep_latest` set and a retention rule for `oci`. It holds which manifests and blobs each served container manifest references, so the retention sweep can keep the blobs of the newest images of a repository. The sweep also drops the rows of images that are no longer among the newest.
 
 On PostgreSQL, `INTEGER PRIMARY KEY` becomes `SERIAL`, `DATETIME` becomes `TIMESTAMP`, `INTEGER DEFAULT 0` booleans become `BOOLEAN DEFAULT FALSE`, and size/count columns use `BIGINT`.
 
