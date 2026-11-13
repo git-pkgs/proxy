@@ -393,21 +393,27 @@ func (h *NuGetHandler) nugetDownloadAllowed(ctx context.Context, id, version str
 		return false, err
 	}
 	_, published := leaf.release()
-	return h.nugetPublishedAllowed(id, published), nil
+	return h.nugetPublishedAllowed(id, version, published), nil
 }
 
 // Missing/invalid timestamps retain the existing permissive behavior, but
-// fetch and JSON errors must not bypass the policy.
-func (h *NuGetHandler) nugetPublishedAllowed(id, published string) bool {
+// fetch and JSON errors must not bypass the policy. A version held back is
+// recorded under the lowercase ID and version downloads are stored under.
+func (h *NuGetHandler) nugetPublishedAllowed(id, version, published string) bool {
 	when, err := time.Parse(time.RFC3339, published)
 	if err != nil {
 		return true
 	}
-	return h.proxy.cooldown().IsAllowed("nuget", canonicalPackagePURL("nuget", strings.ToLower(id)), when)
+	name := strings.ToLower(id)
+	if h.proxy.cooldown().IsAllowed("nuget", canonicalPackagePURL("nuget", name), when) {
+		return true
+	}
+	h.proxy.recordWithheld("nuget", name, nugetVersionKey(version), when)
+	return false
 }
 
 func (h *NuGetHandler) collectNuGetBlockedVersions(document *nugetTimes, id string, blocked map[string]bool) {
-	if version, published := document.release(); version != "" && !h.nugetPublishedAllowed(id, published) {
+	if version, published := document.release(); version != "" && !h.nugetPublishedAllowed(id, version, published) {
 		blocked[nugetVersionKey(version)] = true
 	}
 	for i := range document.Items {
@@ -436,7 +442,11 @@ func (h *NuGetHandler) handleRegistration(w http.ResponseWriter, r *http.Request
 		return
 	}
 	if applyCooldown && document.Items == nil {
-		if _, published := document.release(); !h.nugetPublishedAllowed(id, published) {
+		version, published := document.release()
+		if version == "" {
+			version = nugetRegistrationLeafVersion(r.URL.Path)
+		}
+		if !h.nugetPublishedAllowed(id, version, published) {
 			JSONError(w, http.StatusNotFound, "version not found")
 			return
 		}
@@ -465,6 +475,25 @@ func nugetRegistrationID(path string) string {
 			id, _, _ := strings.Cut(rest, "/")
 			return id
 		}
+	}
+	return ""
+}
+
+// nugetRegistrationLeafVersion returns the version a registration leaf's
+// path names ({prefix}{id}/{version}.json), or "" for any other path. A leaf
+// as nuget.org serves it carries no version of its own.
+func nugetRegistrationLeafVersion(path string) string {
+	for _, prefix := range nugetRegistrationPrefixes {
+		rest, ok := strings.CutPrefix(path, prefix)
+		if !ok {
+			continue
+		}
+		_, leaf, _ := strings.Cut(rest, "/")
+		version, isJSON := strings.CutSuffix(leaf, ".json")
+		if !isJSON || version == "" || version == "index" || strings.Contains(version, "/") {
+			return ""
+		}
+		return version
 	}
 	return ""
 }

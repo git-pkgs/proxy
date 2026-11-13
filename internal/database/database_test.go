@@ -1245,5 +1245,78 @@ func TestVersionPublishedAtIsUTC(t *testing.T) {
 			t.Fatal(err)
 		}
 		check("pkg:cargo/demo@2.0.0")
+
+		if err := db.RecordWithheldVersion(&Package{PURL: "pkg:cargo/demo", Ecosystem: "cargo", Name: "demo"},
+			"pkg:cargo/demo@3.0.0", written); err != nil {
+			t.Fatal(err)
+		}
+		check("pkg:cargo/demo@3.0.0")
+	})
+}
+
+// A version a cooldown filter holds back is recorded with its publish time,
+// and its package gets a row so the package page exists before anything is
+// downloaded. Rows already there keep what they have.
+func TestRecordWithheldVersion(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		const pkgPURL = "pkg:npm/leftpad"
+		published := time.Date(2026, 11, 10, 8, 0, 0, 0, time.UTC)
+		pkg := &Package{PURL: pkgPURL, Ecosystem: "npm", Name: "leftpad"}
+
+		if err := db.RecordWithheldVersion(pkg, pkgPURL+"@2.0.0", published); err != nil {
+			t.Fatalf("RecordWithheldVersion: %v", err)
+		}
+		got, err := db.GetPackageByEcosystemName("npm", "leftpad")
+		if err != nil || got == nil {
+			t.Fatalf("package row = %v, %v", got, err)
+		}
+		if got.PURL != pkgPURL {
+			t.Errorf("package purl = %q, want %q", got.PURL, pkgPURL)
+		}
+		ver, err := db.GetVersionByPURL(pkgPURL + "@2.0.0")
+		if err != nil || ver == nil {
+			t.Fatalf("version row = %v, %v", ver, err)
+		}
+		if ver.PackagePURL != pkgPURL || !ver.PublishedAt.Valid || !ver.PublishedAt.Time.Equal(published) {
+			t.Errorf("version = %+v, want package %s published %v", ver, pkgPURL, published)
+		}
+	})
+}
+
+func TestRecordWithheldVersionKeepsExistingRows(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		const pkgPURL = "pkg:npm/leftpad"
+		stored := time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)
+		other := time.Date(2026, 11, 10, 8, 0, 0, 0, time.UTC)
+		if err := db.UpsertPackage(&Package{PURL: pkgPURL, Ecosystem: "npm", Name: "leftpad",
+			Description: sql.NullString{String: "pads left", Valid: true}}); err != nil {
+			t.Fatalf("UpsertPackage: %v", err)
+		}
+		if err := db.SetVersionPublishedAt(pkgPURL+"@1.0.0", pkgPURL, stored); err != nil {
+			t.Fatalf("SetVersionPublishedAt: %v", err)
+		}
+		if err := db.UpsertVersion(&Version{PURL: pkgPURL + "@3.0.0", PackagePURL: pkgPURL}); err != nil {
+			t.Fatalf("UpsertVersion: %v", err)
+		}
+
+		pkg := &Package{PURL: pkgPURL, Ecosystem: "npm", Name: "leftpad"}
+		for _, v := range []string{"1.0.0", "3.0.0"} {
+			if err := db.RecordWithheldVersion(pkg, pkgPURL+"@"+v, other); err != nil {
+				t.Fatalf("RecordWithheldVersion %s: %v", v, err)
+			}
+		}
+
+		got, err := db.GetPackageByPURL(pkgPURL)
+		if err != nil || got == nil || got.Description.String != "pads left" {
+			t.Errorf("package = %+v, %v; want the description kept", got, err)
+		}
+		ver, err := db.GetVersionByPURL(pkgPURL + "@1.0.0")
+		if err != nil || ver == nil || !ver.PublishedAt.Time.Equal(stored) {
+			t.Errorf("1.0.0 = %+v, %v; want the stored time %v kept", ver, err, stored)
+		}
+		ver, err = db.GetVersionByPURL(pkgPURL + "@3.0.0")
+		if err != nil || ver == nil || !ver.PublishedAt.Valid || !ver.PublishedAt.Time.Equal(other) {
+			t.Errorf("3.0.0 = %+v, %v; want the empty time filled with %v", ver, err, other)
+		}
 	})
 }

@@ -288,6 +288,7 @@ func (h *PubHandler) shouldFilterVersion(packagePURL, name, version string, vmap
 	if !h.proxy.cooldown().IsAllowed("pub", packagePURL, publishedAt) {
 		h.proxy.Logger.Info("cooldown: filtering pub version",
 			"package", name, "version", version)
+		h.proxy.recordWithheld("pub", name, version, publishedAt)
 		return true
 	}
 

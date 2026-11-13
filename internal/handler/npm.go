@@ -721,6 +721,7 @@ func (h *NPMHandler) rewriteMetadataWithLocal(packageName string, body []byte, l
 // cooldown is evaluated at, and the pushed versions to list. The callbacks
 // log what the rewrite did.
 func (h *NPMHandler) npmRewriteOptions(packageName string, local []npmLocalEntry) npm.Options {
+	_, routed := h.routes.match(packageName)
 	return npm.Options{
 		ProxyURL:       h.proxyURL,
 		Cooldown:       h.proxy.cooldown(),
@@ -736,6 +737,11 @@ func (h *NPMHandler) npmRewriteOptions(packageName string, local []npmLocalEntry
 		OnCooldownFilter: func(version, publishedAt string) {
 			h.proxy.Logger.Info("cooldown: filtering npm version", "package", packageName, "version", version,
 				"published", publishedAt)
+			// A routed package's times are the route's, and aren't stored
+			// under the default registry's PURLs (see versionInCooldown).
+			if at, err := time.Parse(time.RFC3339, publishedAt); err == nil && !routed {
+				h.proxy.recordWithheld("npm", packageName, version, at)
+			}
 		},
 	}
 }

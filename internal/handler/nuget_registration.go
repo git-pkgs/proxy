@@ -389,7 +389,11 @@ func (rw *nugetRegistrationWriter) node(dec *jsontext.Decoder, depth int) (bool,
 	if n.container {
 		return n.kept > 0, release.version, nil
 	}
-	return rw.h.nugetPublishedAllowed(rw.id, release.published), release.version, nil
+	var version string
+	if len(release.version) >= 2 && release.version[0] == '"' {
+		version = string(rw.unquote(release.version))
+	}
+	return rw.h.nugetPublishedAllowed(rw.id, version, release.published), release.version, nil
 }
 
 // linksPage reports whether a node at depth is a page of an index whose
