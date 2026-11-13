@@ -22,6 +22,12 @@ var gitConfig = [][2]string{
 	// git would follow a redirect from the relay straight to the network.
 	{"http.followRedirects", "false"},
 	{"protocol.version", "2"},
+	// The reftable storage of Git 2.56 records the writer's identity
+	// with every ref write, and Git takes the email of an unconfigured
+	// one from the machine hostname, a lookup that stalls every fetch
+	// whenever the resolver is slow.
+	{"user.name", "git-pkgs proxy"},
+	{"user.email", "git-pkgs-proxy@localhost"},
 	// Auto gc stays on, as on any Git server, but runs inside the fetch
 	// rather than detaching, so no git process outlives the fetch that
 	// started it, and sizes are measured after it.
