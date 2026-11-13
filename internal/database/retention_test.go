@@ -221,7 +221,7 @@ func TestClearExpiredArtifact(t *testing.T) {
 	})
 }
 
-func TestClearExpiredArtifactFlushesHitsBufferedAfterSweepStart(t *testing.T) {
+func TestClearExpiredArtifactSkipsHitBufferedAfterSweepStart(t *testing.T) {
 	runWithBothDatabases(t, func(t *testing.T, db *DB) {
 		now := time.Now()
 		old := now.Add(-48 * time.Hour)
