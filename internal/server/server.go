@@ -22,6 +22,7 @@
 //   - /apk/*      - Alpine APK repository protocol
 //   - /arch/*     - Arch Linux pacman repository protocol
 //   - /freebsd/*  - FreeBSD pkg repository protocol
+//   - /terraform/* - Terraform/OpenTofu provider network mirror protocol
 //   - /debian/*   - Debian/APT repository protocol
 //   - /rpm/*      - RPM/Yum repository protocol
 //
@@ -538,6 +539,7 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 		WithSnapshots(s.cfg.ParseAPKSnapshots())
 	archHandler := handler.NewArchHandler(proxy, baseURL, s.cfg.Upstream.Arch)
 	freebsdHandler := handler.NewFreeBSDHandler(proxy, baseURL, s.cfg.Upstream.FreeBSD)
+	terraformHandler := handler.NewTerraformHandler(proxy, s.cfg.Upstream.Terraform)
 	debianHandler := handler.NewDebianHandler(
 		proxy,
 		baseURL,
@@ -572,6 +574,7 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 	r.Mount("/apk", http.StripPrefix("/apk", apkHandler.Routes()))
 	r.Mount("/arch", http.StripPrefix("/arch", archHandler.Routes()))
 	r.Mount("/freebsd", http.StripPrefix("/freebsd", freebsdHandler.Routes()))
+	r.Mount("/terraform", http.StripPrefix("/terraform", terraformHandler.Routes()))
 	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 	r.Mount("/generic", http.StripPrefix("/generic", genericHandler.Routes()))

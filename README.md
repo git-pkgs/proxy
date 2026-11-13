@@ -70,6 +70,7 @@ The proxy never uploads artifact bytes to a scanner. Each scanner is notified wi
 | Arch | Arch Linux | | ✓ |
 | FreeBSD | FreeBSD (ports and pkgbase) | | ✓ |
 | Chef Supermarket | Chef | | ✓ |
+| Terraform/OpenTofu providers | Terraform/OpenTofu | | ✓ |
 | Generic | Any | | ✓ |
 | Git | Any | | ✓ |
 | Helm | Kubernetes | Yes | ✓ |
@@ -914,6 +915,37 @@ cached artifacts can be scanned, both kinds of package file are refused while
 a scanner covers `freebsd`; use repositories built with `pkg repo --hash` and
 bootstrap pkg without the proxy.
 
+### Terraform / OpenTofu providers
+
+The proxy is a provider network mirror. Add it to the CLI configuration
+(`~/.terraformrc`, or `~/.tofurc` for OpenTofu):
+
+```hcl
+provider_installation {
+  network_mirror {
+    url = "https://proxy.example.com/terraform/providers/"
+  }
+}
+```
+
+Terraform and OpenTofu only accept an `https:` mirror URL, so the proxy has to
+be reachable over TLS, for example behind a TLS-terminating reverse proxy.
+
+`source` addresses in your configuration stay as they are. Providers from
+`registry.terraform.io` and `registry.opentofu.org` are mirrored by default;
+other registries go under `upstream.terraform`. A provider whose hostname
+isn't configured gets a 404. To install such providers directly, give the
+`network_mirror` block an `include` list and add a `direct` block for the rest.
+
+`index.json` and `{version}.json` are built from the registry's version list
+and download documents, which go through the metadata cache. The archives are
+cached as `pkg:terraform/{namespace}/{type}` and checked against the
+registry's `shasum` before they are served. Each
+`{version}.json` lists that shasum as a `zh:` hash, which Terraform checks and
+records in `.terraform.lock.hcl`. The mirror protocol carries no signatures,
+so Terraform doesn't check the registry's GPG signature for providers
+installed through the proxy.
+
 ### GitHub Releases / mise (aqua backend)
 
 Configure named generic upstreams:
@@ -1339,6 +1371,7 @@ Recently cached:
 | `GET /apk/{repository}/*` | Alpine APK repository protocol |
 | `GET /arch/{repository}/*` | Arch Linux pacman repository protocol |
 | `GET /freebsd/{repository}/*` | FreeBSD pkg repository protocol |
+| `GET /terraform/providers/*` | Terraform/OpenTofu provider network mirror protocol |
 | `GET /generic/{name}/*` | Generic HTTP download proxy (GitHub release assets, mise/aqua) |
 | `GET /git/{name}/{repo}/info/refs`, `POST /git/{name}/{repo}/git-upload-pack` | Git smart HTTP protocol, read-only |
 | `GET /debian/*` | Debian/APT repository protocol (main archive) |

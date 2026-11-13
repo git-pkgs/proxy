@@ -647,6 +647,30 @@ as signatures and keys, is passed through uncached. When `upstream.freebsd` is e
 repository named `freebsd` pointing at `https://pkg.freebsd.org` is available;
 configuring any entry replaces that default.
 
+### Terraform and OpenTofu providers
+
+```yaml
+upstream:
+
+  # Provider registries, by the hostname in provider source addresses.
+  terraform:
+    registry.terraform.io: "https://registry.terraform.io"
+    registry.opentofu.org: "https://registry.opentofu.org"
+```
+
+`/terraform/providers/` serves the provider network mirror protocol, e.g.
+`/terraform/providers/registry.terraform.io/hashicorp/aws/index.json`.
+Terraform and OpenTofu only accept an `https:` mirror URL, so serve the proxy
+over TLS. Only
+hostnames listed here are fetched; others get a 404. The registry's service
+discovery document, version lists and download documents use the metadata
+cache (`metadata_ttl`, stale fallback), so enable `cache_metadata` to keep
+`terraform init` working while the registry is down. Provider archives use the
+shared artifact cache, as `pkg:terraform/{namespace}/{type}`, and are checked
+against the registry's `shasum`. Namespace and type are lowercased. When
+`upstream.terraform` is empty, the two registries above are mirrored;
+configuring any entry replaces that default.
+
 ### Alpine APK snapshots
 
 ```yaml
@@ -1368,6 +1392,10 @@ Names and versions are compared the way each ecosystem treats them:
 - A conda entry covers the package in every channel. Add a `channel` qualifier,
   such as `pkg:conda/numpy@1.26.4?channel=conda-forge`, to deny it in one
   channel only.
+- A Terraform or OpenTofu provider entry names the namespace and type in
+  lowercase, without the registry hostname: `pkg:terraform/hashicorp/random@3.6.0`.
+  It covers the provider on every registry in `upstream.terraform`, however
+  the request spells the address.
 
 Denied versions are removed from npm packuments, Cargo sparse indexes, and PyPI
 simple HTML/JSON (files and the JSON `versions` list) and release metadata, including responses served from cached
