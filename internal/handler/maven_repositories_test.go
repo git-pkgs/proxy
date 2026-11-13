@@ -149,7 +149,7 @@ func TestMavenDottedGroupDirectoryNotCachedAsGroup(t *testing.T) {
 	odd := []string{
 		"/org.foo/bar/1.0/bar-1.0.jar", "/org.foo/bar/1.0/bar-1.0-linux.exe",
 		"/org/foo:x/bar/1.0/bar-1.0.jar", "/org/foo/b:ar/1.0/b:ar-1.0.jar",
-		"/bar/1.0/bar-1.0.jar", "/bar-1.0.jar",
+		"/bar/1.0/bar-1.0.jar", "/bar-1.0.jar", "/bar/1.0/bar-1.0.jar.sha1", "/bar-1.0.pom.asc",
 	}
 	central, requests := mavenRepoUpstream(t, "central", append([]string{standard}, odd...)...)
 	portal, _ := mavenRepoUpstream(t, "portal")
