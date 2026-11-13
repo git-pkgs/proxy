@@ -221,6 +221,29 @@ func TestClearExpiredArtifact(t *testing.T) {
 	})
 }
 
+func TestClearExpiredArtifactSkipsHitBufferedAfterSweepStart(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now()
+		old := now.Add(-48 * time.Hour)
+		cutoff := now.Add(-24 * time.Hour)
+		seedRetentionArtifact(t, db, "npm", "served", old, old)
+		db.BatchHits(time.Hour, nil)
+
+		if err := db.FlushHits(); err != nil {
+			t.Fatalf("initial FlushHits: %v", err)
+		}
+		if err := db.RecordArtifactHit("pkg:npm/served@1.0.0", "served.tgz"); err != nil {
+			t.Fatalf("RecordArtifactHit: %v", err)
+		}
+
+		cleared, err := db.ClearExpiredArtifact("pkg:npm/served@1.0.0", "served.tgz",
+			"npm/served/1.0.0/served.tgz", cutoff)
+		if err != nil || cleared {
+			t.Fatalf("ClearExpiredArtifact(served) = %v, %v, want false, nil", cleared, err)
+		}
+	})
+}
+
 // When the object can't be queued for deletion, the clear is rolled back:
 // the record keeps pointing at the object, so a later sweep retries it
 // rather than leaving a file in storage that nothing refers to.
