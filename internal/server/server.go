@@ -1223,6 +1223,12 @@ func (s *Server) handlePackagePath(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+const (
+	// maxImageTagsShown is how many tags a container image's page lists,
+	// and how many a blob's page names.
+	maxImageTagsShown = 100
+)
+
 func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, name string) {
 	pkg, err := s.db.GetPackageByEcosystemName(ecosystem, name)
 	if err != nil {
@@ -1265,6 +1271,11 @@ func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, 
 		Cooldown:        s.cooldown.forPackage(pkg.Ecosystem, pkg.Name),
 	}
 	data.UsedBy = s.packageUsedBy(pkg, versions)
+	if pkg.Ecosystem == "oci" {
+		if data.Tags, err = s.db.ImageTags(pkg.PURL, maxImageTagsShown); err != nil {
+			s.logger.Error("failed to get image tags", "error", err)
+		}
+	}
 
 	if err := s.templates.Render(w, "package_show", data); err != nil {
 		s.logger.Error("failed to render package show", "error", err)
@@ -1305,6 +1316,13 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 	// browsed, so it must not be advertised as cached.
 	hasCached := firstBrowsableArtifact(artifacts) != nil
 
+	var imageTags []string
+	if pkg.Ecosystem == "oci" {
+		if imageTags, err = s.db.ImageTagsContaining(pkg.PURL, version, maxImageTagsShown); err != nil {
+			s.logger.Error("failed to get image tags", "error", err)
+		}
+	}
+
 	data := VersionShowData{
 		Layout:               s.layoutFor(r),
 		Package:              pkg,
@@ -1315,6 +1333,7 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 		LicenseCategory:      categorizeLicense(ver.License),
 		HasCachedArtifact:    hasCached,
 		HasDeletableArtifact: hasDeletableArtifact(artifacts),
+		ImageTags:            imageTags,
 	}
 
 	if err := s.templates.Render(w, "version_show", data); err != nil {

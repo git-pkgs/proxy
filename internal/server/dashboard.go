@@ -74,6 +74,8 @@ type PackageShowData struct {
 	UsedBy []VersionUsage
 	// Cooldown is nil with cooldown off.
 	Cooldown *PackageCooldown
+	// Tags lists a container image's tags, the most recently seen first.
+	Tags []database.ImageTag
 }
 
 // VersionShowData contains data for rendering the version show page.
@@ -89,6 +91,9 @@ type VersionShowData struct {
 	// HasDeletableArtifact is true when a stored artifact was fetched from
 	// the upstream rather than pushed.
 	HasDeletableArtifact bool
+	// ImageTags names the tags whose cached image contains a container
+	// image's blob.
+	ImageTags []string
 }
 
 // SearchPageData contains data for rendering the search results page.

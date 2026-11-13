@@ -255,6 +255,7 @@ func (m *imageMirror) mirrorTag(ctx context.Context, tag string) (string, error)
 		return digest, nil
 	}
 	m.h.storeContainerManifestForAccept(ctx, m.registryURL, m.upstreamName, tag, accept, cacheAccept, manifest)
+	m.h.recordImageTag(m.cacheName, tag, manifest, false)
 	return digest, nil
 }
 

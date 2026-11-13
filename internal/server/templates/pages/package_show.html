@@ -80,6 +80,26 @@
 </div>
 {{end}}
 
+{{if .Tags}}
+<div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800 mb-8">
+    <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800">
+        <h2 class="text-lg font-semibold">Tags ({{len .Tags}})</h2>
+        <p class="text-sm text-gray-500 dark:text-gray-400">The digest each tag pointed at when the upstream last confirmed it</p>
+    </div>
+    <div class="divide-y divide-gray-200 dark:divide-gray-800">
+        {{range .Tags}}
+        <div class="px-6 py-3 flex flex-col sm:flex-row sm:items-center sm:justify-between gap-1">
+            <div class="flex flex-col sm:flex-row sm:items-center gap-1 sm:gap-6 min-w-0">
+                <span class="font-mono text-sm font-semibold sm:w-48 shrink-0">{{.Tag}}</span>
+                <span class="font-mono text-xs text-gray-500 dark:text-gray-400 break-all">{{.Digest}}</span>
+            </div>
+            <span class="text-sm text-gray-500 dark:text-gray-400 shrink-0">{{.SeenAt.UTC.Format "2006-01-02 15:04"}} UTC</span>
+        </div>
+        {{end}}
+    </div>
+</div>
+{{end}}
+
 {{if .Versions}}
 <div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
     <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800 flex items-center justify-between">
