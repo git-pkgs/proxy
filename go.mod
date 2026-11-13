@@ -18,7 +18,7 @@ require (
 	github.com/git-pkgs/integrity v0.2.0
 	github.com/git-pkgs/magic v0.6.0
 	github.com/git-pkgs/purl v0.2.1
-	github.com/git-pkgs/registries v0.13.0
+	github.com/git-pkgs/registries v0.13.2
 	github.com/git-pkgs/sbom v0.1.9
 	github.com/git-pkgs/spdx v0.3.6
 	github.com/git-pkgs/vers v0.7.2
@@ -114,7 +114,7 @@ require (
 	go.opentelemetry.io/otel/sdk v1.46.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.46.0 // indirect
 	go.opentelemetry.io/otel/trace v1.46.0 // indirect
-	go.yaml.in/yaml/v3 v3.0.5 // indirect
+	go.yaml.in/yaml/v3 v3.0.6 // indirect
 	golang.org/x/crypto v0.58.0 // indirect
 	golang.org/x/oauth2 v0.37.0 // indirect
 	golang.org/x/sys v0.49.0 // indirect

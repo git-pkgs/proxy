@@ -830,6 +830,9 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 			if writeUpstreamHeld(w, err) {
 				return
 			}
+			if h.proxy.serveUpstreamBlock(w, err) {
+				return
+			}
 			h.proxy.Logger.Error("failed to get artifact", "error", err)
 			JSONError(w, http.StatusBadGateway, "failed to fetch package")
 		}

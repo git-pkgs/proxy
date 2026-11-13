@@ -1640,6 +1640,9 @@ func (p *Proxy) serveArtifactError(w http.ResponseWriter, err error, clientMsg s
 	if writeUpstreamHeld(w, err) {
 		return
 	}
+	if p.serveUpstreamBlock(w, err) {
+		return
+	}
 	p.Logger.Error("failed to get artifact", "error", err)
 	http.Error(w, clientMsg, http.StatusBadGateway)
 }

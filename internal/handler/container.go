@@ -15,6 +15,7 @@ import (
 
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
+	"github.com/git-pkgs/registries/fetch"
 	"golang.org/x/sync/singleflight"
 )
 
@@ -452,6 +453,16 @@ func (h *ContainerHandler) handleBlobDownload(w http.ResponseWriter, r *http.Req
 			return
 		}
 		if writeUpstreamHeld(w, err) {
+			return
+		}
+		var statusErr *fetch.StatusError
+		if errors.As(err, &statusErr) && statusErr.Code == http.StatusForbidden {
+			h.proxy.Logger.Warn("blob refused by upstream policy", "name", name, "digest", digest, "detail", statusErr.Body)
+			message := "blob refused by upstream policy"
+			if detail := strings.TrimSpace(statusErr.Body); detail != "" {
+				message = "blob refused by upstream policy: " + detail
+			}
+			h.containerError(w, http.StatusForbidden, "DENIED", message)
 			return
 		}
 		h.proxy.Logger.Error("failed to fetch blob", "error", err)
