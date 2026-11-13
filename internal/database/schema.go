@@ -140,7 +140,7 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_metadata_eco_name ON metadata_cache(ecosystem, name);
 CREATE INDEX IF NOT EXISTS idx_metadata_storage_path ON metadata_cache(storage_path);
 CREATE INDEX IF NOT EXISTS idx_metadata_last_used ON metadata_cache(COALESCE(last_accessed_at, updated_at));
-CREATE INDEX IF NOT EXISTS idx_artifacts_last_used ON artifacts(COALESCE(last_accessed_at, fetched_at));
+CREATE INDEX IF NOT EXISTS idx_artifacts_last_used ON artifacts(COALESCE(last_accessed_at, fetched_at)) WHERE storage_path IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS metadata_dates (
 	ecosystem TEXT NOT NULL,
@@ -319,7 +319,7 @@ CREATE TABLE IF NOT EXISTS metadata_cache (
 CREATE UNIQUE INDEX IF NOT EXISTS idx_metadata_eco_name ON metadata_cache(ecosystem, name);
 CREATE INDEX IF NOT EXISTS idx_metadata_storage_path ON metadata_cache(storage_path);
 CREATE INDEX IF NOT EXISTS idx_metadata_last_used ON metadata_cache((COALESCE(last_accessed_at, updated_at)) NULLS FIRST);
-CREATE INDEX IF NOT EXISTS idx_artifacts_last_used ON artifacts((COALESCE(last_accessed_at, fetched_at)) NULLS FIRST);
+CREATE INDEX IF NOT EXISTS idx_artifacts_last_used ON artifacts((COALESCE(last_accessed_at, fetched_at)) NULLS FIRST) WHERE storage_path IS NOT NULL;
 
 CREATE TABLE IF NOT EXISTS metadata_dates (
 	ecosystem TEXT NOT NULL,
@@ -546,6 +546,7 @@ var migrations = []migration{
 	{"021_add_projects", migrateAddProjects},
 	{"022_add_artifact_mirrored_at", migrateAddArtifactMirroredAt},
 	{"023_add_metadata_upstream_url", migrateAddMetadataUpstreamURL},
+	{"024_partial_artifacts_last_used_index", migratePartialArtifactsLastUsedIndex},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -1170,6 +1171,32 @@ func migrateAddMetadataLastAccessed(db *DB) error {
 		if _, err := db.Exec(q); err != nil {
 			return fmt.Errorf("indexing metadata_cache: %w", err)
 		}
+	}
+	return nil
+}
+
+// migratePartialArtifactsLastUsedIndex rebuilds the index eviction reads so
+// it holds only artifacts in storage. Eviction and retention clear a row's
+// storage_path and keep the row, and cleared rows sort first, so over a
+// full index every eviction batch walked past every artifact ever cleared.
+// The index is replaced in one transaction, so there is always one to read.
+func migratePartialArtifactsLastUsedIndex(db *DB) error {
+	create := `CREATE INDEX idx_artifacts_last_used ON artifacts(COALESCE(last_accessed_at, fetched_at)) WHERE storage_path IS NOT NULL`
+	if db.dialect == DialectPostgres {
+		create = `CREATE INDEX idx_artifacts_last_used ON artifacts((COALESCE(last_accessed_at, fetched_at)) NULLS FIRST) WHERE storage_path IS NOT NULL`
+	}
+	tx, err := db.Beginx()
+	if err != nil {
+		return fmt.Errorf("replacing artifacts last-used index: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }()
+	for _, q := range []string{`DROP INDEX IF EXISTS idx_artifacts_last_used`, create} {
+		if _, err := tx.Exec(q); err != nil {
+			return fmt.Errorf("replacing artifacts last-used index: %w", err)
+		}
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("replacing artifacts last-used index: %w", err)
 	}
 	return nil
 }
