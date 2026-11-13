@@ -390,14 +390,22 @@ func (h *MavenHandler) isChecksumFile(filename string) bool {
 }
 
 // checksummedFile is the file a checksum or signature file is for
-// (bar-1.0.jar for bar-1.0.jar.sha1), or filename itself if it is neither.
+// (bar-1.0.jar for bar-1.0.jar.sha1 and bar-1.0.jar.asc.sha1), or filename
+// itself if it is neither.
 func (h *MavenHandler) checksummedFile(filename string) string {
-	for _, ext := range []string{".sha1", ".sha256", ".sha512", ".md5", ".asc"} {
-		if name, ok := strings.CutSuffix(filename, ext); ok {
-			return name
+	for {
+		trimmed := filename
+		for _, ext := range []string{".sha1", ".sha256", ".sha512", ".md5", ".asc"} {
+			if name, ok := strings.CutSuffix(trimmed, ext); ok {
+				trimmed = name
+				break
+			}
 		}
+		if trimmed == filename {
+			return filename
+		}
+		filename = trimmed
 	}
-	return filename
 }
 
 // mavenForwardHeaders lets clients resume artifacts proxied without caching.
