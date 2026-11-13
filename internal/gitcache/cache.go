@@ -98,6 +98,9 @@ type Cache struct {
 	// foldCase is set where the cache directory ignores case, so keys that
 	// differ only in case, which name one directory, are one repository.
 	foldCase bool
+	// reftable is set when git is new enough for the cache to keep
+	// references in the reftable format.
+	reftable bool
 	// stateReads lets one RepositoryState read run git at a time.
 	stateReads chan struct{}
 
@@ -245,6 +248,12 @@ func New(opts Options) (*Cache, error) {
 	if opts.maxRequestBody > 0 {
 		c.maxRequestBody = opts.maxRequestBody
 	}
+	out, err := c.command(context.Background(), nil, "version").Output()
+	c.reftable = err == nil && reftableReady(string(out))
+	if !c.reftable {
+		logger.Info("git cache: repositories keep the files reference format, as reftable needs git 2.56 or newer",
+			"version", strings.TrimSpace(string(out)))
+	}
 	if err := c.load(); err != nil {
 		_ = lock.Close()
 		return nil, err
@@ -289,7 +298,8 @@ func (c *Cache) tmpDir() string {
 }
 
 // load clears what an earlier run left in the temporary directory and
-// registers the repositories already cached.
+// registers the repositories already cached, converting those in the files
+// reference format to reftable when git supports it.
 func (c *Cache) load() error {
 	if err := os.RemoveAll(c.tmpDir()); err != nil {
 		return fmt.Errorf("clearing %s: %w", c.tmpDir(), err)
@@ -306,6 +316,9 @@ func (c *Cache) load() error {
 			}
 			rel, _ := filepath.Rel(c.dir, path)
 			rp := newRepo(c.repoKey(filepath.ToSlash(rel)), path)
+			if c.reftable && !hasReftable(path) {
+				c.migrate(rp)
+			}
 			rp.size.Store(dirSize(path))
 			rp.lastChecked.Store(stampTime(path, checkedStamp))
 			rp.lastUsed.Store(stampTime(path, usedStamp))
@@ -318,6 +331,40 @@ func (c *Cache) load() error {
 		}
 	}
 	return nil
+}
+
+// reftableReady reports whether out, the output of "git version", names git
+// 2.56 or newer, the first with the reftable fixes the cache relies on.
+func reftableReady(out string) bool {
+	var major, minor int
+	_, err := fmt.Sscanf(out, "git version %d.%d", &major, &minor)
+	return err == nil && (major > 2 || major == 2 && minor >= 56)
+}
+
+// hasReftable reports whether the repository at dir keeps its references in
+// the reftable format. It looks for the table list rather than running git,
+// so a startup costs no process per repository once all are converted. Only
+// a list known to be missing counts as the files format.
+func hasReftable(dir string) bool {
+	_, err := os.Stat(filepath.Join(dir, "reftable", "tables.list"))
+	return !errors.Is(err, fs.ErrNotExist)
+}
+
+// migrate converts the references of the repository rp to the reftable
+// format. load calls it before any request can write to the repository,
+// which git refs migrate does not guard against. One that fails to convert
+// is served as it is.
+func (c *Cache) migrate(rp *repo) {
+	// GIT_DIR rather than -C, which would have git look for a repository in
+	// the directories above one that is not.
+	out, err := c.command(context.Background(), []string{"GIT_DIR=" + rp.dir},
+		"refs", "migrate", "--ref-format=reftable").CombinedOutput()
+	if err != nil {
+		c.logger.Warn("git cache: failed to convert a repository to the reftable format; serving it as it is",
+			"repository", rp.key, "error", err, "output", strings.TrimSpace(string(out)))
+		return
+	}
+	c.logger.Info("git cache: converted a repository to the reftable format", "repository", rp.key)
 }
 
 // upstreamDirPattern matches a directory UpstreamDir names, capturing the
