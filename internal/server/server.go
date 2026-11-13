@@ -272,6 +272,7 @@ func (s *Server) configureGitCache(client *http.Client) error {
 		MaxRepoSize: s.cfg.Git.MaxRepoSizeBytes(),
 		RefreshWait: s.cfg.Git.RefreshWaitDuration(),
 		StaleMaxAge: s.cfg.Git.StaleMaxAgeDuration(),
+		WarmMaxIdle: s.cfg.Git.WarmMaxIdleDuration(),
 		Client:      client,
 		Logger:      s.logger,
 		Upstreams:   upstreamDirs,
@@ -345,7 +346,7 @@ func (s *Server) serve(listener net.Listener) error {
 	r.Use(markRequestContext)
 
 	// Mount protocol handlers
-	s.mountProtocolHandlers(r, proxy)
+	gitHandler := s.mountProtocolHandlers(r, proxy)
 	if err := s.mountCooldownProfiles(r, proxy); err != nil {
 		return err
 	}
@@ -466,6 +467,10 @@ func (s *Server) serve(listener net.Listener) error {
 	s.background.Go(func() { s.startRetentionLoop(bgCtx, retentionResolvers) })
 	s.background.Go(func() { s.startAPKSnapshotPruning(bgCtx) })
 	s.background.Go(func() { s.startReclaimLoop(bgCtx) })
+	if gitHandler != nil {
+		// Stops when the cache is closed.
+		s.git.Warm(gitHandler.ServesRepository)
+	}
 
 	if listener != nil {
 		return s.http.Serve(listener)
@@ -475,11 +480,13 @@ func (s *Server) serve(listener net.Listener) error {
 
 // mountProtocolHandlers constructs every ecosystem handler and mounts it on
 // r under its protocol prefix.
-func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) {
-	s.mountProtocolHandlersAt(r, proxy, s.cfg.BaseURL)
+// mountProtocolHandlers mounts every ecosystem handler at the server's base
+// URL, and returns the Git handler, or nil without a Git cache.
+func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) *handler.GitHandler {
+	return s.mountProtocolHandlersAt(r, proxy, s.cfg.BaseURL)
 }
 
-func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, baseURL string) {
+func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, baseURL string) *handler.GitHandler {
 	npmHandler := handler.NewNPMHandler(proxy, baseURL, s.cfg.Upstream.NPM).
 		WithPackageRoutes(s.cfg.Upstream.NPMRoutes)
 	cargoHandler := handler.NewCargoHandler(
@@ -575,10 +582,12 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
 	r.Mount("/generic", http.StripPrefix("/generic", genericHandler.Routes()))
-	if s.git != nil {
-		gitHandler := handler.NewGitHandler(proxy, s.git, s.cfg.Upstream).WithBaseURL(baseURL)
-		r.Mount("/git", http.StripPrefix("/git", gitHandler.Routes()))
+	if s.git == nil {
+		return nil
 	}
+	gitHandler := handler.NewGitHandler(proxy, s.git, s.cfg.Upstream).WithBaseURL(baseURL)
+	r.Mount("/git", http.StripPrefix("/git", gitHandler.Routes()))
+	return gitHandler
 }
 
 // configureScanning builds the scanner group from cfg and wires it into

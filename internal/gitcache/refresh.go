@@ -130,6 +130,12 @@ func servesStale(err error) bool {
 func (c *Cache) startRefresh(rp *repo, repoURL string) *refreshCall {
 	c.mu.Lock()
 	defer c.mu.Unlock()
+	return c.startRefreshLocked(rp, repoURL, false)
+}
+
+// startRefreshLocked is startRefresh with c.mu held. A refresh started in
+// the background does not count as a use of the repository when it ends.
+func (c *Cache) startRefreshLocked(rp *repo, repoURL string, background bool) *refreshCall {
 	if rp.refreshing != nil {
 		return rp.refreshing
 	}
@@ -154,6 +160,9 @@ func (c *Cache) startRefresh(rp *repo, repoURL string) *refreshCall {
 		switch {
 		case call.err == nil:
 			rp.lastError.Store(nil)
+			// The upstream answered at this URL, so background refreshes
+			// use it.
+			rp.rememberURL(repoURL)
 		case c.ctx.Err() == nil:
 			metrics.RecordUpstreamError(ecosystem, errorType(call.err), metrics.FailureDetail{URL: repoURL, Err: call.err})
 			c.logger.Warn("git cache: refresh failed", "repository", rp.key, "error", call.err)
@@ -165,7 +174,11 @@ func (c *Cache) startRefresh(rp *repo, repoURL string) *refreshCall {
 			rp.refused = call.err
 		}
 		c.mu.Unlock()
-		c.release(rp)
+		if background {
+			c.drop(rp, rp.exists())
+		} else {
+			c.release(rp)
+		}
 		close(call.done)
 		if call.err == nil {
 			c.evict()

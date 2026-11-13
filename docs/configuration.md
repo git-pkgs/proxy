@@ -842,6 +842,7 @@ git:
   max_repo_size: 5GB     # refuse a repository that grows past this
   refresh_wait: 5s       # then serve the cached copy if the upstream check is slow
   stale_max_age: 24h     # never serve a copy not checked for this long
+  warm_max_idle: 30d     # keep checking repositories used within this
 ```
 
 Clients reach the proxy through Git's `insteadOf` setting, which rewrites the
@@ -919,6 +920,22 @@ Redirects are never followed, so point the upstream at a repository's current
 location. A `git-upload-pack` request checks the upstream only when the last
 check refused the repository or the copy was last checked more than a minute
 past `stale_max_age` ago, so a clone checks once, at its ref listing.
+
+The proxy also checks cached repositories in the background, so a copy stays
+servable through an outage even when nobody cloned it for a day. A repository
+that a client used within `warm_max_idle` (default `30d`) is checked again
+once half of `stale_max_age` has passed since its last successful check,
+and fetched if its branches or tags moved. It is checked at the URL its last
+successful check used, so a repository cached by an older version waits for
+a client to refresh it once. After a failed check it waits a quarter of that
+interval, at least 10 minutes, so a few retries fit before the copy goes
+stale. Checks run one at a time and do not count as use, so they neither keep
+a repository from expiring out of `warm_max_idle` nor change which one
+`max_size` evicts first. Repositories the upstream refused, and those the
+configuration no longer serves, are skipped. `warm_max_idle: 0`, or a
+`stale_max_age` under `20m` (which includes `0`), turns the background
+checks off. They run in `proxy serve` only, each process for its own
+`cache_dir`.
 
 The proxy runs `git` 2.31 or newer, which must be installed (the Docker image includes it).
 The `git` processes never reach the network themselves: their fetches go
@@ -1026,8 +1043,8 @@ upstream, until retention removes it or you delete it through the
 Pushing, LFS uploads and locking, and the dumb HTTP protocol are not
 supported. The settings
 under `git` can also be set with `PROXY_GIT_CACHE_DIR`, `PROXY_GIT_MAX_SIZE`,
-`PROXY_GIT_MAX_REPO_SIZE`, `PROXY_GIT_REFRESH_WAIT` and
-`PROXY_GIT_STALE_MAX_AGE`.
+`PROXY_GIT_MAX_REPO_SIZE`, `PROXY_GIT_REFRESH_WAIT`,
+`PROXY_GIT_STALE_MAX_AGE` and `PROXY_GIT_WARM_MAX_IDLE`.
 
 ### Maven repositories
 

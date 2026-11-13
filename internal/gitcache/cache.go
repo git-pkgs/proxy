@@ -46,6 +46,9 @@ const (
 	ecosystem           = "git"
 	upstreamHashLen     = 8
 	checkedStamp        = "proxy-checked"
+	// urlFile holds the upstream URL the last successful refresh used, for
+	// background refreshes.
+	urlFile             = "proxy-url"
 	usedStamp           = "proxy-used"
 	dirPermissions      = 0o750
 	lockFilePermissions = 0o600
@@ -62,6 +65,9 @@ type Options struct {
 	// processes the cache runs. Redirects are never followed.
 	Client *http.Client
 	Logger *slog.Logger
+	// WarmMaxIdle, with StaleMaxAge, lets Warm refresh the repositories
+	// clients used within it before StaleMaxAge runs out. 0 turns that off.
+	WarmMaxIdle time.Duration
 	// Upstreams maps each configured upstream's name to its directory in
 	// CacheDir, as UpstreamDir names it. Only those directories are loaded
 	// at startup. A directory UpstreamDir would name for one of these names
@@ -69,10 +75,11 @@ type Options struct {
 	// else in CacheDir is touched, so it may hold other data.
 	Upstreams map[string]string
 
-	// refCheckTimeout, lowSpeedTime, maxRequestBody, maxUploadPacks and
-	// maxRefListings override their defaults in tests, and refreshWaitOver,
-	// when set, replaces the RefreshWait timer.
+	// refCheckTimeout, lowSpeedTime, maxRequestBody, maxUploadPacks,
+	// maxRefListings and warmTick override their defaults in tests, and
+	// refreshWaitOver, when set, replaces the RefreshWait timer.
 	refCheckTimeout time.Duration
+	warmTick        time.Duration
 	refreshWaitOver <-chan time.Time
 	lowSpeedTime    int
 	maxRequestBody  int64
@@ -155,6 +162,27 @@ type repo struct {
 	// is current while the count is the one it was read at.
 	state       atomic.Pointer[cachedState]
 	refsWritten atomic.Int64
+	// url is the upstream URL the last successful refresh used.
+	url atomic.Pointer[string]
+}
+
+// repoURL returns the upstream URL the last successful refresh used, or ""
+// if none is recorded.
+func (rp *repo) repoURL() string {
+	if u := rp.url.Load(); u != nil {
+		return *u
+	}
+	return ""
+}
+
+// rememberURL records repoURL as the one a refresh succeeded with, on disk
+// too once the repository is cached.
+func (rp *repo) rememberURL(repoURL string) {
+	if rp.repoURL() == repoURL || !rp.exists() {
+		return
+	}
+	rp.url.Store(&repoURL)
+	_ = os.WriteFile(filepath.Join(rp.dir, urlFile), []byte(repoURL+"\n"), lockFilePermissions)
 }
 
 var errLocked = errors.New("locked by another process")
@@ -310,6 +338,11 @@ func (c *Cache) load() error {
 			rp.lastChecked.Store(stampTime(path, checkedStamp))
 			rp.lastUsed.Store(stampTime(path, usedStamp))
 			rp.usedWritten.Store(rp.lastUsed.Load())
+			if data, err := os.ReadFile(filepath.Join(path, urlFile)); err == nil {
+				if u := strings.TrimSpace(string(data)); u != "" {
+					rp.url.Store(&u)
+				}
+			}
 			c.repos[rp.key] = rp
 			return filepath.SkipDir
 		})
@@ -392,6 +425,7 @@ func (c *Cache) repoKey(key string) string {
 	return key
 }
 
+// release ends a use of the repository by a client, recording it as used.
 func (c *Cache) release(rp *repo) {
 	now := time.Now()
 	rp.lastUsed.Store(now.UnixNano())
@@ -400,7 +434,12 @@ func (c *Cache) release(rp *repo) {
 		rp.usedWritten.Store(now.UnixNano())
 		touch(rp.dir, usedStamp, now)
 	}
+	c.drop(rp, exists)
+}
 
+// drop ends a use of the repository without recording it as used. exists
+// is whether the repository is cloned.
+func (c *Cache) drop(rp *repo, exists bool) {
 	c.mu.Lock()
 	rp.users--
 	idle := rp.users == 0 && c.repos[rp.key] == rp
