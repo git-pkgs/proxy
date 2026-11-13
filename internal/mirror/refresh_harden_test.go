@@ -1,0 +1,438 @@
+package mirror
+
+import (
+	"context"
+	"net/http"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/git-pkgs/proxy/internal/denylist"
+	"github.com/git-pkgs/proxy/internal/handler"
+	"github.com/git-pkgs/registries"
+	"github.com/git-pkgs/registries/fetch"
+)
+
+// debCurlPackages returns a Packages index listing curl at version.
+func debCurlPackages(t *testing.T, version string) []byte {
+	t.Helper()
+	return gzipped(t, "Package: curl\nVersion: "+version+"\nArchitecture: amd64\nFilename: pool/main/c/curl/curl_"+version+"_amd64.deb\n\n")
+}
+
+// TestRefreshDebianIndexPerSuite checks that suites sharing a pool are
+// refreshed each on its own: a newer curl cached from trixie must not keep
+// bookworm's security update from being mirrored.
+func TestRefreshDebianIndexPerSuite(t *testing.T) {
+	m, fetcher, idx := setupIndexRefresh(t)
+	release := []byte("SHA256:\n 0000 1 main/binary-amd64/Packages.gz\n")
+	pool := idx.URL + "/debian/pool/main/c/curl/"
+	for suite, version := range map[string]string{"bookworm": "7.88.1-10", "trixie": "8.14.1-2"} {
+		idx.set("/debian/dists/"+suite+"/InRelease", release)
+		idx.set("/debian/dists/"+suite+"/main/binary-amd64/Packages.gz", debCurlPackages(t, version))
+		clientFetchesCurl(t, m, "debian", idx.URL+"/debian/dists/"+suite+"/InRelease",
+			"deb", version, "curl_"+version+"_amd64.deb", pool+"curl_"+version+"_amd64.deb")
+	}
+
+	idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", debCurlPackages(t, "7.88.1-10+deb12u8"))
+	idx.set("/debian/dists/trixie/main/binary-amd64/Packages.gz", debCurlPackages(t, "8.14.1-2+deb13u1"))
+	fetcher.reset()
+	progress := refreshOnce(t, m)
+
+	want := []string{pool + "curl_7.88.1-10+deb12u8_amd64.deb", pool + "curl_8.14.1-2+deb13u1_amd64.deb"}
+	got := fetcher.fetched()
+	slices.Sort(got)
+	if !slices.Equal(got, want) || progress.Completed != 2 {
+		t.Errorf("progress = %+v, fetched %v; want %v", progress, got, want)
+	}
+}
+
+// TestRefreshDebianIndexSkipsOtherSuite checks that a suite's version of a
+// package is not mirrored when only a newer one is cached: clients of that
+// suite never fetched the package.
+func TestRefreshDebianIndexSkipsOtherSuite(t *testing.T) {
+	m, fetcher, idx := setupIndexRefresh(t)
+	release := []byte("SHA256:\n 0000 1 main/binary-amd64/Packages.gz\n")
+	pool := idx.URL + "/debian/pool/main/c/curl/"
+	idx.set("/debian/dists/trixie/InRelease", release)
+	idx.set("/debian/dists/trixie/main/binary-amd64/Packages.gz", debCurlPackages(t, "8.14.1-2"))
+	clientFetchesCurl(t, m, "debian", idx.URL+"/debian/dists/trixie/InRelease",
+		"deb", "8.14.1-2", "curl_8.14.1-2_amd64.deb", pool+"curl_8.14.1-2_amd64.deb")
+	// A bookworm client fetched its index but never curl.
+	idx.set("/debian/dists/bookworm/InRelease", release)
+	idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", debCurlPackages(t, "7.88.1-10+deb12u8"))
+	if _, _, err := m.proxy.FetchOrCacheMetadata(t.Context(), "debian", "key:bookworm", idx.URL+"/debian/dists/bookworm/InRelease", "*/*"); err != nil {
+		t.Fatal(err)
+	}
+	fetcher.reset()
+
+	if progress := refreshOnce(t, m); progress.Completed != 0 || len(fetcher.fetched()) != 0 {
+		t.Errorf("progress = %+v, fetched %v; want nothing", progress, fetcher.fetched())
+	}
+}
+
+// TestRefreshRPMIndexListingSeveralVersions checks that a repository
+// listing old versions next to the newest mirrors only the newest, and
+// nothing once it is cached.
+func TestRefreshRPMIndexListingSeveralVersions(t *testing.T) {
+	m, fetcher, idx := setupIndexRefresh(t)
+	base := "/fedora/updates/40/Everything/x86_64"
+	primary := func(rels ...string) []byte {
+		var pkgs string
+		for _, rel := range rels {
+			pkgs += `<package type="rpm"><name>curl</name><arch>x86_64</arch><location href="Packages/c/curl-8.6.0-` + rel + `.fc40.x86_64.rpm"/></package>`
+		}
+		return gzipped(t, `<metadata xmlns="http://linux.duke.edu/metadata/common">`+pkgs+`</metadata>`)
+	}
+	idx.set(base+"/repodata/repomd.xml", []byte(`<repomd><data type="primary"><location href="repodata/primary.xml.gz"/></data></repomd>`))
+	idx.set(base+"/repodata/primary.xml.gz", primary("10"))
+	clientFetchesCurl(t, m, "rpm", idx.URL+base+"/repodata/repomd.xml",
+		"rpm", "8.6.0-10.fc40", "curl-8.6.0-10.fc40.x86_64.rpm", idx.URL+base+"/Packages/c/curl-8.6.0-10.fc40.x86_64.rpm")
+
+	idx.set(base+"/repodata/primary.xml.gz", primary("10", "12", "11"))
+	fetcher.reset()
+	progress := refreshOnce(t, m)
+	want := []string{idx.URL + base + "/Packages/c/curl-8.6.0-12.fc40.x86_64.rpm"}
+	if !slices.Equal(fetcher.fetched(), want) || progress.Completed != 1 {
+		t.Fatalf("progress = %+v, fetched %v; want %v", progress, fetcher.fetched(), want)
+	}
+
+	fetcher.reset()
+	if progress := refreshOnce(t, m); progress.Completed != 0 || len(fetcher.fetched()) != 0 {
+		t.Errorf("second run: progress = %+v, fetched %v; want nothing", progress, fetcher.fetched())
+	}
+}
+
+// TestRefreshIndexFailureDoesNotStopRun checks that an index that can't be
+// read is counted as failed and the other indexes are still refreshed.
+func TestRefreshIndexFailureDoesNotStopRun(t *testing.T) {
+	m, fetcher, idx := setupIndexRefresh(t)
+	release := []byte("SHA256:\n 0000 1 main/binary-amd64/Packages.gz\n")
+	pool := idx.URL + "/debian/pool/main/c/curl/"
+	for suite, version := range map[string]string{"bookworm": "7.88.1-10", "trixie": "8.14.1-2"} {
+		idx.set("/debian/dists/"+suite+"/InRelease", release)
+		idx.set("/debian/dists/"+suite+"/main/binary-amd64/Packages.gz", debCurlPackages(t, version))
+		clientFetchesCurl(t, m, "debian", idx.URL+"/debian/dists/"+suite+"/InRelease",
+			"deb", version, "curl_"+version+"_amd64.deb", pool+"curl_"+version+"_amd64.deb")
+	}
+	idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", []byte("not gzip"))
+	idx.set("/debian/dists/trixie/main/binary-amd64/Packages.gz", debCurlPackages(t, "8.14.1-2+deb13u1"))
+	fetcher.reset()
+
+	progress := refreshOnce(t, m)
+	want := []string{pool + "curl_8.14.1-2+deb13u1_amd64.deb"}
+	if !slices.Equal(fetcher.fetched(), want) || progress.Completed != 1 || progress.Failed != 1 {
+		t.Errorf("progress = %+v, fetched %v; want %v and one failure", progress, fetcher.fetched(), want)
+	}
+}
+
+func TestNewestPerCachedLineGo(t *testing.T) {
+	allowAll := func(registries.Version) bool { return true }
+	for _, tt := range []struct {
+		name     string
+		cached   []string
+		releases []registries.Version
+		want     []string
+	}{
+		{"v prefix", []string{"v1.2.3"}, releases("v1.2.3", "v1.3.0"), []string{"v1.3.0"}},
+		{"incompatible is its own line", []string{"v1.2.3"}, releases("v1.2.3", "v2.0.0+incompatible"), nil},
+		{"pseudo-versions are prereleases", []string{"v1.2.3"}, releases("v1.2.3", "v1.2.4-0.20260101000000-abcdefabcdef"), nil},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := newestPerCachedLine("golang", tt.cached, tt.releases, allowAll); !reflect.DeepEqual(got, tt.want) {
+				t.Errorf("newestPerCachedLine = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestRefreshScopedNPMPackage(t *testing.T) {
+	m, fetcher := setupRefreshMirror(t, "tarball")
+	cacheNPM(t, m, "@babel/core", "7.24.0")
+	m.Versions = stubReleases{"npm/@babel/core": oldReleases("7.24.0", "7.25.2")}
+	fetcher.reset()
+
+	progress := refreshOnce(t, m)
+	if urls := fetcher.fetched(); progress.Completed != 1 || len(fetchedMatching(urls, "core-7.25.2.tgz")) != 1 {
+		t.Errorf("progress = %+v, fetched %v; want @babel/core 7.25.2", progress, urls)
+	}
+}
+
+func TestRefreshSkipsDeniedRelease(t *testing.T) {
+	m, fetcher := setupRefreshMirror(t, "tarball")
+	cacheNPM(t, m, "lodash", "4.17.20")
+	m.Versions = stubReleases{"npm/lodash": oldReleases("4.17.20", "4.17.21", "4.17.22")}
+	policy, err := denylist.New([]string{"pkg:npm/lodash@4.17.22"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	m.proxy.Denylist = policy
+	fetcher.reset()
+
+	progress := refreshOnce(t, m)
+	if urls := fetcher.fetched(); progress.Completed != 1 || len(fetchedMatching(urls, "lodash-4.17.21.tgz")) != 1 || len(fetchedMatching(urls, "4.17.22")) != 0 {
+		t.Errorf("progress = %+v, fetched %v; want 4.17.21, not the denied 4.17.22", progress, urls)
+	}
+}
+
+func TestRefreshListingFailureDoesNotStopOthers(t *testing.T) {
+	m, fetcher := setupRefreshMirror(t, "tarball")
+	cacheNPM(t, m, "lodash", "4.17.20")
+	cacheNPM(t, m, "react", "18.3.0")
+	m.Versions = stubReleases{"npm/react": oldReleases("18.3.0", "18.3.1")}
+	fetcher.reset()
+
+	progress := refreshOnce(t, m)
+	if urls := fetcher.fetched(); progress.Completed != 1 || progress.Failed != 1 || len(fetchedMatching(urls, "react-18.3.1.tgz")) != 1 {
+		t.Errorf("progress = %+v, fetched %v; want react refreshed and lodash failed", progress, urls)
+	}
+}
+
+func TestRefreshStopsWhenCancelled(t *testing.T) {
+	m, fetcher := setupRefreshMirror(t, "tarball")
+	cacheNPM(t, m, "lodash", "4.17.20")
+	m.Versions = stubReleases{"npm/lodash": oldReleases("4.17.20", "4.17.21")}
+	fetcher.reset()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	progress, err := m.Refresh(ctx, Refresh{Top: 10, Since: time.Hour})
+	if err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if progress.Completed != 0 || len(fetcher.fetched()) != 0 {
+		t.Errorf("progress = %+v, fetched %v; want nothing after cancelling", progress, fetcher.fetched())
+	}
+}
+
+// TestRefreshDebianArchitectureAll checks that a package for every
+// architecture, listed in each binary-* index rather than one of its own,
+// is refreshed.
+func TestRefreshDebianArchitectureAll(t *testing.T) {
+	m, fetcher, idx := setupIndexRefresh(t)
+	packages := func(version string) []byte {
+		return gzipped(t, "Package: ca-certificates\nVersion: "+version+"\nArchitecture: all\nFilename: pool/main/c/ca-certificates/ca-certificates_"+version+"_all.deb\n\n")
+	}
+	idx.set("/debian/dists/bookworm/InRelease", []byte("SHA256:\n 0000 1 main/binary-amd64/Packages.gz\n"))
+	idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", packages("20230311"))
+	pool := idx.URL + "/debian/pool/main/c/ca-certificates/"
+	if _, _, err := m.proxy.FetchOrCacheMetadata(t.Context(), "debian", "key:bookworm", idx.URL+"/debian/dists/bookworm/InRelease", "*/*"); err != nil {
+		t.Fatal(err)
+	}
+	result, err := m.proxy.GetOrFetchArtifactFromURL(t.Context(), "deb", "ca-certificates", "20230311", "ca-certificates_20230311_all.deb", pool+"ca-certificates_20230311_all.deb")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = result.Reader.Close()
+
+	idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", packages("20230311+deb12u1"))
+	fetcher.reset()
+	progress := refreshOnce(t, m)
+	if want := []string{pool + "ca-certificates_20230311+deb12u1_all.deb"}; !slices.Equal(fetcher.fetched(), want) || progress.Completed != 1 {
+		t.Errorf("progress = %+v, fetched %v; want %v", progress, fetcher.fetched(), want)
+	}
+}
+
+// TestRefreshSkipsIndexPathsOutsideTheRepository checks that an index entry
+// whose path leaves the repository base is not fetched.
+func TestRefreshSkipsIndexPathsOutsideTheRepository(t *testing.T) {
+	for _, filename := range []string{
+		"../other/pool/main/c/curl/curl_7.88.1-10+deb12u8_amd64.deb",
+		"pool/main/../../../other/curl_7.88.1-10+deb12u8_amd64.deb",
+		"/other/curl_7.88.1-10+deb12u8_amd64.deb",
+	} {
+		t.Run(filename, func(t *testing.T) {
+			m, fetcher, idx := setupIndexRefresh(t)
+			release := []byte("SHA256:\n 0000 1 main/binary-amd64/Packages.gz\n")
+			pool := idx.URL + "/debian/pool/main/c/curl/"
+			idx.set("/debian/dists/bookworm/InRelease", release)
+			idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", debCurlPackages(t, "7.88.1-10"))
+			clientFetchesCurl(t, m, "debian", idx.URL+"/debian/dists/bookworm/InRelease",
+				"deb", "7.88.1-10", "curl_7.88.1-10_amd64.deb", pool+"curl_7.88.1-10_amd64.deb")
+
+			idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", gzipped(t,
+				"Package: curl\nVersion: 7.88.1-10+deb12u8\nArchitecture: amd64\nFilename: "+filename+"\n\n"))
+			fetcher.reset()
+
+			if progress := refreshOnce(t, m); progress.Completed != 0 || len(fetcher.fetched()) != 0 {
+				t.Errorf("progress = %+v, fetched %v; want nothing", progress, fetcher.fetched())
+			}
+		})
+	}
+}
+
+// TestRefreshRefusesIndexesOverTheSizeLimit checks that an index that
+// decompresses to more than maxIndexBytes fails instead of being parsed in
+// full.
+func TestRefreshRefusesIndexesOverTheSizeLimit(t *testing.T) {
+	limit := maxIndexBytes
+	maxIndexBytes = 4 << 10
+	t.Cleanup(func() { maxIndexBytes = limit })
+
+	m, fetcher, idx := setupIndexRefresh(t)
+	idx.set("/debian/dists/bookworm/InRelease", []byte("SHA256:\n 0000 1 main/binary-amd64/Packages.gz\n"))
+	idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", debCurlPackages(t, "7.88.1-10"))
+	clientFetchesCurl(t, m, "debian", idx.URL+"/debian/dists/bookworm/InRelease",
+		"deb", "7.88.1-10", "curl_7.88.1-10_amd64.deb", idx.URL+"/debian/pool/main/c/curl/curl_7.88.1-10_amd64.deb")
+
+	padding := strings.Repeat("Package: filler\nVersion: 1\nArchitecture: amd64\nFilename: pool/main/f/filler/filler_1_amd64.deb\n\n", 100)
+	idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", gzipped(t,
+		"Package: curl\nVersion: 7.88.1-10+deb12u8\nArchitecture: amd64\nFilename: pool/main/c/curl/curl_7.88.1-10+deb12u8_amd64.deb\n\n"+padding))
+	fetcher.reset()
+
+	progress := refreshOnce(t, m)
+	if progress.Failed != 1 || len(progress.Errors) != 1 || !strings.Contains(progress.Errors[0].Error, "larger than") || len(fetcher.fetched()) != 0 {
+		t.Errorf("progress = %+v, fetched %v; want the index failing for its size", progress, fetcher.fetched())
+	}
+}
+
+// TestRefreshRefusesAPKIndexesOverTheSizeLimit checks that the limit also
+// covers APKINDEX.tar.gz, which comes from the metadata cache rather than
+// readIndex.
+func TestRefreshRefusesAPKIndexesOverTheSizeLimit(t *testing.T) {
+	limit := maxIndexBytes
+	maxIndexBytes = 4 << 10
+	t.Cleanup(func() { maxIndexBytes = limit })
+
+	m, fetcher, idx := setupIndexRefresh(t)
+	dir := "/alpine/v3.20/main/aarch64"
+	idx.set(dir+"/APKINDEX.tar.gz", apkIndexArchive(t, "P:curl\nV:8.9.0-r0\nA:aarch64\n\n"))
+	clientFetchesCurl(t, m, "alpine", idx.URL+dir+"/APKINDEX.tar.gz",
+		"alpine", "8.9.0-r0", "edge/v3.20/main/aarch64/curl-8.9.0-r0.apk", idx.URL+dir+"/curl-8.9.0-r0.apk")
+
+	padding := strings.Repeat("P:filler\nV:1-r0\nA:aarch64\n\n", 400)
+	idx.set(dir+"/APKINDEX.tar.gz", apkIndexArchive(t, "P:curl\nV:8.9.1-r0\nA:aarch64\n\n"+padding))
+	fetcher.reset()
+
+	progress := refreshOnce(t, m)
+	if progress.Failed != 1 || len(progress.Errors) != 1 || !strings.Contains(progress.Errors[0].Error, "larger than") || len(fetcher.fetched()) != 0 {
+		t.Errorf("progress = %+v, fetched %v; want the index failing for its size", progress, fetcher.fetched())
+	}
+}
+
+// TestRefreshRefusesIndexDocumentsOverTheMetadataLimit checks that an
+// InRelease larger than a metadata document may be fails its index.
+func TestRefreshRefusesIndexDocumentsOverTheMetadataLimit(t *testing.T) {
+	m, fetcher, idx := setupIndexRefresh(t)
+	release := "SHA256:\n 0000 1 main/binary-amd64/Packages.gz\n"
+	idx.set("/debian/dists/bookworm/InRelease", []byte(release))
+	idx.set("/debian/dists/bookworm/main/binary-amd64/Packages.gz", debCurlPackages(t, "7.88.1-10+deb12u8"))
+	clientFetchesCurl(t, m, "debian", idx.URL+"/debian/dists/bookworm/InRelease",
+		"deb", "7.88.1-10", "curl_7.88.1-10_amd64.deb", idx.URL+"/debian/pool/main/c/curl/curl_7.88.1-10_amd64.deb")
+
+	m.proxy.MetadataMaxSize = int64(len(release))
+	idx.set("/debian/dists/bookworm/InRelease", []byte(release+" 0000 1 contrib/binary-amd64/Packages.gz\n"))
+	fetcher.reset()
+
+	progress := refreshOnce(t, m)
+	if progress.Failed != 1 || len(progress.Errors) != 1 || !strings.Contains(progress.Errors[0].Error, handler.ErrMetadataTooLarge.Error()) || len(fetcher.fetched()) != 0 {
+		t.Errorf("progress = %+v, fetched %v; want the index failing for its size", progress, fetcher.fetched())
+	}
+}
+
+// TestRefreshDebianSecurityPool checks the security archive's layout, whose
+// pool is pool/updates/main while its InRelease lists main/binary-*.
+func TestRefreshDebianSecurityPool(t *testing.T) {
+	m, fetcher, idx := setupIndexRefresh(t)
+	pool := idx.URL + "/debian-security/pool/updates/main/c/curl/"
+	packages := func(version string) []byte {
+		return gzipped(t, "Package: curl\nVersion: "+version+"\nArchitecture: amd64\nFilename: pool/updates/main/c/curl/curl_"+version+"_amd64.deb\n\n")
+	}
+	idx.set("/debian-security/dists/bookworm-security/InRelease", []byte("SHA256:\n 0000 1 main/binary-amd64/Packages.gz\n"))
+	idx.set("/debian-security/dists/bookworm-security/main/binary-amd64/Packages.gz", packages("7.88.1-10+deb12u7"))
+	clientFetchesCurl(t, m, "debian", idx.URL+"/debian-security/dists/bookworm-security/InRelease",
+		"deb", "7.88.1-10+deb12u7", "curl_7.88.1-10+deb12u7_amd64.deb", pool+"curl_7.88.1-10+deb12u7_amd64.deb")
+
+	idx.set("/debian-security/dists/bookworm-security/main/binary-amd64/Packages.gz", packages("7.88.1-10+deb12u8"))
+	fetcher.reset()
+	progress := refreshOnce(t, m)
+
+	want := []string{pool + "curl_7.88.1-10+deb12u8_amd64.deb"}
+	if !slices.Equal(fetcher.fetched(), want) || progress.Completed != 1 || progress.Failed != 0 {
+		t.Errorf("progress = %+v, fetched %v; want %v", progress, fetcher.fetched(), want)
+	}
+}
+
+// TestRefreshDownloadsDoNotCountAsUse checks that a package nobody fetched
+// within since drops out even though the refresh itself downloaded it.
+func TestRefreshDownloadsDoNotCountAsUse(t *testing.T) {
+	m, _ := setupRefreshMirror(t, "tarball")
+	cacheNPM(t, m, "lodash", "4.17.20")
+	m.Versions = stubReleases{"npm/lodash": oldReleases("4.17.20", "4.17.21")}
+	if progress := refreshOnce(t, m); progress.Completed != 1 {
+		t.Fatalf("progress = %+v, want 4.17.21 mirrored", progress)
+	}
+	old := time.Now().Add(-48 * time.Hour).UTC()
+	if _, err := m.db.Exec(m.db.Rebind("UPDATE artifacts SET fetched_at = ? WHERE filename = ?"), old, "lodash-4.17.20.tgz"); err != nil {
+		t.Fatal(err)
+	}
+
+	used, err := m.db.MostUsedPackages(time.Now().Add(-24*time.Hour), 10)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(used) != 0 {
+		t.Errorf("MostUsedPackages = %+v, want none: only the refresh fetched lodash within since", used)
+	}
+}
+
+// TestRefreshIndexReadIsNotAClientAccess checks that a refresh reading an
+// index again doesn't keep it among those clients fetched within since.
+func TestRefreshIndexReadIsNotAClientAccess(t *testing.T) {
+	m, _, idx := setupIndexRefresh(t)
+	dir := "/alpine/v3.20/main/aarch64"
+	idx.set(dir+"/APKINDEX.tar.gz", apkIndexArchive(t, "P:curl\nV:8.9.0-r0\nA:aarch64\n\n"))
+	clientFetchesCurl(t, m, "alpine", idx.URL+dir+"/APKINDEX.tar.gz",
+		"alpine", "8.9.0-r0", "edge/v3.20/main/aarch64/curl-8.9.0-r0.apk", idx.URL+dir+"/curl-8.9.0-r0.apk")
+	old := time.Now().Add(-2 * time.Hour).UTC()
+	if _, err := m.db.Exec(m.db.Rebind("UPDATE metadata_cache SET last_accessed_at = ?, updated_at = ?"), old, old); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := m.Refresh(context.Background(), Refresh{Top: 10, Since: 3 * time.Hour}); err != nil {
+		t.Fatal(err)
+	}
+	docs, err := m.db.RecentMetadataDocuments("alpine", time.Now().Add(-time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(docs) != 0 {
+		t.Errorf("recent indexes = %+v, want none: only the refresh read the index", docs)
+	}
+}
+
+// panickingFetcher serves files like servingFetcher but panics on URLs
+// containing panicOn.
+type panickingFetcher struct {
+	*servingFetcher
+	panicOn string
+}
+
+func (f *panickingFetcher) Fetch(ctx context.Context, url string) (*fetch.Artifact, error) {
+	return f.FetchWithHeaders(ctx, url, nil)
+}
+
+func (f *panickingFetcher) FetchWithHeaders(ctx context.Context, url string, h http.Header) (*fetch.Artifact, error) {
+	if strings.Contains(url, f.panicOn) {
+		panic("fetcher bug")
+	}
+	return f.servingFetcher.FetchWithHeaders(ctx, url, h)
+}
+
+func TestRefreshRecoversFromPanic(t *testing.T) {
+	m, fetcher := setupRefreshMirror(t, "tarball")
+	cacheNPM(t, m, "lodash", "4.17.20")
+	cacheNPM(t, m, "react", "18.3.0")
+	m.Versions = stubReleases{
+		"npm/lodash": oldReleases("4.17.20", "4.17.21"),
+		"npm/react":  oldReleases("18.3.0", "18.3.1"),
+	}
+	m.proxy.Fetcher = &panickingFetcher{servingFetcher: fetcher, panicOn: "lodash-4.17.21"}
+	fetcher.reset()
+
+	progress := refreshOnce(t, m)
+	if progress.Failed != 1 || progress.Completed != 1 || len(fetchedMatching(fetcher.fetched(), "react-18.3.1.tgz")) != 1 {
+		t.Errorf("progress = %+v, fetched %v; want lodash failed and react mirrored", progress, fetcher.fetched())
+	}
+}

@@ -22,9 +22,10 @@ base_url: "http://localhost:8080"
 # scanning. Set to "0" to disable. Default: "5m". Does not limit proxy mirror.
 # artifact_timeout: "5m"
 
-# Register DELETE /api/cache and show Delete buttons on the UI's version page,
-# for removing cached artifacts so they are fetched again. Has no
-# authentication: restrict /api/cache and /ui at the ingress first.
+# Register DELETE /api/cache and, with upstream.git set, DELETE /api/git, and
+# show Delete buttons on the UI's version and git pages, for removing cached
+# artifacts and repositories so they are fetched again. Has no authentication:
+# restrict /api/cache, /api/git and /ui at the ingress first.
 # cache_delete: false
 
 # Largest upstream artifact to fetch (e.g. "2GB"). Larger ones are refused
@@ -116,12 +117,15 @@ storage:
     #   "pkg:generic/owner%2Frepo": "90d"
     # How often to look for expired artifacts; at least "1m".
     sweep_interval: "10m"
+    # Keep this many of the newest cached versions of each package from
+    # eviction by age (cargo, golang, npm and pypi). 0 keeps none.
+    # keep_latest: 2
 
   # Store fetched artifacts. Set to false to stream every download from
   # upstream without storing it; metadata filtering, cooldown and the
   # denylist still apply. Useful when another cache sits in front of the
-  # proxy. false is incompatible with direct_serve, scanning, mirror_api and
-  # mirror.schedules.
+  # proxy. false is incompatible with direct_serve, scanning, mirror_api,
+  # mirror.schedules and mirror.refresh.
   cache_artifacts: true
 
   # Redirect cached artifact downloads to presigned storage URLs (HTTP 302)
@@ -133,12 +137,15 @@ storage:
   # How long presigned URLs remain valid (e.g. "5m", "1h"). Default: "15m".
   direct_serve_ttl: "15m"
 
-  # Public base URL to substitute into presigned URLs. Set this when the
-  # proxy reaches storage at an internal address (127.0.0.1, a Docker
-  # service name) but clients must use a public hostname. Only scheme and
-  # host are used; the signed path and query are preserved. For S3/MinIO
-  # the reverse proxy at this address must forward requests with the
-  # internal Host header or the SigV4 signature will not validate.
+  # Public base URL for presigned URLs. Set this when the proxy reaches
+  # storage at an internal address (127.0.0.1, a Docker service name, or
+  # VPC DNS) but clients must use a public hostname. Only scheme and host
+  # are used. For S3/MinIO the URL is signed for this host, so the server
+  # there must receive that Host header: a reverse proxy or CDN that sends
+  # the internal or bucket host to the origin fails signature validation.
+  # With virtual-hosted addressing (no use_path_style) the URL carries no
+  # bucket name, so this must be the bucket's own hostname. For GCS and
+  # Azure the host is replaced after signing.
   # direct_serve_base_url: "https://minio.example.com"
 
 # Database configuration
@@ -467,6 +474,16 @@ gradle:
 #     - images: ["pkg:docker/library/alpine@3.20", "pkg:docker/library/nginx@stable"]
 #       interval: "6h"
 #       platforms: ["linux/amd64"]
+#
+# Mirror new releases of the most used packages in the background, so the
+# first install after a release doesn't wait on the upstream. Cooldown and
+# the denylist apply.
+#   refresh:
+#     interval: "24h"
+#     top: 50              # packages per ecosystem, by recent downloads
+#     since: "14d"
+#     max_versions: 200    # per run; default no cap
+#     max_bytes: "2GB"     # per run; default no cap
 
 # Health endpoint configuration.
 health:

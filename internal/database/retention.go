@@ -76,6 +76,22 @@ func (db *DB) GetRetentionCandidates(fromID, toID int64, cutoff time.Time) ([]Re
 	return candidates, nil
 }
 
+// CachedVersionPURLs returns the versions of a package that have at least one
+// file cached from upstream.
+func (db *DB) CachedVersionPURLs(packagePURL string) ([]string, error) {
+	var purls []string
+	query := db.Rebind(`
+		SELECT DISTINCT a.version_purl
+		FROM versions v
+		JOIN artifacts a ON a.version_purl = v.purl
+		WHERE v.package_purl = ? AND a.storage_path IS NOT NULL AND a.source <> 'local'
+	`)
+	if err := db.Select(&purls, query, packagePURL); err != nil {
+		return nil, err
+	}
+	return purls, nil
+}
+
 // ClearExpiredArtifact marks an artifact uncached like ClearArtifactCache,
 // but only while it is still expired before cutoff, so an artifact served
 // between the scan and the clear stays cached. It queues storagePath for

@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bytes"
 	"encoding/json"
 	"io"
 	"log/slog"
@@ -784,6 +785,25 @@ func TestNuGetBuildUpstreamURLRegularPath(t *testing.T) {
 	}
 }
 
+// filterNuGetRegistration returns the registration as it is served for the
+// package id.
+func filterNuGetRegistration(t *testing.T, h *NuGetHandler, registration map[string]any, id string) map[string]any {
+	t.Helper()
+	document, err := json.Marshal(registration)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var out bytes.Buffer
+	if err := h.writeNuGetRegistration(&out, document, id, h.nugetCooldownApplies(id), nil); err != nil {
+		t.Fatal(err)
+	}
+	var filtered map[string]any
+	if err := json.Unmarshal(out.Bytes(), &filtered); err != nil {
+		t.Fatal(err)
+	}
+	return filtered
+}
+
 func TestNuGetCooldownFiltering(t *testing.T) {
 	now := time.Now()
 	oldTime := now.Add(-7 * 24 * time.Hour).Format(time.RFC3339)
@@ -823,11 +843,10 @@ func TestNuGetCooldownFiltering(t *testing.T) {
 		proxyURL: "http://localhost:8080",
 	}
 
-	if !h.filterNuGetRegistration(registration, "") {
+	pages := filterNuGetRegistration(t, h, registration, "TestPackage")["items"].([]any)
+	if len(pages) != 1 {
 		t.Fatal("expected registration items to be retained")
 	}
-
-	pages := registration["items"].([]any)
 	page := pages[0].(map[string]any)
 	items := page["items"].([]any)
 
@@ -841,7 +860,7 @@ func TestNuGetCooldownFiltering(t *testing.T) {
 	}
 
 	count := page["count"]
-	if count != 1 {
+	if count != float64(1) {
 		t.Errorf("expected page count to be 1, got %v", count)
 	}
 }
@@ -878,11 +897,10 @@ func TestNuGetCooldownFilteringWithPackageOverride(t *testing.T) {
 		proxyURL: "http://localhost:8080",
 	}
 
-	if !h.filterNuGetRegistration(registration, "") {
+	pages := filterNuGetRegistration(t, h, registration, "SpecialPackage")["items"].([]any)
+	if len(pages) != 1 {
 		t.Fatal("expected registration items to be retained")
 	}
-
-	pages := registration["items"].([]any)
 	page := pages[0].(map[string]any)
 	items := page["items"].([]any)
 
@@ -915,11 +933,10 @@ func TestNuGetCooldownNoCooldownConfig(t *testing.T) {
 		proxyURL: "http://localhost:8080",
 	}
 
-	if !h.filterNuGetRegistration(registration, "") {
+	pages := filterNuGetRegistration(t, h, registration, "Test")["items"].([]any)
+	if len(pages) != 1 {
 		t.Fatal("expected registration items to be retained")
 	}
-
-	pages := registration["items"].([]any)
 	page := pages[0].(map[string]any)
 	items := page["items"].([]any)
 
@@ -961,11 +978,10 @@ func TestNuGetCooldownFilteringNuGetTimestamp(t *testing.T) {
 		proxyURL: "http://localhost:8080",
 	}
 
-	if !h.filterNuGetRegistration(registration, "") {
+	pages := filterNuGetRegistration(t, h, registration, "Test")["items"].([]any)
+	if len(pages) != 1 {
 		t.Fatal("expected registration items to be retained")
 	}
-
-	pages := registration["items"].([]any)
 	page := pages[0].(map[string]any)
 	items := page["items"].([]any)
 

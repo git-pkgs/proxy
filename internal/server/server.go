@@ -71,6 +71,7 @@ import (
 	"net"
 	"net/http"
 	"net/url"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -188,7 +189,11 @@ func New(cfg *config.Config, logger *slog.Logger, buildInfo BuildInfo) (*Server,
 		// Fall back to file:// with Path
 		storageURL = "file://" + cfg.Storage.Path //nolint:staticcheck // backwards compat
 	}
-	store, err := storage.OpenBucket(context.Background(), storageURL)
+	var storageOpts []storage.Option
+	if cfg.Storage.DirectServe && cfg.Storage.DirectServeBaseURL != "" {
+		storageOpts = append(storageOpts, storage.WithSignEndpoint(cfg.Storage.DirectServeBaseURL))
+	}
+	store, err := storage.OpenBucket(context.Background(), storageURL, storageOpts...)
 	if err != nil {
 		_ = db.Close()
 		return nil, fmt.Errorf("initializing storage: %w", err)
@@ -311,7 +316,6 @@ func (s *Server) serve(listener net.Listener) error {
 	proxy.GradleMaxUploadSize = s.cfg.ParseGradleBuildCacheMaxUploadSize()
 	proxy.DirectServe = s.cfg.Storage.DirectServe
 	proxy.DirectServeTTL = s.cfg.ParseDirectServeTTL()
-	proxy.DirectServeBaseURL = s.cfg.Storage.DirectServeBaseURL
 	proxy.StreamArtifacts = !s.cfg.Storage.CacheArtifacts
 	if err := ConfigureDenylist(s.cfg, proxy); err != nil {
 		return err
@@ -331,7 +335,7 @@ func (s *Server) serve(listener net.Listener) error {
 	r.Use(middleware.Recoverer)
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/metrics" {
+			if countsAsTraffic(r.URL.Path) {
 				metrics.IncrementActiveRequests()
 				defer metrics.DecrementActiveRequests()
 			}
@@ -383,12 +387,21 @@ func (s *Server) serve(listener net.Listener) error {
 			ui.Delete("/api/cache/{ecosystem}/*", s.handleCacheDelete)
 		}
 		s.mountProjectUI(ui)
+		if s.git != nil {
+			ui.Get("/git", s.handleGitRepositories)
+			if s.cfg.CacheDelete {
+				ui.Delete("/api/git/*", s.handleGitDelete)
+			}
+		}
 	})
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 	})
 	if s.cfg.CacheDelete {
 		r.Delete("/api/cache/{ecosystem}/*", s.handleCacheDelete)
+		if s.git != nil {
+			r.Delete("/api/git/*", s.handleGitDelete)
+		}
 	}
 
 	s.mountEnrichmentAPI(r)
@@ -443,7 +456,7 @@ func (s *Server) serve(listener net.Listener) error {
 		"ui_url", s.cfg.UIBaseURL,
 		"storage", storageURL,
 		"database", s.cfg.Database.String())
-	for _, warning := range s.cfg.EnvWarnings() {
+	for _, warning := range slices.Concat(s.cfg.EnvWarnings(), s.cfg.Warnings()) {
 		s.logger.Warn(warning)
 	}
 	s.background.Go(func() { s.updateCacheStatsMetrics(bgCtx) })
@@ -710,13 +723,22 @@ func (s *Server) updateCacheStatsMetrics(ctx context.Context) {
 	defer ticker.Stop()
 
 	for {
-		s.updateCacheStats()
-		s.updateMetadataCacheStats()
+		s.updateGauges()
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+// updateGauges republishes the cache gauges. Each group is updated on its
+// own, so one failing leaves the others current.
+func (s *Server) updateGauges() {
+	s.updateCacheStats()
+	s.updateMetadataCacheStats()
+	if s.git != nil {
+		s.updateGitCacheStats()
 	}
 }
 

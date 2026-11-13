@@ -264,6 +264,22 @@ var (
 		[]string{"ecosystem"},
 	)
 
+	// Git cache gauges. Repositories are kept apart from the artifact
+	// figures, which hold Git LFS objects under ecosystem git.
+	GitCacheSize = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "proxy_git_cache_size_bytes",
+			Help: "Size of the cached Git repositories in bytes",
+		},
+	)
+
+	GitCachedRepositories = prometheus.NewGauge(
+		prometheus.GaugeOpts{
+			Name: "proxy_git_cached_repositories",
+			Help: "Number of cached Git repositories",
+		},
+	)
+
 	ResponseBytes = prometheus.NewCounterVec(
 		prometheus.CounterOpts{
 			Name: "proxy_response_bytes_total",
@@ -348,6 +364,8 @@ func init() {
 		EcosystemVersions,
 		MetadataCacheSize,
 		MetadataCacheEntries,
+		GitCacheSize,
+		GitCachedRepositories,
 		ResponseBytes,
 		ClientRequests,
 		ClientResponseBytes,
@@ -521,6 +539,12 @@ func RecordScanError(ecosystem, scannerName, errorType string, detail FailureDet
 func UpdateCacheStats(sizeBytes, artifactCount int64) {
 	CacheSize.Set(float64(sizeBytes))
 	CachedArtifacts.Set(float64(artifactCount))
+}
+
+// UpdateGitCacheStats sets the git cache gauges.
+func UpdateGitCacheStats(repositories int, sizeBytes int64) {
+	GitCachedRepositories.Set(float64(repositories))
+	GitCacheSize.Set(float64(sizeBytes))
 }
 
 // EcosystemStats is one ecosystem's row of the snapshot published as gauges.

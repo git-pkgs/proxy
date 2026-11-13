@@ -2,6 +2,7 @@ package handler
 
 import (
 	"net/http"
+	"slices"
 	"strings"
 
 	"github.com/git-pkgs/proxy/internal/retention"
@@ -79,6 +80,11 @@ func (h *ConanHandler) handleRecipeFile(w http.ResponseWriter, r *http.Request) 
 	revision := r.PathValue("revision")
 	filename := r.PathValue("filename")
 
+	if conanPartHasSlash(user, channel, revision, filename) {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
 	// Only the archives are artifacts; the rest goes through the metadata cache.
 	if !h.shouldCacheFile(filename) {
 		h.proxyCached(w, r)
@@ -89,7 +95,13 @@ func (h *ConanHandler) handleRecipeFile(w http.ResponseWriter, r *http.Request) 
 		"name", name, "version", version, "user", user, "channel", channel, "filename", filename)
 
 	upstreamURL := h.upstreamURL + r.URL.Path
-	storageFilename := conanStorageFilename(user, channel, revision+"_"+filename)
+	storageFilename, err := h.proxy.cacheFilenameKeepingLegacy("conan", name, version,
+		conanStorageFilename(user, channel, revision, filename),
+		conanLegacyStorageFilename(user, channel, revision+"_"+filename), upstreamURL)
+	if err != nil {
+		h.proxy.serveArtifactError(w, err, "failed to fetch file")
+		return
+	}
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", name, version, storageFilename, upstreamURL)
 	if err != nil {
@@ -111,6 +123,11 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 	pkgrev := r.PathValue("pkgrev")
 	filename := r.PathValue("filename")
 
+	if conanPartHasSlash(user, channel, revision, pkgref, pkgrev, filename) {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
+
 	// Only the archives are artifacts; the rest goes through the metadata cache.
 	if !h.shouldCacheFile(filename) {
 		h.proxyCached(w, r)
@@ -121,7 +138,13 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 		"name", name, "version", version, "pkgref", pkgref, "filename", filename)
 
 	upstreamURL := h.upstreamURL + r.URL.Path
-	storageFilename := conanStorageFilename(user, channel, revision+"_"+pkgref+"_"+pkgrev+"_"+filename)
+	storageFilename, err := h.proxy.cacheFilenameKeepingLegacy("conan", name, version,
+		conanStorageFilename(user, channel, revision, "packages", pkgref, pkgrev, filename),
+		conanLegacyStorageFilename(user, channel, revision+"_"+pkgref+"_"+pkgrev+"_"+filename), upstreamURL)
+	if err != nil {
+		h.proxy.serveArtifactError(w, err, "failed to fetch file")
+		return
+	}
 
 	result, err := h.proxy.GetOrFetchArtifactFromURL(r.Context(), "conan", name, version, storageFilename, upstreamURL)
 	if err != nil {
@@ -133,9 +156,25 @@ func (h *ConanHandler) handlePackageFile(w http.ResponseWriter, r *http.Request)
 }
 
 // conanStorageFilename names a cached archive. Archives are stored under
-// pkg:conan/{name}@{version}, so the file name carries the revisions and, when
-// set, user and channel, to keep every recipe and binary apart.
-func conanStorageFilename(user, channel, file string) string {
+// pkg:conan/{name}@{version}, so the file name carries user, channel and the
+// revisions, to keep every recipe and binary apart. The handlers refuse a
+// part that contains a slash, so joining them with one keeps different
+// references apart.
+func conanStorageFilename(user, channel string, parts ...string) string {
+	return strings.Join(append([]string{user, channel}, parts...), "/")
+}
+
+// conanPartHasSlash reports whether a path value contains a slash, which it
+// can only get from an encoded one (%2F) in the request.
+func conanPartHasSlash(parts ...string) bool {
+	return slices.ContainsFunc(parts, func(part string) bool { return strings.Contains(part, "/") })
+}
+
+// conanLegacyStorageFilename is the name archives were cached under before
+// their parts were joined with slashes. Underscores, which revisions, user
+// and channel can contain, joined them, so it is only read for the URL an
+// entry was fetched from.
+func conanLegacyStorageFilename(user, channel, file string) string {
 	if user == "_" && channel == "_" {
 		return file
 	}

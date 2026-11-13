@@ -13,6 +13,7 @@ import (
 	"slices"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -635,74 +636,6 @@ func TestGetOrFetchArtifact_DirectServe_Redirect(t *testing.T) {
 	art, _ := db.GetArtifact("pkg:npm/lodash@4.17.21", "lodash-4.17.21.tgz")
 	if art == nil || art.HitCount != 1 {
 		t.Errorf("artifact hit count not recorded: %+v", art)
-	}
-}
-
-func TestGetOrFetchArtifact_DirectServe_BaseURLRewrite(t *testing.T) {
-	proxy, db, store, _ := setupTestProxy(t)
-	seedPackage(t, db, store, "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz", "cached content")
-
-	proxy.DirectServe = true
-	proxy.DirectServeBaseURL = "https://cdn.example.com"
-	store.signedURL = "http://127.0.0.1:9000/bucket/npm/lodash?X-Amz-Signature=abc&X-Amz-Expires=900"
-
-	result, err := proxy.GetOrFetchArtifact(context.Background(), "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz")
-	if err != nil {
-		t.Fatalf("unexpected error: %v", err)
-	}
-
-	want := "https://cdn.example.com/bucket/npm/lodash?X-Amz-Signature=abc&X-Amz-Expires=900"
-	if result.RedirectURL != want {
-		t.Errorf("RedirectURL = %q, want %q", result.RedirectURL, want)
-	}
-}
-
-func TestRewriteSignedURLHost(t *testing.T) {
-	tests := []struct {
-		name    string
-		signed  string
-		baseURL string
-		want    string
-	}{
-		{
-			"empty base url is no-op",
-			"http://127.0.0.1:9000/bucket/key?sig=abc",
-			"",
-			"http://127.0.0.1:9000/bucket/key?sig=abc",
-		},
-		{
-			"replaces scheme and host",
-			"http://127.0.0.1:9000/bucket/key?sig=abc",
-			"https://cdn.example.com",
-			"https://cdn.example.com/bucket/key?sig=abc",
-		},
-		{
-			"preserves path and query",
-			"http://minio:9000/bucket/npm/lodash/4.17.21/lodash.tgz?X-Amz-Signature=abc&X-Amz-Date=20260101",
-			"https://files.example.com",
-			"https://files.example.com/bucket/npm/lodash/4.17.21/lodash.tgz?X-Amz-Signature=abc&X-Amz-Date=20260101",
-		},
-		{
-			"ignores base url path",
-			"http://127.0.0.1:9000/bucket/key?sig=abc",
-			"https://cdn.example.com/ignored",
-			"https://cdn.example.com/bucket/key?sig=abc",
-		},
-		{
-			"invalid base url is no-op",
-			"http://127.0.0.1:9000/bucket/key?sig=abc",
-			"://bad",
-			"http://127.0.0.1:9000/bucket/key?sig=abc",
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			got := rewriteSignedURLHost(tt.signed, tt.baseURL)
-			if got != tt.want {
-				t.Errorf("rewriteSignedURLHost(%q, %q) = %q, want %q", tt.signed, tt.baseURL, got, tt.want)
-			}
-		})
 	}
 }
 
@@ -1582,5 +1515,56 @@ func TestCanonicalPackagePURLMatchesConfig(t *testing.T) {
 				t.Errorf("lookup key %q not found in normalized config %v", lookup, normalized)
 			}
 		})
+	}
+}
+
+func TestProxyCachedRecordsUpstreamURL(t *testing.T) {
+	proxy, upstream := setupCachedProxy(t, `"abc123"`, "")
+	req := httptest.NewRequest(http.MethodGet, "/test", nil)
+	proxy.ProxyCached(httptest.NewRecorder(), req, upstream.URL+"/test", "test-eco", "url-key")
+
+	entry, err := proxy.DB.GetMetadataCache("test-eco", "url-key")
+	if err != nil || entry == nil {
+		t.Fatalf("GetMetadataCache: %+v, %v", entry, err)
+	}
+	if entry.UpstreamURL.String != upstream.URL+"/test" {
+		t.Errorf("upstream_url = %q, want %q", entry.UpstreamURL.String, upstream.URL+"/test")
+	}
+}
+
+// A row cached before upstream URLs were recorded gets its URL on the next
+// revalidation, even when upstream answers 304.
+func TestProxyCachedRecordsUpstreamURLOnNotModified(t *testing.T) {
+	var notModified atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("ETag", `"v1"`)
+		if r.Header.Get("If-None-Match") == `"v1"` {
+			notModified.Add(1)
+			w.WriteHeader(http.StatusNotModified)
+			return
+		}
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, _, _, _ := setupTestProxy(t)
+	proxy.CacheMetadata = true
+	proxy.HTTPClient = upstream.Client()
+
+	proxy.ProxyCached(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/test", nil), upstream.URL+"/test", "test-eco", "url-304-key")
+	if _, err := proxy.DB.Exec("UPDATE metadata_cache SET upstream_url = NULL"); err != nil {
+		t.Fatal(err)
+	}
+
+	w := httptest.NewRecorder()
+	proxy.ProxyCached(w, httptest.NewRequest(http.MethodGet, "/test", nil), upstream.URL+"/test", "test-eco", "url-304-key")
+	if w.Code != http.StatusOK || notModified.Load() != 1 {
+		t.Fatalf("status = %d, upstream 304s = %d; want 200 after one 304", w.Code, notModified.Load())
+	}
+	entry, err := proxy.DB.GetMetadataCache("test-eco", "url-304-key")
+	if err != nil || entry == nil {
+		t.Fatalf("GetMetadataCache: %+v, %v", entry, err)
+	}
+	if entry.UpstreamURL.String != upstream.URL+"/test" {
+		t.Errorf("upstream_url after a 304 = %q, want %q", entry.UpstreamURL.String, upstream.URL+"/test")
 	}
 }

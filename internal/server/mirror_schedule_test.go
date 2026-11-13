@@ -4,10 +4,12 @@ import (
 	"context"
 	"io"
 	"log/slog"
+	"reflect"
 	"sync/atomic"
 	"testing"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/mirror"
 )
@@ -95,4 +97,24 @@ func TestWaitForMirrorSchedulesGivesUpAtDeadline(t *testing.T) {
 func TestWaitForMirrorSchedulesWithoutSchedules(t *testing.T) {
 	s := &Server{}
 	s.waitForMirrorSchedules(context.Background())
+}
+
+func TestMirrorSchedulesFromConfig(t *testing.T) {
+	cfg := config.MirrorConfig{
+		Schedules: []config.MirrorSchedule{{Images: []string{"pkg:docker/alpine@3"}, Interval: "6h", Platforms: []string{"linux/amd64"}}},
+		Refresh:   &config.MirrorRefresh{Interval: "24h", Top: 20, Since: "7d", MaxVersions: 100, MaxBytes: "1GB"},
+	}
+	if err := cfg.Validate(); err != nil {
+		t.Fatal(err)
+	}
+	want := []mirror.Schedule{
+		{PURLs: []string{"pkg:docker/alpine@3"}, Platforms: []string{"linux/amd64"}, Interval: 6 * time.Hour},
+		{Refresh: &mirror.Refresh{Top: 20, Since: 7 * 24 * time.Hour, MaxVersions: 100, MaxBytes: 1 << 30}, Interval: 24 * time.Hour},
+	}
+	if got := mirrorSchedules(cfg); !reflect.DeepEqual(got, want) {
+		t.Errorf("mirrorSchedules =\n%+v\nwant\n%+v", got, want)
+	}
+	if got := mirrorSchedules(config.MirrorConfig{}); len(got) != 0 {
+		t.Errorf("mirrorSchedules of an empty config = %+v, want none", got)
+	}
 }

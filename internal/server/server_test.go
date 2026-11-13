@@ -869,6 +869,35 @@ func TestStaticFiles(t *testing.T) {
 	}
 }
 
+func TestStaticFilesRevalidate(t *testing.T) {
+	ts := newTestServer(t)
+	defer ts.close()
+
+	req := httptest.NewRequest("GET", "/ui/static/vendor/tailwind.js", nil)
+	w := httptest.NewRecorder()
+	ts.handler.ServeHTTP(w, req)
+
+	etag := w.Header().Get("ETag")
+	if etag == "" {
+		t.Fatal("expected an ETag on a static file")
+	}
+	if got := w.Header().Get("Cache-Control"); got != "no-cache" {
+		t.Errorf("Cache-Control = %q, want no-cache", got)
+	}
+
+	req = httptest.NewRequest("GET", "/ui/static/vendor/tailwind.js", nil)
+	req.Header.Set("If-None-Match", etag)
+	w = httptest.NewRecorder()
+	ts.handler.ServeHTTP(w, req)
+
+	if w.Code != http.StatusNotModified {
+		t.Errorf("revalidation status = %d, want 304", w.Code)
+	}
+	if w.Body.Len() != 0 {
+		t.Errorf("revalidation body = %d bytes, want none", w.Body.Len())
+	}
+}
+
 func TestCategorizeLicenseCSS(t *testing.T) {
 	tests := []struct {
 		license  string
@@ -1738,6 +1767,63 @@ func TestNewServer_StorageConnectivityCheck(t *testing.T) {
 	}
 
 	_ = srv.db.Close()
+}
+
+func TestNewServer_DirectServeBaseURL(t *testing.T) {
+	tempDir := t.TempDir()
+	awsConfigFile := filepath.Join(tempDir, "aws-config")
+	awsCredsFile := filepath.Join(tempDir, "aws-credentials")
+	if err := os.WriteFile(awsConfigFile, nil, 0o600); err != nil {
+		t.Fatalf("writing empty AWS config file: %v", err)
+	}
+	if err := os.WriteFile(awsCredsFile, nil, 0o600); err != nil {
+		t.Fatalf("writing empty AWS credentials file: %v", err)
+	}
+	t.Setenv("AWS_PROFILE", "")
+	t.Setenv("AWS_DEFAULT_PROFILE", "")
+	t.Setenv("AWS_CONFIG_FILE", awsConfigFile)
+	t.Setenv("AWS_SHARED_CREDENTIALS_FILE", awsCredsFile)
+	t.Setenv("AWS_ACCESS_KEY_ID", "test")
+	t.Setenv("AWS_SECRET_ACCESS_KEY", "test")
+
+	s3Srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer s3Srv.Close()
+
+	cfg := &config.Config{
+		Listen:  ":0",
+		BaseURL: "http://localhost:8080",
+		Storage: config.StorageConfig{
+			URL:                "s3://bucket?region=us-1&endpoint=" + s3Srv.URL + "&use_path_style=true",
+			DirectServe:        true,
+			DirectServeBaseURL: "https://cdn.example.com",
+		},
+		Database: config.DatabaseConfig{Path: filepath.Join(tempDir, "test.db")},
+	}
+
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	srv, err := New(cfg, logger, BuildInfo{})
+	if err != nil {
+		t.Fatalf("New() failed: %v", err)
+	}
+	defer func() {
+		_ = srv.storage.Close()
+		_ = srv.db.Close()
+	}()
+
+	signed, err := srv.storage.SignedURL(context.Background(), "npm/lodash/4.17.21/lodash-4.17.21.tgz", time.Minute)
+	if err != nil {
+		t.Fatalf("SignedURL() failed: %v", err)
+	}
+
+	u, err := url.Parse(signed)
+	if err != nil {
+		t.Fatalf("parsing signed URL %q: %v", signed, err)
+	}
+	if u.Scheme != "https" || u.Host != "cdn.example.com" {
+		t.Errorf("signed URL = %q, want scheme https and host cdn.example.com", signed)
+	}
 }
 
 func TestNewServer_InvalidAccessLogFailsBeforeDatabaseInit(t *testing.T) {

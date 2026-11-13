@@ -11,11 +11,13 @@ import (
 	"fmt"
 	"slices"
 	"sort"
+	"strings"
 	"sync"
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/purl"
+	"github.com/git-pkgs/vers"
 )
 
 // KnownKeys lists the ecosystem keys storage.retention.ecosystems accepts.
@@ -54,6 +56,23 @@ type Spec struct {
 	// config keeps it in Rules.Sources until then. Nil means the ecosystem
 	// has no such form.
 	SourcePackage func(p *purl.PURL) bool
+
+	// CompareVersions orders two versions as the handler stores them,
+	// returning a negative number, zero or a positive number as a is lower
+	// than, the same as or higher than b. With it set, Rules.KeepLatest
+	// applies to the ecosystem. Nil means the stored versions cannot be
+	// ordered, as with digests and hashes.
+	CompareVersions func(a, b string) int
+}
+
+// VersionOrder returns a CompareVersions for an ecosystem whose handler
+// stores each release under its plain version number: it compares by the
+// version rules of the ecosystem key.
+func VersionOrder(key string) func(a, b string) int {
+	scheme := purl.EcosystemToPURLType(key)
+	return func(a, b string) int {
+		return vers.CompareWithScheme(a, b, scheme)
+	}
 }
 
 // dbEcosystems returns every packages.ecosystem value that belongs to the
@@ -149,6 +168,45 @@ func (r *Registry) Keys() []string {
 	return keys
 }
 
+// KeepLatestKeys returns the registered keys Rules.KeepLatest applies to,
+// in sorted order.
+func (r *Registry) KeepLatestKeys() []string {
+	var keys []string
+	for _, key := range r.Keys() {
+		if s, _ := r.Lookup(key); s.CompareVersions != nil {
+			keys = append(keys, key)
+		}
+	}
+	return keys
+}
+
+// NewestVersions returns the versions that are among the n highest under
+// compare, highest first. Versions that compare equal, such as two spellings
+// of one release, count as one version and are returned together.
+func NewestVersions(compare func(a, b string) int, versions []string, n int) []string {
+	if n <= 0 || len(versions) == 0 {
+		return nil
+	}
+	sorted := slices.Clone(versions)
+	slices.SortFunc(sorted, func(a, b string) int {
+		if c := compare(b, a); c != 0 {
+			return c
+		}
+		return strings.Compare(b, a)
+	})
+	distinct := 1
+	for i := 1; i < len(sorted); i++ {
+		if compare(sorted[i-1], sorted[i]) == 0 {
+			continue
+		}
+		if distinct == n {
+			return sorted[:i]
+		}
+		distinct++
+	}
+	return sorted
+}
+
 // KeyForDBEcosystem returns the registered key a packages.ecosystem value
 // belongs to.
 func (r *Registry) KeyForDBEcosystem(ecosystem string) (string, bool) {
@@ -198,6 +256,10 @@ type Rules struct {
 	// Spec.SourcePackage). An ecosystem with any is not swept, since one of
 	// them may keep an artifact the sweep would otherwise clear.
 	Sources map[string]map[string]time.Duration
+	// KeepLatest is how many of the highest cached versions of each package
+	// are never evicted by age, in ecosystems whose Spec sets
+	// CompareVersions. Zero keeps none.
+	KeepLatest int
 }
 
 // Pending reports whether the ecosystem key has package rules still to be

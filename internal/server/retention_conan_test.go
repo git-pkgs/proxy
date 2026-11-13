@@ -29,15 +29,15 @@ type conanFile struct {
 var (
 	conanZlibSources = conanFile{
 		"/v2/conans/zlib/1.3.1/_/_/revisions/" + conanRecipeRevision + "/files/conan_sources.tgz",
-		conanRecipeRevision + "_conan_sources.tgz",
+		"_/_/" + conanRecipeRevision + "/conan_sources.tgz",
 	}
 	conanZlibPackage = conanFile{
 		"/v2/conans/zlib/1.3.1/_/_/revisions/" + conanRecipeRevision + "/packages/0123abc/revisions/4567def/files/conan_package.tgz",
-		conanRecipeRevision + "_0123abc_4567def_conan_package.tgz",
+		"_/_/" + conanRecipeRevision + "/packages/0123abc/4567def/conan_package.tgz",
 	}
 	conanZlibAcme = conanFile{
 		"/v2/conans/zlib/1.2.13/acme/stable/revisions/" + conanRecipeRevision + "/files/conan_export.tgz",
-		"acme@stable_" + conanRecipeRevision + "_conan_export.tgz",
+		"acme/stable/" + conanRecipeRevision + "/conan_export.tgz",
 	}
 	conanOpenSSLSources = conanFile{
 		"/v2/conans/openssl/3.3.2/_/_/revisions/" + conanRecipeRevision + "/files/conan_sources.tgz",
@@ -209,7 +209,7 @@ func TestConanRetentionPackageRule(t *testing.T) {
 			t.Errorf("%s evicted despite the never-evict rule for zlib", f.filename)
 		}
 	}
-	if conanArtifact(t, db, "pkg:conan/openssl", conanRecipeRevision+"_conan_sources.tgz").StoragePath.Valid {
+	if conanArtifact(t, db, "pkg:conan/openssl", "_/_/"+conanRecipeRevision+"/conan_sources.tgz").StoragePath.Valid {
 		t.Error("openssl kept past the conan rule")
 	}
 }

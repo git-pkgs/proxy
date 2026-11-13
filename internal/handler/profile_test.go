@@ -34,7 +34,6 @@ func TestWithCooldownCopiesProxyFields(t *testing.T) {
 	p.NPMFullMetadata = true
 	p.DirectServe = true
 	p.DirectServeTTL = time.Minute
-	p.DirectServeBaseURL = "https://storage.example.com"
 	p.RateLimits = registryclient.NewRateLimitGate(http.DefaultTransport)
 	p.HostedNPMScopes = []string{"@example"}
 	p.HostedComposerVendors = []string{"example"}
@@ -46,6 +45,7 @@ func TestWithCooldownCopiesProxyFields(t *testing.T) {
 	p.inFlight = map[string]*inflightFetch{"artifact": {}}
 	p.detachSlots = make(chan struct{}, 1)
 	p.inFlightMeta = map[string]*inflightMetadata{"metadata": {}}
+	p.metaDetachSlots = make(chan struct{}, 1)
 	p.publishIndexes.entries = map[string]publishIndexEntry{"document": {}}
 	p.cooldownWatch.active = map[*cooldownRecorder]struct{}{{}: {}}
 
@@ -61,7 +61,7 @@ func TestWithCooldownCopiesProxyFields(t *testing.T) {
 		switch name {
 		case "Cooldown", "ShortestCooldown", "shared":
 			continue
-		case "fetchMu", "inFlight", "detachSlots", "metaMu", "inFlightMeta", "publishIndexes", "cooldownWatch":
+		case "fetchMu", "inFlight", "detachSlots", "metaMu", "inFlightMeta", "metaDetachSlots", "publishIndexes", "cooldownWatch", "viewCooldown":
 			if !after.IsZero() {
 				t.Errorf("view field %s is not empty", name)
 			}

@@ -199,12 +199,12 @@ func (h *ArchHandler) handleDatabase(w http.ResponseWriter, r *http.Request, rep
 	d := h.database(repository, upstreamURL, path)
 	if _, hit := p.cachedMetadataState(r.Context(), archEcosystem, d.dbKey, nil); hit != nil {
 		metrics.RecordMetadataCacheHit(archEcosystem, len(hit.body))
-		h.writeMetadata(w, r, d.dbKey, *hit)
+		h.writeMetadata(w, r, *hit)
 		return
 	}
 	p.recordMetadataCacheMiss(archEcosystem)
 	res := h.sharedRefresh(r.Context(), d, true)
-	h.writeMetadata(w, r, d.dbKey, res)
+	h.writeMetadata(w, r, res)
 }
 
 // handleDatabaseSignature serves the signature stored for the cached
@@ -218,7 +218,7 @@ func (h *ArchHandler) handleDatabaseSignature(w http.ResponseWriter, r *http.Req
 	d := h.database(repository, upstreamURL, strings.TrimSuffix(path, archSignatureSuffix))
 	if res, ok := h.cachedSignature(r.Context(), d); ok {
 		metrics.RecordMetadataCacheHit(archEcosystem, len(res.body))
-		h.writeMetadata(w, r, d.sigKey, res)
+		h.writeMetadata(w, r, res)
 		return
 	}
 	p.recordMetadataCacheMiss(archEcosystem)
@@ -242,7 +242,7 @@ func (h *ArchHandler) handleDatabaseSignature(w http.ResponseWriter, r *http.Req
 		}
 		return metadataResult{err: errArchSignatureUnpaired}
 	})
-	h.writeMetadata(w, r, d.sigKey, res)
+	h.writeMetadata(w, r, res)
 }
 
 var errArchSignatureUnpaired = errors.New("database signature could not be paired with the database")
@@ -324,7 +324,7 @@ func (h *ArchHandler) fetchDatabase(ctx context.Context, d archDatabase, entry *
 		return metadataResult{err: fmt.Errorf("upstream failed and no cached metadata: %w", err)}, nil
 	}
 	p.Logger.Warn("upstream metadata fetch failed, checking cache", "ecosystem", archEcosystem, "key", d.dbKey, "error", err)
-	return h.readDatabase(ctx, p.currentMetadataEntry(archEcosystem, d.dbKey, entry), err)
+	return h.readDatabase(ctx, p.currentMetadataEntry(archEcosystem, d.dbKey, entry), err, true)
 }
 
 // storeDatabase caches meta under its digest and returns the database the
@@ -345,15 +345,15 @@ func (h *ArchHandler) storeDatabase(ctx context.Context, d archDatabase, meta *u
 	row, _ := p.DB.GetMetadataCache(archEcosystem, d.dbKey)
 	if row == nil {
 		// Nothing cached at all: serve it like an uncached proxy would.
-		return metadataResult{body: meta.body, contentType: meta.contentType, contentEncoding: meta.contentEncoding}, nil
+		return fetchedResult(meta, ""), nil
 	}
 	if row.StoragePath != path {
-		return h.readDatabase(ctx, row, errArchDatabaseNotCached)
+		return h.readDatabase(ctx, row, errArchDatabaseNotCached, false)
 	}
 	if previous != nil && previous.StoragePath != path {
 		_ = p.Storage.Delete(ctx, previous.StoragePath)
 	}
-	return metadataResult{body: meta.body, contentType: meta.contentType, contentEncoding: meta.contentEncoding}, row
+	return fetchedResult(meta, row.ContentDigest.String), row
 }
 
 // blobExists reports whether path is stored. Size eviction can remove a blob
@@ -377,13 +377,18 @@ func (h *ArchHandler) touchDatabase(row *database.MetadataCacheEntry, meta *upst
 var errArchDatabaseNotCached = errors.New("database could not be cached")
 
 // readDatabase returns the cached database row's bytes, or cause if they are
-// unreadable.
-func (h *ArchHandler) readDatabase(ctx context.Context, row *database.MetadataCacheEntry, cause error) (metadataResult, *database.MetadataCacheEntry) {
+// unreadable. stale marks them as served because the upstream failed with
+// cause.
+func (h *ArchHandler) readDatabase(ctx context.Context, row *database.MetadataCacheEntry, cause error, stale bool) (metadataResult, *database.MetadataCacheEntry) {
 	body, contentType, err := h.proxy.readCachedMetadata(ctx, row, nil)
 	if err != nil {
 		return metadataResult{err: fmt.Errorf("cached database unusable (%v): %w", err, cause)}, nil
 	}
-	return metadataResult{body: body, contentType: contentType, contentEncoding: row.ContentEncoding.String}, row
+	res := metadataResult{body: body, contentType: contentType, contentEncoding: row.ContentEncoding.String}
+	if stale {
+		res.stale, res.upstreamErr = true, cause
+	}
+	return res.describedBy(row), row
 }
 
 // lock serializes cache writes for one database and its signature, so a row
@@ -433,7 +438,7 @@ func (h *ArchHandler) storedSignature(ctx context.Context, d archDatabase, dbDig
 		if err != nil {
 			return metadataResult{}, false
 		}
-		return metadataResult{body: body, contentType: contentType, contentEncoding: entry.ContentEncoding.String}, true
+		return metadataResult{body: body, contentType: contentType, contentEncoding: entry.ContentEncoding.String}.describedBy(entry), true
 	}
 	return metadataResult{}, false
 }
@@ -478,7 +483,7 @@ func archDigest(body []byte) string {
 	return "sha256:" + hex.EncodeToString(digest[:])
 }
 
-func (h *ArchHandler) writeMetadata(w http.ResponseWriter, r *http.Request, cacheKey string, res metadataResult) {
+func (h *ArchHandler) writeMetadata(w http.ResponseWriter, r *http.Request, res metadataResult) {
 	if res.err != nil {
 		if errors.Is(res.err, ErrUpstreamNotFound) {
 			http.Error(w, "not found", http.StatusNotFound)
@@ -491,7 +496,7 @@ func (h *ArchHandler) writeMetadata(w http.ResponseWriter, r *http.Request, cach
 		http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
 		return
 	}
-	h.proxy.writeMetadataCachedResponseWithEncoding(w, r, archEcosystem, cacheKey, res.body, res.contentType, res.contentEncoding)
+	writeMetadataResult(w, r, res)
 }
 
 // metadataCacheKey hashes repository, upstream URL and path, as APKHandler does.

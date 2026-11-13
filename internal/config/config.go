@@ -212,9 +212,10 @@ type Config struct {
 	// Mirror configures scheduled mirroring.
 	Mirror MirrorConfig `json:"mirror" yaml:"mirror"`
 
-	// CacheDelete enables DELETE /api/cache for removing cached artifacts, and
-	// the delete buttons on the UI's version page. It has no authentication of
-	// its own, so restrict /api/cache and /ui at the ingress when enabling it.
+	// CacheDelete enables DELETE /api/cache and DELETE /api/git for removing
+	// cached artifacts and git repositories, and the delete buttons on the
+	// UI's version and git pages. It has no authentication of its own, so
+	// restrict /api/cache, /api/git and /ui at the ingress when enabling it.
 	CacheDelete bool `json:"cache_delete" yaml:"cache_delete"`
 
 	// Hosted configures pushing packages to the proxy (/api/hosted).
@@ -519,10 +520,10 @@ type StorageConfig struct {
 	// Uses Go duration syntax (e.g. "5m", "1h"). Default: "15m".
 	DirectServeTTL string `json:"direct_serve_ttl" yaml:"direct_serve_ttl"`
 
-	// DirectServeBaseURL overrides the scheme and host of presigned URLs
-	// before returning them to clients. Useful when the proxy reaches
-	// storage at an internal address (e.g. 127.0.0.1 or a Docker hostname)
-	// but clients must use a public one.
+	// DirectServeBaseURL sets the scheme and host of presigned URLs. Useful
+	// when the proxy reaches storage at an internal address (e.g. 127.0.0.1
+	// or a Docker hostname) but clients must use a public one. S3 URLs are
+	// signed for this host; GCS and Azure URLs have it replaced after signing.
 	DirectServeBaseURL string `json:"direct_serve_base_url" yaml:"direct_serve_base_url"`
 
 	// CacheArtifacts stores fetched artifacts so later downloads are served
@@ -559,6 +560,10 @@ type RetentionConfig struct {
 	// SweepInterval is how often expired artifacts are looked for, at least
 	// one minute. Default: "10m".
 	SweepInterval string `json:"sweep_interval" yaml:"sweep_interval"`
+
+	// KeepLatest is how many of the highest cached versions of each package
+	// are never evicted by age, in the ecosystems that support it. Default: 0.
+	KeepLatest int `json:"keep_latest" yaml:"keep_latest"`
 }
 
 // GradleConfig configures Gradle-specific features.
@@ -1731,6 +1736,8 @@ func (c *Config) validateCacheArtifacts() error {
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror_api: mirrored artifacts would never be served")
 	case len(c.Mirror.Schedules) > 0:
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror.schedules: mirrored artifacts would never be served")
+	case c.Mirror.Refresh != nil:
+		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with mirror.refresh: mirrored artifacts would never be served")
 	case c.Hosted.Enabled:
 		return fmt.Errorf("storage.cache_artifacts: false cannot be combined with hosted.enabled: pushed packages would never be served")
 	}

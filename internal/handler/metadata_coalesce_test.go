@@ -247,3 +247,39 @@ func TestCoalescedMetadataMiss_ServesRowCommittedSinceLookup(t *testing.T) {
 		t.Errorf("upstream requests = %d, want 1 (the priming fetch only)", got)
 	}
 }
+
+// TestFetchOrCacheMetadata_DetachCapFallsBackToClientContext checks the cap on
+// metadata fetches that outlive their caller: with every slot taken, a caller
+// that leaves ends its fetch, so clients that request documents and hang up
+// can't leave any number of fetches running.
+func TestFetchOrCacheMetadata_DetachCapFallsBackToClientContext(t *testing.T) {
+	u := newMetadataUpstream(t, http.StatusOK)
+	defer close(u.release)
+	p := metadataTestProxy(t, u)
+
+	for range maxDetachedMetadataFetches {
+		if !p.acquireMetadataDetachSlot() {
+			t.Fatal("could not take a free metadata detach slot")
+		}
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	call := startMetadataCalls(p, ctx, 1, u.URL, contentTypeJSON)
+	<-u.entered
+	cancel()
+
+	select {
+	case c := <-call[0]:
+		if !errors.Is(c.err, context.Canceled) {
+			t.Errorf("err = %v, want context.Canceled once the slots are used up", c.err)
+		}
+	case <-time.After(5 * time.Second):
+		t.Fatal("the fetch kept running after its caller left, with no slot free")
+	}
+
+	for range maxDetachedMetadataFetches {
+		p.releaseMetadataDetachSlot()
+	}
+	if !p.acquireMetadataDetachSlot() {
+		t.Error("slots not available again after release")
+	}
+}
