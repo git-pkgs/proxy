@@ -186,6 +186,21 @@ func TestGoListRecordsWithheldVersions(t *testing.T) {
 	assertPackageRow(t, proxy.DB, "golang", "example.com/mod")
 }
 
+// A .info request for a version in cooldown is refused, and the version is
+// recorded with the publish time the refusal was based on.
+func TestGoRefusedInfoRecordsWithheldVersion(t *testing.T) {
+	u := newGoCooldownUpstream(t, "v1.1.0")
+	h, _, proxy := goCooldownHandler(t, u)
+	if w := goGet(h, "/example.com/mod/@v/v1.1.0.info"); w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403", w.Code)
+	}
+	ver, err := proxy.DB.GetVersionByPURL(canonicalVersionPURL("golang", "example.com/mod", "v1.1.0"))
+	if err != nil || ver == nil || !ver.PublishedAt.Valid {
+		t.Fatalf("version = %v, %v; want it stored with its publish time", ver, err)
+	}
+	assertPackageRow(t, proxy.DB, "golang", "example.com/mod")
+}
+
 func assertPackageRow(t *testing.T, db *database.DB, ecosystem, name string) {
 	t.Helper()
 	if pkg, err := db.GetPackageByEcosystemName(ecosystem, name); err != nil || pkg == nil {
@@ -249,6 +264,58 @@ func TestPyPISimpleRecordsWithheldVersions(t *testing.T) {
 	}
 	assertWithheldRecorded(t, proxy.DB, "pypi", "ruff", "2.0.0", recent)
 	assertNotRecorded(t, proxy.DB, "pypi", "ruff", "1.0.0")
+}
+
+// The JSON API filters releases on its own path, so a client that reads it
+// rather than the simple index gets the held back version recorded too.
+func TestPyPIJSONRecordsWithheldVersions(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	old, recent := now.Add(-30*24*time.Hour), now.Add(-time.Hour)
+	h, proxy := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+		if r.URL.Path != "/pypi/ruff/json" {
+			t.Fatalf("unexpected upstream path: %s", r.URL.Path)
+		}
+		body := `{"info":{"name":"ruff","version":"1.0.0"},"releases":{` +
+			`"1.0.0":[{"filename":"ruff-1.0.0.tar.gz","url":"https://files.pythonhosted.org/packages/ab/ruff-1.0.0.tar.gz","upload_time_iso_8601":"` + old.Format(time.RFC3339) + `"}],` +
+			`"2.0.0":[{"filename":"ruff-2.0.0.tar.gz","url":"https://files.pythonhosted.org/packages/cd/ruff-2.0.0.tar.gz","upload_time_iso_8601":"` + recent.Add(-time.Minute).Format(time.RFC3339) + `"},` +
+			`{"filename":"ruff-2.0.0-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/ef/ruff-2.0.0-py3-none-any.whl","upload_time_iso_8601":"` + recent.Format(time.RFC3339) + `"}]}}`
+		return pypiHTTPResponse(r, "application/json", body), nil
+	})
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/pypi/ruff/json", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), `"2.0.0"`) {
+		t.Fatalf("2.0.0 was served although it is in cooldown")
+	}
+	// A release's time is its newest file's.
+	assertWithheldRecorded(t, proxy.DB, "pypi", "ruff", "2.0.0", recent)
+	assertNotRecorded(t, proxy.DB, "pypi", "ruff", "1.0.0")
+}
+
+// The version JSON names one release, in urls, and records it when it is
+// held back.
+func TestPyPIVersionJSONRecordsWithheldVersion(t *testing.T) {
+	recent := time.Now().UTC().Truncate(time.Second).Add(-time.Hour)
+	h, proxy := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+		body := `{"info":{"name":"ruff","version":"2.0.0"},"urls":[` +
+			`{"filename":"ruff-2.0.0.tar.gz","url":"https://files.pythonhosted.org/packages/cd/ruff-2.0.0.tar.gz","upload_time_iso_8601":"` + recent.Format(time.RFC3339) + `"}]}`
+		return pypiHTTPResponse(r, "application/json", body), nil
+	})
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/pypi/ruff/2.0.0/json", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status = %d: %s", w.Code, w.Body)
+	}
+	if strings.Contains(w.Body.String(), "ruff-2.0.0.tar.gz") {
+		t.Fatalf("the files of 2.0.0 were served although it is in cooldown")
+	}
+	assertWithheldRecorded(t, proxy.DB, "pypi", "ruff", "2.0.0", recent)
 }
 
 // The NuGet listing and the registration each find the held back version.

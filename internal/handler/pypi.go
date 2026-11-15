@@ -626,9 +626,17 @@ func (h *PyPIHandler) filterAndRewriteReleases(metadata map[string]any, packageN
 	}
 
 	for version, files := range releases {
-		if h.proxy.versionDenied("pypi", packageName, version) || h.shouldFilterRelease(packagePURL, files) {
+		denied := h.proxy.versionDenied("pypi", packageName, version)
+		held, publishedAt := false, time.Time{}
+		if !denied {
+			held, publishedAt = h.shouldFilterRelease(packagePURL, files)
+		}
+		if denied || held {
 			h.proxy.Logger.Info("policy: filtering pypi version",
 				"package", packageName, "version", version)
+			if held {
+				h.proxy.recordWithheld("pypi", packageName, version, publishedAt)
+			}
 			delete(releases, version)
 			continue
 		}
@@ -637,19 +645,20 @@ func (h *PyPIHandler) filterAndRewriteReleases(metadata map[string]any, packageN
 	}
 }
 
-// shouldFilterRelease returns true if a release should be excluded due to cooldown.
-func (h *PyPIHandler) shouldFilterRelease(packagePURL string, files any) bool {
+// shouldFilterRelease reports whether a release should be excluded due to
+// cooldown, and the newest upload time that decided it.
+func (h *PyPIHandler) shouldFilterRelease(packagePURL string, files any) (bool, time.Time) {
 	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() || packagePURL == "" {
-		return false
+		return false, time.Time{}
 	}
 
 	filesArr, ok := files.([]any)
 	if !ok {
-		return false
+		return false, time.Time{}
 	}
 
 	publishedAt := h.newestUploadTime(filesArr)
-	return !publishedAt.IsZero() && !h.proxy.cooldown().IsAllowed("pypi", packagePURL, publishedAt)
+	return !publishedAt.IsZero() && !h.proxy.cooldown().IsAllowed("pypi", packagePURL, publishedAt), publishedAt
 }
 
 // versionInCooldown reports whether a version is still inside the cooldown
@@ -745,7 +754,10 @@ func (h *PyPIHandler) filterAndRewriteURLs(metadata map[string]any, packagePURL 
 	info, _ := metadata["info"].(map[string]any)
 	name, _ := info["name"].(string)
 	version, _ := info["version"].(string)
-	if h.proxy.versionDenied("pypi", name, version) || h.shouldFilterRelease(packagePURL, urls) {
+	if h.proxy.versionDenied("pypi", name, version) {
+		metadata["urls"] = []any{}
+	} else if held, publishedAt := h.shouldFilterRelease(packagePURL, urls); held {
+		h.proxy.recordWithheld("pypi", name, version, publishedAt)
 		metadata["urls"] = []any{}
 	}
 

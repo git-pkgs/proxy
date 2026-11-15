@@ -234,6 +234,7 @@ func (h *GoHandler) serveCooldownInfo(w http.ResponseWriter, r *http.Request, es
 	var info goInfo
 	if err := json.Unmarshal(body, &info); err == nil && info.Version != "" {
 		if !h.allowedAt(module, info.Time) {
+			h.recordWithheld(module, info.Version, info.Time)
 			h.refuseCooldown(w, module, info.Version)
 			return
 		}
