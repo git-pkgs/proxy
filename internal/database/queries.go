@@ -225,6 +225,25 @@ func (db *DB) SetVersionPublishedAt(versionPURL, packagePURL string, publishedAt
 	return nil
 }
 
+// AdvanceVersionPublishedAt is SetVersionPublishedAt for a time that only
+// moves forward, such as a PyPI release's newest upload: an earlier time,
+// read from an older document, leaves the stored one.
+func (db *DB) AdvanceVersionPublishedAt(versionPURL, packagePURL string, publishedAt time.Time) error {
+	now := time.Now()
+	_, err := db.Exec(db.Rebind(`
+		INSERT INTO versions (purl, package_purl, published_at, created_at, updated_at)
+		VALUES (?, ?, ?, ?, ?)
+		ON CONFLICT(purl) DO UPDATE SET
+			published_at = excluded.published_at,
+			updated_at = excluded.updated_at
+		WHERE versions.published_at IS NULL OR versions.published_at < excluded.published_at
+	`), versionPURL, packagePURL, publishedAt.UTC(), now, now)
+	if err != nil {
+		return fmt.Errorf("advancing version publish time: %w", err)
+	}
+	return nil
+}
+
 // RecordWithheldVersion records a version a cooldown filter held back: its
 // publish time, and a row for its package so the package page exists before
 // anything is downloaded. It only adds what is missing. An existing package

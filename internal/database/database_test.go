@@ -1306,6 +1306,25 @@ func TestRecordWithheldVersionNewest(t *testing.T) {
 	})
 }
 
+// AdvanceVersionPublishedAt only moves a stored time forward, and creates
+// the row when there is none.
+func TestAdvanceVersionPublishedAt(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		const pkgPURL = "pkg:pypi/ruff"
+		first := time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)
+		later := first.Add(time.Hour)
+		for _, at := range []time.Time{first, later, first} {
+			if err := db.AdvanceVersionPublishedAt(pkgPURL+"@2.0.0", pkgPURL, at); err != nil {
+				t.Fatalf("AdvanceVersionPublishedAt: %v", err)
+			}
+		}
+		ver, err := db.GetVersionByPURL(pkgPURL + "@2.0.0")
+		if err != nil || ver == nil || !ver.PublishedAt.Valid || !ver.PublishedAt.Time.Equal(later) {
+			t.Errorf("version = %+v, %v; want published %v", ver, err, later)
+		}
+	})
+}
+
 func TestRecordWithheldVersionKeepsExistingRows(t *testing.T) {
 	runWithBothDatabases(t, func(t *testing.T, db *DB) {
 		const pkgPURL = "pkg:npm/leftpad"

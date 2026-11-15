@@ -368,6 +368,25 @@ func TestPyPIWithheldReleaseKeepsItsNewestUploadTimeOnEveryPath(t *testing.T) {
 	}
 }
 
+// A download that read an older document than one already recorded leaves
+// the newer upload time, so cooldown doesn't end early.
+func TestPyPIDownloadKeepsTheNewerStoredUploadTime(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	older, newer := now.Add(-2*time.Hour), now.Add(-time.Hour)
+	h, proxy := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+		return pypiHTTPResponse(r, "application/json",
+			`{"releases":{"2.0.0":[{"filename":"ruff-2.0.0.tar.gz","upload_time_iso_8601":"`+older.Format(time.RFC3339)+`"}]}}`), nil
+	})
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+	proxy.recordWithheldPyPI("ruff", "2.0.0", newer)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	if inCooldown, err := h.versionInCooldown(req, "ruff", "2.0.0"); err != nil || !inCooldown {
+		t.Fatalf("versionInCooldown = %v, %v; want true", inCooldown, err)
+	}
+	assertWithheldRecorded(t, proxy.DB, "pypi", "ruff", "2.0.0", newer)
+}
+
 // The version JSON names one release, in urls, and records it when it is
 // held back.
 func TestPyPIVersionJSONRecordsWithheldVersion(t *testing.T) {

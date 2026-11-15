@@ -16,10 +16,10 @@ func (p *Proxy) recordWithheld(ecosystem, name, version string, publishedAt time
 	p.recordWithheldWith(ecosystem, name, version, publishedAt, false)
 }
 
-// recordWithheldNewest is recordWithheld for a release whose time is its
+// recordWithheldPyPI is recordWithheld for a PyPI release, whose time is its
 // newest file's: a later time replaces the stored one.
-func (p *Proxy) recordWithheldNewest(ecosystem, name, version string, publishedAt time.Time) {
-	p.recordWithheldWith(ecosystem, name, version, publishedAt, true)
+func (p *Proxy) recordWithheldPyPI(name, version string, publishedAt time.Time) {
+	p.recordWithheldWith("pypi", name, version, publishedAt, true)
 }
 
 func (p *Proxy) recordWithheldWith(ecosystem, name, version string, publishedAt time.Time, newest bool) {

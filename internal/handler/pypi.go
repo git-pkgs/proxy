@@ -326,7 +326,7 @@ func (h *PyPIHandler) fetchFilteredVersions(r *http.Request, name string) (map[s
 	for version, publishedAt := range times {
 		if !publishedAt.IsZero() && !h.proxy.cooldown().IsAllowed("pypi", packagePURL, publishedAt) {
 			filtered[version] = true
-			h.proxy.recordWithheldNewest("pypi", name, version, publishedAt)
+			h.proxy.recordWithheldPyPI(name, version, publishedAt)
 		}
 	}
 
@@ -635,7 +635,7 @@ func (h *PyPIHandler) filterAndRewriteReleases(metadata map[string]any, packageN
 			h.proxy.Logger.Info("policy: filtering pypi version",
 				"package", packageName, "version", version)
 			if held {
-				h.proxy.recordWithheldNewest("pypi", packageName, version, publishedAt)
+				h.proxy.recordWithheldPyPI(packageName, version, publishedAt)
 			}
 			delete(releases, version)
 			continue
@@ -687,7 +687,8 @@ func (h *PyPIHandler) versionInCooldown(r *http.Request, name, version string) (
 }
 
 // storeUploadTime records a release's newest upload time under the version
-// PURL the file is cached under, so storedCooldown finds it.
+// PURL the file is cached under, so storedCooldown finds it. The time only
+// moves forward: a request that read an older document leaves a newer one.
 func (h *PyPIHandler) storeUploadTime(name, version string, publishedAt time.Time) {
 	if h.proxy.DB == nil {
 		return
@@ -696,7 +697,7 @@ func (h *PyPIHandler) storeUploadTime(name, version string, publishedAt time.Tim
 	if err != nil {
 		return
 	}
-	if err := h.proxy.DB.SetVersionPublishedAt(versionPURL, packagePURL, publishedAt); err != nil {
+	if err := h.proxy.DB.AdvanceVersionPublishedAt(versionPURL, packagePURL, publishedAt); err != nil {
 		h.proxy.Logger.Warn("cooldown: could not store pypi upload time",
 			"package", name, "version", version, "error", err)
 	}
@@ -757,7 +758,7 @@ func (h *PyPIHandler) filterAndRewriteURLs(metadata map[string]any, packagePURL 
 	if h.proxy.versionDenied("pypi", name, version) {
 		metadata["urls"] = []any{}
 	} else if held, publishedAt := h.shouldFilterRelease(packagePURL, urls); held {
-		h.proxy.recordWithheldNewest("pypi", name, version, publishedAt)
+		h.proxy.recordWithheldPyPI(name, version, publishedAt)
 		metadata["urls"] = []any{}
 	}
 
