@@ -1619,6 +1619,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Git.MaxRepoSize, "PROXY_GIT_MAX_REPO_SIZE")
 	setEnvString(&c.Git.RefreshWait, "PROXY_GIT_REFRESH_WAIT")
 	setEnvString(&c.Git.StaleMaxAge, "PROXY_GIT_STALE_MAX_AGE")
+	setEnvString(&c.Git.WarmMaxIdle, "PROXY_GIT_WARM_MAX_IDLE")
 }
 
 // validateAbsoluteURL returns an error if value is not a parseable URL with
