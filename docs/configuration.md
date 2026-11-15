@@ -1313,7 +1313,7 @@ cooldown:
 | `cooldown.packages` | - | Per-package overrides (keyed by PURL) |
 | `cooldown.package_patterns` | - | Per-package glob overrides (keyed by PURL glob) |
 
-Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to disable.
+Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to disable. Other units such as weeks (`1w`) are not supported. Invalid durations are rejected at startup, wherever they appear.
 
 Package PURL keys are normalized to canonical form before matching, so `pkg:npm/@babel/core` and `pkg:npm/%40babel/core` are equivalent, as are `pkg:pypi/Django` and `pkg:pypi/django`. If both forms configure the same package, the canonical entry wins.
 

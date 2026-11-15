@@ -79,3 +79,65 @@ func TestLoadRejectsInvalidCooldownProfiles(t *testing.T) {
 		})
 	}
 }
+
+func TestRejectsInvalidTopLevelCooldown(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		set  func(*CooldownConfig)
+		want string
+	}{
+		{"default weeks", func(c *CooldownConfig) { c.Default = "1w" }, "cooldown: invalid default"},
+		{"default words", func(c *CooldownConfig) { c.Default = "7 days" }, "cooldown: invalid default"},
+		{"default negative", func(c *CooldownConfig) { c.Default = "-3d" }, "cooldown: invalid default"},
+		{"ecosystem", func(c *CooldownConfig) { c.Ecosystems = map[string]string{"npm": "3days"} }, "cooldown: invalid ecosystems.npm"},
+		{"package", func(c *CooldownConfig) { c.Packages = map[string]string{"pkg:npm/lodash": "soon"} }, "cooldown: invalid packages.pkg:npm/lodash"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cfg := Default()
+			tc.set(&cfg.Cooldown)
+			err := cfg.Validate()
+			if err == nil || !strings.Contains(err.Error(), tc.want) {
+				t.Fatalf("Validate = %v, want an error containing %q", err, tc.want)
+			}
+		})
+	}
+}
+
+func TestRejectsEveryInvalidTopLevelCooldown(t *testing.T) {
+	cfg := Default()
+	cfg.Cooldown.Default = "1w"
+	cfg.Cooldown.Ecosystems = map[string]string{"npm": "3days", "pypi": "2d"}
+	cfg.Cooldown.Packages = map[string]string{"pkg:npm/lodash": "soon"}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate = nil, want the invalid durations rejected")
+	}
+	for _, want := range []string{"invalid default", "invalid ecosystems.npm", "invalid packages.pkg:npm/lodash"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Errorf("Validate = %q, want it to contain %q", err, want)
+		}
+	}
+	if strings.Contains(err.Error(), "ecosystems.pypi") {
+		t.Errorf("Validate = %q, want the valid pypi value left out", err)
+	}
+}
+
+func TestAcceptsValidTopLevelCooldown(t *testing.T) {
+	for _, value := range []string{"", "0", "3d", "1.5d", "48h", "90m"} {
+		cfg := Default()
+		cfg.Cooldown.Default = value
+		cfg.Cooldown.Ecosystems = map[string]string{"npm": value}
+		if err := cfg.Validate(); err != nil {
+			t.Errorf("Validate(%q) = %v, want nil", value, err)
+		}
+	}
+}
+
+func TestRejectsInvalidCooldownFromEnv(t *testing.T) {
+	t.Setenv("PROXY_COOLDOWN_DEFAULT", "1w")
+	cfg := Default()
+	cfg.LoadFromEnv()
+	if err := cfg.Validate(); err == nil || !strings.Contains(err.Error(), "cooldown: invalid default") {
+		t.Fatalf("Validate = %v, want invalid cooldown default", err)
+	}
+}

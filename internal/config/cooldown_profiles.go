@@ -1,6 +1,7 @@
 package config
 
 import (
+	"errors"
 	"fmt"
 	"maps"
 	"regexp"
@@ -16,6 +17,15 @@ func (c *CooldownConfig) Policy() (*cooldown.Policy, error) {
 	return cooldown.NewPolicy(&cooldown.Config{
 		Default: c.Default, Ecosystems: c.Ecosystems, Packages: c.NormalizedPackages(),
 	}, c.PackagePatterns)
+}
+
+// The cooldown library reads an unparsable duration as 0, which disables cooldown.
+func (c *CooldownConfig) validateTopLevelDurations() error {
+	top := CooldownConfig{Default: c.Default, Ecosystems: c.Ecosystems, Packages: c.Packages}
+	if err := errors.Join(top.durationErrors()...); err != nil {
+		return fmt.Errorf("cooldown: %w", err)
+	}
+	return nil
 }
 
 // ValidateProfiles checks names and policies before they become routes.
@@ -39,6 +49,14 @@ func (c *CooldownConfig) ValidateProfiles() error {
 }
 
 func (c *CooldownConfig) validateProfileDurations() error {
+	if errs := c.durationErrors(); len(errs) > 0 {
+		return errs[0]
+	}
+	return nil
+}
+
+func (c *CooldownConfig) durationErrors() []error {
+	var errs []error
 	values := map[string]string{"default": c.Default}
 	for group, overrides := range map[string]map[string]string{
 		"ecosystems": c.Ecosystems, "packages": c.Packages, "package_patterns": c.PackagePatterns,
@@ -54,11 +72,10 @@ func (c *CooldownConfig) validateProfileDurations() error {
 		}
 		duration, err := cooldown.ParseDuration(value)
 		if err != nil {
-			return fmt.Errorf("invalid %s: %w", key, err)
-		}
-		if duration < 0 {
-			return fmt.Errorf("invalid %s: duration must be non-negative", key)
+			errs = append(errs, fmt.Errorf("invalid %s: %w", key, err))
+		} else if duration < 0 {
+			errs = append(errs, fmt.Errorf("invalid %s: duration must be non-negative", key))
 		}
 	}
-	return nil
+	return errs
 }
