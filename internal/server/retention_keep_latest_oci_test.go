@@ -241,9 +241,9 @@ func TestSweepRetentionPrunesImageRecords(t *testing.T) {
 	ageImages(t, db, now, images...)
 	recorded := func(digest string) bool {
 		t.Helper()
-		_, ok, err := db.ImageManifestTaggedAt(purl.MakePURLString("oci", keepImagesRepo, ""), digest)
+		_, ok, _, err := db.ImageManifestState(purl.MakePURLString("oci", keepImagesRepo, ""), digest)
 		if err != nil {
-			t.Fatalf("ImageManifestTaggedAt: %v", err)
+			t.Fatalf("ImageManifestState: %v", err)
 		}
 		return ok
 	}

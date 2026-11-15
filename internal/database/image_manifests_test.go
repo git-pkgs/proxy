@@ -112,15 +112,15 @@ func TestRecordImageManifestKeepsLatestTagTime(t *testing.T) {
 		recordImage(t, db, testImageRepo, "sha256:a", now.Add(-time.Hour), "sha256:layer-a")
 		recordImage(t, db, testImageRepo, "sha256:b", now.Add(-30*time.Minute), "sha256:layer-b")
 
-		if at, ok, err := db.ImageManifestTaggedAt(testImageRepo, "sha256:missing"); err != nil || ok || !at.IsZero() {
-			t.Fatalf("ImageManifestTaggedAt(missing) = %v, %v, %v; want zero, false, nil", at, ok, err)
+		if at, ok, _, err := db.ImageManifestState(testImageRepo, "sha256:missing"); err != nil || ok || !at.IsZero() {
+			t.Fatalf("ImageManifestState(missing) = %v, %v, %v; want zero, false, nil", at, ok, err)
 		}
 
 		recordImage(t, db, testImageRepo, "sha256:a", time.Time{}, "sha256:layer-a")
 		recordImage(t, db, testImageRepo, "sha256:a", now.Add(-2*time.Hour), "sha256:layer-a")
-		at, ok, err := db.ImageManifestTaggedAt(testImageRepo, "sha256:a")
+		at, ok, _, err := db.ImageManifestState(testImageRepo, "sha256:a")
 		if err != nil || !ok || !at.Equal(now.Add(-time.Hour)) {
-			t.Fatalf("ImageManifestTaggedAt(a) = %v, %v, %v; want %v, true, nil", at, ok, err, now.Add(-time.Hour))
+			t.Fatalf("ImageManifestState(a) =%v, %v, %v; want %v, true, nil", at, ok, err, now.Add(-time.Hour))
 		}
 		if got, want := newestImageDigests(t, db, testImageRepo, 1), []string{"sha256:b", "sha256:layer-b"}; !slices.Equal(got, want) {
 			t.Errorf("newest 1 = %v, want %v", got, want)
@@ -200,7 +200,7 @@ func TestPruneImageManifests(t *testing.T) {
 			t.Errorf("after prune, newest 2 = %v, want %v", got, want)
 		}
 		for _, digest := range []string{"sha256:index-old", "sha256:arm-old", "sha256:pinned"} {
-			if _, ok, err := db.ImageManifestTaggedAt(testImageRepo, digest); err != nil || ok {
+			if _, ok, _, err := db.ImageManifestState(testImageRepo, digest); err != nil || ok {
 				t.Errorf("%s still recorded after prune (ok=%v, err=%v)", digest, ok, err)
 			}
 		}

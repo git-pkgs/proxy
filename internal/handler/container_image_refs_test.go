@@ -37,9 +37,9 @@ func newestImageDigests(t *testing.T, h *ContainerHandler) map[string]struct{} {
 
 func imageTaggedAt(t *testing.T, h *ContainerHandler, digest string) (time.Time, bool) {
 	t.Helper()
-	at, ok, err := h.proxy.DB.ImageManifestTaggedAt(canonicalPackagePURL("oci", imageRefsRepo), digest)
+	at, ok, _, err := h.proxy.DB.ImageManifestState(canonicalPackagePURL("oci", imageRefsRepo), digest)
 	if err != nil {
-		t.Fatalf("ImageManifestTaggedAt: %v", err)
+		t.Fatalf("ImageManifestState: %v", err)
 	}
 	return at, ok
 }

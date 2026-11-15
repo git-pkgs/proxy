@@ -63,15 +63,9 @@ func (db *DB) RecordImageManifest(m ImageManifest) error {
 	return err
 }
 
-// ImageManifestTaggedAt returns when a tag was last found to point at a
-// manifest, zero if none was, and whether the manifest is recorded at all.
-func (db *DB) ImageManifestTaggedAt(packagePURL, digest string) (time.Time, bool, error) {
-	tagged, recorded, _, err := db.ImageManifestState(packagePURL, digest)
-	return tagged, recorded, err
-}
-
-// ImageManifestState is ImageManifestTaggedAt that also reports whether the
-// manifest's references are known.
+// ImageManifestState returns when a tag was last found to point at a
+// manifest, zero if none was, whether the manifest is recorded at all, and
+// whether its references are known.
 func (db *DB) ImageManifestState(packagePURL, digest string) (tagged time.Time, recorded, hasRefs bool, err error) {
 	var row imageManifestRow
 	err = db.Get(&row, db.Rebind(`
