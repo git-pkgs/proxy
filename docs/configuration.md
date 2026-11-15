@@ -71,7 +71,7 @@ storage:
 | `storage.cache_artifacts` | `PROXY_STORAGE_CACHE_ARTIFACTS` | - | Store fetched artifacts (default: true); `false` streams them from upstream |
 | `storage.retention.default` | `PROXY_STORAGE_RETENTION_DEFAULT` | - | Evict artifacts not served for this long (e.g. "30d"); see [Retention](#retention) |
 | `storage.retention.sweep_interval` | `PROXY_STORAGE_RETENTION_SWEEP_INTERVAL` | - | How often expired artifacts are looked for (default: "10m", at least "1m") |
-| `storage.retention.keep_latest` | - | - | Keep this many of the newest cached versions of each package from eviction by age (default: 0); see [Retention](#retention) |
+| `storage.retention.keep_latest` | - | - | Keep this many of the newest cached versions of each package, or images of each repository, from eviction by age (default: 0); see [Retention](#retention) |
 
 `storage.max_size` counts cached artifacts and cached metadata documents (`cache_metadata`). When the total goes over the limit, the least recently served entries of either kind are evicted first; an evicted metadata document is fetched from upstream again on the next request for it. Pushed artifacts are not counted or evicted. An artifact replaced by a refetch stays in storage for at least an hour, or `storage.direct_serve_ttl` if longer, so requests already reading it can finish, and storage use can exceed the limit by what was replaced in that time.
 
@@ -127,7 +127,16 @@ storage:
     keep_latest: 2
 ```
 
-With this, the files of the two highest cached versions of a package are never evicted by age, and older versions expire by their rule as before. Versions are ordered by the ecosystem's version rules, not by when they were fetched, and a prerelease counts like any other version. Only versions in the cache count, not those upstream, so the kept ones need not be the latest releases. `keep_latest` applies to `cargo`, `golang`, `npm` and `pypi`; the other ecosystems ignore it, since many of them cache files under a digest or a build rather than a version. On startup the proxy logs the ecosystems it reaches (`keep_latest_covered`). `storage.max_size` can still evict a kept version.
+With this, the files of the two highest cached versions of a package are never evicted by age, and older versions expire by their rule as before. Versions are ordered by the ecosystem's version rules, not by when they were fetched, and a prerelease counts like any other version. Only versions in the cache count, not those upstream, so the kept ones need not be the latest releases. `keep_latest` applies to `cargo`, `golang`, `npm`, `pypi` and, by image, `oci`; the other ecosystems ignore it, since many of them cache files under a digest or a build rather than a version. On startup the proxy logs the ecosystems it reaches (`keep_latest_covered`). `storage.max_size` can still evict a kept version.
+
+For `oci` there are no versions to order, so `keep_latest` counts images instead: it keeps the blobs of the images of a repository that a tag most recently pointed at. With `keep_latest: 2` and one tag such as `beta` in use, that is the image `beta` points at now and the one it pointed at before. The count is per repository, not per tag, so with several tags in use set it at least that high. A blob that a kept image shares with an older one stays.
+
+To know which blobs an image needs, the proxy records what each manifest it serves references, in the `image_manifests` table, while `keep_latest` is set and a retention rule applies to `oci`. This has a few consequences:
+
+- An image only counts once its tag was pulled or mirrored with `keep_latest` set, and its blobs are known once its platform manifest was pulled too. Until then they expire by their rule as before.
+- An image pulled only by digest is not counted and not kept.
+- A multi-platform tag counts as one image, also when a client that accepts no image index was served one platform's manifest for it.
+- Homebrew bottles and Helm charts pulled over OCI are images here: the newest versions of a bottle or chart are those whose tags were last asked for.
 
 Generic retention is opt-in because release assets may disappear upstream and cannot then be downloaded again after eviction. An existing `default` never starts evicting generic downloads. Set `ecosystems.generic: "30d"` to cover all generic artifacts, or configure only selected GitHub repositories:
 
@@ -955,6 +964,13 @@ A transfer that receives nothing for 10 minutes is abandoned. Git's automatic
 garbage collection runs as part of fetches, and files over 8MB are kept
 without delta compression, so one large file does not take a fetch's memory.
 
+With `git` 2.56 or newer, repositories are cached with reftable reference
+storage, which writes a fetch's reference updates to one table rather than
+a file per reference, so repositories with many branches clone and refresh
+faster, most of all on network file systems. Repositories cached in the
+files format are converted at startup; one that fails to convert is served
+as it is. With an older `git`, repositories keep the files format.
+
 Packs for clients are built by at most two `upload-pack` processes per CPU
 the proxy may use, each with one delta-search thread and 64MB of delta
 window, and further clones wait for one to finish; listing refs does not
@@ -973,6 +989,28 @@ Each repository's directory is named by its path as requested. Where
 paths that differ only in case (`acme/widgets` and `acme/WIDGETS`) share one
 directory and are treated as one repository. Use a case-sensitive file system
 for an upstream whose repositories differ only in case.
+
+The web UI lists the cached repositories at `/ui/git`, linked as "Git" in the
+navigation: each one's upstream, clone URL, size, the newest commit of the
+branch HEAD names (ID, subject and age), how many branches and tags it has,
+when the upstream was last checked and a client last read it, how many
+times clients read its refs (each clone, fetch and `git ls-remote` does),
+and, while the last refresh failed, the kind of error (such as
+`fetch_failed` or `too_large`). A repository the upstream refused shows no
+commit, and one the `repos` allowlist no longer allows isn't listed, as `/git`
+serves neither. Branches and commits are read with git, one repository at a
+time and for at most two seconds per view, and kept until a fetch changes
+the repository; the page says how many it hasn't read yet, and each reload
+reads more. The request counts and errors are kept in memory and start over
+when the proxy restarts. Like the rest of the UI the page has no
+authentication, so it shows everyone who can reach it the names, default
+branches and newest commit subjects of repositories from upstreams with
+credentials. `/git` lets the same people clone them, but where `/ui` and
+`/git` sit behind different access rules, the page shows more than `/git`
+does. The `proxy_git_cache_size_bytes` and
+`proxy_git_cached_repositories` gauges report the git cache's size and
+repository count, apart from the artifact gauges, and clones and fetches
+count as cache hits or misses under `ecosystem="git"`.
 
 Git LFS objects are cached in the artifact cache, so they use the configured
 storage backend and retention rather than `cache_dir`. git-lfs finds the LFS
@@ -1870,7 +1908,7 @@ cache_delete: true
 
 Or via environment variable: `PROXY_CACHE_DELETE=true`.
 
-The endpoint has no authentication. Before enabling it, restrict `/api/cache` and `/ui` to trusted users at your ingress or reverse proxy. The UI sends its deletes to `/ui/api/cache`, so whatever protects `/ui` protects those too.
+The endpoints have no authentication. Before enabling them, restrict `/api/cache`, `/api/git` and `/ui` to trusted users at your ingress or reverse proxy. The UI sends its deletes to `/ui/api/cache` and `/ui/api/git`, so whatever protects `/ui` protects those too.
 
 Delete every cached file of a version, or only the one named by `filename`:
 
@@ -1882,6 +1920,14 @@ curl -X DELETE 'http://localhost:8080/api/cache/maven/com.google.guava:guava/32.
 The name is the package name the UI shows, for example `group:artifact` for Maven. An RPM package's `filename` is its path under `upstream.rpm` (`updates/40/Everything/x86_64/Packages/c/curl-8.6.0-10.fc40.x86_64.rpm`), since repositories under one upstream can ship different files under one name. The response lists the deleted files. The next request for a deleted file fetches it from the upstream again. The stored bytes are removed after the same delay as a replaced artifact, so downloads already in progress can finish.
 
 Pushed archives are not touched: a whole-version delete skips them, and naming one answers 409. Delete those through the [hosted API](#hosted-packages).
+
+With `upstream.git` set, `DELETE /api/git/{upstream}/{repo}` removes one repository from the [git cache](#git-repositories), and the `/ui/git` page gets a Delete button per repository:
+
+```bash
+curl -X DELETE http://localhost:8080/api/git/github/acme/widgets.git
+```
+
+`{upstream}` is the name under `upstream.git`, and `{repo}` the repository path with or without `.git`. The response names the repository and the bytes freed (`freed_bytes`). The next clone fetches it from the upstream again. A repository that a clone, a fetch or a client is using at that moment answers 409; try again once it is done. Git LFS objects are deleted through `/api/cache` like other artifacts.
 
 ## Mirror Command
 

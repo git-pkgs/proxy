@@ -960,6 +960,10 @@ func TestMavenHandler_NonArtifactPathsProxied(t *testing.T) {
 		"/com/google/protobuf/protoc/3.21.0/",
 		"/com/google/protobuf/protoc/",
 		"/archetype-catalog.xml",
+		// Checksums of files that aren't artifacts, too short to parse.
+		"/archetype-catalog.xml.sha1",
+		"/archetype-catalog.xml.md5",
+		"/.index/nexus-maven-repository-index.gz.sha1",
 	}
 	for _, path := range paths {
 		w := httptest.NewRecorder()

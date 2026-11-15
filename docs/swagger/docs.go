@@ -182,6 +182,54 @@ const docTemplate = `{
                 }
             }
         },
+        "/api/git/{upstream}/{repo}": {
+            "delete": {
+                "description": "Removes one repository from the git cache, so the next clone fetches it from the upstream again. A repository that a clone, a fetch or a client is using answers 409. Needs cache_delete.",
+                "produces": [
+                    "application/json"
+                ],
+                "tags": [
+                    "cache"
+                ],
+                "summary": "Delete a cached Git repository",
+                "parameters": [
+                    {
+                        "type": "string",
+                        "description": "Name of the upstream.git entry",
+                        "name": "upstream",
+                        "in": "path",
+                        "required": true
+                    },
+                    {
+                        "type": "string",
+                        "description": "Repository path under the upstream, with or without .git",
+                        "name": "repo",
+                        "in": "path",
+                        "required": true
+                    }
+                ],
+                "responses": {
+                    "200": {
+                        "description": "OK",
+                        "schema": {
+                            "$ref": "#/definitions/server.GitDeleteResponse"
+                        }
+                    },
+                    "404": {
+                        "description": "Not Found",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    },
+                    "409": {
+                        "description": "Conflict",
+                        "schema": {
+                            "$ref": "#/definitions/server.ErrorResponse"
+                        }
+                    }
+                }
+            }
+        },
         "/api/hosted/{ecosystem}/{name}": {
             "get": {
                 "produces": [
@@ -1070,6 +1118,17 @@ const docTemplate = `{
                     "type": "string"
                 },
                 "message": {
+                    "type": "string"
+                }
+            }
+        },
+        "server.GitDeleteResponse": {
+            "type": "object",
+            "properties": {
+                "freed_bytes": {
+                    "type": "integer"
+                },
+                "repository": {
                     "type": "string"
                 }
             }

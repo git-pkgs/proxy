@@ -692,6 +692,52 @@ func TestNewRemovesRepointedUpstreams(t *testing.T) {
 	}
 }
 
+// TestNewMigratesFilesFormatRepositories starts a cache whose directory
+// holds a repository in the files reference format: it is converted to
+// reftable with its refs, and served without being cloned again.
+func TestNewMigratesFilesFormatRepositories(t *testing.T) {
+	// Before the fixture, as git older than 2.45 has no --ref-format.
+	if !reftableReady(runGit(t, "", "version")) {
+		t.Skip("git is older than 2.56")
+	}
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	dir := t.TempDir()
+	bare := filepath.Join(dir, "up", "repo.git")
+	runGit(t, "", "clone", "--quiet", "--bare", "--ref-format=files", upstream.bare(), bare)
+	refs := runGit(t, bare, "for-each-ref", "--format=%(objectname) %(refname)")
+
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) { o.CacheDir = dir })
+	if !hasReftable(bare) {
+		t.Fatal("the repository was not converted to reftable")
+	}
+	if got := tc.Repositories(); len(got) != 1 {
+		t.Fatalf("startup registered %+v, want the converted repository", got)
+	}
+	if got := tc.cachedRefs(t); got != refs {
+		t.Errorf("refs after conversion:\n%s\nwant:\n%s", got, refs)
+	}
+	tc.clone(t, "repo")
+}
+
+// TestReftableReady checks which versions turn reftable on, across the ways
+// git prints its version.
+func TestReftableReady(t *testing.T) {
+	for out, want := range map[string]bool{
+		"git version 2.56.1\n":                 true,
+		"git version 2.56.0.windows.1\n":       true,
+		"git version 2.57.0-rc0\n":             true,
+		"git version 3.0.0\n":                  true,
+		"git version 2.55.2\n":                 false,
+		"git version 2.39.1 (Apple Git-146)\n": false,
+		"git version 2.x\n":                    false,
+	} {
+		if got := reftableReady(out); got != want {
+			t.Errorf("reftableReady(%q) = %v, want %v", out, got, want)
+		}
+	}
+}
+
 // TestCacheDirSharedWithOtherData points the cache at a directory that also
 // holds an artifact store and a database, as git.cache_dir: ./cache would.
 func TestCacheDirSharedWithOtherData(t *testing.T) {

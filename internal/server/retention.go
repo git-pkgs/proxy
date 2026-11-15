@@ -4,8 +4,10 @@ import (
 	"context"
 	"log/slog"
 	"slices"
+	"strings"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/retention"
@@ -14,6 +16,11 @@ import (
 
 // retentionWindow is how many artifact ids one query scans.
 const retentionWindow = 5000
+
+// imageRecordGrace is how long a manifest record is safe from pruning, so
+// one written while a sweep runs, or shortly before the tag that leads to
+// it is recorded, is not lost.
+const imageRecordGrace = time.Hour
 
 // retentionMaxClears caps how many artifacts one sweep clears, so a first
 // sweep over a large, old cache spreads its deletes and the refetches that
@@ -96,6 +103,8 @@ func sweepRetention(ctx context.Context, db *database.DB, logger *slog.Logger,
 		return
 	}
 
+	pruneImageRecords(db, logger, rules.KeepLatest, now)
+
 	// Without the buffered hits written, an artifact being served right now
 	// can look expired, so skip this sweep rather than clear it.
 	if err := db.FlushHits(); err != nil {
@@ -152,6 +161,41 @@ func sweepRetention(ctx context.Context, db *database.DB, logger *slog.Logger,
 	}
 }
 
+// keepLatestImages returns storage.retention.keep_latest if a retention rule
+// can evict container image blobs, and zero otherwise: without such a rule
+// nothing reads what the container handler would record.
+func keepLatestImages(cfg *config.Config) int {
+	rules, err := cfg.RetentionRules(retention.Default)
+	if err != nil || rules.KeepLatest <= 0 {
+		return 0
+	}
+	if rules.For("oci", "") > 0 {
+		return rules.KeepLatest
+	}
+	for packagePURL, d := range rules.Packages {
+		if d > 0 && strings.HasPrefix(packagePURL, "pkg:oci/") {
+			return rules.KeepLatest
+		}
+	}
+	return 0
+}
+
+// pruneImageRecords drops the container manifest records that the keep
+// newest images of their repository do not reference, which is all of them
+// once keep_latest is off.
+func pruneImageRecords(db *database.DB, logger *slog.Logger, keep int, now time.Time) {
+	repositories, err := db.ImageManifestRepositories()
+	if err != nil {
+		logger.Warn("retention: failed to list image manifest records", "error", err)
+		return
+	}
+	for _, packagePURL := range repositories {
+		if err := db.PruneImageManifests(packagePURL, keep, now.Add(-imageRecordGrace)); err != nil {
+			logger.Warn("retention: failed to prune image manifest records", "package_purl", packagePURL, "error", err)
+		}
+	}
+}
+
 // clearIfExpired clears one candidate when its own rule says it has expired
 // and keep does not hold it back, and queues its object for deletion,
 // reporting whether it did.
@@ -180,8 +224,8 @@ func clearIfExpired(db *database.DB, logger *slog.Logger, reg *retention.Registr
 }
 
 // latestKeeper answers, for one sweep, whether an artifact belongs to one of
-// the highest cached versions of its package, which keep_latest holds back
-// from eviction by age.
+// the highest cached versions of its package, or to one of the newest images
+// of its repository, which keep_latest holds back from eviction by age.
 type latestKeeper struct {
 	db     *database.DB
 	logger *slog.Logger
@@ -197,13 +241,14 @@ func newLatestKeeper(db *database.DB, logger *slog.Logger, reg *retention.Regist
 }
 
 // keeps reports whether c, an artifact of the ecosystem key, is a file of
-// one of the highest cached versions of its package.
+// one of the highest cached versions of its package, or a blob of one of the
+// newest images of its repository.
 func (k *latestKeeper) keeps(key string, c database.RetentionCandidate) bool {
 	if k.n <= 0 {
 		return false
 	}
 	spec, _ := k.reg.Lookup(key)
-	if spec.CompareVersions == nil {
+	if spec.CompareVersions == nil && !spec.KeepLatestImages {
 		return false
 	}
 	kept, ok := k.kept[c.PackagePURL]
@@ -212,7 +257,7 @@ func (k *latestKeeper) keeps(key string, c database.RetentionCandidate) bool {
 		if kept, err = k.newest(spec, c.PackagePURL); err != nil {
 			// Not knowing which versions are the highest, keep the artifact
 			// for this sweep rather than evict one of them.
-			k.logger.Warn("retention: failed to list cached versions, keeping artifact",
+			k.logger.Warn("retention: failed to list the versions to keep, keeping artifact",
 				"package_purl", c.PackagePURL, "error", err)
 			return true
 		}
@@ -223,8 +268,16 @@ func (k *latestKeeper) keeps(key string, c database.RetentionCandidate) bool {
 }
 
 // newest returns the version PURLs of the highest cached versions of a
-// package.
+// package. For a repository of container images, whose versions are blob
+// digests, these are the blobs its newest images reference.
 func (k *latestKeeper) newest(spec retention.Spec, packagePURL string) (map[string]struct{}, error) {
+	var imageDigests map[string]struct{}
+	if spec.KeepLatestImages {
+		var err error
+		if imageDigests, err = k.db.NewestImageDigests(packagePURL, k.n); err != nil {
+			return nil, err
+		}
+	}
 	purls, err := k.db.CachedVersionPURLs(packagePURL)
 	if err != nil {
 		return nil, err
@@ -242,7 +295,15 @@ func (k *latestKeeper) newest(spec retention.Spec, packagePURL string) (map[stri
 		byVersion[p.Version] = append(byVersion[p.Version], versionPURL)
 	}
 	kept := map[string]struct{}{}
-	for _, v := range retention.NewestVersions(spec.CompareVersions, versions, k.n) {
+	if spec.KeepLatestImages {
+		versions = slices.DeleteFunc(versions, func(digest string) bool {
+			_, referenced := imageDigests[digest]
+			return !referenced
+		})
+	} else {
+		versions = retention.NewestVersions(spec.CompareVersions, versions, k.n)
+	}
+	for _, v := range versions {
 		for _, versionPURL := range byVersion[v] {
 			kept[versionPURL] = struct{}{}
 		}

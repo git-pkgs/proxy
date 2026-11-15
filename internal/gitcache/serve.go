@@ -60,6 +60,9 @@ func (c *Cache) Open(ctx context.Context, key, repoURL string, opts OpenOptions)
 	}
 	rp := c.acquire(key)
 	hit := rp.exists()
+	if opts.Refresh {
+		rp.requests.Add(1)
+	}
 	var err error
 	switch {
 	case opts.Refresh || !hit:

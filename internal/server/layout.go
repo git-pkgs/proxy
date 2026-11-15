@@ -19,6 +19,8 @@ type Layout struct {
 	CacheDelete bool
 	// Projects shows the project inventory pages.
 	Projects bool
+	// Git shows the page listing the git cache's repositories.
+	Git bool
 }
 
 func (s *Server) layoutFor(r *http.Request) Layout {
@@ -28,5 +30,6 @@ func (s *Server) layoutFor(r *http.Request) Layout {
 		CanonicalPath: r.URL.Path,
 		CacheDelete:   s.cfg.CacheDelete,
 		Projects:      s.cfg.Projects.Enabled,
+		Git:           s.git != nil,
 	}
 }

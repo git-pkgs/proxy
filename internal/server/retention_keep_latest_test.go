@@ -206,9 +206,9 @@ func TestSweepRetentionWithoutKeepLatestEvictsNewestToo(t *testing.T) {
 }
 
 // The ecosystems whose handlers store plain release versions support
-// keep_latest.
+// keep_latest, and so does oci, which keeps by image.
 func TestKeepLatestEcosystems(t *testing.T) {
-	want := []string{"cargo", "golang", "npm", "pypi"}
+	want := []string{"cargo", "golang", "npm", "oci", "pypi"}
 	if got := retention.Default.KeepLatestKeys(); !slices.Equal(got, want) {
 		t.Errorf("KeepLatestKeys() = %v, want %v", got, want)
 	}

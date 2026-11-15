@@ -308,6 +308,7 @@ func (s *Server) serve(listener net.Listener) error {
 		return fmt.Errorf("configuring scanners: %w", err)
 	}
 	configureMetadata(proxy, s.cfg)
+	proxy.KeepLatestImages = keepLatestImages(s.cfg)
 	proxy.GradleReadOnly = s.cfg.Gradle.BuildCache.ReadOnly
 	proxy.HostedEnabled = s.cfg.Hosted.Enabled
 	proxy.HostedNPMScopes = s.cfg.Hosted.NPMScopes
@@ -335,7 +336,7 @@ func (s *Server) serve(listener net.Listener) error {
 	r.Use(middleware.Recoverer)
 	r.Use(func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-			if r.URL.Path != "/metrics" {
+			if countsAsTraffic(r.URL.Path) {
 				metrics.IncrementActiveRequests()
 				defer metrics.DecrementActiveRequests()
 			}
@@ -387,12 +388,21 @@ func (s *Server) serve(listener net.Listener) error {
 			ui.Delete("/api/cache/{ecosystem}/*", s.handleCacheDelete)
 		}
 		s.mountProjectUI(ui)
+		if s.git != nil {
+			ui.Get("/git", s.handleGitRepositories)
+			if s.cfg.CacheDelete {
+				ui.Delete("/api/git/*", s.handleGitDelete)
+			}
+		}
 	})
 	r.Get("/", func(w http.ResponseWriter, r *http.Request) {
 		http.Redirect(w, r, "/ui/", http.StatusFound)
 	})
 	if s.cfg.CacheDelete {
 		r.Delete("/api/cache/{ecosystem}/*", s.handleCacheDelete)
+		if s.git != nil {
+			r.Delete("/api/git/*", s.handleGitDelete)
+		}
 	}
 
 	s.mountEnrichmentAPI(r)
@@ -632,6 +642,7 @@ func NewMirrorProxy(cfg *config.Config, db *database.DB, store storage.Storage, 
 	configureMirrorResolvers(proxy, cfg.Upstream)
 	proxy.HTTPClient = metadataClient
 	proxy.RateLimits = s.rateLimits
+	proxy.KeepLatestImages = keepLatestImages(cfg)
 	return proxy, s.newContainerHandler(proxy)
 }
 
@@ -714,13 +725,22 @@ func (s *Server) updateCacheStatsMetrics(ctx context.Context) {
 	defer ticker.Stop()
 
 	for {
-		s.updateCacheStats()
-		s.updateMetadataCacheStats()
+		s.updateGauges()
 		select {
 		case <-ctx.Done():
 			return
 		case <-ticker.C:
 		}
+	}
+}
+
+// updateGauges republishes the cache gauges. Each group is updated on its
+// own, so one failing leaves the others current.
+func (s *Server) updateGauges() {
+	s.updateCacheStats()
+	s.updateMetadataCacheStats()
+	if s.git != nil {
+		s.updateGitCacheStats()
 	}
 }
 

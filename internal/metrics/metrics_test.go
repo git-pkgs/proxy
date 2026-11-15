@@ -57,6 +57,23 @@ func TestUpdateCacheStats(t *testing.T) {
 	// No panics = success
 }
 
+func TestUpdateGitCacheStats(t *testing.T) {
+	UpdateGitCacheStats(3, 42)
+	if got := testutil.ToFloat64(GitCachedRepositories); got != 3 {
+		t.Errorf("proxy_git_cached_repositories = %v, want 3", got)
+	}
+	if got := testutil.ToFloat64(GitCacheSize); got != 42 {
+		t.Errorf("proxy_git_cache_size_bytes = %v, want 42", got)
+	}
+	snap, err := Gather()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(snap.Samples("proxy_git_cached_repositories")) != 1 || len(snap.Samples("proxy_git_cache_size_bytes")) != 1 {
+		t.Error("git cache gauges are not registered")
+	}
+}
+
 func TestCircuitBreakerMetrics(t *testing.T) {
 	UpdateCircuitBreakerState("npmjs.org", 0) // closed
 	UpdateCircuitBreakerState("npmjs.org", 2) // open
