@@ -21,8 +21,7 @@ func (c *CooldownConfig) Policy() (*cooldown.Policy, error) {
 
 // The cooldown library reads an unparsable duration as 0, which disables cooldown.
 func (c *CooldownConfig) validateTopLevelDurations() error {
-	top := CooldownConfig{Default: c.Default, Ecosystems: c.Ecosystems, Packages: c.Packages}
-	if err := errors.Join(top.durationErrors()...); err != nil {
+	if err := errors.Join(c.durationErrors()...); err != nil {
 		return fmt.Errorf("cooldown: %w", err)
 	}
 	return nil

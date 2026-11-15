@@ -91,6 +91,8 @@ func TestRejectsInvalidTopLevelCooldown(t *testing.T) {
 		{"default negative", func(c *CooldownConfig) { c.Default = "-3d" }, "cooldown: invalid default"},
 		{"ecosystem", func(c *CooldownConfig) { c.Ecosystems = map[string]string{"npm": "3days"} }, "cooldown: invalid ecosystems.npm"},
 		{"package", func(c *CooldownConfig) { c.Packages = map[string]string{"pkg:npm/lodash": "soon"} }, "cooldown: invalid packages.pkg:npm/lodash"},
+		{"pattern weeks", func(c *CooldownConfig) { c.PackagePatterns = map[string]string{"pkg:npm/*": "1w"} }, "cooldown: invalid package_patterns.pkg:npm/*"},
+		{"pattern negative", func(c *CooldownConfig) { c.PackagePatterns = map[string]string{"pkg:npm/*": "-1d"} }, "cooldown: invalid package_patterns.pkg:npm/*"},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			cfg := Default()
