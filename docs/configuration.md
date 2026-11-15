@@ -479,7 +479,9 @@ its patterns match; any other path answers 404. The patterns use the syntax of
 `upstream.git` `repos`: `path.Match`, where `*` does not cross a `/`, and a
 pattern ending in `/**` also matches every path nested below its prefix. A
 path containing `%`, `?`, `#` or a backslash is refused for an upstream with
-`generic_paths`. An upstream without `generic_paths` serves every path.
+`generic_paths`. The patterns only check the path; the query string is passed
+on as it is, except for release assets and the built-in artifact paths below,
+which take none. An upstream without `generic_paths` serves every path.
 
 When `upstream.auth` has credentials for a generic upstream, `generic_paths`
 is required and the proxy refuses to start without it: everyone who can reach
@@ -490,7 +492,8 @@ other token but cannot read anything private, even through an allowed path.
 Paths shaped like `{owner}/{repo}/releases/download/{tag}/{asset}` are
 version-pinned GitHub release assets: they are stored in the artifact cache
 and served from it without revalidation, including while the upstream is
-down.
+down. A release asset takes no query string; a request for one with a query,
+or with an escaped `?` or `#` in its path, answers 400.
 
 Upstreams pointed at these hosts get version-pinned paths built in, whatever
 the upstream is named:
@@ -500,6 +503,11 @@ the upstream is named:
 | `https://archive.apache.org` | `dist/{project dirs}/{version}/[binaries/]{file}`, where `{version}` starts with a digit | the project dirs, e.g. `maven/maven-3`, `maven/mvnd` |
 | `https://nodejs.org` | `dist/v{version}/{file}` | the upstream name |
 | `https://dl.google.com/go` | `go{version}.{os}-{arch}.tar.gz`, `.zip` and their `.sha256` | the upstream name |
+
+Like release assets, these built-in paths take no query string; a request for
+one with a query answers 400, as does one with an escaped `?` or `#` in its
+path. A path that a configured `generic_artifacts` pattern matches first keeps
+its query.
 
 Other upstreams can declare their own version-pinned paths in
 `generic_artifacts`. These are tried before any built-in ones, so a configured
@@ -519,7 +527,9 @@ upstream:
 ```
 
 Only list paths whose content never changes for a given version: a match is
-never revalidated.
+never revalidated. For a configured pattern the query string is passed on and is part of the cache
+key, so each distinct query is fetched and stored as a copy of its own. Only
+`storage.max_size` or a `generic` retention rule removes them.
 
 Every other path is served through the metadata cache (`cache_metadata`
 must be enabled for offline fallback): fresh within `metadata_ttl`, then
@@ -851,6 +861,7 @@ git:
   max_repo_size: 5GB     # refuse a repository that grows past this
   refresh_wait: 5s       # then serve the cached copy if the upstream check is slow
   stale_max_age: 24h     # never serve a copy not checked for this long
+  warm_max_idle: 30d     # keep checking repositories used within this
 ```
 
 Clients reach the proxy through Git's `insteadOf` setting, which rewrites the
@@ -928,6 +939,24 @@ Redirects are never followed, so point the upstream at a repository's current
 location. A `git-upload-pack` request checks the upstream only when the last
 check refused the repository or the copy was last checked more than a minute
 past `stale_max_age` ago, so a clone checks once, at its ref listing.
+
+The proxy also checks cached repositories in the background, so a copy stays
+servable through an outage even when nobody cloned it for a day. A repository
+that a client used within `warm_max_idle` (default `30d`) is checked again
+once half of `stale_max_age` has passed since its last successful check,
+and fetched if its branches or tags moved. It is checked at the URL its last
+successful check used, so a repository cached by an older version waits for
+a client to refresh it once. After a failed check it waits a quarter of that
+interval, at least 10 minutes, so a few retries fit before the copy goes
+stale. Checks run one at a time and do not count as use, so they do not keep
+a repository from expiring out of `warm_max_idle`. With the cache at
+`max_size`, a background fetch makes room as any other fetch does, by
+evicting the least recently used idle repositories, which can be ones used
+more recently than the repository being checked. Repositories the upstream
+refused, and those the configuration no longer serves, are skipped. `warm_max_idle: 0`, or a
+`stale_max_age` under `20m` (which includes `0`), turns the background
+checks off. They run in `proxy serve` only, each process for its own
+`cache_dir`.
 
 The proxy runs `git` 2.31 or newer, which must be installed (the Docker image includes it).
 The `git` processes never reach the network themselves: their fetches go
@@ -1042,8 +1071,8 @@ upstream, until retention removes it or you delete it through the
 Pushing, LFS uploads and locking, and the dumb HTTP protocol are not
 supported. The settings
 under `git` can also be set with `PROXY_GIT_CACHE_DIR`, `PROXY_GIT_MAX_SIZE`,
-`PROXY_GIT_MAX_REPO_SIZE`, `PROXY_GIT_REFRESH_WAIT` and
-`PROXY_GIT_STALE_MAX_AGE`.
+`PROXY_GIT_MAX_REPO_SIZE`, `PROXY_GIT_REFRESH_WAIT`,
+`PROXY_GIT_STALE_MAX_AGE` and `PROXY_GIT_WARM_MAX_IDLE`.
 
 ### Maven repositories
 

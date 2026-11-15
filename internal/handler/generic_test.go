@@ -146,23 +146,23 @@ func TestGenericHandler_BuiltinArtifactPatterns(t *testing.T) {
 		{"apache", "dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz.sha512",
 			genericArtifact{name: "maven", version: "3.9.9", filename: "apache-maven-3.9.9-bin.tar.gz.sha512"}, true},
 		{"apache", "dist/maven/maven-4/4.0.0/binaries/apache-maven-4.0.0-bin.tar.gz",
-			genericArtifact{name: "maven/maven-4", version: "4.0.0", filename: "apache-maven-4.0.0-bin.tar.gz"}, true},
+			genericArtifact{name: "maven/maven-4", version: "4.0.0", filename: "apache-maven-4.0.0-bin.tar.gz", noQuery: true}, true},
 		{"apache", "dist/maven/mvnd/1.0.6/maven-mvnd-1.0.6-linux-amd64.tar.gz",
-			genericArtifact{name: "maven/mvnd", version: "1.0.6", filename: "maven-mvnd-1.0.6-linux-amd64.tar.gz"}, true},
+			genericArtifact{name: "maven/mvnd", version: "1.0.6", filename: "maven-mvnd-1.0.6-linux-amd64.tar.gz", noQuery: true}, true},
 		{"apache", "dist/maven/maven-3/", genericArtifact{}, false},
 		{"apache", "dist/maven/maven-3/3.9.9/source/apache-maven-3.9.9-src.tar.gz", genericArtifact{}, false},
 		{"apache", "extra/1.0/file.txt", genericArtifact{name: "apache", version: "1.0", filename: "file.txt"}, true},
 		{"node", "dist/v22.11.0/node-v22.11.0-linux-x64.tar.gz",
-			genericArtifact{name: "node", version: "v22.11.0", filename: "node-v22.11.0-linux-x64.tar.gz"}, true},
+			genericArtifact{name: "node", version: "v22.11.0", filename: "node-v22.11.0-linux-x64.tar.gz", noQuery: true}, true},
 		{"node", "dist/v22.11.0/SHASUMS256.txt",
-			genericArtifact{name: "node", version: "v22.11.0", filename: "SHASUMS256.txt"}, true},
+			genericArtifact{name: "node", version: "v22.11.0", filename: "SHASUMS256.txt", noQuery: true}, true},
 		{"node", "dist/index.json", genericArtifact{}, false},
 		{"golang", "go1.23.2.linux-amd64.tar.gz",
-			genericArtifact{name: "golang", version: "1.23.2", filename: "go1.23.2.linux-amd64.tar.gz"}, true},
+			genericArtifact{name: "golang", version: "1.23.2", filename: "go1.23.2.linux-amd64.tar.gz", noQuery: true}, true},
 		{"golang", "go1.23.2.darwin-arm64.tar.gz.sha256",
-			genericArtifact{name: "golang", version: "1.23.2", filename: "go1.23.2.darwin-arm64.tar.gz.sha256"}, true},
+			genericArtifact{name: "golang", version: "1.23.2", filename: "go1.23.2.darwin-arm64.tar.gz.sha256", noQuery: true}, true},
 		{"golang", "go1.24rc1.windows-amd64.zip",
-			genericArtifact{name: "golang", version: "1.24rc1", filename: "go1.24rc1.windows-amd64.zip"}, true},
+			genericArtifact{name: "golang", version: "1.24rc1", filename: "go1.24rc1.windows-amd64.zip", noQuery: true}, true},
 		{"mirror", "dist/maven/maven-3/3.9.9/binaries/apache-maven-3.9.9-bin.tar.gz", genericArtifact{}, false},
 	}
 
@@ -415,6 +415,92 @@ func TestGenericHandler_ReleaseAssetIsCachedAndServedWhenUpstreamDown(t *testing
 	}
 }
 
+// A GitHub release asset never needs a query, and each distinct one would be
+// fetched and stored again, so one with a query is refused before it reaches
+// the upstream.
+func TestGenericHandler_RefusesAQueryOnAReleaseAsset(t *testing.T) {
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte("jq binary bytes"))
+	}))
+	defer upstream.Close()
+
+	proxy, _, store, _ := setupTestProxy(t)
+	store.seekable = true
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+	h := NewGenericHandler(proxy, map[string]string{"github": upstream.URL})
+
+	for _, query := range []string{"?a=1", "?a=2", "%3Fa=1", "%23a", "?"} {
+		w := serveGenericRequest(h, "/github"+testReleaseAssetPath+query)
+		if query == "?" {
+			// An empty query is no query; it is served from the same entry.
+			if w.Code != http.StatusOK {
+				t.Errorf("%q: status = %d, want 200", query, w.Code)
+			}
+			continue
+		}
+		if w.Code != http.StatusBadRequest {
+			t.Errorf("%q: status = %d, want 400", query, w.Code)
+		}
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("upstream requests = %d, want 1", got)
+	}
+}
+
+// The built-in hosts are static file hosts and take no query either. A
+// configured pattern is tried first and keeps its query, also where it
+// overlaps a built-in one.
+func TestGenericHandler_RefusesAQueryOnABuiltInArtifact(t *testing.T) {
+	const path = "/dist/v22.0.0/node-v22.0.0.tar.gz"
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		_, _ = w.Write([]byte("node tarball bytes"))
+	}))
+	defer upstream.Close()
+	builtinGenericArtifacts[upstream.URL] = builtinGenericArtifacts["https://nodejs.org"]
+	t.Cleanup(func() { delete(builtinGenericArtifacts, upstream.URL) })
+
+	newHandler := func(configured map[string][]string) *GenericHandler {
+		proxy, _, store, _ := setupTestProxy(t)
+		store.seekable = true
+		fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+		proxy.Fetcher = fetcher
+		t.Cleanup(func() { _ = fetcher.Close() })
+		return NewGenericHandler(proxy, map[string]string{"node": upstream.URL}, configured)
+	}
+
+	h := newHandler(nil)
+	for query, want := range map[string]int{"?a=1": http.StatusBadRequest, "?a=2": http.StatusBadRequest, "": http.StatusOK} {
+		if w := serveGenericRequest(h, "/node"+path+query); w.Code != want {
+			t.Errorf("built-in %q: status = %d, want %d", query, w.Code, want)
+		}
+	}
+	// An escaped ? or # in the path would reach the upstream as a query or
+	// a fragment, and be stored as a copy of its own.
+	for _, suffix := range []string{"%3Fa=1", "%23a"} {
+		if w := serveGenericRequest(h, "/node"+path+suffix); w.Code != http.StatusBadRequest {
+			t.Errorf("built-in %q: status = %d, want 400", suffix, w.Code)
+		}
+	}
+	if got := requests.Load(); got != 1 {
+		t.Errorf("upstream requests = %d, want 1", got)
+	}
+
+	h = newHandler(map[string][]string{"node": {`dist/(?P<version>v22[^/]*)/(?P<file>[^/]+)`}})
+	if w := serveGenericRequest(h, "/node"+path+"?a=1"); w.Code != http.StatusOK {
+		t.Errorf("configured overlap: status = %d, want 200", w.Code)
+	}
+	// A path only the built-in pattern matches is still refused.
+	if w := serveGenericRequest(h, "/node/dist/v20.0.0/node-v20.0.0.tar.gz?a=1"); w.Code != http.StatusBadRequest {
+		t.Errorf("built-in beside configured: status = %d, want 400", w.Code)
+	}
+}
+
 func TestGenericHandler_ServesReleaseAssetCachedUnderUnhashedKey(t *testing.T) {
 	asset := []byte("jq binary bytes")
 	var available atomic.Bool
@@ -451,15 +537,56 @@ func TestGenericHandler_ServesReleaseAssetCachedUnderUnhashedKey(t *testing.T) {
 		t.Fatalf("legacy entry: status = %d, body = %q; want 200 %q", w.Code, w.Body.String(), asset)
 	}
 
-	w = serveGenericRequest(h, "/github"+testReleaseAssetPath+"?x=1")
-	if w.Code != http.StatusBadGateway {
-		t.Errorf("with query: status = %d, want 502", w.Code)
-	}
-
 	repointed := NewGenericHandler(proxy, map[string]string{"github": upstream.URL + "/mirror"})
 	w = serveGenericRequest(repointed, "/github"+testReleaseAssetPath)
 	if w.Code != http.StatusBadGateway {
 		t.Errorf("repointed upstream: status = %d, want 502", w.Code)
+	}
+}
+
+// A configured artifact cached under the unhashed key before hashed keys is
+// served only for the query it was fetched with, not for another one.
+func TestGenericHandler_ServesConfiguredArtifactCachedUnderUnhashedKeyOnlyForItsQuery(t *testing.T) {
+	asset := []byte("tool bytes")
+	var available atomic.Bool
+	available.Store(true)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !available.Load() {
+			http.Error(w, "unavailable", http.StatusServiceUnavailable)
+			return
+		}
+		_, _ = w.Write(asset)
+	}))
+	defer upstream.Close()
+
+	proxy, _, store, _ := setupTestProxy(t)
+	store.seekable = true
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	proxy.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+
+	const path = "/releases/tool/1.0.0/linux/tool.tar.gz"
+	result, err := proxy.GetOrFetchArtifactFromURL(context.Background(), genericEcosystem,
+		"tool", "1.0.0", "downloads/tool.tar.gz", upstream.URL+path+"?variant=a")
+	if err != nil {
+		t.Fatalf("priming legacy entry: %v", err)
+	}
+	if result.Reader != nil {
+		_ = result.Reader.Close()
+	}
+	available.Store(false)
+
+	h := NewGenericHandler(proxy,
+		map[string]string{"downloads": upstream.URL},
+		map[string][]string{"downloads": {`releases/(?P<name>tool)/(?P<version>[^/]+)/linux/(?P<file>[^/]+)`}})
+	w := serveGenericRequest(h, "/downloads"+path+"?variant=a")
+	if w.Code != http.StatusOK || w.Body.String() != string(asset) {
+		t.Fatalf("same query: status = %d, body = %q; want 200 %q", w.Code, w.Body.String(), asset)
+	}
+	for _, query := range []string{"?variant=b", ""} {
+		if w := serveGenericRequest(h, "/downloads"+path+query); w.Code != http.StatusBadGateway {
+			t.Errorf("query %q: status = %d, want 502", query, w.Code)
+		}
 	}
 }
 

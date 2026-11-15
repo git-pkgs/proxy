@@ -60,7 +60,7 @@ func TestMigrateAddsImageTags(t *testing.T) {
 		if _, err := db.Exec("DROP TABLE image_tags"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.Exec("DELETE FROM migrations WHERE name = '025_add_image_tags'"); err != nil {
+		if _, err := db.Exec("DELETE FROM migrations WHERE name = '026_add_image_tags'"); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.MigrateSchema(); err != nil {
