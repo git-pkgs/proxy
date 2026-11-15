@@ -85,7 +85,11 @@ func newTestServer(t *testing.T) *testServer {
 		cfg.Upstream.Cargo,
 		cfg.Upstream.CargoDownload,
 	)
-	gemHandler := handler.NewGemHandler(proxy, cfg.BaseURL)
+	gemUpstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = io.WriteString(w, "specs")
+	}))
+	t.Cleanup(gemUpstream.Close)
+	gemHandler := handler.NewGemHandlerWithUpstream(proxy, cfg.BaseURL, gemUpstream.URL)
 	goHandler := handler.NewGoHandler(proxy, cfg.BaseURL)
 	pypiHandler := handler.NewPyPIHandlerWithUpstreams(proxy, cfg.BaseURL, "", "")
 	gradleHandler := handler.NewGradleBuildCacheHandler(proxy)
@@ -825,8 +829,8 @@ func TestGemSpecs(t *testing.T) {
 	w := httptest.NewRecorder()
 	ts.handler.ServeHTTP(w, req)
 
-	if w.Code == http.StatusNotFound {
-		t.Error("gem handler should be mounted")
+	if w.Code != http.StatusOK || w.Body.String() != "specs" {
+		t.Errorf("GET /gem/specs.4.8.gz = %d %q, want 200 with the upstream's body", w.Code, w.Body.String())
 	}
 }
 
