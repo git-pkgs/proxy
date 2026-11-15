@@ -151,8 +151,9 @@ func (h *GenericHandler) Routes() http.Handler {
 		}
 
 		if artifact, ok := h.parseArtifact(repository, rest); ok {
-			if artifact.noQuery && r.URL.RawQuery != "" {
-				// Each distinct query would be fetched and stored again.
+			if artifact.noQuery && (r.URL.RawQuery != "" || strings.ContainsAny(rest, "?#")) {
+				// Each distinct query would be fetched and stored again. An
+				// escaped ? or # in the path would reach the upstream as one.
 				http.Error(w, "this download takes no query string", http.StatusBadRequest)
 				return
 			}

@@ -480,7 +480,8 @@ its patterns match; any other path answers 404. The patterns use the syntax of
 pattern ending in `/**` also matches every path nested below its prefix. A
 path containing `%`, `?`, `#` or a backslash is refused for an upstream with
 `generic_paths`. The patterns only check the path; the query string is passed
-on as it is. An upstream without `generic_paths` serves every path.
+on as it is, except for release assets and the built-in artifact paths below,
+which take none. An upstream without `generic_paths` serves every path.
 
 When `upstream.auth` has credentials for a generic upstream, `generic_paths`
 is required and the proxy refuses to start without it: everyone who can reach
@@ -491,8 +492,8 @@ other token but cannot read anything private, even through an allowed path.
 Paths shaped like `{owner}/{repo}/releases/download/{tag}/{asset}` are
 version-pinned GitHub release assets: they are stored in the artifact cache
 and served from it without revalidation, including while the upstream is
-down. A release asset takes no query string; a request for one with a query
-answers 400.
+down. A release asset takes no query string; a request for one with a query,
+or with an escaped `?` or `#` in its path, answers 400.
 
 Upstreams pointed at these hosts get version-pinned paths built in, whatever
 the upstream is named:
@@ -504,7 +505,9 @@ the upstream is named:
 | `https://dl.google.com/go` | `go{version}.{os}-{arch}.tar.gz`, `.zip` and their `.sha256` | the upstream name |
 
 Like release assets, these built-in paths take no query string; a request for
-one with a query answers 400.
+one with a query answers 400, as does one with an escaped `?` or `#` in its
+path. A path that a configured `generic_artifacts` pattern matches first keeps
+its query.
 
 Other upstreams can declare their own version-pinned paths in
 `generic_artifacts`. These are tried before any built-in ones, so a configured

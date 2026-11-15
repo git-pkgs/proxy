@@ -433,7 +433,7 @@ func TestGenericHandler_RefusesAQueryOnAReleaseAsset(t *testing.T) {
 	t.Cleanup(func() { _ = fetcher.Close() })
 	h := NewGenericHandler(proxy, map[string]string{"github": upstream.URL})
 
-	for _, query := range []string{"?a=1", "?a=2", "?"} {
+	for _, query := range []string{"?a=1", "?a=2", "%3Fa=1", "%23a", "?"} {
 		w := serveGenericRequest(h, "/github"+testReleaseAssetPath+query)
 		if query == "?" {
 			// An empty query is no query; it is served from the same entry.
@@ -478,6 +478,13 @@ func TestGenericHandler_RefusesAQueryOnABuiltInArtifact(t *testing.T) {
 	for query, want := range map[string]int{"?a=1": http.StatusBadRequest, "?a=2": http.StatusBadRequest, "": http.StatusOK} {
 		if w := serveGenericRequest(h, "/node"+path+query); w.Code != want {
 			t.Errorf("built-in %q: status = %d, want %d", query, w.Code, want)
+		}
+	}
+	// An escaped ? or # in the path would reach the upstream as a query or
+	// a fragment, and be stored as a copy of its own.
+	for _, suffix := range []string{"%3Fa=1", "%23a"} {
+		if w := serveGenericRequest(h, "/node"+path+suffix); w.Code != http.StatusBadRequest {
+			t.Errorf("built-in %q: status = %d, want 400", suffix, w.Code)
 		}
 	}
 	if got := requests.Load(); got != 1 {
