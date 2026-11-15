@@ -151,6 +151,15 @@ CREATE TABLE IF NOT EXISTS metadata_dates (
 	PRIMARY KEY (ecosystem, proxy_url, name)
 );
 
+CREATE TABLE IF NOT EXISTS image_manifests (
+	package_purl TEXT NOT NULL,
+	digest TEXT NOT NULL,
+	refs TEXT NOT NULL,
+	tagged_at INTEGER NOT NULL DEFAULT 0,
+	recorded_at INTEGER NOT NULL,
+	PRIMARY KEY (package_purl, digest)
+);
+
 CREATE TABLE IF NOT EXISTS upstream_holds (
 	host TEXT NOT NULL PRIMARY KEY,
 	until_ms INTEGER NOT NULL
@@ -328,6 +337,15 @@ CREATE TABLE IF NOT EXISTS metadata_dates (
 	etag TEXT NOT NULL,
 	last_modified BIGINT NOT NULL,
 	PRIMARY KEY (ecosystem, proxy_url, name)
+);
+
+CREATE TABLE IF NOT EXISTS image_manifests (
+	package_purl TEXT NOT NULL,
+	digest TEXT NOT NULL,
+	refs TEXT NOT NULL,
+	tagged_at BIGINT NOT NULL DEFAULT 0,
+	recorded_at BIGINT NOT NULL,
+	PRIMARY KEY (package_purl, digest)
 );
 
 CREATE TABLE IF NOT EXISTS upstream_holds (
@@ -546,6 +564,7 @@ var migrations = []migration{
 	{"021_add_projects", migrateAddProjects},
 	{"022_add_artifact_mirrored_at", migrateAddArtifactMirroredAt},
 	{"023_add_metadata_upstream_url", migrateAddMetadataUpstreamURL},
+	{"024_add_image_manifests", migrateAddImageManifests},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -1026,6 +1045,27 @@ func migrateAddMetadataDates(db *DB) error {
 	)`, seconds)
 	if _, err := db.Exec(query); err != nil {
 		return fmt.Errorf("creating metadata_dates table: %w", err)
+	}
+	return nil
+}
+
+// migrateAddImageManifests creates the table of what container image
+// manifests reference, which retention's keep_latest reads.
+func migrateAddImageManifests(db *DB) error {
+	millis := "INTEGER"
+	if db.dialect == DialectPostgres {
+		millis = "BIGINT"
+	}
+	query := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS image_manifests (
+		package_purl TEXT NOT NULL,
+		digest TEXT NOT NULL,
+		refs TEXT NOT NULL,
+		tagged_at %s NOT NULL DEFAULT 0,
+		recorded_at %s NOT NULL,
+		PRIMARY KEY (package_purl, digest)
+	)`, millis, millis)
+	if _, err := db.Exec(query); err != nil {
+		return fmt.Errorf("creating image_manifests table: %w", err)
 	}
 	return nil
 }
