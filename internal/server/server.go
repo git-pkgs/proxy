@@ -472,8 +472,6 @@ func (s *Server) serve(listener net.Listener) error {
 	return s.http.ListenAndServe()
 }
 
-// mountProtocolHandlers constructs every ecosystem handler and mounts it on
-// r under its protocol prefix.
 // mountProtocolHandlers mounts every ecosystem handler at the server's base
 // URL, and returns the Git handler, or nil without a Git cache.
 func (s *Server) mountProtocolHandlers(r chi.Router, proxy *handler.Proxy) *handler.GitHandler {

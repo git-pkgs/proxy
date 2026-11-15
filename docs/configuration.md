@@ -929,10 +929,12 @@ and fetched if its branches or tags moved. It is checked at the URL its last
 successful check used, so a repository cached by an older version waits for
 a client to refresh it once. After a failed check it waits a quarter of that
 interval, at least 10 minutes, so a few retries fit before the copy goes
-stale. Checks run one at a time and do not count as use, so they neither keep
-a repository from expiring out of `warm_max_idle` nor change which one
-`max_size` evicts first. Repositories the upstream refused, and those the
-configuration no longer serves, are skipped. `warm_max_idle: 0`, or a
+stale. Checks run one at a time and do not count as use, so they do not keep
+a repository from expiring out of `warm_max_idle`. With the cache at
+`max_size`, a background fetch makes room as any other fetch does, by
+evicting the least recently used idle repositories, which can be ones used
+more recently than the repository being checked. Repositories the upstream
+refused, and those the configuration no longer serves, are skipped. `warm_max_idle: 0`, or a
 `stale_max_age` under `20m` (which includes `0`), turns the background
 checks off. They run in `proxy serve` only, each process for its own
 `cache_dir`.

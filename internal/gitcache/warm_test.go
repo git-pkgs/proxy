@@ -51,8 +51,8 @@ func TestWarmPassRefreshesARepositoryDueForACheck(t *testing.T) {
 	if checked := time.Unix(0, rp.lastChecked.Load()); time.Since(checked) > time.Minute {
 		t.Errorf("lastChecked = %v, want just now", checked)
 	}
-	// A background refresh is no use by a client, so it neither renews the
-	// repository's idle window nor changes the eviction order.
+	// A background refresh is no use by a client, so it does not renew the
+	// repository's idle window.
 	if got := rp.lastUsed.Load(); got != used {
 		t.Errorf("lastUsed moved from %v to %v", time.Unix(0, used), time.Unix(0, got))
 	}

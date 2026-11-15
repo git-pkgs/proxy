@@ -34,13 +34,8 @@ const (
 // quarter of that interval, at least warmMinInterval. Refreshes stop when
 // the cache is closed.
 //
-// A repository is checked at the URL its last successful refresh used, so
-// one cached before that URL was kept waits for a client to refresh it.
 // serves reports whether the configuration still serves a repository's
 // directory in the cache, such as github-1a2b3c4d/acme/widgets.git.
-//
-// It does nothing with WarmMaxIdle 0, or StaleMaxAge under twice
-// warmMinInterval, which includes 0.
 func (c *Cache) Warm(serves func(dir string) bool) {
 	if !c.warmEnabled() {
 		return
@@ -71,22 +66,18 @@ func (c *Cache) Warm(serves func(dir string) bool) {
 	}()
 }
 
-// warmEnabled reports whether Warm checks repositories at all: not with
-// WarmMaxIdle 0, nor when checks every half StaleMaxAge would come more
-// often than warmMinInterval.
+// warmEnabled reports whether Warm checks repositories at all.
 func (c *Cache) warmEnabled() bool {
 	return c.opts.WarmMaxIdle > 0 && c.warmInterval() >= warmMinInterval
 }
 
-// warmInterval is how long after a check a repository is checked again in
-// the background: half of StaleMaxAge.
+// warmInterval is how long after a check a repository is checked again.
 func (c *Cache) warmInterval() time.Duration {
 	return c.opts.StaleMaxAge / warmStaleFraction
 }
 
 // warmRetryInterval is how long after a failed check a repository is tried
-// again in the background: a quarter of warmInterval, at least
-// warmMinInterval.
+// again.
 func (c *Cache) warmRetryInterval() time.Duration {
 	return max(c.warmInterval()/warmRetryFraction, warmMinInterval)
 }
@@ -149,11 +140,8 @@ func (c *Cache) warmDue(now time.Time) []*repo {
 	return due
 }
 
-// warmDueLocked reports whether rp is due for a background check: cached,
-// with a URL a refresh succeeded with, used by a client within WarmMaxIdle,
-// not checked within warmInterval nor failed within warmRetryInterval, not
-// refreshing, and not refused upstream or waiting after passing
-// git.max_repo_size. c.mu must be held.
+// warmDueLocked reports whether rp is due for a background check. c.mu must
+// be held.
 func (c *Cache) warmDueLocked(rp *repo, now time.Time) bool {
 	used := rp.lastUsed.Load()
 	if rp.refused != nil || rp.refreshing != nil || used == 0 || rp.repoURL() == "" ||
