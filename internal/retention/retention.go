@@ -63,6 +63,12 @@ type Spec struct {
 	// applies to the ecosystem. Nil means the stored versions cannot be
 	// ordered, as with digests and hashes.
 	CompareVersions func(a, b string) int
+
+	// KeepLatestImages marks an ecosystem that stores the blobs of container
+	// images under their digests and records which of them each image
+	// references. Rules.KeepLatest then keeps the blobs of the newest
+	// images of a repository.
+	KeepLatestImages bool
 }
 
 // VersionOrder returns a CompareVersions for an ecosystem whose handler
@@ -173,7 +179,7 @@ func (r *Registry) Keys() []string {
 func (r *Registry) KeepLatestKeys() []string {
 	var keys []string
 	for _, key := range r.Keys() {
-		if s, _ := r.Lookup(key); s.CompareVersions != nil {
+		if s, _ := r.Lookup(key); s.CompareVersions != nil || s.KeepLatestImages {
 			keys = append(keys, key)
 		}
 	}
@@ -258,7 +264,8 @@ type Rules struct {
 	Sources map[string]map[string]time.Duration
 	// KeepLatest is how many of the highest cached versions of each package
 	// are never evicted by age, in ecosystems whose Spec sets
-	// CompareVersions. Zero keeps none.
+	// CompareVersions. Where it sets KeepLatestImages, it is how many of the
+	// newest images of each repository keep their blobs. Zero keeps none.
 	KeepLatest int
 }
 
