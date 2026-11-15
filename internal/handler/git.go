@@ -241,6 +241,24 @@ func (h *GitHandler) repository(path string) (gitRepository, int, string) {
 	}, 0, ""
 }
 
+// ServesRepository reports whether the configuration still serves the
+// repository in a directory of the cache, such as
+// github-1a2b3c4d/acme/widgets.git: not when its upstream was removed or
+// repointed, or the repos allowlist leaves it out.
+func (h *GitHandler) ServesRepository(dir string) bool {
+	upstreamDir, repoPath, ok := strings.Cut(dir, "/")
+	if !ok {
+		return false
+	}
+	for name, upstream := range h.upstreams {
+		if upstream.dir == upstreamDir {
+			_, status, _ := h.repository(name + "/" + repoPath)
+			return status == 0
+		}
+	}
+	return false
+}
+
 // validGitSegment checks one segment of a repository path, which becomes both
 // part of a directory under the cache and part of the upstream URL. Only the
 // last segment may end in .git, so one repository's directory never sits
