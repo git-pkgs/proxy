@@ -155,3 +155,49 @@ func TestMirrorImageRecordsWhatImagesContain(t *testing.T) {
 		t.Errorf("tags containing the amd64 layer after a mirror run = %v, %v; want multi", got, err)
 	}
 }
+
+// A fresh cache hit repeats what is stored, so it writes nothing: SQLite has
+// one writer, and every cached pull would queue behind it.
+func TestContainerCachedPullWritesNoTag(t *testing.T) {
+	h, _, _ := imageTagsHandler(t)
+	h.proxy.MetadataTTL = time.Hour
+	db := h.proxy.DB
+	if _, err := db.Exec(`CREATE TABLE tag_writes (n INTEGER)`); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := db.Exec(`CREATE TRIGGER count_tag_writes BEFORE INSERT ON image_tags BEGIN INSERT INTO tag_writes VALUES (1); END`); err != nil {
+		t.Fatal(err)
+	}
+	for range 3 {
+		requestTagManifest(t, h, http.MethodGet, "multi")
+		requestTagManifest(t, h, http.MethodHead, "multi")
+	}
+	var writes int
+	if err := db.Get(&writes, `SELECT COUNT(*) FROM tag_writes`); err != nil {
+		t.Fatal(err)
+	}
+	if writes != 1 {
+		t.Errorf("%d tag writes, want 1", writes)
+	}
+}
+
+// A client that accepts no index is served one platform's manifest for a
+// tag. That is the image the tag points at seen another way, so the tag keeps
+// the index's digest and only its time moves. A digest the stored one does
+// not reference is a new image.
+func TestContainerPlatformManifestKeepsTheTagsIndex(t *testing.T) {
+	h, _, image := imageTagsHandler(t)
+	requestTagManifest(t, h, http.MethodGet, "multi")
+	later := imageTags(t, h)["multi"].SeenAt.Add(time.Minute)
+
+	h.recordImageTag(imageTagsRepo, "multi", &cachedContainerManifest{contentDigest: image.amd64Digest, fetchedAt: later}, false)
+	if got := imageTags(t, h)["multi"]; got.Digest != image.indexDigest || !got.SeenAt.Equal(later) {
+		t.Errorf("tag after a platform manifest = %+v, want %s at %v", got, image.indexDigest, later)
+	}
+
+	moved := later.Add(time.Minute)
+	h.recordImageTag(imageTagsRepo, "multi", &cachedContainerManifest{contentDigest: image.singleDigest, fetchedAt: moved}, false)
+	if got := imageTags(t, h)["multi"]; got.Digest != image.singleDigest || !got.SeenAt.Equal(moved) {
+		t.Errorf("tag after another image = %+v, want %s at %v", got, image.singleDigest, moved)
+	}
+}

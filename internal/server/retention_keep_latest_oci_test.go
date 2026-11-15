@@ -222,9 +222,9 @@ func TestSweepRetentionKeepsBlobsOfNewestImages(t *testing.T) {
 	}
 }
 
-// A sweep drops the records of images that are no longer among the newest
+// The prune drops the records of images that are no longer among the newest
 // and that no tag points at, so the table holds a few images per repository.
-func TestSweepRetentionPrunesImageRecords(t *testing.T) {
+func TestPruneImageRecords(t *testing.T) {
 	registry := newKeepImagesRegistry(t)
 	srv, db := newKeepImagesProxy(t, registry)
 	images := []keepImage{registry.addImage(t, "first"), registry.addImage(t, "second")}
@@ -243,8 +243,7 @@ func TestSweepRetentionPrunesImageRecords(t *testing.T) {
 		return ok
 	}
 
-	rules := retention.Rules{Ecosystems: map[string]time.Duration{"oci": retentionDay}, KeepLatest: 1}
-	sweepRetention(context.Background(), db, discardLogger(), retention.Default, rules, now)
+	pruneImageRecords(db, discardLogger(), 1, now)
 	for _, digest := range []string{images[0].index, images[0].manifest} {
 		if recorded(digest) {
 			t.Errorf("manifest %s of the older image is still recorded", digest)
@@ -258,8 +257,7 @@ func TestSweepRetentionPrunesImageRecords(t *testing.T) {
 
 	// Without keep_latest the records of the image the tag points at stay,
 	// for the web UI.
-	rules.KeepLatest = 0
-	sweepRetention(context.Background(), db, discardLogger(), retention.Default, rules, now)
+	pruneImageRecords(db, discardLogger(), 0, now)
 	if !recorded(images[1].index) || !recorded(images[1].manifest) {
 		t.Error("the records of the image the tag points at are gone after keep_latest was turned off")
 	}

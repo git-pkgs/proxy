@@ -133,7 +133,7 @@ For `oci` there are no versions to order, so `keep_latest` counts images instead
 
 To know which blobs an image needs, the proxy records what each manifest it serves references, in the `image_manifests` table. This has a few consequences:
 
-- An image only counts once its tag was pulled or mirrored, and its blobs are known once its platform manifest was pulled too. Until then they expire by their rule as before. While `keep_latest` is off, the sweep drops the records of images that no tag points at any more, so those don't count when it is turned on.
+- An image only counts once its tag was pulled or mirrored, and its blobs are known once its platform manifest was pulled too. Until then they expire by their rule as before. The records are pruned hourly, also without a retention rule: while `keep_latest` is off, those of images that no tag points at any more go, so they don't count when it is turned on, and so do tags not pulled for 90 days.
 - An image pulled only by digest is not counted and not kept.
 - A multi-platform tag counts as one image, also when a client that accepts no image index was served one platform's manifest for it.
 - Homebrew bottles and Helm charts pulled over OCI are images here: the newest versions of a bottle or chart are those whose tags were last asked for.

@@ -464,6 +464,7 @@ func (s *Server) serve(listener net.Listener) error {
 	s.background.Go(func() { s.startEvictionLoop(bgCtx) })
 	retentionResolvers := s.retentionResolvers(proxy)
 	s.background.Go(func() { s.startRetentionLoop(bgCtx, retentionResolvers) })
+	s.startImageRecordPruning(bgCtx)
 	s.background.Go(func() { s.startAPKSnapshotPruning(bgCtx) })
 	s.background.Go(func() { s.startReclaimLoop(bgCtx) })
 

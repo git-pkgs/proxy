@@ -188,3 +188,102 @@ func TestPruneImageManifestsKeepsWhatTagsPointAt(t *testing.T) {
 		}
 	})
 }
+
+// Tags the upstream has not confirmed since the given time are dropped, in
+// every repository.
+func TestPruneImageTags(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now()
+		recordTag(t, db, testTagRepo, "old", "sha256:a", now.Add(-100*24*time.Hour))
+		recordTag(t, db, testTagRepo, "latest", "sha256:b", now)
+		recordTag(t, db, "pkg:oci/library/alpine", "3.19", "sha256:c", now.Add(-100*24*time.Hour))
+
+		if err := db.PruneImageTags(now.Add(-90 * 24 * time.Hour)); err != nil {
+			t.Fatalf("PruneImageTags: %v", err)
+		}
+		if tags, _ := db.ImageTags(testTagRepo, 10); len(tags) != 1 || tags[0].Tag != "latest" {
+			t.Errorf("tags = %+v, want latest only", tags)
+		}
+		if tags, _ := db.ImageTags("pkg:oci/library/alpine", 10); len(tags) != 0 {
+			t.Errorf("alpine tags = %+v, want none", tags)
+		}
+	})
+}
+
+// A tag's stored digest and time are read back, and a missing tag says so.
+func TestImageTag(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now().Truncate(time.Millisecond)
+		recordTag(t, db, testTagRepo, "latest", "sha256:a", now)
+		tag, ok, err := db.ImageTag(testTagRepo, "latest")
+		if err != nil || !ok || tag.Digest != "sha256:a" || !tag.SeenAt.Equal(now) {
+			t.Errorf("ImageTag(latest) = %+v, %v, %v; want sha256:a at %v", tag, ok, err, now)
+		}
+		if _, ok, err := db.ImageTag(testTagRepo, "missing"); err != nil || ok {
+			t.Errorf("ImageTag(missing) ok = %v, %v; want false", ok, err)
+		}
+		if _, ok, err := db.ImageTag("pkg:oci/library/alpine", "latest"); err != nil || ok {
+			t.Errorf("ImageTag in another repository ok = %v, %v; want false", ok, err)
+		}
+	})
+}
+
+// TouchImageTag moves a tag's time forward and leaves its digest.
+func TestTouchImageTag(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now().Truncate(time.Millisecond)
+		recordTag(t, db, testTagRepo, "latest", "sha256:a", now.Add(-time.Hour))
+		if err := db.TouchImageTag(testTagRepo, "latest", now); err != nil {
+			t.Fatal(err)
+		}
+		if err := db.TouchImageTag(testTagRepo, "latest", now.Add(-2*time.Hour)); err != nil {
+			t.Fatal(err)
+		}
+		tag, _, err := db.ImageTag(testTagRepo, "latest")
+		if err != nil || tag.Digest != "sha256:a" || !tag.SeenAt.Equal(now) {
+			t.Errorf("tag = %+v, %v; want sha256:a at %v", tag, err, now)
+		}
+	})
+}
+
+// The references a manifest records are read back; an unknown one has none.
+func TestImageManifestRefs(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		recordReferences(t, db, testTagRepo, "sha256:index", "sha256:amd64", "sha256:arm64")
+		if refs, err := db.ImageManifestRefs(testTagRepo, "sha256:index"); err != nil || !slices.Equal(refs, []string{"sha256:amd64", "sha256:arm64"}) {
+			t.Errorf("refs = %v, %v", refs, err)
+		}
+		if refs, err := db.ImageManifestRefs(testTagRepo, "sha256:unknown"); err != nil || refs != nil {
+			t.Errorf("unknown refs = %v, %v; want none", refs, err)
+		}
+		if refs, err := db.ImageManifestRefs("pkg:oci/library/alpine", "sha256:index"); err != nil || refs != nil {
+			t.Errorf("refs in another repository = %v, %v; want none", refs, err)
+		}
+	})
+}
+
+// The delete runs in batches, so a repository with more manifests to keep
+// than a query can bind is pruned all the same.
+func TestPruneImageManifestsInBatches(t *testing.T) {
+	defer func(n int) { imagePruneBatch = n }(imagePruneBatch)
+	imagePruneBatch = 2
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now()
+		for i := range 5 {
+			kept := fmt.Sprintf("sha256:kept-%d", i)
+			recordReferences(t, db, testTagRepo, kept, "sha256:layer")
+			recordTag(t, db, testTagRepo, fmt.Sprintf("v%d", i), kept, now)
+			recordReferences(t, db, testTagRepo, fmt.Sprintf("sha256:gone-%d", i), "sha256:layer")
+		}
+		if err := db.PruneImageManifests(testTagRepo, 0, now.Add(time.Minute)); err != nil {
+			t.Fatalf("PruneImageManifests: %v", err)
+		}
+		for i := range 5 {
+			for digest, want := range map[string]bool{fmt.Sprintf("sha256:kept-%d", i): true, fmt.Sprintf("sha256:gone-%d", i): false} {
+				if _, ok, _, err := db.ImageManifestState(testTagRepo, digest); err != nil || ok != want {
+					t.Errorf("%s recorded = %v, %v; want %v", digest, ok, err, want)
+				}
+			}
+		}
+	})
+}

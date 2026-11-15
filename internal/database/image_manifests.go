@@ -21,6 +21,10 @@ const (
 	imageWalkBatch = 500
 )
 
+// imagePruneBatch is how many manifests one prune query deletes, well below
+// the bind limits of SQLite and PostgreSQL. A variable so tests can lower it.
+var imagePruneBatch = 500
+
 // ImageManifest is what one container image manifest of a repository
 // references.
 type ImageManifest struct {
@@ -121,16 +125,53 @@ func (db *DB) PruneImageManifests(packagePURL string, n int, before time.Time) e
 	if err != nil {
 		return err
 	}
-	query := `DELETE FROM image_manifests WHERE package_purl = ? AND recorded_at < ?`
-	args := []any{packagePURL, before.UnixMilli()}
-	if len(manifests) > 0 {
-		query, args, err = sqlx.In(query+` AND digest NOT IN (?)`, packagePURL, before.UnixMilli(), manifests)
+	keep := make(map[string]struct{}, len(manifests))
+	for _, digest := range manifests {
+		keep[digest] = struct{}{}
+	}
+
+	var old []string
+	err = db.Select(&old, db.Rebind(`
+		SELECT digest FROM image_manifests WHERE package_purl = ? AND recorded_at < ?
+	`), packagePURL, before.UnixMilli())
+	if err != nil {
+		return err
+	}
+	drop := old[:0]
+	for _, digest := range old {
+		if _, ok := keep[digest]; !ok {
+			drop = append(drop, digest)
+		}
+	}
+	// Deleted by name in batches: a list of the kept ones can outgrow what
+	// one query may bind.
+	for start := 0; start < len(drop); start += imagePruneBatch {
+		batch := drop[start:min(start+imagePruneBatch, len(drop))]
+		query, args, err := sqlx.In(`DELETE FROM image_manifests WHERE package_purl = ? AND digest IN (?)`, packagePURL, batch)
 		if err != nil {
 			return fmt.Errorf("building prune query: %w", err)
 		}
+		if _, err := db.Exec(db.Rebind(query), args...); err != nil {
+			return err
+		}
 	}
-	_, err = db.Exec(db.Rebind(query), args...)
-	return err
+	return nil
+}
+
+// ImageManifestRefs returns the digests a recorded manifest of a repository
+// references, or none for one that is not recorded.
+func (db *DB) ImageManifestRefs(packagePURL, digest string) ([]string, error) {
+	var row imageManifestRow
+	err := db.Get(&row, db.Rebind(`
+		SELECT digest, refs FROM image_manifests WHERE package_purl = ? AND digest = ?
+	`), packagePURL, digest)
+	if errors.Is(err, sql.ErrNoRows) {
+		return nil, nil
+	}
+	if err != nil {
+		return nil, err
+	}
+	return row.refs(), nil
 }
 
 // walkNewestImages returns every digest the n newest images of a repository

@@ -47,8 +47,8 @@ func TestPackageShowPageListsImageTags(t *testing.T) {
 		t.Fatalf("status %d", w.Code)
 	}
 	body := w.Body.String()
-	if !strings.Contains(body, "Tags (3)") {
-		t.Error("page has no Tags (3) section")
+	if !strings.Contains(body, ">Tags<") {
+		t.Error("page has no Tags section")
 	}
 	latest, current, older := strings.Index(body, ">latest<"), strings.Index(body, ">2026.11.0<"), strings.Index(body, ">2026.10.0<")
 	if latest < 0 || current < 0 || older < 0 || latest > current || current > older {

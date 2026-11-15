@@ -101,8 +101,6 @@ func sweepRetention(ctx context.Context, db *database.DB, logger *slog.Logger,
 		return
 	}
 
-	pruneImageRecords(db, logger, rules.KeepLatest, now)
-
 	// Without the buffered hits written, an artifact being served right now
 	// can look expired, so skip this sweep rather than clear it.
 	if err := db.FlushHits(); err != nil {
@@ -159,10 +157,13 @@ func sweepRetention(ctx context.Context, db *database.DB, logger *slog.Logger,
 	}
 }
 
-// pruneImageRecords drops the container manifest records that neither the
-// keep newest images of their repository nor the images its tags point at
-// reference.
+// pruneImageRecords drops the container tags the upstream has not confirmed
+// for imageTagMaxAge, then the manifest records that neither the keep newest
+// images of their repository nor the images its tags point at reference.
 func pruneImageRecords(db *database.DB, logger *slog.Logger, keep int, now time.Time) {
+	if err := db.PruneImageTags(now.Add(-imageTagMaxAge)); err != nil {
+		logger.Warn("retention: failed to prune image tags", "error", err)
+	}
 	repositories, err := db.ImageManifestRepositories()
 	if err != nil {
 		logger.Warn("retention: failed to list image manifest records", "error", err)

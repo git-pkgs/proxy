@@ -1,6 +1,8 @@
 package database
 
 import (
+	"database/sql"
+	"errors"
 	"time"
 )
 
@@ -27,6 +29,37 @@ func (db *DB) RecordImageTag(packagePURL, tag, digest string, seenAt time.Time) 
 		ON CONFLICT (package_purl, tag) DO UPDATE SET digest = excluded.digest, seen_at = excluded.seen_at
 		WHERE image_tags.seen_at < excluded.seen_at
 	`), packagePURL, tag, digest, seenAt.UnixMilli())
+	return err
+}
+
+// ImageTag returns a tag of a repository as stored, and whether there is one.
+func (db *DB) ImageTag(packagePURL, tag string) (ImageTag, bool, error) {
+	var row imageTagRow
+	err := db.Get(&row, db.Rebind(`
+		SELECT tag, digest, seen_at FROM image_tags WHERE package_purl = ? AND tag = ?
+	`), packagePURL, tag)
+	if errors.Is(err, sql.ErrNoRows) {
+		return ImageTag{}, false, nil
+	}
+	if err != nil {
+		return ImageTag{}, false, err
+	}
+	return ImageTag{Tag: row.Tag, Digest: row.Digest, SeenAt: time.UnixMilli(row.SeenAt)}, true, nil
+}
+
+// TouchImageTag moves the time a tag was last seen forward and leaves its
+// digest.
+func (db *DB) TouchImageTag(packagePURL, tag string, seenAt time.Time) error {
+	_, err := db.Exec(db.Rebind(`
+		UPDATE image_tags SET seen_at = ? WHERE package_purl = ? AND tag = ? AND seen_at < ?
+	`), seenAt.UnixMilli(), packagePURL, tag, seenAt.UnixMilli())
+	return err
+}
+
+// PruneImageTags removes the tags the upstream has not confirmed since the
+// given time, in every repository.
+func (db *DB) PruneImageTags(before time.Time) error {
+	_, err := db.Exec(db.Rebind(`DELETE FROM image_tags WHERE seen_at < ?`), before.UnixMilli())
 	return err
 }
 
