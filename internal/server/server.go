@@ -308,6 +308,7 @@ func (s *Server) serve(listener net.Listener) error {
 		return fmt.Errorf("configuring scanners: %w", err)
 	}
 	configureMetadata(proxy, s.cfg)
+	proxy.KeepLatestImages = keepLatestImages(s.cfg)
 	proxy.GradleReadOnly = s.cfg.Gradle.BuildCache.ReadOnly
 	proxy.HostedEnabled = s.cfg.Hosted.Enabled
 	proxy.HostedNPMScopes = s.cfg.Hosted.NPMScopes
@@ -641,6 +642,7 @@ func NewMirrorProxy(cfg *config.Config, db *database.DB, store storage.Storage, 
 	configureMirrorResolvers(proxy, cfg.Upstream)
 	proxy.HTTPClient = metadataClient
 	proxy.RateLimits = s.rateLimits
+	proxy.KeepLatestImages = keepLatestImages(cfg)
 	return proxy, s.newContainerHandler(proxy)
 }
 
