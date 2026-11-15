@@ -151,6 +151,15 @@ CREATE TABLE IF NOT EXISTS metadata_dates (
 	PRIMARY KEY (ecosystem, proxy_url, name)
 );
 
+CREATE TABLE IF NOT EXISTS image_manifests (
+	package_purl TEXT NOT NULL,
+	digest TEXT NOT NULL,
+	refs TEXT NOT NULL,
+	tagged_at INTEGER NOT NULL DEFAULT 0,
+	recorded_at INTEGER NOT NULL,
+	PRIMARY KEY (package_purl, digest)
+);
+
 CREATE TABLE IF NOT EXISTS image_tags (
 	package_purl TEXT NOT NULL,
 	tag TEXT NOT NULL,
@@ -158,14 +167,6 @@ CREATE TABLE IF NOT EXISTS image_tags (
 	seen_at INTEGER NOT NULL,
 	PRIMARY KEY (package_purl, tag)
 );
-
-CREATE TABLE IF NOT EXISTS image_manifest_references (
-	package_purl TEXT NOT NULL,
-	manifest_digest TEXT NOT NULL,
-	reference_digest TEXT NOT NULL,
-	PRIMARY KEY (package_purl, manifest_digest, reference_digest)
-);
-CREATE INDEX IF NOT EXISTS idx_image_manifest_references_reference ON image_manifest_references(package_purl, reference_digest);
 
 CREATE TABLE IF NOT EXISTS upstream_holds (
 	host TEXT NOT NULL PRIMARY KEY,
@@ -346,6 +347,15 @@ CREATE TABLE IF NOT EXISTS metadata_dates (
 	PRIMARY KEY (ecosystem, proxy_url, name)
 );
 
+CREATE TABLE IF NOT EXISTS image_manifests (
+	package_purl TEXT NOT NULL,
+	digest TEXT NOT NULL,
+	refs TEXT NOT NULL,
+	tagged_at BIGINT NOT NULL DEFAULT 0,
+	recorded_at BIGINT NOT NULL,
+	PRIMARY KEY (package_purl, digest)
+);
+
 CREATE TABLE IF NOT EXISTS image_tags (
 	package_purl TEXT NOT NULL,
 	tag TEXT NOT NULL,
@@ -353,14 +363,6 @@ CREATE TABLE IF NOT EXISTS image_tags (
 	seen_at BIGINT NOT NULL,
 	PRIMARY KEY (package_purl, tag)
 );
-
-CREATE TABLE IF NOT EXISTS image_manifest_references (
-	package_purl TEXT NOT NULL,
-	manifest_digest TEXT NOT NULL,
-	reference_digest TEXT NOT NULL,
-	PRIMARY KEY (package_purl, manifest_digest, reference_digest)
-);
-CREATE INDEX IF NOT EXISTS idx_image_manifest_references_reference ON image_manifest_references(package_purl, reference_digest);
 
 CREATE TABLE IF NOT EXISTS upstream_holds (
 	host TEXT NOT NULL PRIMARY KEY,
@@ -578,8 +580,8 @@ var migrations = []migration{
 	{"021_add_projects", migrateAddProjects},
 	{"022_add_artifact_mirrored_at", migrateAddArtifactMirroredAt},
 	{"023_add_metadata_upstream_url", migrateAddMetadataUpstreamURL},
-	{"024_add_image_tags", migrateAddImageTags},
-	{"025_add_image_manifest_references", migrateAddImageManifestReferences},
+	{"024_add_image_manifests", migrateAddImageManifests},
+	{"025_add_image_tags", migrateAddImageTags},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -1064,41 +1066,39 @@ func migrateAddMetadataDates(db *DB) error {
 	return nil
 }
 
-// migrateAddImageTags creates the table of the tags of container image
-// repositories that the web UI lists.
-func migrateAddImageTags(db *DB) error {
+// migrateAddImageManifests creates the table of what container image
+// manifests reference, which retention's keep_latest reads.
+func migrateAddImageManifests(db *DB) error {
 	millis := "INTEGER"
 	if db.dialect == DialectPostgres {
 		millis = "BIGINT"
 	}
-	query := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS image_tags (
+	query := fmt.Sprintf(`CREATE TABLE IF NOT EXISTS image_manifests (
 		package_purl TEXT NOT NULL,
-		tag TEXT NOT NULL,
 		digest TEXT NOT NULL,
-		seen_at %s NOT NULL,
-		PRIMARY KEY (package_purl, tag)
-	)`, millis)
+		refs TEXT NOT NULL,
+		tagged_at %s NOT NULL DEFAULT 0,
+		recorded_at %s NOT NULL,
+		PRIMARY KEY (package_purl, digest)
+	)`, millis, millis)
 	if _, err := db.Exec(query); err != nil {
-		return fmt.Errorf("creating image_tags table: %w", err)
+		return fmt.Errorf("creating image_manifests table: %w", err)
 	}
 	return nil
 }
 
-// migrateAddImageManifestReferences creates the table of the digests each
-// cached image manifest references, which finds the tags whose image
-// contains a blob.
-func migrateAddImageManifestReferences(db *DB) error {
-	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS image_manifest_references (
+// migrateAddImageTags creates the table of the tags of container image
+// repositories that the web UI lists.
+func migrateAddImageTags(db *DB) error {
+	// BIGINT is an integer column on SQLite too.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS image_tags (
 		package_purl TEXT NOT NULL,
-		manifest_digest TEXT NOT NULL,
-		reference_digest TEXT NOT NULL,
-		PRIMARY KEY (package_purl, manifest_digest, reference_digest)
+		tag TEXT NOT NULL,
+		digest TEXT NOT NULL,
+		seen_at BIGINT NOT NULL,
+		PRIMARY KEY (package_purl, tag)
 	)`); err != nil {
-		return fmt.Errorf("creating image_manifest_references table: %w", err)
-	}
-	if _, err := db.Exec(`CREATE INDEX IF NOT EXISTS idx_image_manifest_references_reference
-		ON image_manifest_references(package_purl, reference_digest)`); err != nil {
-		return fmt.Errorf("creating image_manifest_references index: %w", err)
+		return fmt.Errorf("creating image_tags table: %w", err)
 	}
 	return nil
 }

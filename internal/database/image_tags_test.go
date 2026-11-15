@@ -60,7 +60,7 @@ func TestMigrateAddsImageTags(t *testing.T) {
 		if _, err := db.Exec("DROP TABLE image_tags"); err != nil {
 			t.Fatal(err)
 		}
-		if _, err := db.Exec("DELETE FROM migrations WHERE name = '024_add_image_tags'"); err != nil {
+		if _, err := db.Exec("DELETE FROM migrations WHERE name = '025_add_image_tags'"); err != nil {
 			t.Fatal(err)
 		}
 		if err := db.MigrateSchema(); err != nil {
@@ -75,8 +75,8 @@ func TestMigrateAddsImageTags(t *testing.T) {
 
 func recordReferences(t *testing.T, db *DB, repo, manifest string, references ...string) {
 	t.Helper()
-	if err := db.RecordImageManifestReferences(repo, manifest, references); err != nil {
-		t.Fatalf("RecordImageManifestReferences(%s): %v", manifest, err)
+	if err := db.RecordImageManifest(ImageManifest{PackagePURL: repo, Digest: manifest, Refs: references}); err != nil {
+		t.Fatalf("RecordImageManifest(%s): %v", manifest, err)
 	}
 }
 
@@ -142,41 +142,49 @@ func TestImageTagsContainingLimitsTheMatches(t *testing.T) {
 	})
 }
 
-// A manifest's digest fixes its content, so the references recorded first
-// stand, and recording them again adds nothing.
-func TestRecordImageManifestReferencesKeepsTheFirstRecord(t *testing.T) {
+// An index can list another index, so the walk from a blob up to the tags
+// goes as far as the references do, and a manifest that references itself
+// does not stop it.
+func TestImageTagsContainingFollowsNestedIndexes(t *testing.T) {
 	runWithBothDatabases(t, func(t *testing.T, db *DB) {
-		recordReferences(t, db, testTagRepo, "sha256:m", "sha256:a", "sha256:b", "sha256:a")
-		recordReferences(t, db, testTagRepo, "sha256:m", "sha256:c")
-		recordTag(t, db, testTagRepo, "latest", "sha256:m", time.Now())
-		if got, _ := db.ImageTagsContaining(testTagRepo, "sha256:c", 10); len(got) != 0 {
-			t.Errorf("a second record added a reference: %v", got)
-		}
-		var rows int
-		if err := db.Get(&rows, "SELECT COUNT(*) FROM image_manifest_references"); err != nil {
-			t.Fatal(err)
-		}
-		if rows != 2 {
-			t.Errorf("%d rows, want 2", rows)
+		recordReferences(t, db, testTagRepo, "sha256:outer", "sha256:inner")
+		recordReferences(t, db, testTagRepo, "sha256:inner", "sha256:platform", "sha256:inner")
+		recordReferences(t, db, testTagRepo, "sha256:platform", "sha256:layer")
+		recordTag(t, db, testTagRepo, "nested", "sha256:outer", time.Now())
+		got, err := db.ImageTagsContaining(testTagRepo, "sha256:layer", 10)
+		if err != nil || !slices.Equal(got, []string{"nested"}) {
+			t.Errorf("ImageTagsContaining = %v, %v; want nested", got, err)
 		}
 	})
 }
 
-func TestMigrateAddsImageManifestReferences(t *testing.T) {
+// Pruning keeps what the tags of a repository point at, however many images
+// retention keeps, so a blob's page still finds its tags.
+func TestPruneImageManifestsKeepsWhatTagsPointAt(t *testing.T) {
 	runWithBothDatabases(t, func(t *testing.T, db *DB) {
-		if _, err := db.Exec("DROP TABLE image_manifest_references"); err != nil {
-			t.Fatal(err)
+		now := time.Now()
+		recordReferences(t, db, testTagRepo, "sha256:index", "sha256:platform")
+		recordReferences(t, db, testTagRepo, "sha256:platform", "sha256:layer")
+		recordReferences(t, db, testTagRepo, "sha256:moved", "sha256:moved-layer")
+		recordReferences(t, db, testTagRepo, "sha256:pinned", "sha256:pinned-layer")
+		recordTag(t, db, testTagRepo, "stable", "sha256:moved", now.Add(-time.Hour))
+		recordTag(t, db, testTagRepo, "stable", "sha256:index", now)
+		// A tag of another repository holds nothing here.
+		recordTag(t, db, "pkg:oci/library/alpine", "latest", "sha256:pinned", now)
+
+		// No image is among the newest none, whatever the count says.
+		if err := db.PruneImageManifests(testTagRepo, -1, now.Add(time.Minute)); err != nil {
+			t.Fatalf("PruneImageManifests: %v", err)
 		}
-		if _, err := db.Exec("DELETE FROM migrations WHERE name = '025_add_image_manifest_references'"); err != nil {
-			t.Fatal(err)
+		for digest, want := range map[string]bool{
+			"sha256:index": true, "sha256:platform": true, "sha256:moved": false, "sha256:pinned": false,
+		} {
+			if _, ok, _, err := db.ImageManifestState(testTagRepo, digest); err != nil || ok != want {
+				t.Errorf("%s recorded = %v, %v; want %v", digest, ok, err, want)
+			}
 		}
-		if err := db.MigrateSchema(); err != nil {
-			t.Fatalf("MigrateSchema: %v", err)
-		}
-		recordReferences(t, db, testTagRepo, "sha256:m", "sha256:a")
-		recordTag(t, db, testTagRepo, "latest", "sha256:m", time.Now())
-		if got, err := db.ImageTagsContaining(testTagRepo, "sha256:a", 10); err != nil || len(got) != 1 {
-			t.Errorf("ImageTagsContaining after migration = %v, %v; want latest", got, err)
+		if got, _ := db.ImageTagsContaining(testTagRepo, "sha256:layer", 10); !slices.Equal(got, []string{"stable"}) {
+			t.Errorf("ImageTagsContaining after prune = %v, want stable", got)
 		}
 	})
 }

@@ -221,7 +221,11 @@ func (c *Cache) clone(ctx context.Context, rp *repo, repoURL string, remote remo
 	}
 	defer func() { _ = os.RemoveAll(tmp) }()
 
-	if _, err := c.run(ctx, tmp, "init", "--quiet", "--bare"); err != nil {
+	args := []string{"init", "--quiet", "--bare"}
+	if c.reftable {
+		args = append(args, "--ref-format=reftable")
+	}
+	if _, err := c.run(ctx, tmp, args...); err != nil {
 		return err
 	}
 	if err := c.fetch(ctx, tmp, repoURL, c.opts.MaxRepoSize, res, refreshFlags, branchesAndTags...); err != nil {

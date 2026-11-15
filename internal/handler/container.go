@@ -70,7 +70,7 @@ func isDockerHubKey(key string) bool {
 // Package rules write the repository name as a path, pkg:oci/library/nginx,
 // and are mapped to that form.
 func init() {
-	retention.Default.Register(retention.Spec{Key: "oci", CanonicalPackage: ociRetentionKey})
+	retention.Default.Register(retention.Spec{Key: "oci", CanonicalPackage: ociRetentionKey, KeepLatestImages: true})
 }
 
 // ociRetentionKey maps a package rule to the stored package PURL. It refuses

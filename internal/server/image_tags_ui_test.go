@@ -88,7 +88,7 @@ func TestVersionShowPageListsImageTagsContainingTheBlob(t *testing.T) {
 		t.Fatalf("UpsertVersion: %v", err)
 	}
 	const image = "sha256:66c798d79a95c2691f280329c3611dba1746117c61c9f331907ca35a06a52778"
-	if err := ts.db.RecordImageManifestReferences(pkg.PURL, image, []string{layer}); err != nil {
+	if err := ts.db.RecordImageManifest(database.ImageManifest{PackagePURL: pkg.PURL, Digest: image, Refs: []string{layer}}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()
@@ -126,7 +126,7 @@ func TestVersionShowPageSearchesPastTheListedTags(t *testing.T) {
 	if err := ts.db.UpsertVersion(&database.Version{PURL: pkg.PURL + "@" + layer, PackagePURL: pkg.PURL}); err != nil {
 		t.Fatal(err)
 	}
-	if err := ts.db.RecordImageManifestReferences(pkg.PURL, "sha256:old", []string{layer}); err != nil {
+	if err := ts.db.RecordImageManifest(database.ImageManifest{PackagePURL: pkg.PURL, Digest: "sha256:old", Refs: []string{layer}}); err != nil {
 		t.Fatal(err)
 	}
 	now := time.Now()

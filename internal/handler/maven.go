@@ -241,10 +241,12 @@ func (h *MavenHandler) handleDownload(w http.ResponseWriter, r *http.Request, so
 	// e.g., com/google/guava/guava/32.1.3-jre/guava-32.1.3-jre.jar
 	group, artifact, version, filename := h.parsePath(urlPath)
 	if artifact == "" {
-		if strings.Count(urlPath, "/") >= minMavenParts-1 {
-			// A dot or colon in a group directory, or a colon in the
-			// artifact, which the Maven layout never has. Proxied, the
-			// file would skip the denylist, scan and cooldown.
+		// Too few segments to hold a coordinate, or a dot or colon in a
+		// group directory, or a colon in the artifact, which the Maven
+		// layout never has. Proxied, an artifact would skip the denylist,
+		// scan and cooldown. A checksum of another file, such as
+		// archetype-catalog.xml.sha1, is proxied like that file.
+		if h.isArtifactFile(h.checksummedFile(path.Base(urlPath))) || h.isCoordinateFile(urlPath) {
 			http.NotFound(w, r)
 			return
 		}
@@ -384,12 +386,26 @@ func (h *MavenHandler) isVersionListingFile(filename string) bool {
 // an artifact. They are as immutable as the artifact, so they are cached
 // with it rather than refetched on every request.
 func (h *MavenHandler) isChecksumFile(filename string) bool {
-	for _, ext := range []string{".sha1", ".sha256", ".sha512", ".md5", ".asc"} {
-		if strings.HasSuffix(filename, ext) {
-			return true
+	return h.checksummedFile(filename) != filename
+}
+
+// checksummedFile is the file a checksum or signature file is for
+// (bar-1.0.jar for bar-1.0.jar.sha1 and bar-1.0.jar.asc.sha1), or filename
+// itself if it is neither.
+func (h *MavenHandler) checksummedFile(filename string) string {
+	for {
+		trimmed := filename
+		for _, ext := range []string{".sha1", ".sha256", ".sha512", ".md5", ".asc"} {
+			if name, ok := strings.CutSuffix(trimmed, ext); ok {
+				trimmed = name
+				break
+			}
 		}
+		if trimmed == filename {
+			return filename
+		}
+		filename = trimmed
 	}
-	return false
 }
 
 // mavenForwardHeaders lets clients resume artifacts proxied without caching.

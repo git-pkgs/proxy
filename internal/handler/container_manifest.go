@@ -109,12 +109,13 @@ func (h *ContainerHandler) manifestDenied(w http.ResponseWriter, cacheName, refe
 	return true
 }
 
-// writeManifest writes manifest unless the denylist names its digest.
+// writeManifest writes the manifest that reference resolved to, unless the
+// denylist names its digest.
 func (h *ContainerHandler) writeManifest(w http.ResponseWriter, r *http.Request, cacheName, reference string, manifest *cachedContainerManifest, stale bool) {
 	if h.manifestDenied(w, cacheName, manifest.contentDigest) {
 		return
 	}
-	h.recordImageManifestReferences(cacheName, manifest)
+	h.recordImageManifest(cacheName, reference, manifest, stale)
 	h.recordImageTag(cacheName, reference, manifest, stale)
 	writeContainerManifest(w, r, manifest, stale)
 }

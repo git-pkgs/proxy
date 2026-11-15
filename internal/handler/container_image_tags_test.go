@@ -2,8 +2,6 @@ package handler
 
 import (
 	"context"
-	"crypto/sha512"
-	"encoding/hex"
 	"net/http"
 	"net/http/httptest"
 	"slices"
@@ -155,36 +153,5 @@ func TestMirrorImageRecordsWhatImagesContain(t *testing.T) {
 	got, err := h.proxy.DB.ImageTagsContaining(canonicalPackagePURL("oci", imageTagsRepo), image.amd64Layer, 10)
 	if err != nil || !slices.Equal(got, []string{"multi"}) {
 		t.Errorf("tags containing the amd64 layer after a mirror run = %v, %v; want multi", got, err)
-	}
-}
-
-// The first record of a manifest stands, so a body that is not the one its
-// digest names is not recorded under that digest.
-func TestImageManifestReferencesNeedTheBodyTheDigestNames(t *testing.T) {
-	h, _, image := imageTagsHandler(t)
-	body := []byte(`{"schemaVersion":2,"layers":[{"digest":"sha256:` + strings.Repeat("1", 64) + `"}]}`)
-	h.recordImageManifestReferences(imageTagsRepo, &cachedContainerManifest{body: body, contentDigest: image.singleDigest})
-	requestTagManifest(t, h, http.MethodGet, "single")
-	got, err := h.proxy.DB.ImageTagsContaining(canonicalPackagePURL("oci", imageTagsRepo), image.singleLayer, 10)
-	if err != nil || !slices.Equal(got, []string{"single"}) {
-		t.Errorf("tags containing the single layer = %v, %v; want single", got, err)
-	}
-}
-
-// A manifest named by a sha512 digest is checked with sha512.
-func TestImageManifestReferencesOfASHA512Manifest(t *testing.T) {
-	h, _, _ := imageTagsHandler(t)
-	layer := "sha256:" + strings.Repeat("1", 64)
-	body := []byte(`{"schemaVersion":2,"layers":[{"digest":"` + layer + `"}]}`)
-	sum := sha512.Sum512(body)
-	digest := "sha512:" + hex.EncodeToString(sum[:])
-	h.recordImageManifestReferences(imageTagsRepo, &cachedContainerManifest{body: body, contentDigest: digest})
-	repo := canonicalPackagePURL("oci", imageTagsRepo)
-	if err := h.proxy.DB.RecordImageTag(repo, "v1", digest, time.Now()); err != nil {
-		t.Fatal(err)
-	}
-	got, err := h.proxy.DB.ImageTagsContaining(repo, layer, 10)
-	if err != nil || !slices.Equal(got, []string{"v1"}) {
-		t.Errorf("tags containing the layer = %v, %v; want v1", got, err)
 	}
 }

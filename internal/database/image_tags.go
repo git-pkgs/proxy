@@ -1,8 +1,6 @@
 package database
 
 import (
-	"database/sql"
-	"errors"
 	"time"
 )
 
@@ -50,51 +48,53 @@ func (db *DB) ImageTags(packagePURL string, limit int) ([]ImageTag, error) {
 	return tags, nil
 }
 
-// RecordImageManifestReferences stores the digests a manifest of a
-// repository references: the platform manifests of an index, or the config
-// and layers of an image. A digest fixes the manifest's content, so a
-// manifest already recorded is left as it is.
-func (db *DB) RecordImageManifestReferences(packagePURL, manifestDigest string, references []string) error {
-	var known int
-	err := db.Get(&known, db.Rebind(`
-		SELECT 1 FROM image_manifest_references WHERE package_purl = ? AND manifest_digest = ? LIMIT 1
-	`), packagePURL, manifestDigest)
-	if err == nil || !errors.Is(err, sql.ErrNoRows) {
-		return err
-	}
-	tx, err := db.Beginx()
-	if err != nil {
-		return err
-	}
-	defer func() { _ = tx.Rollback() }()
-	insert := db.Rebind(`
-		INSERT INTO image_manifest_references (package_purl, manifest_digest, reference_digest) VALUES (?, ?, ?)
-		ON CONFLICT DO NOTHING
-	`)
-	for _, reference := range references {
-		if _, err := tx.Exec(insert, packagePURL, manifestDigest, reference); err != nil {
-			return err
-		}
-	}
-	return tx.Commit()
-}
-
 // ImageTagsContaining returns up to limit tags of a repository whose image
 // contains digest, the most recently seen first: tags pointing at digest,
 // at a manifest that references it, or at an index listing such a manifest.
+// It reads the references recorded in image_manifests.
 func (db *DB) ImageTagsContaining(packagePURL, digest string, limit int) ([]string, error) {
+	var manifests []imageManifestRow
+	err := db.Select(&manifests, db.Rebind(`
+		SELECT digest, refs FROM image_manifests WHERE package_purl = ?
+	`), packagePURL)
+	if err != nil {
+		return nil, err
+	}
+	referencedBy := make(map[string][]string)
+	for _, manifest := range manifests {
+		for _, ref := range manifest.refs() {
+			referencedBy[ref] = append(referencedBy[ref], manifest.Digest)
+		}
+	}
+	containing := map[string]struct{}{digest: {}}
+	for next := []string{digest}; len(next) > 0; {
+		var parents []string
+		for _, child := range next {
+			for _, parent := range referencedBy[child] {
+				if _, seen := containing[parent]; !seen {
+					containing[parent] = struct{}{}
+					parents = append(parents, parent)
+				}
+			}
+		}
+		next = parents
+	}
+
+	var rows []imageTagRow
+	err = db.Select(&rows, db.Rebind(`
+		SELECT tag, digest, seen_at FROM image_tags WHERE package_purl = ? ORDER BY seen_at DESC, tag
+	`), packagePURL)
+	if err != nil {
+		return nil, err
+	}
 	var tags []string
-	err := db.Select(&tags, db.Rebind(`
-		SELECT tag FROM image_tags WHERE package_purl = ? AND (digest = ? OR digest IN (
-			SELECT manifest_digest FROM image_manifest_references
-			WHERE package_purl = ? AND reference_digest = ?
-			UNION
-			SELECT parent.manifest_digest FROM image_manifest_references child
-			JOIN image_manifest_references parent
-				ON parent.package_purl = child.package_purl AND parent.reference_digest = child.manifest_digest
-			WHERE child.package_purl = ? AND child.reference_digest = ?
-		))
-		ORDER BY seen_at DESC, tag LIMIT ?
-	`), packagePURL, digest, packagePURL, digest, packagePURL, digest, limit)
-	return tags, err
+	for _, row := range rows {
+		if len(tags) == limit {
+			break
+		}
+		if _, ok := containing[row.Digest]; ok {
+			tags = append(tags, row.Tag)
+		}
+	}
+	return tags, nil
 }

@@ -56,8 +56,9 @@ func TestRegistryKeepLatestKeys(t *testing.T) {
 	reg.Register(Spec{Key: "npm", CompareVersions: VersionOrder("npm")})
 	reg.Register(Spec{Key: "gem"})
 	reg.Register(Spec{Key: "cargo", CompareVersions: VersionOrder("cargo")})
+	reg.Register(Spec{Key: "oci", KeepLatestImages: true})
 
-	if got := reg.KeepLatestKeys(); !slices.Equal(got, []string{"cargo", "npm"}) {
-		t.Errorf("KeepLatestKeys() = %v, want [cargo npm]", got)
+	if got := reg.KeepLatestKeys(); !slices.Equal(got, []string{"cargo", "npm", "oci"}) {
+		t.Errorf("KeepLatestKeys() = %v, want [cargo npm oci]", got)
 	}
 }
