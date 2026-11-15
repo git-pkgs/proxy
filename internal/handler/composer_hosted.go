@@ -6,8 +6,9 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"strings"
 	"time"
+
+	"github.com/git-pkgs/proxy/internal/metadata/composer"
 )
 
 // composerRootOnlyKeys are composer.json keys that only apply to the root
@@ -15,10 +16,7 @@ import (
 var composerRootOnlyKeys = []string{"repositories", "config", "minimum-stability", "prefer-stable"}
 
 // composerLocalEntry is a pushed version as Composer metadata lists it.
-type composerLocalEntry struct {
-	version string
-	entry   json.RawMessage
-}
+type composerLocalEntry = composer.LocalVersion
 
 // composerLocalEntries returns the pushed versions of a package for one of
 // its metadata files: the dev versions for the ~dev file, the tagged ones for
@@ -59,24 +57,13 @@ func (h *ComposerHandler) composerLocalEntries(packageName string, dev bool) ([]
 		if err != nil {
 			return nil, err
 		}
-		entries = append(entries, composerLocalEntry{version: lv.Version, entry: entry})
+		entries = append(entries, composerLocalEntry{Version: lv.Version, Entry: entry})
 	}
 	return entries, nil
 }
 
 func (h *ComposerHandler) localDistURL(packageName, version, filename string) string {
 	return fmt.Sprintf("%s/composer/files/%s/%s/%s", h.proxyURL, packageName, url.PathEscape(version), filename)
-}
-
-// pushedComposerVersion reports whether version is one of the pushed ones.
-// Tags are listed with and without a leading v, and both name one version.
-func pushedComposerVersion(local []composerLocalEntry, version string) bool {
-	for _, e := range local {
-		if strings.TrimPrefix(e.version, "v") == strings.TrimPrefix(version, "v") {
-			return true
-		}
-	}
-	return false
 }
 
 // serveMetadataWithLocal serves a package's metadata with its pushed versions
@@ -89,7 +76,7 @@ func (h *ComposerHandler) serveMetadataWithLocal(w http.ResponseWriter, r *http.
 	var err error
 	switch {
 	case errors.Is(upstream.err, ErrUpstreamNotFound):
-		out, err = localComposerDocument(packageName, local)
+		out, err = composer.LocalDocument(packageName, local)
 	case upstream.err != nil:
 		if writeUpstreamHeld(w, upstream.err) {
 			return
@@ -116,19 +103,11 @@ func (h *ComposerHandler) serveHostedOnlyMetadata(w http.ResponseWriter, r *http
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	out, err := localComposerDocument(packageName, local)
+	out, err := composer.LocalDocument(packageName, local)
 	if err != nil {
 		h.proxy.Logger.Error("failed to build composer metadata from pushed versions", "package", packageName, "error", err)
 		http.Error(w, "failed to build package metadata", http.StatusInternalServerError)
 		return
 	}
 	serveRewrittenMetadata(w, r, h.proxy.uncachedRewrite("composer", h.proxyURL, cacheKey, out))
-}
-
-func localComposerDocument(packageName string, local []composerLocalEntry) ([]byte, error) {
-	entries := make([]json.RawMessage, 0, len(local))
-	for _, e := range local {
-		entries = append(entries, e.entry)
-	}
-	return json.Marshal(map[string]any{"packages": map[string]any{packageName: entries}})
 }

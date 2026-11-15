@@ -42,7 +42,7 @@ func composerVersions(t *testing.T, output []byte, packageName string) []map[str
 		}
 		expanded = maps.Clone(expanded)
 		for k, v := range fields {
-			if v == composerUnset {
+			if v == "__unset" {
 				delete(expanded, k)
 				continue
 			}
