@@ -1283,6 +1283,29 @@ func TestRecordWithheldVersion(t *testing.T) {
 	})
 }
 
+// For an ecosystem whose release time is its newest file's, a later time
+// replaces the stored one and an earlier one doesn't.
+func TestRecordWithheldVersionNewest(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		const pkgPURL = "pkg:pypi/ruff"
+		first := time.Date(2026, 11, 1, 8, 0, 0, 0, time.UTC)
+		later := first.Add(time.Hour)
+		pkg := &Package{PURL: pkgPURL, Ecosystem: "pypi", Name: "ruff"}
+		for _, at := range []time.Time{first, later, first} {
+			if err := db.RecordWithheldVersionNewest(pkg, pkgPURL+"@2.0.0", at); err != nil {
+				t.Fatalf("RecordWithheldVersionNewest: %v", err)
+			}
+		}
+		ver, err := db.GetVersionByPURL(pkgPURL + "@2.0.0")
+		if err != nil || ver == nil || !ver.PublishedAt.Valid || !ver.PublishedAt.Time.Equal(later) {
+			t.Errorf("version = %+v, %v; want published %v", ver, err, later)
+		}
+		if got, err := db.GetPackageByEcosystemName("pypi", "ruff"); err != nil || got == nil {
+			t.Errorf("package row = %v, %v", got, err)
+		}
+	})
+}
+
 func TestRecordWithheldVersionKeepsExistingRows(t *testing.T) {
 	runWithBothDatabases(t, func(t *testing.T, db *DB) {
 		const pkgPURL = "pkg:npm/leftpad"

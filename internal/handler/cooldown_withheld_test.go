@@ -2,6 +2,7 @@ package handler
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -294,6 +295,77 @@ func TestPyPIJSONRecordsWithheldVersions(t *testing.T) {
 	// A release's time is its newest file's.
 	assertWithheldRecorded(t, proxy.DB, "pypi", "ruff", "2.0.0", recent)
 	assertNotRecorded(t, proxy.DB, "pypi", "ruff", "1.0.0")
+}
+
+// A release's time is its newest file's, and files can be added to a release
+// after it was first held back, so the newer time replaces the stored one.
+func TestPyPIWithheldReleaseKeepsItsNewestUploadTime(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	first, added := now.Add(-2*time.Hour), now.Add(-time.Hour)
+	files := []string{`{"filename":"ruff-2.0.0.tar.gz","url":"https://files.pythonhosted.org/packages/cd/ruff-2.0.0.tar.gz","upload_time_iso_8601":"` + first.Format(time.RFC3339) + `"}`}
+	h, proxy := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+		body := `{"info":{"name":"ruff","version":"2.0.0"},"releases":{"2.0.0":[` + strings.Join(files, ",") + `]}}`
+		return pypiHTTPResponse(r, "application/json", body), nil
+	})
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+	get := func() {
+		t.Helper()
+		w := httptest.NewRecorder()
+		h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/pypi/ruff/json", nil))
+		if w.Code != http.StatusOK {
+			t.Fatalf("status = %d: %s", w.Code, w.Body)
+		}
+	}
+
+	get()
+	assertWithheldRecorded(t, proxy.DB, "pypi", "ruff", "2.0.0", first)
+	files = append(files, `{"filename":"ruff-2.0.0-py3-none-any.whl","url":"https://files.pythonhosted.org/packages/ef/ruff-2.0.0-py3-none-any.whl","upload_time_iso_8601":"`+added.Format(time.RFC3339)+`"}`)
+	get()
+	assertWithheldRecorded(t, proxy.DB, "pypi", "ruff", "2.0.0", added)
+}
+
+// The simple index and the version JSON also keep the newest upload time.
+func TestPyPIWithheldReleaseKeepsItsNewestUploadTimeOnEveryPath(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	first, added := now.Add(-2*time.Hour), now.Add(-time.Hour)
+	for name, path := range map[string]string{"simple": "/simple/ruff/", "version json": "/pypi/ruff/2.0.0/json"} {
+		t.Run(name, func(t *testing.T) {
+			times := []time.Time{first}
+			files := func(key string) string {
+				var out []string
+				for i, at := range times {
+					out = append(out, fmt.Sprintf(`{"filename":"ruff-2.0.0-%d.tar.gz","url":"https://files.pythonhosted.org/packages/cd/ruff-2.0.0-%d.tar.gz",%q:%q}`, i, i, key, at.Format(time.RFC3339)))
+				}
+				return strings.Join(out, ",")
+			}
+			h, proxy := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+				switch r.URL.Path {
+				case "/simple/ruff/":
+					return pypiHTTPResponse(r, pypiSimpleJSON, `{"meta":{"api-version":"1.4"},"name":"ruff","files":[`+files("upload-time")+`]}`), nil
+				case "/pypi/ruff/json":
+					return pypiHTTPResponse(r, "application/json", `{"releases":{"2.0.0":[`+files("upload_time_iso_8601")+`]}}`), nil
+				default:
+					return pypiHTTPResponse(r, "application/json", `{"info":{"name":"ruff","version":"2.0.0"},"urls":[`+files("upload_time_iso_8601")+`]}`), nil
+				}
+			})
+			proxy.Cooldown = &cooldown.Config{Default: "7d"}
+			get := func() {
+				t.Helper()
+				req := httptest.NewRequest(http.MethodGet, path, nil)
+				req.Header.Set("Accept", uvPyPIAccept)
+				w := httptest.NewRecorder()
+				h.Routes().ServeHTTP(w, req)
+				if w.Code != http.StatusOK {
+					t.Fatalf("status = %d: %s", w.Code, w.Body)
+				}
+			}
+			get()
+			assertWithheldRecorded(t, proxy.DB, "pypi", "ruff", "2.0.0", first)
+			times = append(times, added)
+			get()
+			assertWithheldRecorded(t, proxy.DB, "pypi", "ruff", "2.0.0", added)
+		})
+	}
 }
 
 // The version JSON names one release, in urls, and records it when it is

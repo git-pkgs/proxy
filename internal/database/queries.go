@@ -232,6 +232,20 @@ func (db *DB) SetVersionPublishedAt(versionPURL, packagePURL string, publishedAt
 // filters can call it for every version they hold back without reading
 // first.
 func (db *DB) RecordWithheldVersion(pkg *Package, versionPURL string, publishedAt time.Time) error {
+	return db.recordWithheldVersion(pkg, versionPURL, publishedAt, "versions.published_at IS NULL")
+}
+
+// RecordWithheldVersionNewest is RecordWithheldVersion for an ecosystem whose
+// release time is its newest file's, such as PyPI: a later time replaces the
+// stored one, since a file can be added to a release after it was held back.
+func (db *DB) RecordWithheldVersionNewest(pkg *Package, versionPURL string, publishedAt time.Time) error {
+	return db.recordWithheldVersion(pkg, versionPURL, publishedAt,
+		"versions.published_at IS NULL OR versions.published_at < excluded.published_at")
+}
+
+// recordWithheldVersion records a held back version, updating the stored
+// publish time where replace, a condition on the existing row, holds.
+func (db *DB) recordWithheldVersion(pkg *Package, versionPURL string, publishedAt time.Time, replace string) error {
 	now := time.Now()
 	tx, err := db.Beginx()
 	if err != nil {
@@ -252,7 +266,7 @@ func (db *DB) RecordWithheldVersion(pkg *Package, versionPURL string, publishedA
 		ON CONFLICT(purl) DO UPDATE SET
 			published_at = excluded.published_at,
 			updated_at = excluded.updated_at
-		WHERE versions.published_at IS NULL
+		WHERE `+replace+`
 	`), versionPURL, pkg.PURL, publishedAt.UTC(), now, now); err != nil {
 		return fmt.Errorf("recording withheld version: %w", err)
 	}

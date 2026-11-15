@@ -13,6 +13,16 @@ import (
 // A version without a package name, a version or a known time is skipped,
 // and a failed write is only logged: the metadata is served either way.
 func (p *Proxy) recordWithheld(ecosystem, name, version string, publishedAt time.Time) {
+	p.recordWithheldWith(ecosystem, name, version, publishedAt, false)
+}
+
+// recordWithheldNewest is recordWithheld for a release whose time is its
+// newest file's: a later time replaces the stored one.
+func (p *Proxy) recordWithheldNewest(ecosystem, name, version string, publishedAt time.Time) {
+	p.recordWithheldWith(ecosystem, name, version, publishedAt, true)
+}
+
+func (p *Proxy) recordWithheldWith(ecosystem, name, version string, publishedAt time.Time, newest bool) {
 	if p.DB == nil || name == "" || version == "" || publishedAt.IsZero() {
 		return
 	}
@@ -21,7 +31,11 @@ func (p *Proxy) recordWithheld(ecosystem, name, version string, publishedAt time
 		return
 	}
 	pkg := &database.Package{PURL: packagePURL, Ecosystem: ecosystem, Name: name}
-	if err := p.DB.RecordWithheldVersion(pkg, versionPURL, publishedAt); err != nil {
+	record := p.DB.RecordWithheldVersion
+	if newest {
+		record = p.DB.RecordWithheldVersionNewest
+	}
+	if err := record(pkg, versionPURL, publishedAt); err != nil {
 		p.Logger.Warn("cooldown: failed to record withheld version",
 			"ecosystem", ecosystem, "name", name, "version", version, "error", err)
 	}

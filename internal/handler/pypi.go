@@ -326,7 +326,7 @@ func (h *PyPIHandler) fetchFilteredVersions(r *http.Request, name string) (map[s
 	for version, publishedAt := range times {
 		if !publishedAt.IsZero() && !h.proxy.cooldown().IsAllowed("pypi", packagePURL, publishedAt) {
 			filtered[version] = true
-			h.proxy.recordWithheld("pypi", name, version, publishedAt)
+			h.proxy.recordWithheldNewest("pypi", name, version, publishedAt)
 		}
 	}
 
@@ -635,7 +635,7 @@ func (h *PyPIHandler) filterAndRewriteReleases(metadata map[string]any, packageN
 			h.proxy.Logger.Info("policy: filtering pypi version",
 				"package", packageName, "version", version)
 			if held {
-				h.proxy.recordWithheld("pypi", packageName, version, publishedAt)
+				h.proxy.recordWithheldNewest("pypi", packageName, version, publishedAt)
 			}
 			delete(releases, version)
 			continue
@@ -757,7 +757,7 @@ func (h *PyPIHandler) filterAndRewriteURLs(metadata map[string]any, packagePURL 
 	if h.proxy.versionDenied("pypi", name, version) {
 		metadata["urls"] = []any{}
 	} else if held, publishedAt := h.shouldFilterRelease(packagePURL, urls); held {
-		h.proxy.recordWithheld("pypi", name, version, publishedAt)
+		h.proxy.recordWithheldNewest("pypi", name, version, publishedAt)
 		metadata["urls"] = []any{}
 	}
 
