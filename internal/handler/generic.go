@@ -71,6 +71,9 @@ type GenericHandler struct {
 	proxy            *Proxy
 	repositories     map[string]string
 	artifactPatterns map[string][]*regexp.Regexp
+	// builtinPatterns holds each upstream's built-in patterns, tried after
+	// the configured ones. A path they match takes no query.
+	builtinPatterns map[string][]*regexp.Regexp
 	// paths holds each upstream's upstream.generic_paths patterns; an
 	// upstream without any serves every path.
 	paths map[string][]string
@@ -84,6 +87,7 @@ func NewGenericHandler(proxy *Proxy, repositories map[string]string, artifactPat
 		proxy:            proxy,
 		repositories:     make(map[string]string, len(repositories)),
 		artifactPatterns: make(map[string][]*regexp.Regexp),
+		builtinPatterns:  make(map[string][]*regexp.Regexp),
 	}
 	for name, upstreamURL := range repositories {
 		h.repositories[name] = strings.TrimSuffix(upstreamURL, "/")
@@ -91,11 +95,11 @@ func NewGenericHandler(proxy *Proxy, repositories map[string]string, artifactPat
 	// The first matching pattern wins, so configured patterns go first.
 	if len(artifactPatterns) > 0 {
 		for name, patterns := range artifactPatterns[0] {
-			h.addArtifactPatterns(name, patterns)
+			h.addArtifactPatterns(h.artifactPatterns, name, patterns)
 		}
 	}
 	for name, upstreamURL := range h.repositories {
-		h.addArtifactPatterns(name, builtinGenericArtifacts[upstreamURL])
+		h.addArtifactPatterns(h.builtinPatterns, name, builtinGenericArtifacts[upstreamURL])
 	}
 	return h
 }
@@ -107,7 +111,7 @@ func (h *GenericHandler) WithPaths(paths map[string][]string) *GenericHandler {
 	return h
 }
 
-func (h *GenericHandler) addArtifactPatterns(name string, patterns []string) {
+func (h *GenericHandler) addArtifactPatterns(into map[string][]*regexp.Regexp, name string, patterns []string) {
 	for _, pattern := range patterns {
 		re, err := config.CompileGenericArtifactPattern(pattern)
 		if err != nil {
@@ -115,7 +119,7 @@ func (h *GenericHandler) addArtifactPatterns(name string, patterns []string) {
 				"repository", name, "pattern", pattern, "error", err)
 			continue
 		}
-		h.artifactPatterns[name] = append(h.artifactPatterns[name], re)
+		into[name] = append(into[name], re)
 	}
 }
 
@@ -147,6 +151,12 @@ func (h *GenericHandler) Routes() http.Handler {
 		}
 
 		if artifact, ok := h.parseArtifact(repository, rest); ok {
+			if artifact.noQuery && (r.URL.RawQuery != "" || strings.ContainsAny(rest, "?#")) {
+				// Each distinct query would be fetched and stored again. An
+				// escaped ? or # in the path would reach the upstream as one.
+				http.Error(w, "this download takes no query string", http.StatusBadRequest)
+				return
+			}
 			h.handleArtifact(w, r, repository, upstreamURL, rest, artifact)
 			return
 		}
@@ -192,13 +202,23 @@ type genericArtifact struct {
 	name     string
 	version  string
 	filename string
+	// noQuery is set for a GitHub release asset and for a path matched by a
+	// built-in pattern, which take no query.
+	noQuery bool
 }
 
 // parseArtifact returns the identity of a version-pinned download path: one
-// matching the upstream's artifact patterns, else a GitHub release asset.
+// matching the upstream's configured artifact patterns, then its built-in
+// ones, else a GitHub release asset.
 func (h *GenericHandler) parseArtifact(repository, path string) (genericArtifact, bool) {
 	for _, pattern := range h.artifactPatterns[repository] {
 		if artifact, ok := matchArtifactPattern(pattern, repository, path); ok {
+			return artifact, true
+		}
+	}
+	for _, pattern := range h.builtinPatterns[repository] {
+		if artifact, ok := matchArtifactPattern(pattern, repository, path); ok {
+			artifact.noQuery = true
 			return artifact, true
 		}
 	}
@@ -207,6 +227,7 @@ func (h *GenericHandler) parseArtifact(repository, path string) (genericArtifact
 			name:     asset.owner + "/" + asset.repo,
 			version:  asset.tag,
 			filename: asset.filename,
+			noQuery:  true,
 		}, true
 	}
 	return genericArtifact{}, false

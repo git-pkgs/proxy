@@ -479,7 +479,9 @@ its patterns match; any other path answers 404. The patterns use the syntax of
 `upstream.git` `repos`: `path.Match`, where `*` does not cross a `/`, and a
 pattern ending in `/**` also matches every path nested below its prefix. A
 path containing `%`, `?`, `#` or a backslash is refused for an upstream with
-`generic_paths`. An upstream without `generic_paths` serves every path.
+`generic_paths`. The patterns only check the path; the query string is passed
+on as it is, except for release assets and the built-in artifact paths below,
+which take none. An upstream without `generic_paths` serves every path.
 
 When `upstream.auth` has credentials for a generic upstream, `generic_paths`
 is required and the proxy refuses to start without it: everyone who can reach
@@ -490,7 +492,8 @@ other token but cannot read anything private, even through an allowed path.
 Paths shaped like `{owner}/{repo}/releases/download/{tag}/{asset}` are
 version-pinned GitHub release assets: they are stored in the artifact cache
 and served from it without revalidation, including while the upstream is
-down.
+down. A release asset takes no query string; a request for one with a query,
+or with an escaped `?` or `#` in its path, answers 400.
 
 Upstreams pointed at these hosts get version-pinned paths built in, whatever
 the upstream is named:
@@ -500,6 +503,11 @@ the upstream is named:
 | `https://archive.apache.org` | `dist/{project dirs}/{version}/[binaries/]{file}`, where `{version}` starts with a digit | the project dirs, e.g. `maven/maven-3`, `maven/mvnd` |
 | `https://nodejs.org` | `dist/v{version}/{file}` | the upstream name |
 | `https://dl.google.com/go` | `go{version}.{os}-{arch}.tar.gz`, `.zip` and their `.sha256` | the upstream name |
+
+Like release assets, these built-in paths take no query string; a request for
+one with a query answers 400, as does one with an escaped `?` or `#` in its
+path. A path that a configured `generic_artifacts` pattern matches first keeps
+its query.
 
 Other upstreams can declare their own version-pinned paths in
 `generic_artifacts`. These are tried before any built-in ones, so a configured
@@ -519,7 +527,9 @@ upstream:
 ```
 
 Only list paths whose content never changes for a given version: a match is
-never revalidated.
+never revalidated. For a configured pattern the query string is passed on and is part of the cache
+key, so each distinct query is fetched and stored as a copy of its own. Only
+`storage.max_size` or a `generic` retention rule removes them.
 
 Every other path is served through the metadata cache (`cache_metadata`
 must be enabled for offline fallback): fresh within `metadata_ttl`, then
