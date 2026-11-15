@@ -387,6 +387,24 @@ func TestPyPIDownloadKeepsTheNewerStoredUploadTime(t *testing.T) {
 	assertWithheldRecorded(t, proxy.DB, "pypi", "ruff", "2.0.0", newer)
 }
 
+// A download that read an upload time out of cooldown is still refused when
+// a newer time, inside it, was stored meanwhile.
+func TestPyPIDownloadDecidesWithTheNewerStoredUploadTime(t *testing.T) {
+	now := time.Now().UTC().Truncate(time.Second)
+	older, newer := now.Add(-30*24*time.Hour), now.Add(-time.Hour)
+	h, proxy := setupPyPIHandler(t, func(r *http.Request) (*http.Response, error) {
+		return pypiHTTPResponse(r, "application/json",
+			`{"releases":{"2.0.0":[{"filename":"ruff-2.0.0.tar.gz","upload_time_iso_8601":"`+older.Format(time.RFC3339)+`"}]}}`), nil
+	})
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+	proxy.recordWithheldPyPI("ruff", "2.0.0", newer)
+
+	req := httptest.NewRequest(http.MethodGet, "/", nil)
+	if inCooldown, err := h.versionInCooldown(req, "ruff", "2.0.0"); err != nil || !inCooldown {
+		t.Errorf("versionInCooldown = %v, %v; want true from the newer stored time", inCooldown, err)
+	}
+}
+
 // The version JSON names one release, in urls, and records it when it is
 // held back.
 func TestPyPIVersionJSONRecordsWithheldVersion(t *testing.T) {

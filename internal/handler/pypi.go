@@ -668,7 +668,8 @@ func (h *PyPIHandler) shouldFilterRelease(packagePURL string, files any) (bool, 
 //
 // A release whose upload time cannot be determined is allowed through, matching
 // how fetchFilteredVersions treats it. Failing to read the times is an error.
-// The time read is stored for storedCooldown.
+// The time read is stored for storedCooldown, and a newer one stored
+// meanwhile decides.
 func (h *PyPIHandler) versionInCooldown(r *http.Request, name, version string) (bool, error) {
 	if !h.proxy.cooldownApplies("pypi", name) {
 		return false, nil
@@ -682,25 +683,32 @@ func (h *PyPIHandler) versionInCooldown(r *http.Request, name, version string) (
 	if publishedAt.IsZero() {
 		return false, nil
 	}
-	h.storeUploadTime(name, version, publishedAt)
+	publishedAt = h.storeUploadTime(name, version, publishedAt)
 	return !h.proxy.cooldown().IsAllowed("pypi", canonicalPackagePURL("pypi", name), publishedAt), nil
 }
 
 // storeUploadTime records a release's newest upload time under the version
 // PURL the file is cached under, so storedCooldown finds it. The time only
-// moves forward: a request that read an older document leaves a newer one.
-func (h *PyPIHandler) storeUploadTime(name, version string, publishedAt time.Time) {
+// moves forward: a request that read an older document leaves a newer one,
+// and gets that newer time back.
+func (h *PyPIHandler) storeUploadTime(name, version string, publishedAt time.Time) time.Time {
 	if h.proxy.DB == nil {
-		return
+		return publishedAt
 	}
 	packagePURL, versionPURL, err := packagePURLStrings("pypi", name, version)
 	if err != nil {
-		return
+		return publishedAt
 	}
 	if err := h.proxy.DB.AdvanceVersionPublishedAt(versionPURL, packagePURL, publishedAt); err != nil {
 		h.proxy.Logger.Warn("cooldown: could not store pypi upload time",
 			"package", name, "version", version, "error", err)
+		return publishedAt
 	}
+	if ver, err := h.proxy.DB.GetVersionByPURL(versionPURL); err == nil && ver != nil &&
+		ver.PublishedAt.Valid && ver.PublishedAt.Time.After(publishedAt) {
+		return ver.PublishedAt.Time
+	}
+	return publishedAt
 }
 
 // storedCooldown answers the cooldown check for a download from the upload
