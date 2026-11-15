@@ -503,6 +503,9 @@ the upstream is named:
 | `https://nodejs.org` | `dist/v{version}/{file}` | the upstream name |
 | `https://dl.google.com/go` | `go{version}.{os}-{arch}.tar.gz`, `.zip` and their `.sha256` | the upstream name |
 
+Like release assets, these built-in paths take no query string; a request for
+one with a query answers 400.
+
 Other upstreams can declare their own version-pinned paths in
 `generic_artifacts`. These are tried before any built-in ones, so a configured
 pattern that overlaps a built-in decides the package name. Each pattern is a regular expression that must match the
@@ -521,7 +524,7 @@ upstream:
 ```
 
 Only list paths whose content never changes for a given version: a match is
-never revalidated. The query string is passed on and is part of the cache
+never revalidated. For a configured pattern the query string is passed on and is part of the cache
 key, so each distinct query is fetched and stored as a copy of its own. Only
 `storage.max_size` or a `generic` retention rule removes them.
 
