@@ -176,7 +176,6 @@ func (h *GemHandler) handleCompactIndex(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	packagePURL := canonicalPackagePURL("gem", name)
 	m, err := h.proxy.cachedRewrite(r.Context(), "gem", h.proxyURL, "info/"+name, docs.doc.body, docs.rewriteDigest(),
 		func([]byte) ([]byte, []string, error) {
 			body, err := h.proxy.decodedMetadataBody(docs.doc)
@@ -184,7 +183,7 @@ func (h *GemHandler) handleCompactIndex(w http.ResponseWriter, r *http.Request) 
 				return nil, nil, err
 			}
 			out, kept := h.filterIndex(body, name, func(version string) bool {
-				return docs.withheld(h.proxy, "gem", packagePURL, version)
+				return docs.withheld(h.proxy, "gem", name, version)
 			})
 			return out, kept, nil
 		})

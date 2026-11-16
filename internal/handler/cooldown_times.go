@@ -138,8 +138,8 @@ func (d timedDocuments) rewriteDigest() string {
 }
 
 // withheld reports whether cooldown leaves version out, given the
-// package's publish times.
-func (d timedDocuments) withheld(p *Proxy, ecosystem, packagePURL, version string) bool {
+// package's publish times, and records a version it leaves out.
+func (d timedDocuments) withheld(p *Proxy, ecosystem, name, version string) bool {
 	published, ok := d.published[version]
 	if !ok {
 		return d.withholdUnknown
@@ -147,7 +147,11 @@ func (d timedDocuments) withheld(p *Proxy, ecosystem, packagePURL, version strin
 	if published.IsZero() {
 		return false
 	}
-	return !p.cooldown().IsAllowed(ecosystem, packagePURL, published)
+	if p.cooldown().IsAllowed(ecosystem, canonicalPackagePURL(ecosystem, name), published) {
+		return false
+	}
+	p.recordWithheld(ecosystem, name, version, published)
+	return true
 }
 
 // decodedMetadataBody returns res's body without its Content-Encoding. The

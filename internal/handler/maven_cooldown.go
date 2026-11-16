@@ -330,6 +330,11 @@ func (h *MavenHandler) filterMetadata(ctx context.Context, source mavenSource, a
 		}
 		h.proxy.Logger.Info("cooldown: filtering maven version", "group", group, "artifact", artifact, "version", v)
 		removed[v] = true
+		// A named repository's times are its own, under PURLs that name it,
+		// and the package page shows the default repository's.
+		if source.name == "" {
+			h.proxy.recordWithheld("maven", group+":"+artifact, v, published)
+		}
 	}
 	if len(removed) == 0 {
 		return body, nil

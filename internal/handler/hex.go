@@ -130,7 +130,6 @@ func (h *HexHandler) handlePackages(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	packagePURL := canonicalPackagePURL("hex", name)
 	m, err := h.proxy.cachedRewrite(r.Context(), "hex", h.proxyURL, "packages/"+name, docs.doc.body, docs.rewriteDigest(),
 		func([]byte) ([]byte, []string, error) {
 			body, err := h.proxy.decodedMetadataBody(docs.doc)
@@ -144,7 +143,7 @@ func (h *HexHandler) handlePackages(w http.ResponseWriter, r *http.Request) {
 			filtered := make(map[string]bool)
 			var kept []string
 			for _, version := range versions {
-				if docs.withheld(h.proxy, "hex", packagePURL, version) {
+				if docs.withheld(h.proxy, "hex", name, version) {
 					filtered[version] = true
 					h.proxy.Logger.Info("cooldown: filtering hex version", "package", name, "version", version)
 					continue
