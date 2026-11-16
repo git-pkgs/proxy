@@ -58,12 +58,9 @@ func NewDebianHandler(
 	upstreamURL string,
 	repositories map[string]string,
 ) *DebianHandler {
-	if upstreamURL == "" {
-		upstreamURL = debianUpstream
-	}
 	h := &DebianHandler{
 		proxy:        proxy,
-		upstreamURL:  strings.TrimSuffix(upstreamURL, "/"),
+		upstreamURL:  DebianUpstreamURL(upstreamURL),
 		proxyURL:     strings.TrimSuffix(proxyURL, "/"),
 		repositories: make(map[string]string, len(repositories)),
 	}
@@ -238,11 +235,27 @@ func (h *DebianHandler) releaseListing(r *http.Request, repository, upstreamURL,
 	return nil, ""
 }
 
+// DebianUpstreamURL returns the upstream.debian archive, the default one when
+// none is configured.
+func DebianUpstreamURL(configured string) string {
+	if configured == "" {
+		configured = debianUpstream
+	}
+	return strings.TrimSuffix(configured, "/")
+}
+
 // artifactCacheFilename names a package in the cache by its repository and
 // its path in it, since the same file name can hold different bytes in
 // different archives, and in different directories of one archive: Docker's
 // repository has a pool under each suite.
 func (h *DebianHandler) artifactCacheFilename(repository, path string) string {
+	return DebianCacheFilename(repository, path)
+}
+
+// DebianCacheFilename is the name the Debian handler caches the package at
+// path in the upstream.debian_repositories archive repository under, or in
+// the upstream.debian archive when repository is empty.
+func DebianCacheFilename(repository, path string) string {
 	if repository == "" {
 		return path
 	}
