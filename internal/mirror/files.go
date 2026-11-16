@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/git-pkgs/proxy/internal/handler"
+	"github.com/git-pkgs/proxy/internal/metadata/pypi"
 	"github.com/git-pkgs/registries"
 )
 
@@ -39,7 +40,7 @@ var fileEcosystems = map[string]fileEcosystem{
 			return map[string]string{"file_name": file.Filename}
 		},
 		cacheKey: func(pv PackageVersion, file registries.Artifact) (string, string, string, bool) {
-			name, version := handler.PyPIFilenameIdentity(file.Filename)
+			name, version := pypi.FilenameIdentity(file.Filename)
 			if name == "" {
 				name, version = pv.Name, pv.Version
 			}

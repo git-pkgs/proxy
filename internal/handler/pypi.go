@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
@@ -12,12 +11,12 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
-	"regexp"
 	"slices"
 	"strconv"
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/metadata/pypi"
 	"github.com/git-pkgs/proxy/internal/retention"
 )
 
@@ -30,17 +29,11 @@ const (
 	pypiSimpleLatestHTML = "application/vnd.pypi.simple.latest+html"
 	pypiLegacyHTML       = "text/html"
 	pypiExactSpecificity = 2
-	minWheelParts        = 5 // name + version + python + abi + platform
-	minSubmatchParts     = 2 // full match + first capture group
 	minPyPIPathParts     = 3 // hash_prefix + hash + filename
-	minEggParts          = 3 // name + version + python tag
 
-	// PyPIMetadataSuffix is the PEP 658 core-metadata sidecar suffix that pip
-	// appends to a distribution URL when the index advertises core metadata.
-	// A sidecar resolves to the same name and version as the distribution it
-	// describes, so it is cached alongside it; consumers that expect an openable
-	// archive must skip these.
-	PyPIMetadataSuffix = ".metadata"
+	// PyPIMetadataSuffix is the PEP 658 core-metadata sidecar suffix; see
+	// pypi.MetadataSuffix.
+	PyPIMetadataSuffix = pypi.MetadataSuffix
 )
 
 // PyPIHandler handles PyPI registry protocol requests.
@@ -353,159 +346,50 @@ func (h *PyPIHandler) fetchReleaseTimes(r *http.Request, name string) (map[strin
 	return h.parseReleaseTimes(body)
 }
 
-// pypiReleaseFiles is the part of a JSON API document the release times are
-// read from. Decoding into it skips every other field, where a generic
-// map would hold the whole document, several times its size, in memory.
-type pypiReleaseFiles struct {
-	Releases map[string][]struct {
-		UploadTime string `json:"upload_time_iso_8601"`
-	} `json:"releases"`
-}
-
 // parseReleaseTimes returns each release's newest upload time from a JSON
 // API document, zero for a release without one.
 func (h *PyPIHandler) parseReleaseTimes(body []byte) (map[string]time.Time, error) {
-	var metadata pypiReleaseFiles
-	// A value of another type than expected is skipped and the rest is
-	// still decoded, so a file entry without a usable time doesn't count.
-	var mismatch *json.UnmarshalTypeError
-	if err := json.Unmarshal(body, &metadata); err != nil && !errors.As(err, &mismatch) {
-		return nil, fmt.Errorf("parsing pypi json metadata: %w", err)
-	}
-	if metadata.Releases == nil {
-		return nil, errors.New("pypi json metadata has no releases")
-	}
-
-	times := make(map[string]time.Time, len(metadata.Releases))
-	for version, files := range metadata.Releases {
-		var newest time.Time
-		for _, file := range files {
-			if t, err := time.Parse(time.RFC3339, file.UploadTime); err == nil && t.After(newest) {
-				newest = t
-			}
-		}
-		times[version] = newest
-	}
-	return times, nil
+	return pypi.ReleaseTimes(body)
 }
 
-var (
-	// simpleLinkRe matches a whole anchor tag: <a ...href="...">filename</a>.
-	simpleLinkRe = regexp.MustCompile(`<a[^>]+href="[^"]*"[^>]*>[^<]+</a>`)
-	// simpleLinkTextRe captures an anchor's text.
-	simpleLinkTextRe = regexp.MustCompile(`>([^<]+)</a>`)
-)
+// urlOptions are the URLs a simple index rewrite needs; the simple index is
+// filtered by the versions the caller passes.
+func (h *PyPIHandler) urlOptions() pypi.Options {
+	return pypi.Options{ProxyURL: h.proxyURL, DownloadURL: h.downloadURL}
+}
 
-// rewriteSimpleHTML rewrites package URLs in simple API HTML to point at this proxy.
-// If filteredVersions is non-nil, links for those versions are removed entirely.
+// metadataOptions add the policy the JSON API rewrite applies itself. The
+// callbacks log and record what it holds back.
+func (h *PyPIHandler) metadataOptions() pypi.Options {
+	return pypi.Options{
+		ProxyURL:    h.proxyURL,
+		DownloadURL: h.downloadURL,
+		Cooldown:    h.proxy.cooldown(),
+		EvaluatedAt: time.Now(),
+		Denied: func(name, version string) bool {
+			return h.proxy.versionDenied("pypi", name, version)
+		},
+		OnFiltered: func(name, version string) {
+			h.proxy.Logger.Info("policy: filtering pypi version", "package", name, "version", version)
+		},
+		OnWithheld: h.proxy.recordWithheldPyPI,
+	}
+}
+
 func (h *PyPIHandler) rewriteSimpleHTML(body []byte, filteredVersions map[string]bool) []byte {
-	// If cooldown filtering is active, remove entire <a> tags for filtered versions
-	if len(filteredVersions) > 0 {
-		body = simpleLinkRe.ReplaceAllFunc(body, func(match []byte) []byte {
-			// Extract filename from between tags
-			innerMatch := simpleLinkTextRe.FindSubmatch(match)
-			if len(innerMatch) < minSubmatchParts {
-				return match
-			}
-			filename := string(innerMatch[1])
-			_, version := h.parseFilename(strings.TrimSpace(filename))
-			if version != "" && filteredVersions[version] {
-				return nil
-			}
-			return match
-		})
-	}
-
-	return h.rewriteDownloadHrefs(body)
+	return pypi.RewriteSimpleHTML(body, filteredVersions, h.urlOptions())
 }
 
-// rewriteDownloadHrefs points href attributes for files on the configured
-// download host at the proxy. It makes the same replacements as the regular
-// expression `href="(<download URL>/packages/[^"]+)"` would: an href
-// whose URL starts with the download host's /packages/ and has at least one
-// more character before the closing quote. Finding the literal prefix is many
-// times faster than running the regular expression over every link.
 func (h *PyPIHandler) rewriteDownloadHrefs(body []byte) []byte {
-	from := []byte(`href="` + h.downloadURL + `/packages/`)
-	// The download route is /pypi/packages/{path...} and keeps the path
-	// from the download host, /packages/ included.
-	to := []byte(`href="` + h.proxyURL + `/pypi/packages/packages/`)
+	return pypi.RewriteDownloadHrefs(body, h.urlOptions())
+}
 
-	var out []byte
-	done := 0 // body[:done] is in out already
-	for search := 0; ; {
-		i := bytes.Index(body[search:], from)
-		if i < 0 {
-			break
-		}
-		start := search + i
-		rest := start + len(from)
-		end := bytes.IndexByte(body[rest:], '"')
-		if end <= 0 {
-			// No closing quote, or nothing before it: not a match. The
-			// regular expression would go on looking from the next byte.
-			search = start + 1
-			continue
-		}
-		if out == nil {
-			out = make([]byte, 0, len(body)+len(body)/8)
-		}
-		out = append(out, body[done:start]...)
-		out = append(out, to...)
-		done = rest
-		search = rest + end + 1
-	}
-	if out == nil {
-		return body
-	}
-	return append(out, body[done:]...)
+func (h *PyPIHandler) filterSimpleHTMLLinks(body []byte, versions map[string]bool) []byte {
+	return pypi.FilterSimpleHTMLLinks(body, versions)
 }
 
 func (h *PyPIHandler) rewriteSimpleJSON(body []byte, filteredVersions map[string]bool) ([]byte, error) {
-	var metadata map[string]any
-	if err := json.Unmarshal(body, &metadata); err != nil {
-		return nil, err
-	}
-
-	files, ok := metadata["files"].([]any)
-	if !ok {
-		return nil, errors.New("pypi simple json response has no files array")
-	}
-
-	rewrittenFiles := make([]any, 0, len(files))
-	for _, file := range files {
-		entry, ok := file.(map[string]any)
-		if !ok {
-			rewrittenFiles = append(rewrittenFiles, file)
-			continue
-		}
-
-		if filename, ok := entry["filename"].(string); ok {
-			_, version := h.parseFilename(filename)
-			if version != "" && filteredVersions[version] {
-				continue
-			}
-		}
-
-		h.rewriteURLEntry(entry)
-		rewrittenFiles = append(rewrittenFiles, entry)
-	}
-
-	metadata["files"] = rewrittenFiles
-
-	// The versions list (PEP 700) loses the filtered versions too, whose
-	// files were all left out above.
-	if versions, ok := metadata["versions"].([]any); ok && len(filteredVersions) > 0 {
-		keptVersions := make([]any, 0, len(versions))
-		for _, v := range versions {
-			if version, ok := v.(string); ok && filteredVersions[version] {
-				continue
-			}
-			keptVersions = append(keptVersions, v)
-		}
-		metadata["versions"] = keptVersions
-	}
-	return json.Marshal(metadata)
+	return pypi.RewriteSimpleJSON(body, filteredVersions, h.urlOptions())
 }
 
 // handleJSON serves the JSON API package metadata.
@@ -585,80 +469,10 @@ func (h *PyPIHandler) proxyAndRewriteJSON(w http.ResponseWriter, r *http.Request
 	serveRewrittenMetadata(w, r, rewritten)
 }
 
-// rewriteJSONMetadata rewrites download URLs in PyPI JSON metadata.
-// If cooldown is enabled, versions published too recently are filtered out.
-// It also returns what it kept: the releases, and the current version's files
-// unless they were dropped.
+// rewriteJSONMetadata rewrites download URLs in PyPI JSON metadata, leaving
+// out releases the denylist names or cooldown holds back.
 func (h *PyPIHandler) rewriteJSONMetadata(body []byte) ([]byte, []string, error) {
-	var metadata map[string]any
-	if err := json.Unmarshal(body, &metadata); err != nil {
-		return nil, nil, err
-	}
-
-	packageName, _ := extractPyPIName(metadata)
-	packagePURL := ""
-	if packageName != "" {
-		packagePURL = canonicalPackagePURL("pypi", packageName)
-	}
-
-	h.filterAndRewriteReleases(metadata, packageName, packagePURL)
-	h.filterAndRewriteURLs(metadata, packagePURL)
-
-	var kept []string
-	if releases, ok := metadata["releases"].(map[string]any); ok {
-		kept = slices.Collect(maps.Keys(releases))
-	}
-	if urls, ok := metadata["urls"].([]any); ok && len(urls) > 0 {
-		// Not a valid release key, so it can't be confused with one.
-		kept = append(kept, "\x00urls")
-	}
-
-	out, err := json.Marshal(metadata)
-	return out, kept, err
-}
-
-// filterAndRewriteReleases applies cooldown filtering and URL rewriting to the
-// releases map in PyPI metadata.
-func (h *PyPIHandler) filterAndRewriteReleases(metadata map[string]any, packageName, packagePURL string) {
-	releases, ok := metadata["releases"].(map[string]any)
-	if !ok {
-		return
-	}
-
-	for version, files := range releases {
-		denied := h.proxy.versionDenied("pypi", packageName, version)
-		held, publishedAt := false, time.Time{}
-		if !denied {
-			held, publishedAt = h.shouldFilterRelease(packagePURL, files)
-		}
-		if denied || held {
-			h.proxy.Logger.Info("policy: filtering pypi version",
-				"package", packageName, "version", version)
-			if held {
-				h.proxy.recordWithheldPyPI(packageName, version, publishedAt)
-			}
-			delete(releases, version)
-			continue
-		}
-
-		h.rewriteFileEntries(files)
-	}
-}
-
-// shouldFilterRelease reports whether a release should be excluded due to
-// cooldown, and the newest upload time that decided it.
-func (h *PyPIHandler) shouldFilterRelease(packagePURL string, files any) (bool, time.Time) {
-	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() || packagePURL == "" {
-		return false, time.Time{}
-	}
-
-	filesArr, ok := files.([]any)
-	if !ok {
-		return false, time.Time{}
-	}
-
-	publishedAt := h.newestUploadTime(filesArr)
-	return !publishedAt.IsZero() && !h.proxy.cooldown().IsAllowed("pypi", packagePURL, publishedAt), publishedAt
+	return pypi.RewriteJSON(body, h.metadataOptions())
 }
 
 // versionInCooldown reports whether a version is still inside the cooldown
@@ -738,92 +552,6 @@ func (h *PyPIHandler) storedCooldown(r *http.Request, name, version, filename st
 	return false, err == nil && cached
 }
 
-// rewriteFileEntries rewrites URLs in a list of file entries.
-func (h *PyPIHandler) rewriteFileEntries(files any) {
-	filesArr, ok := files.([]any)
-	if !ok {
-		return
-	}
-
-	for _, f := range filesArr {
-		if fmap, ok := f.(map[string]any); ok {
-			h.rewriteURLEntry(fmap)
-		}
-	}
-}
-
-// filterAndRewriteURLs applies cooldown filtering and URL rewriting to the
-// urls array (current version files) in PyPI metadata.
-func (h *PyPIHandler) filterAndRewriteURLs(metadata map[string]any, packagePURL string) {
-	urls, ok := metadata["urls"].([]any)
-	if !ok {
-		return
-	}
-
-	info, _ := metadata["info"].(map[string]any)
-	name, _ := info["name"].(string)
-	version, _ := info["version"].(string)
-	if h.proxy.versionDenied("pypi", name, version) {
-		metadata["urls"] = []any{}
-	} else if held, publishedAt := h.shouldFilterRelease(packagePURL, urls); held {
-		h.proxy.recordWithheldPyPI(name, version, publishedAt)
-		metadata["urls"] = []any{}
-	}
-
-	if urls, ok := metadata["urls"].([]any); ok {
-		for _, u := range urls {
-			if umap, ok := u.(map[string]any); ok {
-				h.rewriteURLEntry(umap)
-			}
-		}
-	}
-}
-
-// extractPyPIName extracts the package name from PyPI JSON metadata.
-func extractPyPIName(metadata map[string]any) (string, bool) {
-	info, ok := metadata["info"].(map[string]any)
-	if !ok {
-		return "", false
-	}
-	name, ok := info["name"].(string)
-	return name, ok
-}
-
-// newestUploadTime returns the most recent upload_time_iso_8601 from a list of file entries.
-func (h *PyPIHandler) newestUploadTime(files []any) time.Time {
-	var newest time.Time
-	for _, f := range files {
-		fmap, ok := f.(map[string]any)
-		if !ok {
-			continue
-		}
-		ts, ok := fmap["upload_time_iso_8601"].(string)
-		if !ok {
-			continue
-		}
-		t, err := time.Parse(time.RFC3339, ts)
-		if err != nil {
-			continue
-		}
-		if t.After(newest) {
-			newest = t
-		}
-	}
-	return newest
-}
-
-// rewriteURLEntry rewrites a single URL entry in PyPI metadata.
-func (h *PyPIHandler) rewriteURLEntry(entry map[string]any) {
-	urlStr, ok := entry["url"].(string)
-	if !ok {
-		return
-	}
-
-	if strings.HasPrefix(urlStr, h.downloadURL+"/packages/") {
-		entry["url"] = h.proxyURL + "/pypi/packages" + strings.TrimPrefix(urlStr, h.downloadURL)
-	}
-}
-
 // handleDownload serves a package file, fetching and caching from upstream if needed.
 func (h *PyPIHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	path := r.PathValue("path")
@@ -885,173 +613,8 @@ func (h *PyPIHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	ServeArtifactRequest(w, r, result)
 }
 
-// archiveExtensions are sdist formats of the form {name}-{version}{ext}. They
-// carry no trailing tags, but legacy sdist names may contain hyphens.
-var archiveExtensions = []string{".tar.gz", ".tar.bz2", ".tar.xz", ".tar.Z", ".tgz", ".tar", ".zip"}
-
-// windowsInstallerExtensions are the legacy distutils bdist_wininst and
-// bdist_msi formats, which share a filename layout.
-var windowsInstallerExtensions = []string{".exe", ".msi"}
-
 func (h *PyPIHandler) parseFilename(filename string) (name, version string) {
-	return PyPIFilenameIdentity(filename)
-}
-
-// PyPIFilenameIdentity extracts the package name and version a PyPI file is
-// cached under from its filename, so proxy mirror stores files where the
-// download handler looks for them. Handles wheels, sdists and legacy bdist
-// formats:
-// - requests-2.31.0-py3-none-any.whl
-// - requests-2.31.0.tar.gz
-// - numpy-1.8.0-py2.7-macosx-10.9-x86_64.egg
-// - numpy-1.8.0.win32-py2.7.exe
-func PyPIFilenameIdentity(filename string) (name, version string) {
-	// PEP 658/714 core-metadata sidecars are the distribution filename plus
-	// ".metadata"; they describe the same name and version. Without this, pip's
-	// metadata-only fetches fall back to a hash-derived package identifier.
-	filename = strings.TrimSuffix(filename, PyPIMetadataSuffix)
-
-	switch {
-	case strings.HasSuffix(filename, ".whl"):
-		return parseWheelFilename(strings.TrimSuffix(filename, ".whl"))
-	case strings.HasSuffix(filename, ".egg"):
-		return parseEggFilename(strings.TrimSuffix(filename, ".egg"))
-	}
-
-	for _, ext := range windowsInstallerExtensions {
-		if strings.HasSuffix(filename, ext) {
-			return parseWindowsInstallerFilename(strings.TrimSuffix(filename, ext))
-		}
-	}
-
-	for _, ext := range archiveExtensions {
-		if strings.HasSuffix(filename, ext) {
-			return splitNameVersion(strings.TrimSuffix(filename, ext))
-		}
-	}
-
-	return "", ""
-}
-
-// parseWheelFilename parses the PEP 427 layout
-// {name}-{version}(-{build})?-{python}-{abi}-{platform}, base being the
-// filename without its ".whl" suffix. The spec escapes every hyphen in the name
-// and version to '_', so the first two fields are authoritative even when the
-// optional build tag is present.
-func parseWheelFilename(base string) (name, version string) {
-	parts := strings.Split(base, "-")
-	if len(parts) < minWheelParts {
-		return "", ""
-	}
-
-	return parts[0], parts[1]
-}
-
-// parseEggFilename parses the setuptools bdist_egg layout
-// {name}-{version}-py{X.Y}(-{platform})?, base being the filename without its
-// ".egg" suffix. setuptools escapes hyphens in the name and version to '_', but
-// eggs built by other tooling do not always, so the version is located relative
-// to the interpreter field rather than assumed to be the second field.
-func parseEggFilename(base string) (name, version string) {
-	parts := strings.Split(base, "-")
-	// Scan from the end: the trailing platform fields never look like an
-	// interpreter tag, so the last match is the real one even when the package
-	// name itself carries a "py{N}" component. Stop before index 1, since a tag
-	// any earlier would leave no room for both a name and a version.
-	for i := len(parts) - 1; i >= minEggParts-1; i-- {
-		if !isEggPythonTag(parts[i]) || !isVersionField(parts[i-1]) {
-			continue
-		}
-
-		return strings.Join(parts[:i-1], "-"), parts[i-1]
-	}
-
-	// No interpreter field: {name}-{version}.
-	return splitNameVersion(base)
-}
-
-// parseWindowsInstallerFilename parses the distutils bdist_wininst and
-// bdist_msi layout {name}-{version}.{platform}(-py{X.Y})?, base being the
-// filename without its ".exe" or ".msi" suffix. The platform is joined to the
-// version with a '.' rather than a '-' and may itself contain a hyphen
-// ("win-amd64"), so both trailing fields are stripped before the name and
-// version are split apart.
-func parseWindowsInstallerFilename(base string) (name, version string) {
-	if i := strings.LastIndex(base, "-py"); i >= 0 && isDottedNumber(base[i+len("-py"):]) {
-		base = base[:i]
-	}
-
-	// The platform is the final '.'-separated field. Requiring it to start with
-	// a non-digit keeps a dotted version from being truncated when a filename
-	// carries no platform tag.
-	i := strings.LastIndex(base, ".")
-	if i < 0 || i+1 >= len(base) || isVersionStart(base[i+1]) {
-		return "", ""
-	}
-
-	return splitFullname(base[:i])
-}
-
-// splitFullname splits the distutils fullname {name}-{version} that precedes a
-// Windows installer's platform field. Unlike an sdist, a wininst fullname may
-// carry a trailing build variant ("cx_Oracle-5.1.2-11g"), which belongs to
-// neither the name nor the version, so the first purely numeric field wins and
-// anything after it is discarded.
-func splitFullname(fullname string) (name, version string) {
-	parts := strings.Split(fullname, "-")
-	for i := 1; i < len(parts); i++ {
-		if isDottedNumber(parts[i]) {
-			return strings.Join(parts[:i], "-"), parts[i]
-		}
-	}
-
-	// No purely numeric field, e.g. a prerelease version like "1.0b1".
-	return splitNameVersion(fullname)
-}
-
-// splitNameVersion splits a {name}-{version} pair at the last hyphen that
-// starts a version, leaving hyphens inside the name intact.
-func splitNameVersion(base string) (name, version string) {
-	for i := len(base) - 1; i >= 0; i-- {
-		if base[i] == '-' && i+1 < len(base) && isVersionStart(base[i+1]) {
-			return base[:i], base[i+1:]
-		}
-	}
-
-	return "", ""
-}
-
-// isEggPythonTag reports whether field is the py{X.Y} interpreter field that
-// setuptools places directly after the version in an egg filename.
-func isEggPythonTag(field string) bool {
-	const prefix = "py"
-
-	return len(field) > len(prefix) && strings.HasPrefix(field, prefix) && isVersionStart(field[len(prefix)])
-}
-
-// isVersionField reports whether field can be a version, i.e. it is non-empty
-// and starts with a digit as every PEP 440 release segment does.
-func isVersionField(field string) bool {
-	return field != "" && isVersionStart(field[0])
-}
-
-// isDottedNumber reports whether s is a dotted numeric version such as "2.7".
-func isDottedNumber(s string) bool {
-	if s == "" || !isVersionStart(s[0]) {
-		return false
-	}
-
-	for i := range len(s) {
-		if !isVersionStart(s[i]) && s[i] != '.' {
-			return false
-		}
-	}
-
-	return true
-}
-
-func isVersionStart(c byte) bool {
-	return c >= '0' && c <= '9'
+	return pypi.FilenameIdentity(filename)
 }
 
 func hashPath(path string) string {
