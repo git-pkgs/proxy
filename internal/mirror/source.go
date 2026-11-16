@@ -151,6 +151,8 @@ func mirrorTarget(p *purl.PURL) (ecosystem, name string, qualifiers map[string]s
 		qualifiers = map[string]string{"uuid": p.Qualifier("uuid")}
 	case "alpine":
 		qualifiers = map[string]string{"arch": p.Qualifier("arch"), "distro": p.Qualifier("distro")}
+	case "rpm":
+		qualifiers = map[string]string{"arch": p.Qualifier("arch"), "distro": p.Qualifier("distro"), "epoch": p.Qualifier("epoch")}
 	}
 	return ecosystem, name, qualifiers
 }

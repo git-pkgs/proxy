@@ -52,10 +52,16 @@ func NewRPMHandler(proxy *Proxy, proxyURL string) *RPMHandler {
 	}
 }
 
+// RPMUpstreamURL returns upstream.rpm, the default Fedora tree when none is
+// configured. Package files are cached under their path below it.
+func RPMUpstreamURL(configured string) string {
+	return configuredUpstreamURL(configured, defaultRPMUpstream)
+}
+
 // NewRPMHandlerWithUpstream creates an RPM handler with a custom upstream.
 func NewRPMHandlerWithUpstream(proxy *Proxy, proxyURL, upstreamURL string) *RPMHandler {
 	h := NewRPMHandler(proxy, proxyURL)
-	h.upstreamURL = configuredUpstreamURL(upstreamURL, defaultRPMUpstream)
+	h.upstreamURL = RPMUpstreamURL(upstreamURL)
 	return h
 }
 

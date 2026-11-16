@@ -41,11 +41,14 @@ func (s *Server) newMirror(proxy *handler.Proxy, workers int) *mirror.Mirror {
 
 // UseMirrorUpstreams points m at the configured upstreams: it lists
 // versions from them, through client, fetches Julia packages from
-// upstream.julia and Alpine packages from upstream.apk.
+// upstream.julia, Alpine packages from upstream.apk and RPM packages from
+// upstream.rpm.
 func UseMirrorUpstreams(m *mirror.Mirror, upstream config.UpstreamConfig, client *http.Client) {
 	m.Versions = NewMirrorVersions(upstream, client)
 	m.JuliaUpstream = upstream.Julia
 	m.APKRepositories = upstream.APK
+	m.RPMUpstream = upstream.RPM
+	m.RPMRepositoryPaths = upstream.RPMRepositoryPaths
 }
 
 // mirrorVersionsURL returns the registry base URL to list a package's
