@@ -14,6 +14,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/proxy/internal/metadata/composer"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
 )
@@ -312,12 +313,7 @@ func TestComposerRewriteDistURLGitHubZipball(t *testing.T) {
 	// GitHub zipball URLs end with a bare commit hash, no file extension.
 	// The proxy must produce a filename with .zip extension so that the
 	// archives library can detect the format when browsing source.
-	h := &ComposerHandler{
-		proxy:    testProxy(),
-		proxyURL: "http://localhost:8080",
-	}
-
-	url, ok := h.proxyDistURL("symfony/asset", "v7.4.8",
+	url, ok := composer.ProxyDistURL("http://localhost:8080", "symfony/asset", "v7.4.8",
 		"https://api.github.com/repos/symfony/asset/zipball/d2e2f014ccd6ec9fae8dbe6336a4164346a2a856", "zip")
 	if !ok {
 		t.Fatal("dist URL was not rewritten")
@@ -818,7 +814,7 @@ func TestComposerDownloadBranchWithSlash(t *testing.T) {
 	t.Cleanup(func() { _ = fetcher.Close() })
 	h := NewComposerHandlerWithUpstreams(proxy, "http://proxy", srv.URL, srv.URL)
 
-	distURL, ok := h.proxyDistURL("v/p", version, srv.URL+"/zip/x.zip", "zip")
+	distURL, ok := composer.ProxyDistURL("http://proxy", "v/p", version, srv.URL+"/zip/x.zip", "zip")
 	if want := "http://proxy/composer/files/v/p/dev-feature%2Fx/x.zip"; !ok || distURL != want {
 		t.Fatalf("dist URL = %q, want %q", distURL, want)
 	}

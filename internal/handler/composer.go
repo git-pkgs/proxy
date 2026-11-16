@@ -1,19 +1,16 @@
 package handler
 
 import (
-	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"path"
-	"regexp"
 	"strings"
 	"time"
 
-	"github.com/git-pkgs/proxy/internal/jsonscan"
+	"github.com/git-pkgs/proxy/internal/metadata/composer"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
 )
@@ -21,14 +18,9 @@ import (
 const (
 	composerUpstream   = "https://packagist.org"
 	composerRepo       = "https://repo.packagist.org"
-	composerMinified   = "composer/2.0"
-	composerUnset      = "__unset"
-	composerDevReset   = "~dev"
 	composerDevFile    = "~dev" // suffix of the metadata file holding dev versions
 	vendorPackageParts = 2
 )
-
-var composerUnsetJSON = []byte(`"` + composerUnset + `"`)
 
 // Archives are stored under pkg:composer/{vendor}/{package}, which purl
 // lowercases, so a package rule matches whatever case it is written in. The
@@ -224,411 +216,49 @@ func (h *ComposerHandler) rewriteMetadataKeeping(body []byte) ([]byte, []string,
 }
 
 // rewriteMetadataWithLocal is rewriteMetadataKeeping that also lists the
-// pushed versions in local under localPackage, in place of any upstream entry
-// with the same version. Cooldown only filters upstream versions. A document
-// that does not list localPackage at all is replaced by one holding only the
-// pushed versions.
+// pushed versions in local under localPackage; see composer.Rewrite.
 func (h *ComposerHandler) rewriteMetadataWithLocal(body []byte, localPackage string, local []composerLocalEntry) ([]byte, []string, error) {
-	if !json.Valid(body) {
-		return nil, nil, errors.New("composer metadata is not valid JSON")
-	}
-	format, _, err := jsonscan.LookupString(body, "minified")
-	if err != nil {
-		return nil, nil, err
-	}
-	minified := format == composerMinified
-
-	var out bytes.Buffer
-	var kept []string
-	listed := false
-	out.Grow(len(body) + len(body)/8)
-	err = jsonscan.RewriteMembers(&out, body, func(out *bytes.Buffer, m jsonscan.Member) (bool, error) {
-		packages := m.Value(body)
-		if !jsonscan.KeyIs(m.Key(body), "packages") || packages[0] != '{' {
-			return false, nil
-		}
-		return true, jsonscan.RewriteMembers(out, packages, func(out *bytes.Buffer, p jsonscan.Member) (bool, error) {
-			versions := p.Value(packages)
-			if versions[0] != '[' {
-				return false, nil
-			}
-			packageName, err := jsonscan.Key(p.Key(packages))
-			if err != nil {
-				return false, err
-			}
-			var pushed []composerLocalEntry
-			if packageName == localPackage {
-				pushed, listed = local, true
-			}
-			return true, h.writeVersions(out, packageName, versions, minified, &kept, pushed)
-		})
+	return composer.Rewrite(body, composer.Options{
+		ProxyURL:      h.proxyURL,
+		Cooldown:      h.proxy.cooldown(),
+		EvaluatedAt:   time.Now(),
+		LocalPackage:  localPackage,
+		LocalVersions: local,
+		Routed: func(packageName string) bool {
+			_, routed := h.routes.match(packageName)
+			return routed
+		},
+		OnCooldownFilter: h.cooldownFiltered,
 	})
-	if err != nil {
-		return nil, nil, err
-	}
-	if len(local) > 0 && !listed {
-		document, err := localComposerDocument(localPackage, local)
-		return document, nil, err
-	}
-	return out.Bytes(), kept, nil
 }
 
-// writeVersions writes one package's version list without the versions in
-// cooldown and with each dist pointing at this proxy, and appends each version
-// it writes to kept as its package name and version.
-//
-// Minified lists stay minified. Each version written carries the fields that
-// differ from what the client has expanded so far, which is the upstream
-// entry itself unless filtered versions were dropped before it; then it also
-// carries the changes those versions made. Every version gets its own dist,
-// since the proxied URL names the version.
-//
-// The pushed versions in local follow the upstream ones and take the place of
-// upstream entries with the same version.
-func (h *ComposerHandler) writeVersions(out *bytes.Buffer, packageName string, versions []byte, minified bool, kept *[]string, local []composerLocalEntry) error {
-	packagePURL := canonicalPackagePURL("composer", packageName)
-	upstream, written := newComposerFields(), newComposerFields()
-	devReset, first := false, true
-	_, routed := h.routes.match(packageName)
-
-	out.WriteByte('[')
-	err := jsonscan.EachElement(versions, func(entry []byte) error {
-		if minified && jsonscan.StringIs(entry, composerDevReset) {
-			upstream.reset()
-			written.reset()
-			devReset = true
-			return nil
-		}
-		if entry[0] != '{' {
-			return nil
-		}
-		if !minified {
-			upstream.reset()
-			written.reset()
-		}
-		if err := upstream.apply(entry, minified); err != nil {
-			return err
-		}
-
-		version := upstream.string("version")
-		if pushedComposerVersion(local, version) || h.shouldFilterVersion(packagePURL, packageName, version, upstream.get("time")) {
-			return nil
-		}
-
-		if !first {
-			out.WriteByte(',')
-		}
-		first = false
-		if devReset {
-			out.WriteString(`"` + composerDevReset + `",`)
-			devReset = false
-		}
-		if routed {
-			disableDefaultNotification(upstream)
-		}
-		h.writeVersion(out, packageName, version, upstream, written)
-		*kept = append(*kept, packageName+"\x00"+version)
-		return nil
-	})
-	if err != nil {
-		return err
+// cooldownFiltered logs a version a metadata rewrite held back and records
+// it for the package page.
+func (h *ComposerHandler) cooldownFiltered(packageName, version string, publishedAt time.Time) {
+	h.proxy.Logger.Info("cooldown: filtering composer version", "package", packageName, "version", version)
+	// A routed package's times are the route's, and aren't stored under the
+	// default registry's PURLs (see releaseTimeStored).
+	if _, routed := h.routes.match(packageName); !routed {
+		h.proxy.recordWithheld("composer", packageName, version, publishedAt)
 	}
-	for _, e := range local {
-		pushed := newComposerFields()
-		if err := pushed.apply(e.entry, false); err != nil {
-			return err
-		}
-		if !minified {
-			written.reset()
-		}
-		if !first {
-			out.WriteByte(',')
-		}
-		first = false
-		if devReset {
-			out.WriteString(`"` + composerDevReset + `",`)
-			devReset = false
-		}
-		h.writeVersion(out, packageName, e.version, pushed, written)
-		*kept = append(*kept, packageName+"\x00"+e.version)
-	}
-	out.WriteByte(']')
-	return nil
 }
 
-// writeVersion writes the fields of upstream that differ from written, with
-// dist pointing at this proxy, and "__unset" for those written has and
-// upstream lacks. written is then what the client expands this version to.
-func (h *ComposerHandler) writeVersion(out *bytes.Buffer, packageName, version string, upstream, written *composerFields) {
-	out.WriteByte('{')
-	first := true
-	writeMember := func(key, value []byte) {
-		if !first {
-			out.WriteByte(',')
-		}
-		first = false
-		out.Write(key)
-		out.WriteByte(':')
-		out.Write(value)
-	}
-
-	for _, f := range upstream.fields {
-		value := f.value
-		if value == nil {
-			continue
-		}
-		if f.name == "dist" {
-			value = h.rewriteDist(packageName, version, value)
-		}
-		if bytes.Equal(value, written.get(f.name)) {
-			continue
-		}
-		writeMember(f.key, value)
-		written.set(f.name, f.key, value)
-	}
-	for _, f := range written.fields {
-		if f.value != nil && upstream.get(f.name) == nil {
-			writeMember(f.key, composerUnsetJSON)
-			written.set(f.name, f.key, nil)
-		}
-	}
-	out.WriteByte('}')
-}
-
-// shouldFilterVersion returns true if the version should be excluded due to cooldown.
+// shouldFilterVersion reports whether cooldown holds a version back from a
+// download.
 func (h *ComposerHandler) shouldFilterVersion(packagePURL, packageName, version string, published []byte) bool {
 	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
 		return false
 	}
-
-	publishedAt, ok := composerPublishTime(published)
-	if !ok {
+	publishedAt, ok := composer.PublishTime(published)
+	if !ok || h.proxy.cooldown().IsAllowed("composer", packagePURL, publishedAt) {
 		return false
 	}
-
-	if !h.proxy.cooldown().IsAllowed("composer", packagePURL, publishedAt) {
-		h.proxy.Logger.Info("cooldown: filtering composer version",
-			"package", packageName, "version", version)
-		// A routed package's times are the route's, and aren't stored under
-		// the default registry's PURLs (see releaseTimeStored).
-		if _, routed := h.routes.match(packageName); !routed {
-			h.proxy.recordWithheld("composer", packageName, version, publishedAt)
-		}
-		return true
-	}
-
-	return false
+	h.cooldownFiltered(packageName, version, publishedAt)
+	return true
 }
 
-// composerPublishTime parses the raw "time" field of a version, reporting
-// false when it is missing or not an RFC 3339 string.
-func composerPublishTime(published []byte) (time.Time, bool) {
-	var timeStr string
-	if err := json.Unmarshal(published, &timeStr); err != nil {
-		return time.Time{}, false
-	}
-	publishedAt, err := time.Parse(time.RFC3339, timeStr)
-	return publishedAt, err == nil
-}
-
-// disableDefaultNotification stops Composer from reporting installs of a routed
-// package to the default repository's notify-batch URL, which would disclose
-// the package name to it. Composer only falls back to notify-batch when a
-// version has no notification-url of its own, and skips an empty one. Setting
-// it on the expanded fields keeps it set for the versions that inherit them.
-// Composer reads a null notification-url as absent too.
-func disableDefaultNotification(fields *composerFields) {
-	if v := fields.get("notification-url"); v == nil || string(v) == "null" {
-		fields.set("notification-url", []byte(`"notification-url"`), []byte(`""`))
-	}
-}
-
-// rewriteDist returns a version's dist object with its url pointing at this
-// proxy. A dist without a string url is returned unchanged.
-func (h *ComposerHandler) rewriteDist(packageName, version string, dist []byte) []byte {
-	urlMember, ok, err := jsonscan.FindMember(dist, "url")
-	if err != nil || !ok || dist[urlMember.ValStart] != '"' {
-		return dist
-	}
-	var upstreamURL string
-	if err := json.Unmarshal(urlMember.Value(dist), &upstreamURL); err != nil {
-		return dist
-	}
-	distType, _, _ := jsonscan.LookupString(dist, "type")
-
-	proxyURL, ok := h.proxyDistURL(packageName, version, upstreamURL, distType)
-	if !ok {
-		return dist
-	}
-	encoded, err := json.Marshal(proxyURL)
-	if err != nil {
-		return dist
-	}
-	rewritten := make([]byte, 0, len(dist)-len(urlMember.Value(dist))+len(encoded))
-	rewritten = append(rewritten, dist[:urlMember.ValStart]...)
-	rewritten = append(rewritten, encoded...)
-	return append(rewritten, dist[urlMember.ValEnd:]...)
-}
-
-// proxyDistURL returns the URL this proxy serves a version's archive at, or
-// false when the upstream URL or package name gives nothing to build it from.
-func (h *ComposerHandler) proxyDistURL(packageName, version, upstreamURL, distType string) (string, bool) {
-	if upstreamURL == "" {
-		return "", false
-	}
-	parts := strings.SplitN(packageName, "/", vendorPackageParts)
-	if len(parts) != vendorPackageParts {
-		return "", false
-	}
-	return fmt.Sprintf("%s/composer/files/%s/%s/%s/%s",
-		h.proxyURL, parts[0], parts[1], url.PathEscape(version), distFilename(upstreamURL, distType)), true
-}
-
-// distFilename returns the file name this proxy serves an archive under: the
-// last segment of its upstream URL.
-func distFilename(upstreamURL, distType string) string {
-	filename := "package.zip"
-	if idx := strings.LastIndex(upstreamURL, "/"); idx >= 0 {
-		filename = upstreamURL[idx+1:]
-	}
-
-	// GitHub zipball URLs end with a bare commit hash (no extension).
-	// Append .zip so the archives library can detect the format.
-	if path.Ext(filename) == "" && distType == "zip" {
-		filename += ".zip"
-	}
-	return filename
-}
-
-// composerCommitPattern matches a full git commit hash, SHA-1 or SHA-256.
-var composerCommitPattern = regexp.MustCompile(`^([0-9a-f]{40}|[0-9a-f]{64})$`)
-
-// upstreamDistURL returns the upstream URL of the archive served as filename,
-// given the dist URL the version's metadata lists now. A branch version only
-// lists its current head while lock files pin older commits, so for a branch
-// a dist URL ending in a commit hash is rebuilt for the requested commit. A
-// tagged release has to ask for the listed name. Any other name gives false:
-// fetching the listed archive would cache it under a name it does not have.
 func upstreamDistURL(listedURL, distType, filename string, branch bool) (string, bool) {
-	listed := distFilename(listedURL, distType)
-	// Proxy versions before the .zip suffix handed out bare commit names,
-	// and lock files written back then still ask for them.
-	if bare := distFilename(listedURL, ""); listed != bare && path.Ext(filename) == "" {
-		filename += listed[len(bare):]
-	}
-	if filename == listed {
-		return listedURL, true
-	}
-	if commit, ok := shaQueryCommit(listed); ok {
-		requested, ok := shaQueryCommit(filename)
-		listedSha, requestedSha := "sha="+commit, "sha="+requested
-		idx := strings.LastIndex(listed, listedSha)
-		if !branch || !ok || idx < 0 || listed[:idx]+requestedSha+listed[idx+len(listedSha):] != filename {
-			return "", false
-		}
-		idx = strings.LastIndex(listedURL, listedSha)
-		return listedURL[:idx] + requestedSha + listedURL[idx+len(listedSha):], true
-	}
-	ext := path.Ext(listed)
-	commit := strings.TrimSuffix(listed, ext)
-	requested, ok := strings.CutSuffix(filename, ext)
-	if !branch || !ok || !composerCommitPattern.MatchString(commit) || !composerCommitPattern.MatchString(requested) {
-		return "", false
-	}
-	idx := strings.LastIndex(listedURL, commit)
-	return listedURL[:idx] + requested + listedURL[idx+len(commit):], true
-}
-
-// shaQueryCommit returns the commit an archive name passes in a sha query
-// parameter. GitLab names the archive of every commit archive.zip and picks
-// the commit that way.
-func shaQueryCommit(filename string) (string, bool) {
-	_, query, ok := strings.Cut(filename, "?")
-	if !ok {
-		return "", false
-	}
-	values, err := url.ParseQuery(query)
-	if err != nil {
-		return "", false
-	}
-	commit := values.Get("sha")
-	return commit, composerCommitPattern.MatchString(commit)
-}
-
-// composerFields holds one version's fields as Composer sees them after
-// expanding the minified format: raw values under their decoded names, in the
-// order the names first appeared. A removed field keeps its slot with a nil
-// value, so the order stays stable when it comes back.
-type composerFields struct {
-	fields []composerField
-	index  map[string]int
-}
-
-type composerField struct {
-	name       string
-	key, value []byte
-}
-
-func newComposerFields() *composerFields {
-	return &composerFields{index: map[string]int{}}
-}
-
-func (f *composerFields) reset() {
-	f.fields = f.fields[:0]
-	clear(f.index)
-}
-
-// get returns the raw value of the named field, or nil when it is not set.
-func (f *composerFields) get(name string) []byte {
-	if i, ok := f.index[name]; ok {
-		return f.fields[i].value
-	}
-	return nil
-}
-
-// string returns the named field when it is a string, or "".
-func (f *composerFields) string(name string) string {
-	raw := f.get(name)
-	if len(raw) == 0 || raw[0] != '"' {
-		return ""
-	}
-	var s string
-	_ = json.Unmarshal(raw, &s)
-	return s
-}
-
-// set stores value under name, written with the quoted key. A nil value
-// removes the field.
-func (f *composerFields) set(name string, key, value []byte) {
-	if i, ok := f.index[name]; ok {
-		f.fields[i].key, f.fields[i].value = key, value
-		return
-	}
-	f.index[name] = len(f.fields)
-	f.fields = append(f.fields, composerField{name: name, key: key, value: value})
-}
-
-// apply overlays the members of a version entry. In minified metadata the
-// value "__unset" removes the field instead.
-func (f *composerFields) apply(entry []byte, minified bool) error {
-	return jsonscan.EachMember(entry, func(m jsonscan.Member) error {
-		key, value := m.Key(entry), m.Value(entry)
-		if minified && jsonscan.StringIs(value, composerUnset) {
-			value = nil
-		}
-		if bytes.IndexByte(key, '\\') < 0 {
-			if i, ok := f.index[string(key[1:len(key)-1])]; ok {
-				f.fields[i].key, f.fields[i].value = key, value
-				return nil
-			}
-		}
-		name, err := jsonscan.Key(key)
-		if err != nil {
-			return err
-		}
-		f.set(name, key, value)
-		return nil
-	})
+	return composer.UpstreamDistURL(listedURL, distType, filename, branch)
 }
 
 // handleDownload serves a package file, fetching and caching from upstream if needed.
@@ -690,13 +320,13 @@ func (h *ComposerHandler) handleDownload(w http.ResponseWriter, r *http.Request)
 	// the name they are cached under. Proxy versions before that cached every
 	// commit under the shared name, which is dropped once a commit is fetched.
 	var sharedFilename string
-	if commit, ok := shaQueryCommit(requested); ok {
+	if commit, ok := composer.ShaQueryCommit(requested); ok {
 		sharedFilename = h.routes.cacheFilename(packageName, filename)
 		ext := path.Ext(filename)
 		filename = strings.TrimSuffix(filename, ext) + "-" + commit + ext
 	}
 	cacheFilename := h.routes.cacheFilename(packageName, filename)
-	if commit := strings.TrimSuffix(filename, path.Ext(filename)); isDevVersion(version) && composerCommitPattern.MatchString(commit) {
+	if commit := strings.TrimSuffix(filename, path.Ext(filename)); isDevVersion(version) && composer.IsCommit(commit) {
 		h.discardOtherCommit(packageName, version, cacheFilename, commit)
 	}
 	result, err := h.proxy.GetOrFetchArtifactFromURLWithIntegrity(r.Context(), "composer", packageName, version, cacheFilename, downloadURL,
@@ -775,7 +405,7 @@ func (h *ComposerHandler) recordPublishTime(packageName, version string, publish
 	if !h.releaseTimeStored(packageName, version) {
 		return
 	}
-	publishedAt, ok := composerPublishTime(published)
+	publishedAt, ok := composer.PublishTime(published)
 	if !ok {
 		return
 	}
@@ -971,55 +601,10 @@ func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaU
 	return dist, nil
 }
 
-// composerDistURL returns the upstream dist of version from Composer
-// metadata, with an empty URL when the package has no such version or it has
-// no dist URL. It walks the version list in place, expanding only as much of
-// the minified format as it needs, since it runs on each archive the proxy
-// has not cached yet.
+// composerDistURL returns the upstream dist of version; see composer.FindDist.
 func composerDistURL(body []byte, packageName, version string) (composerDist, error) {
-	format, _, err := jsonscan.LookupString(body, "minified")
-	if err != nil {
-		return composerDist{}, err
-	}
-	versions, err := jsonscan.Lookup(body, "packages", packageName)
-	if err != nil || len(versions) == 0 || versions[0] != '[' {
-		return composerDist{}, err
-	}
-	minified := format == composerMinified
-
-	fields := newComposerFields()
-	var dist composerDist
-	err = jsonscan.EachElement(versions, func(entry []byte) error {
-		if minified && jsonscan.StringIs(entry, composerDevReset) {
-			fields.reset()
-			return nil
-		}
-		if entry[0] != '{' {
-			return nil
-		}
-		if !minified {
-			fields.reset()
-		}
-		if err := fields.apply(entry, minified); err != nil {
-			return err
-		}
-		if !jsonscan.StringIs(fields.get("version"), version) {
-			return nil
-		}
-		distRaw := fields.get("dist")
-		dist.url, _, _ = jsonscan.LookupString(distRaw, "url")
-		if dist.url != "" {
-			dist.distType, _, _ = jsonscan.LookupString(distRaw, "type")
-			dist.shasum, _, _ = jsonscan.LookupString(distRaw, "shasum")
-			dist.published = fields.get("time")
-			return jsonscan.ErrStop
-		}
-		return nil
-	})
-	if errors.Is(err, jsonscan.ErrStop) {
-		err = nil
-	}
-	return dist, err
+	d, err := composer.FindDist(body, packageName, version)
+	return composerDist{url: d.URL, distType: d.Type, shasum: d.Shasum, published: d.Published}, err
 }
 
 // composerIntegrity returns the integrity to verify an archive of version
@@ -1053,7 +638,7 @@ func ComposerReleaseArchive(version, distURL, distType, shasum string) (filename
 	case strings.ContainsAny(distURL, "?#"):
 		return "", "", fmt.Errorf("the archive URL of %s has a query, which isn't mirrored", version)
 	}
-	return distFilename(distURL, distType), composerIntegrity(shasum, version, true), nil
+	return composer.DistFilename(distURL, distType), composerIntegrity(shasum, version, true), nil
 }
 
 // RecordComposerPublishTime stores the publish time of a tagged release from
