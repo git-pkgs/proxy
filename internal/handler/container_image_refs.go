@@ -19,13 +19,13 @@ const maxImageManifestRefs = 4096
 var imageSubjectTagPattern = regexp.MustCompile(`^sha256-[a-f0-9]{64}(\.[a-z0-9]+)?$`)
 
 // recordImageManifest notes which manifests and blobs a served manifest
-// references, and for a tag that it pointed at the manifest, so retention
-// can keep the blobs of the newest images of a repository. It does nothing
-// unless storage.retention.keep_latest covers container images. The
-// retention sweep drops the records of images that are no longer among the
-// newest.
+// references, and for a tag that it pointed at the manifest. Retention reads
+// the records to keep the blobs of the newest images of a repository, and
+// the web UI to name the tags whose image contains a blob. The retention
+// sweep drops the records of images that are no longer among the newest and
+// that no tag points at.
 func (h *ContainerHandler) recordImageManifest(cacheName, reference string, manifest *cachedContainerManifest, stale bool) {
-	if h.proxy.KeepLatestImages <= 0 || h.proxy.DB == nil {
+	if h.proxy.DB == nil {
 		return
 	}
 	// A manifest asked for by digest is recorded under that digest, the one

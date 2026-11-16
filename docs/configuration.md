@@ -131,9 +131,9 @@ With this, the files of the two highest cached versions of a package are never e
 
 For `oci` there are no versions to order, so `keep_latest` counts images instead: it keeps the blobs of the images of a repository that a tag most recently pointed at. With `keep_latest: 2` and one tag such as `beta` in use, that is the image `beta` points at now and the one it pointed at before. The count is per repository, not per tag, so with several tags in use set it at least that high. A blob that a kept image shares with an older one stays.
 
-To know which blobs an image needs, the proxy records what each manifest it serves references, in the `image_manifests` table, while `keep_latest` is set and a retention rule applies to `oci`. This has a few consequences:
+To know which blobs an image needs, the proxy records what each manifest it serves references, in the `image_manifests` table. This has a few consequences:
 
-- An image only counts once its tag was pulled or mirrored with `keep_latest` set, and its blobs are known once its platform manifest was pulled too. Until then they expire by their rule as before.
+- An image only counts once its tag was pulled or mirrored, and its blobs are known once its platform manifest was pulled too. Until then they expire by their rule as before. The records are pruned hourly, also without a retention rule: while `keep_latest` is off, those of images that no tag points at any more go, so they don't count when it is turned on, and so do tags not pulled for 90 days.
 - An image pulled only by digest is not counted and not kept.
 - A multi-platform tag counts as one image, also when a client that accepts no image index was served one platform's manifest for it.
 - Homebrew bottles and Helm charts pulled over OCI are images here: the newest versions of a bottle or chart are those whose tags were last asked for.
@@ -1313,7 +1313,7 @@ cooldown:
 | `cooldown.packages` | - | Per-package overrides (keyed by PURL) |
 | `cooldown.package_patterns` | - | Per-package glob overrides (keyed by PURL glob) |
 
-Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to disable.
+Durations support days (`7d`), hours (`48h`), and minutes (`30m`). Set to `0` to disable. Other units such as weeks (`1w`) are not supported. Invalid durations are rejected at startup, wherever they appear.
 
 Package PURL keys are normalized to canonical form before matching, so `pkg:npm/@babel/core` and `pkg:npm/%40babel/core` are equivalent, as are `pkg:pypi/Django` and `pkg:pypi/django`. If both forms configure the same package, the canonical entry wins.
 

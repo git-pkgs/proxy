@@ -4,10 +4,8 @@ import (
 	"context"
 	"log/slog"
 	"slices"
-	"strings"
 	"time"
 
-	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/retention"
@@ -103,8 +101,6 @@ func sweepRetention(ctx context.Context, db *database.DB, logger *slog.Logger,
 		return
 	}
 
-	pruneImageRecords(db, logger, rules.KeepLatest, now)
-
 	// Without the buffered hits written, an artifact being served right now
 	// can look expired, so skip this sweep rather than clear it.
 	if err := db.FlushHits(); err != nil {
@@ -161,37 +157,21 @@ func sweepRetention(ctx context.Context, db *database.DB, logger *slog.Logger,
 	}
 }
 
-// keepLatestImages returns storage.retention.keep_latest if a retention rule
-// can evict container image blobs, and zero otherwise: without such a rule
-// nothing reads what the container handler would record.
-func keepLatestImages(cfg *config.Config) int {
-	rules, err := cfg.RetentionRules(retention.Default)
-	if err != nil || rules.KeepLatest <= 0 {
-		return 0
-	}
-	if rules.For("oci", "") > 0 {
-		return rules.KeepLatest
-	}
-	for packagePURL, d := range rules.Packages {
-		if d > 0 && strings.HasPrefix(packagePURL, "pkg:oci/") {
-			return rules.KeepLatest
-		}
-	}
-	return 0
-}
-
-// pruneImageRecords drops the container manifest records that the keep
-// newest images of their repository do not reference, which is all of them
-// once keep_latest is off.
+// pruneImageRecords drops the container tags the upstream has not confirmed
+// for imageTagMaxAge, then the manifest records that neither the keep newest
+// images of their repository nor the images its tags point at reference.
 func pruneImageRecords(db *database.DB, logger *slog.Logger, keep int, now time.Time) {
+	if err := db.PruneImageTags(now.Add(-imageTagMaxAge)); err != nil {
+		logger.Warn("image records: failed to prune image tags", "error", err)
+	}
 	repositories, err := db.ImageManifestRepositories()
 	if err != nil {
-		logger.Warn("retention: failed to list image manifest records", "error", err)
+		logger.Warn("image records: failed to list image manifest records", "error", err)
 		return
 	}
 	for _, packagePURL := range repositories {
 		if err := db.PruneImageManifests(packagePURL, keep, now.Add(-imageRecordGrace)); err != nil {
-			logger.Warn("retention: failed to prune image manifest records", "package_purl", packagePURL, "error", err)
+			logger.Warn("image records: failed to prune image manifest records", "package_purl", packagePURL, "error", err)
 		}
 	}
 }

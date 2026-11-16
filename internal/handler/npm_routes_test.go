@@ -82,7 +82,7 @@ func TestNPMRoutedMetadataComesFromRouteOnly(t *testing.T) {
 	if strings.Contains(w.Body.String(), "9.9.9") {
 		t.Errorf("routed package served the default registry's metadata: %s", w.Body.String())
 	}
-	wantTarball := "http://proxy.test/npm/@example%2Fwidgets/-/widgets-1.0.0.tgz"
+	wantTarball := "http://proxy.test/npm/@example/widgets/-/widgets-1.0.0.tgz"
 	if !strings.Contains(w.Body.String(), wantTarball) {
 		t.Errorf("tarball not rewritten to %q: %s", wantTarball, w.Body.String())
 	}

@@ -75,7 +75,7 @@ func TestRewriteHostedOverride(t *testing.T) {
 	if len(doc.Tags) != 1 || doc.Tags["latest"] != "1.0.0" || doc.Time["2.0.0"] != "" || doc.Time["created"] == "" {
 		t.Fatalf("policy output: %s", out)
 	}
-	for _, want := range []string{"12345678901234567890", "<b>Widgets & tools</b>", "https://proxy.example/npm/@example%2Fwidgets/-/widgets-1.0.0.tgz"} {
+	for _, want := range []string{"12345678901234567890", "<b>Widgets & tools</b>", "https://proxy.example/npm/@example/widgets/-/widgets-1.0.0.tgz"} {
 		if !strings.Contains(string(out), want) {
 			t.Errorf("output lost %q", want)
 		}
@@ -111,7 +111,7 @@ func TestVersionPolicyErrors(t *testing.T) {
 			if !slices.Equal(counts, []int{1}) {
 				t.Errorf("rewrite reports = %v, want [1]", counts)
 			}
-			if tc.want == nil && (!bytes.Contains(out, []byte(`"version": "1.0.0"`)) || !bytes.Contains(out, []byte("https://proxy.example/npm/@example%2Fwidgets/-/widgets-1.0.0.tgz"))) {
+			if tc.want == nil && (!bytes.Contains(out, []byte(`"version": "1.0.0"`)) || !bytes.Contains(out, []byte("https://proxy.example/npm/@example/widgets/-/widgets-1.0.0.tgz"))) {
 				t.Fatalf("resolved version: %s", out)
 			}
 		})
@@ -146,7 +146,7 @@ func TestRewriteVersionDocument(t *testing.T) {
 	body := []byte(`{"name":"@example/widgets","version":"1.0.0","dist":{"tarball":"https://cdn.example/abcdef.tgz"}}`)
 	options := Options{ProxyURL: "https://proxy.example"}
 	out, kept, err := Rewrite("@example/widgets", body, options)
-	if err != nil || !slices.Equal(kept, []string{"1.0.0"}) || !bytes.Contains(out, []byte("https://proxy.example/npm/@example%2Fwidgets/-/widgets-1.0.0.tgz")) {
+	if err != nil || !slices.Equal(kept, []string{"1.0.0"}) || !bytes.Contains(out, []byte("https://proxy.example/npm/@example/widgets/-/widgets-1.0.0.tgz")) {
 		t.Fatalf("rewrite: %s, %v, %v", out, kept, err)
 	}
 	var counts []int
