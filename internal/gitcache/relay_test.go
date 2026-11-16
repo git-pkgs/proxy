@@ -9,6 +9,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 func newTestRelay(t *testing.T) *relay {
@@ -97,6 +98,64 @@ func TestRelayStopsAtLimit(t *testing.T) {
 		t.Errorf("exceeded %v after relaying %d of %d bytes; relay log:\n%s", route.exceeded.Load(), route.relayed.Load(), size, logs.String())
 	}
 }
+
+// TestRelayReadsTheRequestWhileResponding checks the relay keeps passing on
+// the request body after the response has started, as an HTTP/1 server
+// otherwise closes the body on the first flush and the relay cuts off the
+// upstream mid-response.
+func TestRelayReadsTheRequestWhileResponding(t *testing.T) {
+	head := strings.Repeat("x", 64<<10)
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if err := http.NewResponseController(w).EnableFullDuplex(); err != nil {
+			t.Error(err)
+		}
+		_, _ = io.WriteString(w, head)
+		_ = http.NewResponseController(w).Flush()
+		body, _ := io.ReadAll(r.Body)
+		_, _ = io.WriteString(w, "got:"+string(body))
+	}))
+	defer upstream.Close()
+	rl := newTestRelay(t)
+	base, _, unregister := rl.register(t.Context(), upstream.URL+"/repo", 0, nil)
+	defer unregister()
+
+	pr, pw := io.Pipe()
+	responses := make(chan *http.Response, 1)
+	go func() {
+		resp, err := http.Post(base+"/git-upload-pack", requestType, pr)
+		if err != nil {
+			t.Error(err)
+			close(responses)
+			return
+		}
+		responses <- resp
+	}()
+	defer func() { _ = pw.Close() }()
+	_, _ = io.WriteString(pw, "first")
+	var resp *http.Response
+	select {
+	case r, ok := <-responses:
+		if !ok {
+			return
+		}
+		resp = r
+	case <-time.After(5 * time.Second):
+		t.Fatal("no response while the request body was still open")
+	}
+	defer func() { _ = resp.Body.Close() }()
+	_, _ = io.WriteString(pw, "second")
+	_ = pw.Close()
+
+	got, err := io.ReadAll(resp.Body)
+	if err != nil {
+		t.Fatalf("reading the response after %d bytes: %v", len(got), err)
+	}
+	if want := head + "got:firstsecond"; string(got) != want {
+		t.Errorf("response ends %q, want it to end %q", tail(string(got)), tail(want))
+	}
+}
+
+func tail(s string) string { return s[max(0, len(s)-32):] }
 
 type lockedWriter struct {
 	mu *sync.Mutex
