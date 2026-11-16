@@ -4,7 +4,6 @@ import (
 	"compress/gzip"
 	"encoding/json"
 	"fmt"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -15,8 +14,6 @@ import (
 )
 
 func TestGemParseFilename(t *testing.T) {
-	h := &GemHandler{proxy: &Proxy{Logger: slog.Default()}}
-
 	tests := []struct {
 		filename    string
 		wantName    string
@@ -42,9 +39,9 @@ func TestGemParseFilename(t *testing.T) {
 	}
 
 	for _, tt := range tests {
-		name, version := h.parseGemFilename(tt.filename)
+		name, version := GemFilenameIdentity(tt.filename)
 		if name != tt.wantName || version != tt.wantVersion {
-			t.Errorf("parseGemFilename(%q) = (%q, %q), want (%q, %q)",
+			t.Errorf("GemFilenameIdentity(%q) = (%q, %q), want (%q, %q)",
 				tt.filename, name, version, tt.wantName, tt.wantVersion)
 		}
 	}
