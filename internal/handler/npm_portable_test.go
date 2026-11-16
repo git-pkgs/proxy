@@ -82,7 +82,7 @@ func TestNPMRoutesWithPortableMetadata(t *testing.T) {
 			if len(doc.Versions) != count || doc.DistTags["latest"] != "1.0.0" || len(doc.DistTags) != 1 {
 				t.Fatalf("filtered metadata: %s", rec.Body.String())
 			}
-			if doc.Versions["1.0.0"].Dist.Tarball != "http://proxy.local/npm/@example%2Fwidgets/-/widgets-1.0.0.tgz" || !strings.Contains(rec.Body.String(), "12345678901234567890") {
+			if doc.Versions["1.0.0"].Dist.Tarball != "http://proxy.local/npm/@example/widgets/-/widgets-1.0.0.tgz" || !strings.Contains(rec.Body.String(), "12345678901234567890") {
 				t.Fatalf("rewritten metadata: %s", rec.Body.String())
 			}
 			if hosted && doc.Versions["3.0.0"].Dependencies["local"] != "1.0.0" {
