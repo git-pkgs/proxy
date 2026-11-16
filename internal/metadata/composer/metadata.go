@@ -398,9 +398,10 @@ func ShaQueryCommit(filename string) (string, bool) {
 	return commit, commitPattern.MatchString(commit)
 }
 
-// FindDist returns the upstream dist of version from Composer metadata, with an empty URL when the package has no such version or it has
-// no dist URL. It walks the version list in place, expanding only as much of
-// the minified format as it needs, since it runs on each archive the proxy
+// FindDist returns the upstream dist of version from Composer metadata, with
+// an empty URL when the package has no such version or it has no dist URL. It
+// walks the version list in place, expanding only as much of the minified
+// format as it needs, since it runs on each archive the proxy
 // has not cached yet.
 func FindDist(body []byte, packageName, version string) (Dist, error) {
 	format, _, err := jsonscan.LookupString(body, "minified")

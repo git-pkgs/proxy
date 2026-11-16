@@ -257,10 +257,6 @@ func (h *ComposerHandler) shouldFilterVersion(packagePURL, packageName, version 
 	return true
 }
 
-func (h *ComposerHandler) proxyDistURL(packageName, version, upstreamURL, distType string) (string, bool) {
-	return composer.ProxyDistURL(h.proxyURL, packageName, version, upstreamURL, distType)
-}
-
 func upstreamDistURL(listedURL, distType, filename string, branch bool) (string, bool) {
 	return composer.UpstreamDistURL(listedURL, distType, filename, branch)
 }
