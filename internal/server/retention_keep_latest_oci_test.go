@@ -4,14 +4,12 @@ import (
 	"context"
 	"encoding/json"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"sync"
 	"testing"
 	"time"
 
-	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/retention"
@@ -121,16 +119,14 @@ func (r *keepImagesRegistry) tag(tag string, image keepImage) {
 	r.tags[tag] = image.index
 }
 
-// newKeepImagesProxy serves the registry through a proxy that keeps the
-// blobs of keepLatest images per repository.
-func newKeepImagesProxy(t *testing.T, registry *keepImagesRegistry, keepLatest int) (*httptest.Server, *database.DB) {
+// newKeepImagesProxy serves the registry through a proxy.
+func newKeepImagesProxy(t *testing.T, registry *keepImagesRegistry) (*httptest.Server, *database.DB) {
 	t.Helper()
 	db, store := setupEvictionTest(t)
 	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(registry.srv.Client()), fetch.WithMaxRetries(0))
 	t.Cleanup(func() { _ = fetcher.Close() })
 	proxy := handler.NewProxy(db, store, fetcher, fetch.NewResolver(), discardLogger())
 	proxy.HTTPClient = registry.srv.Client()
-	proxy.KeepLatestImages = keepLatest
 	srv := httptest.NewServer(handler.NewContainerHandlerWithRegistry(proxy, "http://proxy.test", registry.srv.URL).Routes())
 	t.Cleanup(srv.Close)
 	return srv, db
@@ -206,7 +202,7 @@ func TestSweepRetentionKeepsBlobsOfNewestImages(t *testing.T) {
 		{keepLatest: 2, wantCached: [3]bool{false, true, true}},
 	} {
 		registry := newKeepImagesRegistry(t)
-		srv, db := newKeepImagesProxy(t, registry, tt.keepLatest)
+		srv, db := newKeepImagesProxy(t, registry)
 		images := []keepImage{registry.addImage(t, "first"), registry.addImage(t, "second"), registry.addImage(t, "third")}
 		for _, image := range images {
 			registry.tag("beta", image)
@@ -226,12 +222,11 @@ func TestSweepRetentionKeepsBlobsOfNewestImages(t *testing.T) {
 	}
 }
 
-// A sweep drops the records of images that are no longer among the newest,
-// so the table holds a few images per repository, and all records once
-// keep_latest is turned off.
-func TestSweepRetentionPrunesImageRecords(t *testing.T) {
+// The prune drops the records of images that are no longer among the newest
+// and that no tag points at, so the table holds a few images per repository.
+func TestPruneImageRecords(t *testing.T) {
 	registry := newKeepImagesRegistry(t)
-	srv, db := newKeepImagesProxy(t, registry, 1)
+	srv, db := newKeepImagesProxy(t, registry)
 	images := []keepImage{registry.addImage(t, "first"), registry.addImage(t, "second")}
 	for _, image := range images {
 		registry.tag("beta", image)
@@ -248,8 +243,7 @@ func TestSweepRetentionPrunesImageRecords(t *testing.T) {
 		return ok
 	}
 
-	rules := retention.Rules{Ecosystems: map[string]time.Duration{"oci": retentionDay}, KeepLatest: 1}
-	sweepRetention(context.Background(), db, discardLogger(), retention.Default, rules, now)
+	pruneImageRecords(db, discardLogger(), 1, now)
 	for _, digest := range []string{images[0].index, images[0].manifest} {
 		if recorded(digest) {
 			t.Errorf("manifest %s of the older image is still recorded", digest)
@@ -261,55 +255,11 @@ func TestSweepRetentionPrunesImageRecords(t *testing.T) {
 		}
 	}
 
-	rules.KeepLatest = 0
-	sweepRetention(context.Background(), db, discardLogger(), retention.Default, rules, now)
-	if recorded(images[1].index) {
-		t.Error("records are left after keep_latest was turned off")
-	}
-}
-
-// Manifests are recorded only when a retention rule can evict container
-// blobs, since nothing reads the records otherwise.
-func TestKeepLatestImagesNeedsAnOCIRule(t *testing.T) {
-	for _, tt := range []struct {
-		name       string
-		def        string
-		ecosystems map[string]string
-		packages   map[string]string
-		keepLatest int
-		want       int
-	}{
-		{name: "no keep_latest", ecosystems: map[string]string{"oci": "1d"}, want: 0},
-		{name: "no rule", keepLatest: 2, want: 0},
-		{name: "rule for another ecosystem", ecosystems: map[string]string{"npm": "7d"}, keepLatest: 2, want: 0},
-		{name: "oci rule", ecosystems: map[string]string{"oci": "1d"}, keepLatest: 2, want: 2},
-		{name: "default", def: "30d", keepLatest: 2, want: 2},
-		{name: "default with oci exempt", def: "30d", ecosystems: map[string]string{"oci": "0"}, keepLatest: 2, want: 0},
-		{name: "rule for one repository", packages: map[string]string{"pkg:oci/library/nginx": "3d"}, keepLatest: 2, want: 2},
-		{name: "rule for another ecosystem's package", packages: map[string]string{"pkg:npm/lodash": "3d"}, keepLatest: 2, want: 0},
-	} {
-		t.Run(tt.name, func(t *testing.T) {
-			cfg := config.Default()
-			cfg.Storage.Retention.Default = tt.def
-			cfg.Storage.Retention.Ecosystems = tt.ecosystems
-			cfg.Storage.Retention.Packages = tt.packages
-			cfg.Storage.Retention.KeepLatest = tt.keepLatest
-			if got := keepLatestImages(cfg); got != tt.want {
-				t.Errorf("keepLatestImages() = %d, want %d", got, tt.want)
-			}
-		})
-	}
-}
-
-// proxy mirror runs in a process of its own and has to record the images it
-// mirrors as serve does, or the sweep would not know their blobs.
-func TestMirrorProxyRecordsImagesForKeepLatest(t *testing.T) {
-	cfg := config.Default()
-	cfg.Storage.Retention.Ecosystems = map[string]string{"oci": "1d"}
-	cfg.Storage.Retention.KeepLatest = 2
-	proxy, _ := NewMirrorProxy(cfg, nil, nil, slog.New(slog.NewTextHandler(io.Discard, nil)))
-	if proxy.KeepLatestImages != 2 {
-		t.Errorf("KeepLatestImages = %d, want 2", proxy.KeepLatestImages)
+	// Without keep_latest the records of the image the tag points at stay,
+	// for the web UI.
+	pruneImageRecords(db, discardLogger(), 0, now)
+	if !recorded(images[1].index) || !recorded(images[1].manifest) {
+		t.Error("the records of the image the tag points at are gone after keep_latest was turned off")
 	}
 }
 
@@ -317,7 +267,7 @@ func TestMirrorProxyRecordsImagesForKeepLatest(t *testing.T) {
 // blobs are evicted by age as without keep_latest.
 func TestSweepRetentionKeepLatestIgnoresImagesPulledByDigest(t *testing.T) {
 	registry := newKeepImagesRegistry(t)
-	srv, db := newKeepImagesProxy(t, registry, 1)
+	srv, db := newKeepImagesProxy(t, registry)
 	image := registry.addImage(t, "pinned")
 	pullImage(t, srv.URL, image.index, image)
 	now := time.Now()
@@ -335,7 +285,7 @@ func TestSweepRetentionKeepLatestIgnoresImagesPulledByDigest(t *testing.T) {
 // manifests by digest. The HEAD alone makes the image one of the newest.
 func TestSweepRetentionKeepsBlobsOfImagesPulledByHead(t *testing.T) {
 	registry := newKeepImagesRegistry(t)
-	srv, db := newKeepImagesProxy(t, registry, 1)
+	srv, db := newKeepImagesProxy(t, registry)
 	images := []keepImage{registry.addImage(t, "first"), registry.addImage(t, "second")}
 	for _, image := range images {
 		registry.tag("beta", image)

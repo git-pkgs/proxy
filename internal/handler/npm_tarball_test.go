@@ -48,7 +48,7 @@ func TestNPMContentAddressedTarball(t *testing.T) {
 				t.Fatalf("metadata status = %d: %s", metadata.Code, metadata.Body.String())
 			}
 			tarball := npmVersionTarball(metadata.Body.Bytes(), testVersion100)
-			if want := "http://proxy.test/npm/@example%2Fwidget/-/widget-1.0.0.tgz"; tarball != want {
+			if want := "http://proxy.test/npm/@example/widget/-/widget-1.0.0.tgz"; tarball != want {
 				t.Fatalf("rewritten tarball = %q, want %q", tarball, want)
 			}
 			for i := range 2 {
@@ -65,6 +65,25 @@ func TestNPMContentAddressedTarball(t *testing.T) {
 				t.Errorf("upstream requests: metadata=%d tarballs=%d, want %d %d", metadataCalls.Load(), tarballCalls.Load(), tc.metadata, tc.tarballs)
 			}
 		})
+	}
+}
+
+// Lockfiles written before tarball URLs kept the scope slash hold the encoded form.
+func TestNPMEncodedScopeTarballDownloads(t *testing.T) {
+	var metadataCalls, tarballCalls atomic.Int64
+	upstream := npmContentAddressedRegistry(t, &metadataCalls, &tarballCalls)
+	p, _, _, _ := setupTestProxy(t)
+	p.Cooldown = &cooldown.Config{Default: "7d"}
+	p.HTTPClient = upstream.Client()
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	p.Fetcher = fetcher
+	t.Cleanup(func() { _ = fetcher.Close() })
+	routes := http.StripPrefix("/npm", NewNPMHandler(p, "http://proxy.test", upstream.URL+"/registry").Routes())
+
+	response := httptest.NewRecorder()
+	routes.ServeHTTP(response, httptest.NewRequest(http.MethodGet, "http://proxy.test/npm/@example%2Fwidget/-/widget-1.0.0.tgz", nil))
+	if response.Code != http.StatusOK || response.Body.String() != "tarball bytes" {
+		t.Fatalf("download = %d %q", response.Code, response.Body.String())
 	}
 }
 

@@ -1746,6 +1746,9 @@ func (c *Config) validateCacheArtifacts() error {
 }
 
 func (c *Config) validateComponents() error {
+	if err := c.Cooldown.validateTopLevelDurations(); err != nil {
+		return err
+	}
 	if err := c.Cooldown.ValidateProfiles(); err != nil {
 		return err
 	}

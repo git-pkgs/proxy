@@ -165,7 +165,7 @@ func TestNPMMetadataForPackageOnlyPushed(t *testing.T) {
 	if doc.DistTags["latest"] != "1.10.0" {
 		t.Errorf("dist-tags.latest = %q, want the highest pushed version 1.10.0", doc.DistTags["latest"])
 	}
-	if doc.Versions["1.9.0"].Dist.Tarball != "http://proxy.local/npm/@acme%2Fprivate/-/private-1.9.0.tgz" {
+	if doc.Versions["1.9.0"].Dist.Tarball != "http://proxy.local/npm/@acme/private/-/private-1.9.0.tgz" {
 		t.Errorf("tarball = %q", doc.Versions["1.9.0"].Dist.Tarball)
 	}
 

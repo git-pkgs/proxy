@@ -857,7 +857,7 @@ func (h *NPMHandler) getTarball(r *http.Request, registryURL, packageName, versi
 	if err != nil {
 		return nil, fmt.Errorf("fetching npm metadata to verify tarball: %w", err)
 	}
-	downloadURL := fmt.Sprintf("%s/%s/-/%s", registryURL, escapeNPMDownloadPackage(packageName), url.PathEscape(filename))
+	downloadURL := fmt.Sprintf("%s/%s/-/%s", registryURL, npm.EscapeTarballPackage(packageName), url.PathEscape(filename))
 	if tarball := npmEntryTarball(data.entry); tarball != "" {
 		downloadURL, err = validateTarballURL(tarball, registryURL)
 		if err != nil {
@@ -1090,14 +1090,6 @@ func npmMetadataPath(packagePath string) (packageName, registryPath string) {
 	}
 	name, version, _ := strings.Cut(packagePath, "/")
 	return name, url.PathEscape(name) + "/" + url.PathEscape(version)
-}
-
-func escapeNPMDownloadPackage(packageName string) string {
-	scope, name, scoped := strings.Cut(packageName, "/")
-	if scoped && strings.HasPrefix(scope, "@") && len(scope) > 1 && name != "" && !strings.Contains(name, "/") {
-		return url.PathEscape(scope) + "/" + url.PathEscape(name)
-	}
-	return url.PathEscape(packageName)
 }
 
 // extractPackageName extracts the package name from the request path.

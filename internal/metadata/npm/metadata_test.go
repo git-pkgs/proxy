@@ -177,7 +177,7 @@ func TestNPMRewriteAttestationsURL(t *testing.T) {
 			`{"tarball":"http://proxy/npm/demo/-/demo-1.0.0.tgz","attestations":{"url":"http://proxy/npm/-/npm/v1/attestations/demo@1.0.0","provenance":{"predicateType":"p"}}}`},
 		{"@scope/demo", "2.0.0-rc.1",
 			`{"attestations":{"provenance":{},"url":"https://registry.npmjs.org/-/npm/v1/attestations/@scope%2fdemo@2.0.0-rc.1"},"tarball":"https://registry.npmjs.org/@scope/demo/-/demo-2.0.0-rc.1.tgz"}`,
-			`{"attestations":{"provenance":{},"url":"http://proxy/npm/-/npm/v1/attestations/@scope%2Fdemo@2.0.0-rc.1"},"tarball":"http://proxy/npm/@scope%2Fdemo/-/demo-2.0.0-rc.1.tgz"}`},
+			`{"attestations":{"provenance":{},"url":"http://proxy/npm/-/npm/v1/attestations/@scope%2Fdemo@2.0.0-rc.1"},"tarball":"http://proxy/npm/@scope/demo/-/demo-2.0.0-rc.1.tgz"}`},
 		{"demo", "3.0.0",
 			`{"attestations":{"url":7}}`,
 			`{"attestations":{"url":7}}`},

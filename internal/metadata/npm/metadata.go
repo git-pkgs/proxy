@@ -485,7 +485,18 @@ func TarballURL(proxyURL, packageName, version, tarball string) string {
 		filename = shortName + "-" + version + ".tgz"
 	}
 
-	return fmt.Sprintf("%s/npm/%s/-/%s", proxyURL, url.PathEscape(packageName), filename)
+	return fmt.Sprintf("%s/npm/%s/-/%s", proxyURL, EscapeTarballPackage(packageName), filename)
+}
+
+// EscapeTarballPackage escapes a package name for a tarball path. A scoped
+// name keeps its slash, as the registry writes it, so clients that derive
+// tarball URLs from the registry URL get the same one.
+func EscapeTarballPackage(packageName string) string {
+	scope, name, scoped := strings.Cut(packageName, "/")
+	if scoped && strings.HasPrefix(scope, "@") && len(scope) > 1 && name != "" && !strings.Contains(name, "/") {
+		return url.PathEscape(scope) + "/" + url.PathEscape(name)
+	}
+	return url.PathEscape(packageName)
 }
 
 // AttestationsURL returns the proxy URL that serves the attestations of a
