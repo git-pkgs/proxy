@@ -14,6 +14,8 @@ const (
 	MetadataSuffix = ".metadata"
 )
 
+// archiveExtensions are sdist formats of the form {name}-{version}{ext}. They
+// carry no trailing tags, but legacy sdist names may contain hyphens.
 var archiveExtensions = []string{".tar.gz", ".tar.bz2", ".tar.xz", ".tar.Z", ".tgz", ".tar", ".zip"}
 
 // windowsInstallerExtensions are the legacy distutils bdist_wininst and

@@ -613,8 +613,6 @@ func (h *PyPIHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	ServeArtifactRequest(w, r, result)
 }
 
-// archiveExtensions are sdist formats of the form {name}-{version}{ext}. They
-// carry no trailing tags, but legacy sdist names may contain hyphens.
 func (h *PyPIHandler) parseFilename(filename string) (name, version string) {
 	return pypi.FilenameIdentity(filename)
 }
