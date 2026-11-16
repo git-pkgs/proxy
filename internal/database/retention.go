@@ -93,17 +93,15 @@ func (db *DB) CachedVersionPURLs(packagePURL string) ([]string, error) {
 }
 
 // ClearExpiredArtifact marks an artifact uncached like ClearArtifactCache,
-// but only while it is still expired before cutoff. It checks pending hits as
-// well as persisted access times, so a hit buffered after the scan keeps the
-// artifact cached. It queues storagePath for deletion in the same transaction:
-// if queueing fails, the record keeps its path and a later sweep retries,
-// instead of leaving an object in storage with no record pointing to it.
+// but only while it is still expired before cutoff. It checks hits not yet
+// written, including those a flush is writing, as well as persisted access
+// times, so a hit buffered after the scan keeps the artifact cached. It queues
+// storagePath for deletion in the same transaction: if queueing fails, the
+// record keeps its path and a later sweep retries, instead of leaving an
+// object in storage with no record pointing to it.
 func (db *DB) ClearExpiredArtifact(versionPURL, filename, storagePath string, cutoff time.Time) (bool, error) {
 	if db.hits != nil {
-		db.hits.mu.Lock()
-		pending, ok := db.hits.pending[hitKey{versionPURL, filename}]
-		db.hits.mu.Unlock()
-		if ok && !pending.last.Before(cutoff) {
+		if last, ok := db.hits.lastHit(hitKey{versionPURL, filename}); ok && !last.Before(cutoff) {
 			return false, nil
 		}
 	}

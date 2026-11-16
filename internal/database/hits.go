@@ -26,17 +26,27 @@ type hitEntry struct {
 type metadataHitKey struct{ ecosystem, name string }
 
 type hitBatch struct {
-	mu       sync.Mutex
-	pending  map[hitKey]hitEntry
+	mu      sync.Mutex
+	pending map[hitKey]hitEntry
+	// flushing keeps the hits a flush is writing visible to retention.
+	flushing map[hitKey]hitEntry
 	metadata map[metadataHitKey]time.Time
-	stop     chan struct{}
-	stopOnce sync.Once
-	done     chan struct{}
+	// flushMu runs one flush at a time, so flushing holds one batch.
+	flushMu sync.Mutex
+	// beforeWrite, when set by a test, runs as a flush starts writing hits.
+	beforeWrite func()
+	stop        chan struct{}
+	stopOnce    sync.Once
+	done        chan struct{}
 }
 
 func (b *hitBatch) add(k hitKey, e hitEntry) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.addLocked(k, e)
+}
+
+func (b *hitBatch) addLocked(k hitKey, e hitEntry) {
 	cur := b.pending[k]
 	cur.count += e.count
 	if e.last.After(cur.last) {
@@ -65,8 +75,34 @@ func (b *hitBatch) take() map[hitKey]hitEntry {
 	b.mu.Lock()
 	defer b.mu.Unlock()
 	pending := b.pending
+	b.flushing = pending
 	b.pending = map[hitKey]hitEntry{}
 	return pending
+}
+
+// finish ends the flush of taken. If the write failed, its hits go back to
+// pending in the same step, so they are never out of sight.
+func (b *hitBatch) finish(taken map[hitKey]hitEntry, failed bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if failed {
+		for k, e := range taken {
+			b.addLocked(k, e)
+		}
+	}
+	b.flushing = nil
+}
+
+// lastHit returns the latest hit on k not yet written to the database.
+func (b *hitBatch) lastHit(k hitKey) (time.Time, bool) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	pending, inPending := b.pending[k]
+	flushing, inFlushing := b.flushing[k]
+	if flushing.last.After(pending.last) {
+		return flushing.last, true
+	}
+	return pending.last, inPending || inFlushing
 }
 
 // BatchHits makes RecordArtifactHit buffer hits and write them every
@@ -105,18 +141,21 @@ func (db *DB) BatchHits(interval time.Duration, logger *slog.Logger) {
 // fails they are put back for the next flush, so a failed write delays
 // counts rather than losing them.
 func (db *DB) flushHits() error {
+	db.hits.flushMu.Lock()
+	defer db.hits.flushMu.Unlock()
+
 	metadataErr := db.flushMetadataHits()
 	pending := db.hits.take()
 	if len(pending) == 0 {
+		db.hits.finish(pending, false)
 		return metadataErr
 	}
 
-	err := db.writeHits(pending)
-	if err != nil {
-		for k, e := range pending {
-			db.hits.add(k, e)
-		}
+	if db.hits.beforeWrite != nil {
+		db.hits.beforeWrite()
 	}
+	err := db.writeHits(pending)
+	db.hits.finish(pending, err != nil)
 	return errors.Join(err, metadataErr)
 }
 
