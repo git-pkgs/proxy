@@ -230,7 +230,7 @@ func TestNPMRewriteMetadataScopedPackage(t *testing.T) {
 	dist := v["dist"].(map[string]any)
 	tarball := dist["tarball"].(string)
 
-	expected := "http://localhost:8080/npm/@babel%2Fcore/-/core-7.23.0.tgz"
+	expected := "http://localhost:8080/npm/@babel/core/-/core-7.23.0.tgz"
 	if tarball != expected {
 		t.Errorf("tarball = %q, want %q", tarball, expected)
 	}
@@ -1104,7 +1104,7 @@ func TestNPMVersionMetadataKeepsVersionSegment(t *testing.T) {
 		{
 			request:      "/@babel/core/7.23.0",
 			upstreamPath: "/@babel%2Fcore/7.23.0",
-			wantTarball:  "http://proxy.local/npm/@babel%2Fcore/-/core-7.23.0.tgz",
+			wantTarball:  "http://proxy.local/npm/@babel/core/-/core-7.23.0.tgz",
 			body: `{
 				"name": "@babel/core",
 				"version": "7.23.0",
