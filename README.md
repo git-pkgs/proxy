@@ -559,6 +559,12 @@ docker pull localhost:8080/library/nginx:latest
 The registry is pull-only. BuildKit cache exports (`--cache-to type=registry`)
 and other pushes need a separate registry.
 
+An image's page in the web UI (`/ui/package/oci/{name}`) lists its tags, the
+most recently seen first, with the digest each one pointed at when the
+upstream last confirmed it, through a pull or a mirror run. Its versions are
+the cached blobs, by digest, and a blob's page names the tags whose cached
+image contains it.
+
 SBOMs, signatures and attestations attached to an image are found through the
 OCI 1.1 referrers API (`GET /v2/{name}/referrers/{digest}`). `oras discover`
 and `notation verify` use it, and so does cosign for its newer signature

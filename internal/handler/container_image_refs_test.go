@@ -10,11 +10,10 @@ import (
 
 const imageRefsRepo = "team/app"
 
-func imageRefsHandler(t *testing.T, keepLatest int) (*ContainerHandler, *fakeImageRegistry, fakeImage) {
+func imageRefsHandler(t *testing.T) (*ContainerHandler, *fakeImageRegistry, fakeImage) {
 	t.Helper()
 	registry, image := newFakeImageRegistry(t)
 	proxy := newMirrorTestProxy(t, registry)
-	proxy.KeepLatestImages = keepLatest
 	return NewContainerHandlerWithRegistry(proxy, "http://proxy.example", registry.server.URL), registry, image
 }
 
@@ -54,7 +53,7 @@ func (r *fakeImageRegistry) moveTag(tag, digest string) {
 // A pull by tag makes the manifest an image of the repository, and the
 // manifests pulled by digest after it say which blobs it needs.
 func TestContainerPullRecordsWhatAnImageReferences(t *testing.T) {
-	h, _, image := imageRefsHandler(t, 1)
+	h, _, image := imageRefsHandler(t)
 
 	pullImageManifest(t, h, "multi")
 	if at, ok := imageTaggedAt(t, h, image.indexDigest); !ok || at.IsZero() {
@@ -80,23 +79,24 @@ func TestContainerPullRecordsWhatAnImageReferences(t *testing.T) {
 	}
 }
 
-// Without keep_latest nothing is recorded.
-func TestContainerPullRecordsNothingWithoutKeepLatest(t *testing.T) {
-	h, _, image := imageRefsHandler(t, 0)
+// Manifests are recorded without keep_latest too: the web UI reads them to
+// name the tags whose image contains a blob.
+func TestContainerPullRecordsWithoutKeepLatest(t *testing.T) {
+	h, _, image := imageRefsHandler(t)
 	pullImageManifest(t, h, "multi")
 	pullImageManifest(t, h, image.arm64Digest)
-	if _, ok := imageTaggedAt(t, h, image.indexDigest); ok {
-		t.Errorf("index recorded though keep_latest is off")
+	if _, ok := imageTaggedAt(t, h, image.indexDigest); !ok {
+		t.Errorf("index not recorded")
 	}
-	if _, ok := imageTaggedAt(t, h, image.arm64Digest); ok {
-		t.Errorf("platform manifest recorded though keep_latest is off")
+	if _, ok := imageTaggedAt(t, h, image.arm64Digest); !ok {
+		t.Errorf("platform manifest not recorded")
 	}
 }
 
 // Referrers and cosign tags hold what refers to an image. They are recorded
 // like a pull by digest, so they don't count as images of their own.
 func TestContainerPullOfReferrersTagIsNotAnImage(t *testing.T) {
-	h, registry, image := imageRefsHandler(t, 1)
+	h, registry, image := imageRefsHandler(t)
 	subject := "sha256-" + image.indexDigest[len("sha256:"):]
 	for _, tag := range []string{subject, subject + ".sig", subject + ".att"} {
 		registry.moveTag(tag, image.singleDigest)
@@ -112,7 +112,7 @@ func TestContainerPullOfReferrersTagIsNotAnImage(t *testing.T) {
 func TestContainerPullAgainMovesTagTimeForward(t *testing.T) {
 	for _, method := range []string{http.MethodGet, http.MethodHead} {
 		t.Run(method, func(t *testing.T) {
-			h, _, image := imageRefsHandler(t, 1)
+			h, _, image := imageRefsHandler(t)
 			pullImageManifest(t, h, "single")
 			db := h.proxy.DB
 			if _, err := db.Exec(db.Rebind("UPDATE image_manifests SET tagged_at = ?"), 1000); err != nil {
@@ -136,7 +136,7 @@ func TestContainerPullAgainMovesTagTimeForward(t *testing.T) {
 // When a tag moves, the image it points at now is the newest, and the one
 // it pointed at before no longer is.
 func TestContainerMovedTagMakesTheNewImageNewest(t *testing.T) {
-	h, registry, image := imageRefsHandler(t, 1)
+	h, registry, image := imageRefsHandler(t)
 	registry.moveTag("stable", image.singleDigest)
 	pullImageManifest(t, h, "stable")
 	if _, ok := newestImageDigests(t, h)[image.singleLayer]; !ok {
@@ -162,7 +162,7 @@ func TestContainerMovedTagMakesTheNewImageNewest(t *testing.T) {
 
 // A scheduled mirror run resolves tags itself, and records them like a pull.
 func TestMirrorImageRecordsWhatAnImageReferences(t *testing.T) {
-	h, _, image := imageRefsHandler(t, 1)
+	h, _, image := imageRefsHandler(t)
 	platform, err := ParsePlatform("linux/arm64")
 	if err != nil {
 		t.Fatal(err)

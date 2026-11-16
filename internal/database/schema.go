@@ -160,6 +160,14 @@ CREATE TABLE IF NOT EXISTS image_manifests (
 	PRIMARY KEY (package_purl, digest)
 );
 
+CREATE TABLE IF NOT EXISTS image_tags (
+	package_purl TEXT NOT NULL,
+	tag TEXT NOT NULL,
+	digest TEXT NOT NULL,
+	seen_at INTEGER NOT NULL,
+	PRIMARY KEY (package_purl, tag)
+);
+
 CREATE TABLE IF NOT EXISTS upstream_holds (
 	host TEXT NOT NULL PRIMARY KEY,
 	until_ms INTEGER NOT NULL
@@ -346,6 +354,14 @@ CREATE TABLE IF NOT EXISTS image_manifests (
 	tagged_at BIGINT NOT NULL DEFAULT 0,
 	recorded_at BIGINT NOT NULL,
 	PRIMARY KEY (package_purl, digest)
+);
+
+CREATE TABLE IF NOT EXISTS image_tags (
+	package_purl TEXT NOT NULL,
+	tag TEXT NOT NULL,
+	digest TEXT NOT NULL,
+	seen_at BIGINT NOT NULL,
+	PRIMARY KEY (package_purl, tag)
 );
 
 CREATE TABLE IF NOT EXISTS upstream_holds (
@@ -566,6 +582,7 @@ var migrations = []migration{
 	{"023_add_metadata_upstream_url", migrateAddMetadataUpstreamURL},
 	{"024_add_image_manifests", migrateAddImageManifests},
 	{"025_partial_artifacts_last_used_index", migratePartialArtifactsLastUsedIndex},
+	{"026_add_image_tags", migrateAddImageTags},
 }
 
 // isTableNotFound returns true if the error indicates a missing table.
@@ -1067,6 +1084,22 @@ func migrateAddImageManifests(db *DB) error {
 	)`, millis, millis)
 	if _, err := db.Exec(query); err != nil {
 		return fmt.Errorf("creating image_manifests table: %w", err)
+	}
+	return nil
+}
+
+// migrateAddImageTags creates the table of the tags of container image
+// repositories that the web UI lists.
+func migrateAddImageTags(db *DB) error {
+	// BIGINT is an integer column on SQLite too.
+	if _, err := db.Exec(`CREATE TABLE IF NOT EXISTS image_tags (
+		package_purl TEXT NOT NULL,
+		tag TEXT NOT NULL,
+		digest TEXT NOT NULL,
+		seen_at BIGINT NOT NULL,
+		PRIMARY KEY (package_purl, tag)
+	)`); err != nil {
+		return fmt.Errorf("creating image_tags table: %w", err)
 	}
 	return nil
 }

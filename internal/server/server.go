@@ -309,7 +309,6 @@ func (s *Server) serve(listener net.Listener) error {
 		return fmt.Errorf("configuring scanners: %w", err)
 	}
 	configureMetadata(proxy, s.cfg)
-	proxy.KeepLatestImages = keepLatestImages(s.cfg)
 	proxy.GradleReadOnly = s.cfg.Gradle.BuildCache.ReadOnly
 	proxy.HostedEnabled = s.cfg.Hosted.Enabled
 	proxy.HostedNPMScopes = s.cfg.Hosted.NPMScopes
@@ -466,6 +465,7 @@ func (s *Server) serve(listener net.Listener) error {
 	s.background.Go(func() { s.startEvictionLoop(bgCtx) })
 	retentionResolvers := s.retentionResolvers(proxy)
 	s.background.Go(func() { s.startRetentionLoop(bgCtx, retentionResolvers) })
+	s.startImageRecordPruning(bgCtx)
 	s.background.Go(func() { s.startAPKSnapshotPruning(bgCtx) })
 	s.background.Go(func() { s.startReclaimLoop(bgCtx) })
 	if gitHandler != nil {
@@ -649,7 +649,6 @@ func NewMirrorProxy(cfg *config.Config, db *database.DB, store storage.Storage, 
 	configureMirrorResolvers(proxy, cfg.Upstream)
 	proxy.HTTPClient = metadataClient
 	proxy.RateLimits = s.rateLimits
-	proxy.KeepLatestImages = keepLatestImages(cfg)
 	return proxy, s.newContainerHandler(proxy)
 }
 
@@ -1232,6 +1231,12 @@ func (s *Server) handlePackagePath(w http.ResponseWriter, r *http.Request) {
 	}
 }
 
+const (
+	// maxImageTagsShown is how many tags a container image's page lists,
+	// and how many a blob's page names.
+	maxImageTagsShown = 100
+)
+
 func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, name string) {
 	pkg, err := s.db.GetPackageByEcosystemName(ecosystem, name)
 	if err != nil {
@@ -1274,6 +1279,11 @@ func (s *Server) showPackage(w http.ResponseWriter, r *http.Request, ecosystem, 
 		Cooldown:        s.cooldown.forPackage(pkg.Ecosystem, pkg.Name),
 	}
 	data.UsedBy = s.packageUsedBy(pkg, versions)
+	if pkg.Ecosystem == "oci" {
+		if data.Tags, err = s.db.ImageTags(pkg.PURL, maxImageTagsShown); err != nil {
+			s.logger.Error("failed to get image tags", "error", err)
+		}
+	}
 
 	if err := s.templates.Render(w, "package_show", data); err != nil {
 		s.logger.Error("failed to render package show", "error", err)
@@ -1314,6 +1324,13 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 	// browsed, so it must not be advertised as cached.
 	hasCached := firstBrowsableArtifact(artifacts) != nil
 
+	var imageTags []string
+	if pkg.Ecosystem == "oci" {
+		if imageTags, err = s.db.ImageTagsContaining(pkg.PURL, version, maxImageTagsShown); err != nil {
+			s.logger.Error("failed to get image tags", "error", err)
+		}
+	}
+
 	data := VersionShowData{
 		Layout:               s.layoutFor(r),
 		Package:              pkg,
@@ -1324,6 +1341,7 @@ func (s *Server) showVersion(w http.ResponseWriter, r *http.Request, ecosystem, 
 		LicenseCategory:      categorizeLicense(ver.License),
 		HasCachedArtifact:    hasCached,
 		HasDeletableArtifact: hasDeletableArtifact(artifacts),
+		ImageTags:            imageTags,
 	}
 
 	if err := s.templates.Render(w, "version_show", data); err != nil {

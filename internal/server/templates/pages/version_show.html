@@ -43,6 +43,9 @@
             {{if .Version.PublishedAt.Valid}}
             <div><dt class="inline text-gray-500 dark:text-gray-400">Published:</dt> <dd class="inline">{{.Version.PublishedAt.Time.Format "2006-01-02 15:04:05"}}</dd></div>
             {{end}}
+            {{if .ImageTags}}
+            <div><dt class="inline text-gray-500 dark:text-gray-400">Tags:</dt> <dd class="inline">{{range $i, $tag := .ImageTags}}{{if $i}}, {{end}}<span class="font-mono">{{$tag}}</span>{{end}}</dd></div>
+            {{end}}
             {{if .Version.Integrity.Valid}}
             <div><dt class="inline text-gray-500 dark:text-gray-400">Integrity:</dt> <dd class="inline font-mono text-xs break-all">{{.Version.Integrity.String}}</dd></div>
             {{end}}

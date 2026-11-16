@@ -214,11 +214,21 @@ image_manifests (
     recorded_at   INTEGER NOT NULL,   -- Unix ms; BIGINT on Postgres
     PRIMARY KEY (package_purl, digest)
 )
+
+image_tags (
+    package_purl  TEXT NOT NULL,      -- the repository, as its blobs are cached
+    tag           TEXT NOT NULL,
+    digest        TEXT NOT NULL,      -- the manifest the tag pointed at
+    seen_at       INTEGER NOT NULL,   -- Unix ms the upstream last confirmed it; BIGINT on Postgres
+    PRIMARY KEY (package_purl, tag)
+)
 ```
 
 `metadata_dates` holds the `Last-Modified` served with rewritten metadata, such as npm packuments, Composer documents, PyPI simple pages and Helm indexes. A package's date is the second it started serving its current representation, and a new representation is only dated in a later second. Keeping it in the database means replicas sharing one serve the same date, and never give one representation's date to another, so `If-Modified-Since` cannot return 304 for a body the client does not have.
 
-`image_manifests` is filled only with `storage.retention.keep_latest` set and a retention rule for `oci`. It holds which manifests and blobs each served container manifest references, so the retention sweep can keep the blobs of the newest images of a repository. The sweep also drops the rows of images that are no longer among the newest.
+`image_manifests` holds which manifests and blobs each served container manifest references. The retention sweep reads it to keep the blobs of the newest images of a repository, and the web UI to name the tags whose image contains a blob. An hourly prune, which runs with or without a retention rule, drops the rows of images that are no longer among the newest and that no tag points at.
+
+`image_tags` holds the tags of a container image repository, each with the digest it pointed at when the upstream last confirmed it, for the web UI. The same prune drops tags the upstream has not confirmed for 90 days. A tag served as one platform's manifest of the index it points at, to a client that accepts no index, keeps the index's digest.
 
 On PostgreSQL, `INTEGER PRIMARY KEY` becomes `SERIAL`, `DATETIME` becomes `TIMESTAMP`, `INTEGER DEFAULT 0` booleans become `BOOLEAN DEFAULT FALSE`, and size/count columns use `BIGINT`.
 

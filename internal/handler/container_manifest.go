@@ -116,6 +116,7 @@ func (h *ContainerHandler) writeManifest(w http.ResponseWriter, r *http.Request,
 		return
 	}
 	h.recordImageManifest(cacheName, reference, manifest, stale)
+	h.recordImageTag(cacheName, reference, manifest, stale)
 	writeContainerManifest(w, r, manifest, stale)
 }
 

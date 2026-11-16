@@ -257,6 +257,7 @@ func (m *imageMirror) mirrorTag(ctx context.Context, tag string) (string, error)
 	m.h.storeContainerManifestForAccept(ctx, m.registryURL, m.upstreamName, tag, accept, cacheAccept, manifest)
 	// The walk recorded the manifest as one asked for by digest.
 	m.h.recordImageManifest(m.cacheName, tag, manifest, false)
+	m.h.recordImageTag(m.cacheName, tag, manifest, false)
 	return digest, nil
 }
 
