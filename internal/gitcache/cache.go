@@ -73,7 +73,10 @@ type Options struct {
 	// multi-pack index with reachability bitmaps, which turn the object
 	// enumeration of a clone from a walk of the whole history into bitmap
 	// lookups. The indexes are rebuilt from the packs, so they are not
-	// counted in MaxSize or MaxRepoSize.
+	// counted in MaxSize or MaxRepoSize. At startup the indexes of the
+	// repositories already cached are read once, so a filesystem that does
+	// not keep them in the page cache does not have the first fetch pay
+	// for them.
 	Maintenance bool
 	// MaintenanceInterval is the least time between the bitmap writes of
 	// one repository, which walk all of its objects. Zero rewrites them
@@ -323,6 +326,9 @@ func New(opts Options) (*Cache, error) {
 	c.ctx, c.cancel = context.WithCancel(context.Background())
 	// Applies a lowered git.max_size straight away.
 	c.evict()
+	if c.opts.Maintenance {
+		c.preloadCached()
+	}
 	return c, nil
 }
 
