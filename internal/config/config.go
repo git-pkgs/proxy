@@ -64,6 +64,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"maps"
 	"math"
 	"net"
 	"net/url"
@@ -983,6 +984,9 @@ func (u *UpstreamConfig) Validate() error {
 	if err := validateNamedUpstreams("upstream.terraform", u.Terraform); err != nil {
 		return err
 	}
+	if err := validateTerraformHostnames(u.Terraform); err != nil {
+		return err
+	}
 	if err := validateNamedUpstreams("upstream.go_sumdbs", u.GoSumDBs); err != nil {
 		return err
 	}
@@ -1241,6 +1245,21 @@ func validateNamedUpstreams(field string, upstreams map[string]string) error {
 		if err := validateAbsoluteURL(field+"."+name, upstreamURL); err != nil {
 			return err
 		}
+	}
+	return nil
+}
+
+// validateTerraformHostnames rejects two registries whose hostnames differ
+// only in case, as hostnames are matched case-insensitively and only one of
+// them could be served.
+func validateTerraformHostnames(registries map[string]string) error {
+	seen := make(map[string]string, len(registries))
+	for _, hostname := range slices.Sorted(maps.Keys(registries)) {
+		key := strings.ToLower(hostname)
+		if other, ok := seen[key]; ok {
+			return fmt.Errorf("upstream.terraform names %q and %q, the same hostname", other, hostname)
+		}
+		seen[key] = hostname
 	}
 	return nil
 }

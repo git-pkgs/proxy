@@ -2005,6 +2005,7 @@ func TestValidateTerraformUpstreams(t *testing.T) {
 		{"valid", map[string]string{"registry.terraform.io": "https://registry.terraform.io", "terraform.example.com": "https://terraform.example.com"}, false},
 		{"hostname contains path separator", map[string]string{"registry.terraform.io/v1": "https://registry.terraform.io"}, true},
 		{"URL is not absolute", map[string]string{"registry.terraform.io": "registry.terraform.io"}, true},
+		{"hostnames differing only in case", map[string]string{"registry.terraform.io": "https://registry.terraform.io", "Registry.Terraform.IO": "https://mirror.example.com"}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
