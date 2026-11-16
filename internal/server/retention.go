@@ -162,16 +162,16 @@ func sweepRetention(ctx context.Context, db *database.DB, logger *slog.Logger,
 // images of their repository nor the images its tags point at reference.
 func pruneImageRecords(db *database.DB, logger *slog.Logger, keep int, now time.Time) {
 	if err := db.PruneImageTags(now.Add(-imageTagMaxAge)); err != nil {
-		logger.Warn("retention: failed to prune image tags", "error", err)
+		logger.Warn("image records: failed to prune image tags", "error", err)
 	}
 	repositories, err := db.ImageManifestRepositories()
 	if err != nil {
-		logger.Warn("retention: failed to list image manifest records", "error", err)
+		logger.Warn("image records: failed to list image manifest records", "error", err)
 		return
 	}
 	for _, packagePURL := range repositories {
 		if err := db.PruneImageManifests(packagePURL, keep, now.Add(-imageRecordGrace)); err != nil {
-			logger.Warn("retention: failed to prune image manifest records", "package_purl", packagePURL, "error", err)
+			logger.Warn("image records: failed to prune image manifest records", "package_purl", packagePURL, "error", err)
 		}
 	}
 }
