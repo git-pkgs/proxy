@@ -65,12 +65,11 @@ type debIndexes struct {
 }
 
 // debReleaseInfo is what the Releases of a release's suites give: the suites
-// the archive serves, the components they list, and the architecture whose
-// index is read for Architecture: all packages.
+// the archive serves, the components they list, and the architectures whose
+// indexes are read for Architecture: all packages, one for each suite.
 type debReleaseInfo struct {
-	suites, components []string
-	allArch            string
-	fetched            time.Time
+	suites, components, allArchs []string
+	fetched                      time.Time
 }
 
 type debIndex struct {
@@ -175,7 +174,7 @@ func (m *Mirror) debArtifact(ctx context.Context, archiveURL, codename, arch, na
 	// Architecture: all packages are in every binary-<arch> index.
 	indexArch := arch
 	if arch == "all" {
-		indexArch = rel.allArch
+		indexArch = strings.Join(rel.allArchs, ",")
 	}
 	reg, err := m.debRegistry(archiveURL, codename, indexArch, rel)
 	if err != nil {
@@ -228,9 +227,10 @@ func debEpoch(epoch string) string {
 
 // debReleaseInfo returns what the Releases of the suites of release codename
 // give, reading each suite's once per debIndexTTL: the suites the archive
-// serves, the components they list, or debComponents where none lists any,
-// and the architecture for Architecture: all packages, from the first
-// served suite's Release.
+// serves, the components they list, with debComponents for a suite that
+// lists none, and the architecture for Architecture: all packages of each.
+// The registries client needs an index of every suite among those it is
+// given.
 func (m *Mirror) debReleaseInfo(ctx context.Context, archiveURL, codename string) (debReleaseInfo, error) {
 	key := archiveURL + "\x00" + codename
 	m.deb.mu.Lock()
@@ -250,21 +250,16 @@ func (m *Mirror) debReleaseInfo(ctx context.Context, archiveURL, codename string
 		if !served {
 			continue
 		}
-		if rel.suites == nil {
-			rel.allArch = debReleaseAllArch(body)
-		}
 		rel.suites = append(rel.suites, suite)
-		for _, c := range debReleaseComponents(body) {
-			if !slices.Contains(rel.components, c) {
-				rel.components = append(rel.components, c)
-			}
+		components := debReleaseComponents(body)
+		if components == nil {
+			components = debComponents
 		}
+		rel.components = appendNew(rel.components, components...)
+		rel.allArchs = appendNew(rel.allArchs, debReleaseAllArch(body))
 	}
 	if len(rel.suites) == 0 {
 		return debReleaseInfo{}, fmt.Errorf("%s serves no suite of %s", archiveURL, codename)
-	}
-	if rel.components == nil {
-		rel.components = debComponents
 	}
 	rel.fetched = time.Now()
 	if m.deb.releases == nil {
@@ -319,13 +314,24 @@ func debReleaseAllArch(release string) string {
 	return "amd64"
 }
 
+// appendNew appends the items of add that list doesn't hold yet.
+func appendNew(list []string, add ...string) []string {
+	for _, item := range add {
+		if !slices.Contains(list, item) {
+			list = append(list, item)
+		}
+	}
+	return list
+}
+
 func debIndexKey(archiveURL, codename, arch string) string {
 	return archiveURL + "\x00" + codename + "\x00" + arch
 }
 
 // debRegistry returns the client for the binary-arch indexes of the
 // components of the suites of release codename that rel names, reusing it,
-// and the indexes it read, for debIndexTTL.
+// and the indexes it read, for debIndexTTL. arch may list several
+// architectures, separated by commas.
 func (m *Mirror) debRegistry(archiveURL, codename, arch string, rel debReleaseInfo) (registries.Registry, error) { //nolint:ireturn // registries.New returns the interface
 	key := debIndexKey(archiveURL, codename, arch)
 	m.deb.mu.Lock()

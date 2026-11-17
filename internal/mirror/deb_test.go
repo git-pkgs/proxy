@@ -93,11 +93,11 @@ func TestDebReleaseIsReadOncePerTTL(t *testing.T) {
 	t.Cleanup(srv.Close)
 	m := &Mirror{}
 	ctx := context.Background()
-	want := debReleaseInfo{suites: []string{"jammy"}, components: []string{"stable"}, allArch: "arm64"}
+	want := debReleaseInfo{suites: []string{"jammy"}, components: []string{"stable"}, allArchs: []string{"arm64"}}
 
 	for range 2 {
 		rel, err := m.debReleaseInfo(ctx, srv.URL, "jammy")
-		if err != nil || !slices.Equal(rel.suites, want.suites) || !slices.Equal(rel.components, want.components) || rel.allArch != want.allArch {
+		if err != nil || !slices.Equal(rel.suites, want.suites) || !slices.Equal(rel.components, want.components) || !slices.Equal(rel.allArchs, want.allArchs) {
 			t.Fatalf("debReleaseInfo = %+v, %v; want %+v", rel, err, want)
 		}
 	}
@@ -128,17 +128,20 @@ func TestDebReleaseDefaults(t *testing.T) {
 	}))
 	t.Cleanup(srv.Close)
 	rel, err := (&Mirror{}).debReleaseInfo(context.Background(), srv.URL, "jammy")
-	if err != nil || !slices.Equal(rel.components, debComponents) || rel.allArch != "amd64" {
+	if err != nil || !slices.Equal(rel.components, debComponents) || !slices.Equal(rel.allArchs, []string{"amd64"}) {
 		t.Errorf("debReleaseInfo = %+v, %v; want the default components and amd64", rel, err)
 	}
 }
 
-// The components of all served suites are read, each once, and the
-// architecture for Architecture: all packages is the release's own.
+// The components of all served suites are read, each once, with the usual
+// ones for a suite that lists none, and the architectures for Architecture:
+// all packages are each suite's: the registries client needs an index in
+// every suite.
 func TestDebReleaseOfSeveralSuites(t *testing.T) {
 	releases := map[string]string{
-		"/dists/jammy/InRelease":         "Architectures: arm64 armhf\nComponents: stable\n",
-		"/dists/jammy-updates/InRelease": "Architectures: armhf\nComponents: stable test\n",
+		"/dists/jammy/InRelease":          "Architectures: arm64 armhf\nComponents: stable\n",
+		"/dists/jammy-updates/InRelease":  "Architectures: armhf\nComponents: stable test\n",
+		"/dists/jammy-security/InRelease": "Architectures: arm64\n",
 	}
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, ok := releases[r.URL.Path]
@@ -153,8 +156,9 @@ func TestDebReleaseOfSeveralSuites(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !slices.Equal(rel.suites, []string{"jammy", "jammy-updates"}) || !slices.Equal(rel.components, []string{"stable", "test"}) || rel.allArch != "arm64" {
-		t.Errorf("debReleaseInfo = %+v; want jammy and jammy-updates, stable and test, arm64", rel)
+	wantComponents := append([]string{"stable", "test"}, debComponents...)
+	if !slices.Equal(rel.suites, []string{"jammy", "jammy-updates", "jammy-security"}) || !slices.Equal(rel.components, wantComponents) || !slices.Equal(rel.allArchs, []string{"arm64", "armhf"}) {
+		t.Errorf("debReleaseInfo = %+v; want the three suites, components %v, arm64 and armhf", rel, wantComponents)
 	}
 }
 

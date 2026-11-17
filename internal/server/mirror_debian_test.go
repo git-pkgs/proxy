@@ -30,13 +30,14 @@ type debUpstream struct {
 	hits  map[string]int
 	// fail answers the paths it holds with that status.
 	fail map[string]int
-	// architectures, by archive root, are the architectures its Releases
-	// list, the first of which holds Architecture: all packages. An
-	// archive not in it lists none and holds them in binary-amd64.
+	// architectures, by archive root, or by root and suite as
+	// "{root}#{suite}", are the architectures its Releases list, the first
+	// of which holds Architecture: all packages. An archive not in it lists
+	// none and holds them in binary-amd64.
 	architectures map[string][]string
-	// components, by archive root, is the component its packages are in,
-	// which its Releases list. An archive not in it keeps them in main and
-	// lists no components.
+	// components, keyed as architectures, is the component its packages
+	// are in, which its Releases list. An archive not in it keeps them in
+	// main and lists no components.
 	components map[string]string
 }
 
@@ -71,18 +72,26 @@ func sha256Hex(s string) string {
 // addSuite serves suite of the archive under root, with codename in its
 // Release and pkgs in component main for each package's architecture.
 func (u *debUpstream) addSuite(root, suite, codename string, pkgs ...debPackage) {
+	archs, ok := u.architectures[root+"#"+suite]
+	if !ok {
+		archs = u.architectures[root]
+	}
+	comp, ok := u.components[root+"#"+suite]
+	if !ok {
+		comp = u.components[root]
+	}
 	indexes := map[string]*strings.Builder{}
 	for _, p := range pkgs {
 		arch := p.arch
 		if arch == "all" {
 			arch = "amd64"
-			if archs := u.architectures[root]; len(archs) > 0 {
+			if len(archs) > 0 {
 				arch = archs[0]
 			}
 		}
 		component := "main"
-		if c := u.components[root]; c != "" {
-			component = c
+		if comp != "" {
+			component = comp
 		}
 		dir := component + "/binary-" + arch
 		if indexes[dir] == nil {
@@ -98,11 +107,11 @@ func (u *debUpstream) addSuite(root, suite, codename string, pkgs ...debPackage)
 	}
 	sort.Strings(dirs)
 	release := "Codename: " + codename + "\n"
-	if archs := u.architectures[root]; len(archs) > 0 {
+	if len(archs) > 0 {
 		release += "Architectures: " + strings.Join(archs, " ") + "\n"
 	}
-	if c := u.components[root]; c != "" {
-		release += "Components: " + c + "\n"
+	if comp != "" {
+		release += "Components: " + comp + "\n"
 	}
 	release += "SHA256:\n"
 	for _, dir := range dirs {
@@ -349,5 +358,30 @@ func TestMirrorDebianReadsEachReleaseOnce(t *testing.T) {
 	}
 	if got := upstream.hitsFor("/ports/dists/jammy/Release"); got != 2 {
 		t.Errorf("Release read %d times, want 2", got)
+	}
+}
+
+// Suites of a release that list other components, or none, are each read
+// for theirs, and an Architecture: all package is found where the suites
+// hold such packages in the indexes of different architectures.
+func TestMirrorDebianSuitesThatDiffer(t *testing.T) {
+	upstream := newDebUpstream(t)
+	upstream.architectures["/vendor#jammy"] = []string{"arm64", "armhf"}
+	upstream.architectures["/vendor#jammy-updates"] = []string{"armhf"}
+	upstream.components["/vendor#jammy-updates"] = "stable"
+	upstream.addSuite("/vendor", "jammy", "jammy",
+		debPackage{"tzdata", "2024a-0ubuntu0.22.04", "all", "pool/main/t/tzdata/tzdata_2024a-0ubuntu0.22.04_all.deb", "tzdata"},
+	)
+	upstream.addSuite("/vendor", "jammy-updates", "jammy",
+		debPackage{"agent", "1.2-1", "all", "pool/stable/a/agent/agent_1.2-1_all.deb", "agent"},
+	)
+	cfg := config.Default()
+	cfg.Upstream.DebianRepositories = map[string]string{"vendor": upstream.URL + "/vendor"}
+
+	progress, _ := mirrorWithConfig(t, cfg,
+		"pkg:deb/vendor/tzdata@2024a-0ubuntu0.22.04?arch=all&distro=ubuntu-22.04",
+		"pkg:deb/vendor/agent@1.2-1?arch=all&distro=ubuntu-22.04")
+	if progress.Completed != 2 || progress.Failed != 0 {
+		t.Fatalf("completed = %d, failed = %d, errors = %v", progress.Completed, progress.Failed, progress.Errors)
 	}
 }
