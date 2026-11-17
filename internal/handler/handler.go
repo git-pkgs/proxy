@@ -2180,7 +2180,24 @@ func upstreamMetadataStatus(resp *http.Response) error {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, upstreamNotFoundBodyLimit))
 		return &upstreamNotFoundError{body: body}
 	}
-	return fmt.Errorf("upstream returned %d", resp.StatusCode)
+	return &upstreamStatusError{status: resp.StatusCode}
+}
+
+// upstreamStatusError is a metadata response other than 200, 304 and 404.
+type upstreamStatusError struct {
+	status int
+}
+
+func (e *upstreamStatusError) Error() string {
+	return fmt.Sprintf("upstream returned %d", e.status)
+}
+
+// refused reports whether upstream answered the request with a definite 4xx,
+// such as an object store's 403 for a key that doesn't exist, rather than
+// failing. 408 and 429 are failures to retry, not answers.
+func (e *upstreamStatusError) refused() bool {
+	return e.status >= 400 && e.status < 500 &&
+		e.status != http.StatusRequestTimeout && e.status != http.StatusTooManyRequests
 }
 
 // refreshMetadataBlob records that upstream answered 304 for the cached
@@ -2371,7 +2388,15 @@ func (p *Proxy) writeMetadataFetchError(w http.ResponseWriter, err error) {
 	if writeUpstreamHeld(w, err) {
 		return
 	}
-	p.Logger.Error("metadata fetch failed", "error", err)
+	// An upstream refusal is still a 502, since the client can't act on the
+	// proxy's own request being refused, but it is upstream's answer and not
+	// a fault here, so it is logged as a warning.
+	var status *upstreamStatusError
+	if errors.As(err, &status) && status.refused() {
+		p.Logger.Warn("metadata fetch refused by upstream", "error", err)
+	} else {
+		p.Logger.Error("metadata fetch failed", "error", err)
+	}
 	http.Error(w, "failed to fetch from upstream", http.StatusBadGateway)
 }
 
