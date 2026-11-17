@@ -1035,7 +1035,11 @@ func (u *UpstreamConfig) Validate() error {
 			)
 		}
 	}
-	for _, p := range u.RPMRepositoryPaths {
+	return validateRPMRepositoryPaths(u.RPMRepositoryPaths)
+}
+
+func validateRPMRepositoryPaths(paths []string) error {
+	for _, p := range paths {
 		if err := validateRPMRepositoryPath(p); err != nil {
 			return fmt.Errorf("invalid upstream.rpm_repository_paths entry %q: %w", p, err)
 		}
