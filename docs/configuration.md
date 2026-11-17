@@ -535,8 +535,10 @@ Every other path is served through the metadata cache (`cache_metadata`
 must be enabled for offline fallback): fresh within `metadata_ttl`, then
 revalidated with the upstream's `ETag`/`Last-Modified`, and served stale with
 a `Warning: 110` header when the upstream fails, refuses or rate-limits the
-request. Metadata responses are buffered up to `metadata_max_size`, so keep
-large mutable downloads (`releases/latest/download/...`) off this route.
+request. Metadata responses are streamed through storage up to
+`metadata_stream_max_size` (see [Metadata size limit](#metadata-size-limit)),
+so keep large mutable downloads (`releases/latest/download/...`) off this
+route.
 
 This is the cache behind [mise](https://mise.jdx.dev)'s aqua backend; see the
 mise section in the README for the client-side `url_replacements`.
@@ -1644,7 +1646,7 @@ A new release therefore shows up about a minute after the registry lists it rath
 
 ### Metadata size limit
 
-Upstream metadata responses are buffered in memory before being rewritten and served. `metadata_max_size` caps that buffer to protect against OOM from a misbehaving upstream. Some npm packages with thousands of versions (for example `renovate`) exceed the 100 MB default, so raise this if you see `metadata response exceeds size limit` in the logs. Conda `repodata.json` with cooldown enabled is filtered as it streams and isn't held in memory decompressed. With `cache_metadata` the limit applies to the compressed document as it does without cooldown; one over it is filtered as it streams from the upstream and not cached. With `cache_metadata` and the metadata rewrite cache on, an npm packument is streamed from the upstream into storage and rewritten from there in two passes, so it isn't held in memory and the limit doesn't apply to it; the rewritten copy is kept gzip-compressed. Requests for a single version (`/<package>/<version>`) and tarball downloads read the version from the stored copy the same way. `metadata_stream_max_size` (1 GB by default) caps a document streamed this way; one over it isn't stored, and the stored copy, if any, is served instead.
+Upstream metadata responses are buffered in memory before being rewritten and served. A document the proxy serves as upstream sent it, without rewriting it (for example a Go module list, Conda repodata without cooldown, or a generic metadata path), is instead streamed from the upstream into storage and served from there with `cache_metadata` on and a nonzero `metadata_ttl`, so `metadata_max_size` doesn't apply to it; a `304` from the upstream checks the stored copy against its digest as it streams it, without reading it into memory. `metadata_max_size` caps the buffer to protect against OOM from a misbehaving upstream. Some npm packages with thousands of versions (for example `renovate`) exceed the 100 MB default, so raise this if you see `metadata response exceeds size limit` in the logs. Conda `repodata.json` with cooldown enabled is filtered as it streams and isn't held in memory decompressed. With `cache_metadata` the limit applies to the compressed document as it does without cooldown; one over it is filtered as it streams from the upstream and not cached. With `cache_metadata` and the metadata rewrite cache on, an npm packument is streamed from the upstream into storage and rewritten from there in two passes, so it isn't held in memory and the limit doesn't apply to it; the rewritten copy is kept gzip-compressed. Requests for a single version (`/<package>/<version>`) and tarball downloads read the version from the stored copy the same way. `metadata_stream_max_size` (1 GB by default) caps a document streamed either way; one over it isn't stored, and the stored copy, if any, is served instead.
 
 ```yaml
 metadata_max_size: "100MB"          # default

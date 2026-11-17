@@ -41,13 +41,43 @@ func (p *Proxy) serveStoredMetadata(w http.ResponseWriter, r *http.Request, ecos
 // serveMetadataEntry is serveStoredMetadata for entry, a row
 // storedMetadataEntry or streamableMetadata accepted.
 func (p *Proxy) serveMetadataEntry(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, entry *database.MetadataCacheEntry, immutable bool) bool {
+	return p.writeMetadataEntry(w, r, ecosystem, cacheKey, entry, immutable, true)
+}
+
+// relayStoredMetadata answers a ProxyCached request that missed the cache
+// with the document streamed from upstream into storage, and then from
+// storage to the client, so it is never held in memory and
+// metadata_max_size doesn't apply to it. On a 304 from upstream the stored
+// copy is checked against its digest as it streams, the cache row's
+// fetched_at is moved on, and the copy is sent as on a hit.
+//
+// It reports false, having written nothing, when the document could not be
+// stored or opened, and the request should take the buffered path instead.
+func (p *Proxy) relayStoredMetadata(w http.ResponseWriter, r *http.Request, upstreamURL, ecosystem, cacheKey, accept, acceptEncoding string) bool {
+	res := p.storedMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, accept, acceptEncoding, nil, "")
+	if errors.Is(res.err, errMetadataNotStored) {
+		return false
+	}
+	if res.err != nil {
+		p.writeMetadataFetchError(w, res.err)
+		return true
+	}
+	// storedMetadata counted the hit or miss already.
+	return p.writeMetadataEntry(w, r, ecosystem, cacheKey, res.entry, false, false)
+}
+
+// writeMetadataEntry is serveMetadataEntry, counting a cache hit when hit is
+// set.
+func (p *Proxy) writeMetadataEntry(w http.ResponseWriter, r *http.Request, ecosystem, cacheKey string, entry *database.MetadataCacheEntry, immutable, hit bool) bool {
 	body, err := p.openMetadataEntry(r.Context(), ecosystem, cacheKey, entry)
 	if err != nil {
 		return false
 	}
 	defer func() { _ = body.Close() }()
 
-	p.recordStreamedMetadataHit(ecosystem, entry)
+	if hit {
+		p.recordStreamedMetadataHit(ecosystem, entry)
+	}
 
 	cm := p.cachedMetaFor(entry)
 	if immutable {
