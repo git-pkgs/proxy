@@ -25,6 +25,14 @@ func (h *GitHandler) Mirror(ctx context.Context, location, version string) (gitc
 	return h.mirror(ctx, location, version, map[string]bool{}, 0)
 }
 
+// ListsRepository reports whether location, as Mirror takes it, is served
+// by an upstream.git host whose repos list names it. A host without a repos
+// list serves every repository but lists none.
+func (h *GitHandler) ListsRepository(location string) bool {
+	repo, err := h.mirrorRepository(location)
+	return err == nil && len(repo.upstream.Repos) > 0
+}
+
 func (h *GitHandler) mirror(ctx context.Context, location, version string, seen map[string]bool, depth int) (gitcache.MirrorResult, error) {
 	repo, err := h.mirrorRepository(location)
 	if err != nil {

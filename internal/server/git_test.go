@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/cgi"
 	"net/http/httptest"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -186,17 +187,33 @@ func TestGitRouteServesClonesWithUpstreamCredentials(t *testing.T) {
 // TestMirrorAPICachesGitCommit mirrors a pkg:git commit through the mirror
 // API, then clones it through /git while the upstream is down.
 func TestMirrorAPICachesGitCommit(t *testing.T) {
+	mirrorGitThroughAPI(t, nil, func(location, head string) string { return "pkg:git/" + location + "@" + head })
+}
+
+// A generic package whose vcs_url names a repository a repos list allows
+// is mirrored into the git cache like pkg:git.
+func TestMirrorAPICachesGitCommitOfVCSURL(t *testing.T) {
+	mirrorGitThroughAPI(t, []string{"team/*"}, func(location, head string) string {
+		return "pkg:generic/repo@1.0?vcs_url=" + url.QueryEscape("git+http://"+location+".git@"+head)
+	})
+}
+
+// mirrorGitThroughAPI mirrors the commit purl names of a repository of an
+// upstream.git host with repos through the mirror API, then clones it
+// through /git while the upstream is down.
+func mirrorGitThroughAPI(t *testing.T, repos []string, purl func(location, head string) string) {
+	t.Helper()
 	root := t.TempDir()
 	head := newGitTestRepo(t, root, "team/repo")
 	upstream := httptest.NewServer(gitBackend(t, root))
 	defer upstream.Close()
 	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
 		cfg.MirrorAPI = true
-		cfg.Upstream.Git = map[string]config.GitUpstream{"up": {URL: upstream.URL}}
+		cfg.Upstream.Git = map[string]config.GitUpstream{"up": {URL: upstream.URL, Repos: repos}}
 	})
 
 	location := strings.TrimPrefix(upstream.URL, "http://") + "/team/repo"
-	body, err := json.Marshal(map[string][]string{"purls": {"pkg:git/" + location + "@" + head}})
+	body, err := json.Marshal(map[string][]string{"purls": {purl(location, head)}})
 	if err != nil {
 		t.Fatal(err)
 	}

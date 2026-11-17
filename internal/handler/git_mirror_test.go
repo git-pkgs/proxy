@@ -74,6 +74,26 @@ func TestGitMirrorCachesCommitForClones(t *testing.T) {
 	}
 }
 
+// A repository is listed when the upstream.git host serving it names it in
+// a repos list; a host without one serves every repository but lists none.
+func TestGitListsRepository(t *testing.T) {
+	h := NewGitHandler(nil, nil, config.UpstreamConfig{Git: map[string]config.GitUpstream{
+		"github":    {URL: "https://github.com", Repos: []string{"acme/*"}},
+		"bitbucket": {URL: "https://bitbucket.org"},
+	}})
+	for location, want := range map[string]bool{
+		"github.com/acme/widgets":     true,
+		"github.com/actions/checkout": false,
+		"bitbucket.org/acme/widgets":  false,
+		"codeberg.org/acme/widgets":   false,
+		"github.com/acme/../widgets":  false,
+	} {
+		if got := h.ListsRepository(location); got != want {
+			t.Errorf("ListsRepository(%q) = %v, want %v", location, got, want)
+		}
+	}
+}
+
 func TestGitSubmoduleLocation(t *testing.T) {
 	tests := []struct {
 		repoURL, submoduleURL, want string
