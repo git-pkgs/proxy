@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"slices"
 	"sync/atomic"
 	"testing"
 	"time"
@@ -16,12 +17,12 @@ func TestDebRegistryDropsExpiredIndexes(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
 	t.Cleanup(srv.Close)
 	m := &Mirror{}
-	ctx := context.Background()
+	rel := debReleaseInfo{suites: []string{"bookworm"}, components: []string{"main"}}
 
-	if _, _, err := m.debRegistry(ctx, srv.URL+"/old", "bookworm", "amd64"); err != nil {
+	if _, err := m.debRegistry(srv.URL+"/old", "bookworm", "amd64", rel); err != nil {
 		t.Fatal(err)
 	}
-	if _, _, err := m.debRegistry(ctx, srv.URL+"/fresh", "bookworm", "amd64"); err != nil {
+	if _, err := m.debRegistry(srv.URL+"/fresh", "bookworm", "amd64", rel); err != nil {
 		t.Fatal(err)
 	}
 	old := debIndexKey(srv.URL+"/old", "bookworm", "amd64")
@@ -29,7 +30,7 @@ func TestDebRegistryDropsExpiredIndexes(t *testing.T) {
 	idx.fetched = time.Now().Add(-debIndexTTL)
 	m.deb.regs[old] = idx
 
-	if _, _, err := m.debRegistry(ctx, srv.URL+"/new", "bookworm", "amd64"); err != nil {
+	if _, err := m.debRegistry(srv.URL+"/new", "bookworm", "amd64", rel); err != nil {
 		t.Fatal(err)
 	}
 	if _, ok := m.deb.regs[old]; ok {
@@ -57,9 +58,29 @@ func TestDebReleaseAllArch(t *testing.T) {
 	}
 }
 
-// The architecture for Architecture: all packages is read from the Release
-// once per debIndexTTL.
-func TestDebAllArchIsReadOncePerTTL(t *testing.T) {
+func TestDebReleaseComponents(t *testing.T) {
+	tests := map[string][]string{
+		"Codename: bookworm\n": nil,
+		"Components: main contrib non-free-firmware non-free\n": {"main", "contrib", "non-free-firmware", "non-free"},
+		"Components: stable edge test nightly\n":                {"stable", "edge", "test", "nightly"},
+		// debian-security names its components below updates/, and keeps
+		// their indexes where the last part of that names them, as apt
+		// reads them.
+		"Components: updates/main updates/contrib updates/main\n":    {"main", "contrib"},
+		"Components: ../x . main%2f\n":                               nil,
+		"Codename: bookworm\nComponents: main\nArchitectures: all\n": {"main"},
+	}
+	for release, want := range tests {
+		if got := debReleaseComponents(release); !slices.Equal(got, want) {
+			t.Errorf("debReleaseComponents(%q) = %q, want %q", release, got, want)
+		}
+	}
+}
+
+// An archive's Releases are read once per debIndexTTL, for the suites it
+// serves, their components and the architecture for Architecture: all
+// packages.
+func TestDebReleaseIsReadOncePerTTL(t *testing.T) {
 	var reads atomic.Int32
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/dists/jammy/InRelease" {
@@ -67,28 +88,99 @@ func TestDebAllArchIsReadOncePerTTL(t *testing.T) {
 			return
 		}
 		reads.Add(1)
-		_, _ = io.WriteString(w, "Architectures: arm64\n")
+		_, _ = io.WriteString(w, "Architectures: arm64\nComponents: stable\n")
 	}))
 	t.Cleanup(srv.Close)
 	m := &Mirror{}
 	ctx := context.Background()
+	want := debReleaseInfo{suites: []string{"jammy"}, components: []string{"stable"}, allArch: "arm64"}
 
 	for range 2 {
-		if arch, err := m.debAllArch(ctx, srv.URL, "jammy"); err != nil || arch != "arm64" {
-			t.Fatalf("debAllArch = %q, %v; want arm64", arch, err)
+		rel, err := m.debReleaseInfo(ctx, srv.URL, "jammy")
+		if err != nil || !slices.Equal(rel.suites, want.suites) || !slices.Equal(rel.components, want.components) || rel.allArch != want.allArch {
+			t.Fatalf("debReleaseInfo = %+v, %v; want %+v", rel, err, want)
 		}
 	}
 	if got := reads.Load(); got != 1 {
 		t.Errorf("InRelease read %d times, want once", got)
 	}
 	key := srv.URL + "\x00jammy"
-	a := m.deb.allArchs[key]
-	a.fetched = time.Now().Add(-debIndexTTL)
-	m.deb.allArchs[key] = a
-	if _, err := m.debAllArch(ctx, srv.URL, "jammy"); err != nil {
+	rel := m.deb.releases[key]
+	rel.fetched = time.Now().Add(-debIndexTTL)
+	m.deb.releases[key] = rel
+	if _, err := m.debReleaseInfo(ctx, srv.URL, "jammy"); err != nil {
 		t.Fatal(err)
 	}
 	if got := reads.Load(); got != 2 {
 		t.Errorf("InRelease read %d times after the TTL, want twice", got)
+	}
+}
+
+// A suite whose Release lists no components is read for the usual ones,
+// and one without amd64 among its architectures for the first it lists.
+func TestDebReleaseDefaults(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/dists/jammy/Release" {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, "Codename: jammy\n")
+	}))
+	t.Cleanup(srv.Close)
+	rel, err := (&Mirror{}).debReleaseInfo(context.Background(), srv.URL, "jammy")
+	if err != nil || !slices.Equal(rel.components, debComponents) || rel.allArch != "amd64" {
+		t.Errorf("debReleaseInfo = %+v, %v; want the default components and amd64", rel, err)
+	}
+}
+
+// The components of all served suites are read, each once, and the
+// architecture for Architecture: all packages is the release's own.
+func TestDebReleaseOfSeveralSuites(t *testing.T) {
+	releases := map[string]string{
+		"/dists/jammy/InRelease":         "Architectures: arm64 armhf\nComponents: stable\n",
+		"/dists/jammy-updates/InRelease": "Architectures: armhf\nComponents: stable test\n",
+	}
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		body, ok := releases[r.URL.Path]
+		if !ok {
+			http.NotFound(w, r)
+			return
+		}
+		_, _ = io.WriteString(w, body)
+	}))
+	t.Cleanup(srv.Close)
+	rel, err := (&Mirror{}).debReleaseInfo(context.Background(), srv.URL, "jammy")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !slices.Equal(rel.suites, []string{"jammy", "jammy-updates"}) || !slices.Equal(rel.components, []string{"stable", "test"}) || rel.allArch != "arm64" {
+		t.Errorf("debReleaseInfo = %+v; want jammy and jammy-updates, stable and test, arm64", rel)
+	}
+}
+
+// Reading a release's Releases drops those read past debIndexTTL.
+func TestDebReleaseInfoDropsExpiredEntries(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(http.ResponseWriter, *http.Request) {}))
+	t.Cleanup(srv.Close)
+	m := &Mirror{}
+	ctx := context.Background()
+	for _, root := range []string{"/old", "/fresh"} {
+		if _, err := m.debReleaseInfo(ctx, srv.URL+root, "bookworm"); err != nil {
+			t.Fatal(err)
+		}
+	}
+	old := srv.URL + "/old\x00bookworm"
+	rel := m.deb.releases[old]
+	rel.fetched = time.Now().Add(-debIndexTTL)
+	m.deb.releases[old] = rel
+
+	if _, err := m.debReleaseInfo(ctx, srv.URL+"/new", "bookworm"); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := m.deb.releases[old]; ok {
+		t.Error("expired entry kept")
+	}
+	if _, ok := m.deb.releases[srv.URL+"/fresh\x00bookworm"]; !ok {
+		t.Error("entry within its TTL dropped")
 	}
 }

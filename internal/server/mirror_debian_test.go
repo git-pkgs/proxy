@@ -34,11 +34,15 @@ type debUpstream struct {
 	// list, the first of which holds Architecture: all packages. An
 	// archive not in it lists none and holds them in binary-amd64.
 	architectures map[string][]string
+	// components, by archive root, is the component its packages are in,
+	// which its Releases list. An archive not in it keeps them in main and
+	// lists no components.
+	components map[string]string
 }
 
 func newDebUpstream(t *testing.T) *debUpstream {
 	t.Helper()
-	u := &debUpstream{files: map[string]string{}, hits: map[string]int{}, fail: map[string]int{}, architectures: map[string][]string{}}
+	u := &debUpstream{files: map[string]string{}, hits: map[string]int{}, fail: map[string]int{}, architectures: map[string][]string{}, components: map[string]string{}}
 	u.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u.mu.Lock()
 		body, ok := u.files[r.URL.Path]
@@ -76,7 +80,11 @@ func (u *debUpstream) addSuite(root, suite, codename string, pkgs ...debPackage)
 				arch = archs[0]
 			}
 		}
-		dir := "main/binary-" + arch
+		component := "main"
+		if c := u.components[root]; c != "" {
+			component = c
+		}
+		dir := component + "/binary-" + arch
 		if indexes[dir] == nil {
 			indexes[dir] = &strings.Builder{}
 		}
@@ -92,6 +100,9 @@ func (u *debUpstream) addSuite(root, suite, codename string, pkgs ...debPackage)
 	release := "Codename: " + codename + "\n"
 	if archs := u.architectures[root]; len(archs) > 0 {
 		release += "Architectures: " + strings.Join(archs, " ") + "\n"
+	}
+	if c := u.components[root]; c != "" {
+		release += "Components: " + c + "\n"
 	}
 	release += "SHA256:\n"
 	for _, dir := range dirs {
@@ -297,5 +308,46 @@ func TestMirrorDebianArchitectureAllOnAPortsArchive(t *testing.T) {
 	}
 	if got := upstream.hitsFor("/ports/dists/jammy/main/binary-amd64/Packages"); got != 0 {
 		t.Errorf("binary-amd64 read %d times, want none", got)
+	}
+}
+
+// A package in a component the archive's Release lists, such as the stable
+// of Docker's apt repository, is found there.
+func TestMirrorDebianReadsTheComponentsTheReleaseLists(t *testing.T) {
+	upstream := newDebUpstream(t)
+	upstream.components["/docker"] = "stable"
+	upstream.addSuite("/docker", "bookworm", "bookworm",
+		debPackage{"docker-ce", "5:27.3.1-1~debian.12~bookworm", "amd64", "pool/stable/d/docker-ce/docker-ce_27.3.1-1~debian.12~bookworm_amd64.deb", "docker-ce"},
+	)
+	cfg := config.Default()
+	cfg.Upstream.DebianRepositories = map[string]string{"docker": upstream.URL + "/docker"}
+
+	progress, _ := mirrorWithConfig(t, cfg, "pkg:deb/docker/docker-ce@5:27.3.1-1~debian.12~bookworm?arch=amd64&distro=debian-12")
+	if progress.Completed != 1 || progress.Failed != 0 {
+		t.Fatalf("completed = %d, failed = %d, errors = %v", progress.Completed, progress.Failed, progress.Errors)
+	}
+	if got := upstream.hitsFor("/docker/dists/bookworm/main/binary-amd64/Packages"); got != 0 {
+		t.Errorf("main read %d times, want none: the Release doesn't list it", got)
+	}
+}
+
+// The Release of a suite is read once for the suites, components and the
+// architecture of Architecture: all packages, and once more by the index
+// reader that checks the indexes against it.
+func TestMirrorDebianReadsEachReleaseOnce(t *testing.T) {
+	upstream := newDebUpstream(t)
+	upstream.architectures["/ports"] = []string{"arm64", "armhf"}
+	upstream.addSuite("/ports", "jammy", "jammy",
+		debPackage{"tzdata", "2024a-0ubuntu0.22.04", "all", "pool/main/t/tzdata/tzdata_2024a-0ubuntu0.22.04_all.deb", "tzdata"},
+	)
+	cfg := config.Default()
+	cfg.Upstream.DebianRepositories = map[string]string{"ports": upstream.URL + "/ports"}
+
+	progress, _ := mirrorWithConfig(t, cfg, "pkg:deb/ports/tzdata@2024a-0ubuntu0.22.04?arch=all&distro=ubuntu-22.04")
+	if progress.Completed != 1 || progress.Failed != 0 {
+		t.Fatalf("completed = %d, failed = %d, errors = %v", progress.Completed, progress.Failed, progress.Errors)
+	}
+	if got := upstream.hitsFor("/ports/dists/jammy/Release"); got != 2 {
+		t.Errorf("Release read %d times, want 2", got)
 	}
 }

@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"maps"
-	"net/http"
 	"net/url"
 	"regexp"
 	"slices"
@@ -28,8 +27,10 @@ var (
 	debCodenamePattern = regexp.MustCompile(`^[a-z]+$`)
 	// debArchPattern matches an architecture, such as amd64 or the ports'
 	// hurd-amd64.
-	debArchPattern  = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
-	debEpochPattern = regexp.MustCompile(`^\d+$`)
+	debArchPattern = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	// debComponentPattern matches the components read from a Release.
+	debComponentPattern = regexp.MustCompile(`^[a-z0-9][a-z0-9.+_-]*$`)
+	debEpochPattern     = regexp.MustCompile(`^\d+$`)
 
 	// debCodenames are the codenames of the Debian and Ubuntu releases,
 	// which their suites are named after. Other releases can be given by
@@ -48,7 +49,8 @@ var (
 	// has; Debian keeps security updates in an archive of its own.
 	debSuffixes = []string{"", "-updates", "-security"}
 
-	// debComponents are read where a suite's Release lists them.
+	// debComponents are read where no Release of a release lists its
+	// components.
 	debComponents = []string{"main", "contrib", "non-free", "non-free-firmware", "restricted", "universe", "multiverse"}
 )
 
@@ -57,20 +59,22 @@ var (
 type debIndexes struct {
 	mu   sync.Mutex
 	regs map[string]debIndex
-	// allArchs are the architectures whose index is read for Architecture:
-	// all packages, by archive and release.
-	allArchs map[string]debAllArch
+	// releases are what the Releases of a release's suites give, by
+	// archive and release.
+	releases map[string]debReleaseInfo
 }
 
-type debAllArch struct {
-	arch    string
-	fetched time.Time
+// debReleaseInfo is what the Releases of a release's suites give: the suites
+// the archive serves, the components they list, and the architecture whose
+// index is read for Architecture: all packages.
+type debReleaseInfo struct {
+	suites, components []string
+	allArch            string
+	fetched            time.Time
 }
 
 type debIndex struct {
-	reg registries.Registry
-	// suites are the suites of the release the archive serves.
-	suites  []string
+	reg     registries.Registry
 	fetched time.Time
 }
 
@@ -164,19 +168,20 @@ func debSplitEpoch(version string) (epoch, rest string) {
 // given, picks the epoch; without it, versions that differ only in their
 // epoch are refused rather than one picked.
 func (m *Mirror) debArtifact(ctx context.Context, archiveURL, codename, arch, name, version, epoch string) (registries.Artifact, error) {
-	// Architecture: all packages are in every binary-<arch> index.
-	indexArch := arch
-	if arch == "all" {
-		var err error
-		if indexArch, err = m.debAllArch(ctx, archiveURL, codename); err != nil {
-			return registries.Artifact{}, err
-		}
-	}
-	reg, suites, err := m.debRegistry(ctx, archiveURL, codename, indexArch)
+	rel, err := m.debReleaseInfo(ctx, archiveURL, codename)
 	if err != nil {
 		return registries.Artifact{}, err
 	}
-	notIn := fmt.Errorf("%s %s isn't in %s of %s for %s", name, version, strings.Join(suites, ", "), archiveURL, arch)
+	// Architecture: all packages are in every binary-<arch> index.
+	indexArch := arch
+	if arch == "all" {
+		indexArch = rel.allArch
+	}
+	reg, err := m.debRegistry(archiveURL, codename, indexArch, rel)
+	if err != nil {
+		return registries.Artifact{}, err
+	}
+	notIn := fmt.Errorf("%s %s isn't in %s of %s for %s", name, version, strings.Join(rel.suites, ", "), archiveURL, arch)
 	versions, err := reg.FetchVersions(ctx, name)
 	if isNotFound(err) {
 		return registries.Artifact{}, notIn
@@ -221,36 +226,76 @@ func debEpoch(epoch string) string {
 	return epoch
 }
 
-// debAllArch returns the architecture whose index is read for
-// Architecture: all packages of release codename: amd64 where the archive's
-// Release lists it or lists none, and otherwise the first it lists, as a
-// ports archive has no amd64.
-func (m *Mirror) debAllArch(ctx context.Context, archiveURL, codename string) (string, error) {
+// debReleaseInfo returns what the Releases of the suites of release codename
+// give, reading each suite's once per debIndexTTL: the suites the archive
+// serves, the components they list, or debComponents where none lists any,
+// and the architecture for Architecture: all packages, from the first
+// served suite's Release.
+func (m *Mirror) debReleaseInfo(ctx context.Context, archiveURL, codename string) (debReleaseInfo, error) {
 	key := archiveURL + "\x00" + codename
 	m.deb.mu.Lock()
 	defer m.deb.mu.Unlock()
-	if a, ok := m.deb.allArchs[key]; ok && time.Since(a.fetched) < debIndexTTL {
-		return a.arch, nil
+	if rel, ok := m.deb.releases[key]; ok && time.Since(rel.fetched) < debIndexTTL {
+		return rel, nil
 	}
 	r, _ := m.Versions.(RegistryVersions)
 	client := r.client()
-	arch := "amd64"
-	for _, file := range []string{"InRelease", "Release"} {
-		body, err := client.GetBody(ctx, archiveURL+"/dists/"+codename+"/"+file)
-		if isNotFound(err) {
+	var rel debReleaseInfo
+	for _, suffix := range debSuffixes {
+		suite := codename + suffix
+		body, served, err := debReleaseFile(ctx, client, archiveURL, suite)
+		if err != nil {
+			return debReleaseInfo{}, fmt.Errorf("checking %s for suite %s: %w", archiveURL, suite, err)
+		}
+		if !served {
 			continue
 		}
-		if err != nil {
-			return "", fmt.Errorf("reading the %s of %s: %w", file, codename, err)
+		if rel.suites == nil {
+			rel.allArch = debReleaseAllArch(body)
 		}
-		arch = debReleaseAllArch(string(body))
-		break
+		rel.suites = append(rel.suites, suite)
+		for _, c := range debReleaseComponents(body) {
+			if !slices.Contains(rel.components, c) {
+				rel.components = append(rel.components, c)
+			}
+		}
 	}
-	if m.deb.allArchs == nil {
-		m.deb.allArchs = map[string]debAllArch{}
+	if len(rel.suites) == 0 {
+		return debReleaseInfo{}, fmt.Errorf("%s serves no suite of %s", archiveURL, codename)
 	}
-	m.deb.allArchs[key] = debAllArch{arch: arch, fetched: time.Now()}
-	return arch, nil
+	if rel.components == nil {
+		rel.components = debComponents
+	}
+	rel.fetched = time.Now()
+	if m.deb.releases == nil {
+		m.deb.releases = map[string]debReleaseInfo{}
+	}
+	maps.DeleteFunc(m.deb.releases, func(_ string, rel debReleaseInfo) bool { return time.Since(rel.fetched) >= debIndexTTL })
+	m.deb.releases[key] = rel
+	return rel, nil
+}
+
+// debReleaseComponents returns the components a Release lists. A
+// component below a directory, as debian-security lists updates/main, is
+// read where its last part names it, as apt reads it.
+func debReleaseComponents(release string) []string {
+	var components []string
+	for line := range strings.Lines(release) {
+		value, ok := strings.CutPrefix(line, "Components:")
+		if !ok {
+			continue
+		}
+		for _, c := range strings.Fields(value) {
+			parts := strings.Split(c, "/")
+			if slices.ContainsFunc(parts, func(p string) bool { return !debComponentPattern.MatchString(p) }) {
+				continue
+			}
+			if c = parts[len(parts)-1]; !slices.Contains(components, c) {
+				components = append(components, c)
+			}
+		}
+	}
+	return components
 }
 
 // debReleaseAllArch picks the architecture for Architecture: all packages
@@ -278,40 +323,25 @@ func debIndexKey(archiveURL, codename, arch string) string {
 	return archiveURL + "\x00" + codename + "\x00" + arch
 }
 
-// debRegistry returns the client for the binary-arch indexes of the suites
-// of release codename that the archive serves, reusing it, and the indexes it read, for
-// debIndexTTL. It also returns the suites.
-func (m *Mirror) debRegistry(ctx context.Context, archiveURL, codename, arch string) (registries.Registry, []string, error) { //nolint:ireturn // registries.New returns the interface
+// debRegistry returns the client for the binary-arch indexes of the
+// components of the suites of release codename that rel names, reusing it,
+// and the indexes it read, for debIndexTTL.
+func (m *Mirror) debRegistry(archiveURL, codename, arch string, rel debReleaseInfo) (registries.Registry, error) { //nolint:ireturn // registries.New returns the interface
 	key := debIndexKey(archiveURL, codename, arch)
 	m.deb.mu.Lock()
 	defer m.deb.mu.Unlock()
 	if idx, ok := m.deb.regs[key]; ok && time.Since(idx.fetched) < debIndexTTL {
-		return idx.reg, idx.suites, nil
+		return idx.reg, nil
 	}
 	r, _ := m.Versions.(RegistryVersions)
-	client := r.client()
-	var suites []string
-	for _, suffix := range debSuffixes {
-		suite := codename + suffix
-		served, err := debSuiteServed(ctx, client, archiveURL, suite)
-		if err != nil {
-			return nil, nil, fmt.Errorf("checking %s for suite %s: %w", archiveURL, suite, err)
-		}
-		if served {
-			suites = append(suites, suite)
-		}
-	}
-	if len(suites) == 0 {
-		return nil, nil, fmt.Errorf("%s serves no suite of %s", archiveURL, codename)
-	}
 	query := url.Values{
-		"suites":        {strings.Join(suites, ",")},
-		"components":    {strings.Join(debComponents, ",")},
+		"suites":        {strings.Join(rel.suites, ",")},
+		"components":    {strings.Join(rel.components, ",")},
 		"architectures": {arch},
 	}
-	reg, err := registries.New("deb", archiveURL+"?"+query.Encode(), client)
+	reg, err := registries.New("deb", archiveURL+"?"+query.Encode(), r.client())
 	if err != nil {
-		return nil, nil, err
+		return nil, err
 	}
 	if m.deb.regs == nil {
 		m.deb.regs = map[string]debIndex{}
@@ -319,26 +349,25 @@ func (m *Mirror) debRegistry(ctx context.Context, archiveURL, codename, arch str
 	// Indexes no longer asked for are dropped, rather than kept for the
 	// Mirror's life.
 	maps.DeleteFunc(m.deb.regs, func(_ string, idx debIndex) bool { return time.Since(idx.fetched) >= debIndexTTL })
-	m.deb.regs[key] = debIndex{reg: reg, suites: suites, fetched: time.Now()}
-	return reg, suites, nil
+	m.deb.regs[key] = debIndex{reg: reg, fetched: time.Now()}
+	return reg, nil
 }
 
-// debSuiteServed reports whether the archive serves suite, by its InRelease
-// or Release file. An answer other than the file or 404 is an error, so a
-// failing archive doesn't leave a suite out for debIndexTTL.
-func debSuiteServed(ctx context.Context, client *registries.Client, archiveURL, suite string) (bool, error) {
+// debReleaseFile returns the InRelease or Release of suite, and whether
+// the archive serves one. An answer other than the file or 404 is an error,
+// so a failing archive doesn't leave a suite out for debIndexTTL.
+func debReleaseFile(ctx context.Context, client *registries.Client, archiveURL, suite string) (string, bool, error) {
 	for _, file := range []string{"InRelease", "Release"} {
-		status, err := client.Head(ctx, archiveURL+"/dists/"+suite+"/"+file)
-		switch {
-		case err != nil:
-			return false, err
-		case status == http.StatusOK:
-			return true, nil
-		case status != http.StatusNotFound:
-			return false, fmt.Errorf("%s/dists/%s/%s: status %d", archiveURL, suite, file, status)
+		body, err := client.GetBody(ctx, archiveURL+"/dists/"+suite+"/"+file)
+		if isNotFound(err) {
+			continue
 		}
+		if err != nil {
+			return "", false, err
+		}
+		return string(body), true, nil
 	}
-	return false, nil
+	return "", false, nil
 }
 
 // forget drops the client for key, so indexes that failed to load are read
