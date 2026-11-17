@@ -3,12 +3,15 @@ package gitcache
 import (
 	"context"
 	"errors"
-	"io"
 	"io/fs"
 	"os"
 	"path/filepath"
 	"time"
 )
+
+// midxName names the serving index maintenance writes in objects/pack,
+// with reachability bitmaps beside it.
+const midxName = "multi-pack-index"
 
 // maintainTimeout bounds one maintenance run, so a repository whose indexes
 // cannot be written, on a full disk say, holds neither its write slot nor
@@ -62,15 +65,12 @@ func (c *Cache) scheduleMaintain(rp *repo) {
 	}()
 }
 
-// maintain writes the indexes a repository is served from: a multi-pack
+// maintain writes the index a repository is served from: a multi-pack
 // index with reachability bitmaps, which turn the object enumeration at
 // the head of every clone from a walk of the whole history into bitmap
 // lookups. Packs are never rewritten, so a run costs no more than reading
-// them. The indexes are read back afterward, so that a filesystem that does not keep them in
-// the page cache, a network mount or a freshly booted machine say, does
-// not have the next fetch pay for that reading. It runs in the background:
-// requests are never held for it, and neither are fetches for longer than
-// one run.
+// them. It runs in the background: requests are never held for it, and
+// neither are fetches for longer than one run.
 func (c *Cache) maintain(rp *repo) {
 	// The repository may have been evicted since it asked for maintenance;
 	// the one to maintain is whatever is cached under its key now.
@@ -115,82 +115,6 @@ func (c *Cache) maintain(rp *repo) {
 		return
 	}
 	rp.maintainedAt.Store(rp.refsWritten.Load())
-	c.preloadIndexes(ctx, rp.dir)
-	c.logger.Debug("git cache: read the serving indexes into the page cache", "repository", rp.key)
-}
-
-// preloadIndexes reads the serving indexes of the repository at dir
-// sequentially, which brings them into the page cache, so that the next
-// fetch is not the one to pay for reading them.
-func (c *Cache) preloadIndexes(ctx context.Context, dir string) {
-	for _, path := range servingIndexes(dir) {
-		if ctx.Err() != nil {
-			return
-		}
-		// The file can vanish, evicted say, between it being listed and
-		// opened, or something else take its place, which would not read
-		// like a file; nothing is served from it anymore, so skip it.
-		file, err := os.Open(path)
-		if err != nil {
-			continue
-		}
-		if info, err := file.Stat(); err != nil || !info.Mode().IsRegular() {
-			_ = file.Close()
-			continue
-		}
-		_, err = io.Copy(io.Discard, file)
-		_ = file.Close()
-		if err != nil {
-			c.logger.Warn("git cache: reading a serving index", "path", path, "error", err)
-		}
-	}
-}
-
-// preloadCached starts reading the serving indexes of the cached
-// repositories into the page cache, in the background, once at startup.
-// Close stops it and waits for it.
-func (c *Cache) preloadCached() {
-	c.mu.Lock()
-	if c.closed {
-		c.mu.Unlock()
-		return
-	}
-	var rps []*repo
-	for _, rp := range c.repos {
-		rps = append(rps, rp)
-	}
-	if len(rps) == 0 {
-		c.mu.Unlock()
-		return
-	}
-	// Matches a maintenance run: Close waits for the reading, and it
-	// cannot start once Close has begun.
-	c.refreshes.Add(1)
-	c.mu.Unlock()
-	c.logger.Info("git cache: reading the serving indexes of the cached repositories into the page cache",
-		"repositories", len(rps))
-	go func() {
-		defer c.refreshes.Done()
-		for _, rp := range rps {
-			if c.ctx.Err() != nil {
-				return
-			}
-			c.preloadIndexes(c.ctx, rp.dir)
-		}
-	}()
-}
-
-// servingIndexes returns the index files a repository at dir is served
-// from, that exist: the multi-pack index, with its reachability bitmaps
-// and reverse indexes beside it.
-func servingIndexes(dir string) []string {
-	packDir := filepath.Join(dir, "objects", "pack")
-	var paths []string
-	for _, pattern := range []string{midxName, midxName + "-*.bitmap", midxName + "-*.rev"} {
-		matches, _ := filepath.Glob(filepath.Join(packDir, pattern))
-		paths = append(paths, matches...)
-	}
-	return paths
 }
 
 // bitmapDue reports whether the repository's multi-pack index and its

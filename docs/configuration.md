@@ -856,13 +856,13 @@ upstream:
       repos: ["mediawiki/core", "mediawiki/extensions/**"]  # optional allowlist
 
 git:
-  cache_dir: /data/git       # local disk, used by this process only
-  max_size: 50GB             # evict least recently used repositories past this
-  max_repo_size: 5GB         # refuse a repository that grows past this
-  refresh_wait: 5s           # then serve the cached copy if the upstream check is slow
-  stale_max_age: 24h         # never serve a copy not checked for this long
-  warm_max_idle: 30d         # keep checking repositories used within this
-  maintenance_interval: 1h   # how often the reachability bitmaps are rewritten, or "off"
+  cache_dir: /data/git   # local disk, used by this process only
+  max_size: 50GB         # evict least recently used repositories past this
+  max_repo_size: 5GB     # refuse a repository that grows past this
+  refresh_wait: 5s       # then serve the cached copy if the upstream check is slow
+  stale_max_age: 24h     # never serve a copy not checked for this long
+  warm_max_idle: 30d     # keep checking repositories used within this
+  maintenance_interval: 1h # how often the reachability bitmaps are rewritten, or "off"
 ```
 
 Clients reach the proxy through Git's `insteadOf` setting, which rewrites the

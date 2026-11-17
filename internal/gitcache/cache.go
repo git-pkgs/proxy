@@ -48,11 +48,8 @@ const (
 	checkedStamp        = "proxy-checked"
 	// urlFile holds the upstream URL the last successful refresh used, for
 	// background refreshes.
-	urlFile   = "proxy-url"
-	usedStamp = "proxy-used"
-	// midxName names the serving index maintenance writes in objects/pack,
-	// with reachability bitmaps beside it.
-	midxName            = "multi-pack-index"
+	urlFile             = "proxy-url"
+	usedStamp           = "proxy-used"
 	dirPermissions      = 0o750
 	lockFilePermissions = 0o600
 )
@@ -64,15 +61,11 @@ type Options struct {
 	MaxRepoSize int64
 	RefreshWait time.Duration
 	StaleMaxAge time.Duration
-	// Maintenance turns on the serving indexes kept for each repository
-	// after every fetch that changes it: a multi-pack index with
-	// reachability bitmaps, which turn the object
-	// enumeration of a clone from a walk of the whole history into bitmap
-	// lookups. The indexes are rebuilt from the packs, so they are not
-	// counted in MaxSize or MaxRepoSize. At startup the indexes of the
-	// repositories already cached are read once, so a filesystem that does
-	// not keep them in the page cache does not have the first fetch pay
-	// for them.
+	// Maintenance turns on the serving index kept for each repository after
+	// the fetches that change it: a multi-pack index with reachability
+	// bitmaps, which turn the object enumeration of a clone from a walk of
+	// the whole history into bitmap lookups. It is rebuilt from the packs,
+	// so it is not counted in MaxSize or MaxRepoSize.
 	Maintenance bool
 	// MaintenanceInterval is the least time between the bitmap writes of
 	// one repository, which walk all of its objects. Zero rewrites them
@@ -321,9 +314,6 @@ func New(opts Options) (*Cache, error) {
 	c.ctx, c.cancel = context.WithCancel(context.Background())
 	// Applies a lowered git.max_size straight away.
 	c.evict()
-	if c.opts.Maintenance {
-		c.preloadCached()
-	}
 	return c, nil
 }
 
