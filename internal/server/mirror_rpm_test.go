@@ -223,3 +223,24 @@ func TestMirrorRPMRefusesWhatItCantFind(t *testing.T) {
 		})
 	}
 }
+
+// A repository that isn't there is asked for once, not once per package.
+func TestMirrorRPMRemembersAMissingRepository(t *testing.T) {
+	upstream := newRPMUpstream(t)
+	upstream.addRepository(t, "9/BaseOS/x86_64/os",
+		rpmPackage{"bash", "0", "5.1.8", "9.el9", "x86_64", "rocky bash", ""},
+		rpmPackage{"curl", "0", "7.76.1", "29.el9", "x86_64", "rocky curl", ""},
+	)
+	cfg := rpmMirrorConfig(upstream)
+	cfg.Upstream.RPMRepositoryPaths = []string{"{major}/AppStream/{arch}/os", "{major}/BaseOS/{arch}/os"}
+
+	progress, _ := mirrorWithConfig(t, cfg,
+		"pkg:rpm/rocky/bash@5.1.8-9.el9?arch=x86_64&distro=rocky-9.4",
+		"pkg:rpm/rocky/curl@7.76.1-29.el9?arch=x86_64&distro=rocky-9.4")
+	if progress.Completed != 2 || progress.Failed != 0 {
+		t.Fatalf("completed = %d, failed = %d, errors = %v", progress.Completed, progress.Failed, progress.Errors)
+	}
+	if got := upstream.hitsFor("/9/AppStream/x86_64/os/repodata/repomd.xml"); got != 1 {
+		t.Errorf("missing repository asked for %d times, want once", got)
+	}
+}

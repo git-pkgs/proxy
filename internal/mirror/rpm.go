@@ -2,7 +2,9 @@ package mirror
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"maps"
 	"net/url"
 	"path"
 	"regexp"
@@ -43,6 +45,7 @@ type rpmIndexes struct {
 }
 
 type rpmIndex struct {
+	// reg is nil for a repository upstream answered 404 for.
 	reg     registries.Registry
 	fetched time.Time
 }
@@ -118,7 +121,17 @@ func (m *Mirror) rpmArtifact(ctx context.Context, upstreamURL string, dirs []str
 		if err != nil {
 			return registries.Artifact{}, err
 		}
+		if reg == nil {
+			continue
+		}
 		versions, err := reg.FetchVersions(ctx, name)
+		var httpErr *registries.HTTPError
+		if errors.As(err, &httpErr) && httpErr.IsNotFound() {
+			// The repository isn't there, which is kept for rpmIndexTTL
+			// rather than asked again for each package.
+			m.rpm.missing(repoURL)
+			continue
+		}
 		if isNotFound(err) {
 			continue
 		}
@@ -126,22 +139,7 @@ func (m *Mirror) rpmArtifact(ctx context.Context, upstreamURL string, dirs []str
 			m.rpm.forget(repoURL)
 			return registries.Artifact{}, fmt.Errorf("reading %s/repodata: %w", repoURL, err)
 		}
-		var found registries.Artifact
-		var epochs []string
-		for _, v := range versions {
-			if v.Number != version {
-				continue
-			}
-			for _, a := range v.Artifacts {
-				e := rpmEpoch(a)
-				if (a.Metadata["arch"] == arch || a.Metadata["arch"] == "noarch") && (epoch == "" || e == epoch) {
-					if !slices.Contains(epochs, e) {
-						epochs = append(epochs, e)
-					}
-					found = a
-				}
-			}
-		}
+		found, epochs := rpmMatch(versions, arch, version, epoch)
 		switch {
 		case len(epochs) > 1:
 			return registries.Artifact{}, fmt.Errorf("%s %s has epochs %s in %s; give one in the epoch qualifier",
@@ -153,6 +151,28 @@ func (m *Mirror) rpmArtifact(ctx context.Context, upstreamURL string, dirs []str
 	return registries.Artifact{}, fmt.Errorf("%s %s isn't in %s below %s for %s", name, version, strings.Join(dirs, " or "), upstreamURL, arch)
 }
 
+// rpmMatch returns a file of versions for arch whose version-release is
+// version, and the epochs of those files, of epoch alone when it is given.
+func rpmMatch(versions []registries.Version, arch, version, epoch string) (registries.Artifact, []string) {
+	var found registries.Artifact
+	var epochs []string
+	for _, v := range versions {
+		if v.Number != version {
+			continue
+		}
+		for _, a := range v.Artifacts {
+			e := rpmEpoch(a)
+			if (a.Metadata["arch"] == arch || a.Metadata["arch"] == "noarch") && (epoch == "" || e == epoch) {
+				if !slices.Contains(epochs, e) {
+					epochs = append(epochs, e)
+				}
+				found = a
+			}
+		}
+	}
+	return found, epochs
+}
+
 // rpmEpoch returns the epoch of a, 0 when it records none.
 func rpmEpoch(a registries.Artifact) string {
 	if e, _ := a.Metadata["epoch"].(string); e != "" {
@@ -162,7 +182,8 @@ func rpmEpoch(a registries.Artifact) string {
 }
 
 // rpmRegistry returns the client for the repository at repoURL, reusing it,
-// and the metadata it read, for rpmIndexTTL.
+// and the metadata it read, for rpmIndexTTL. It returns nil for a
+// repository recorded as missing.
 func (m *Mirror) rpmRegistry(repoURL, distro string) (registries.Registry, error) { //nolint:ireturn // registries.New returns the interface
 	m.rpm.mu.Lock()
 	defer m.rpm.mu.Unlock()
@@ -174,11 +195,26 @@ func (m *Mirror) rpmRegistry(repoURL, distro string) (registries.Registry, error
 	if err != nil {
 		return nil, err
 	}
-	if m.rpm.regs == nil {
-		m.rpm.regs = map[string]rpmIndex{}
-	}
-	m.rpm.regs[repoURL] = rpmIndex{reg: reg, fetched: time.Now()}
+	m.rpm.store(repoURL, reg)
 	return reg, nil
+}
+
+// store keeps reg for repoURL, dropping the clients past rpmIndexTTL, so
+// indexes no longer asked for aren't kept for the Mirror's life. The
+// caller holds r.mu.
+func (r *rpmIndexes) store(repoURL string, reg registries.Registry) {
+	if r.regs == nil {
+		r.regs = map[string]rpmIndex{}
+	}
+	maps.DeleteFunc(r.regs, func(_ string, idx rpmIndex) bool { return time.Since(idx.fetched) >= rpmIndexTTL })
+	r.regs[repoURL] = rpmIndex{reg: reg, fetched: time.Now()}
+}
+
+// missing records that the repository at repoURL isn't there.
+func (r *rpmIndexes) missing(repoURL string) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	r.store(repoURL, nil)
 }
 
 // forget drops the client for repoURL, so metadata that failed to load is
