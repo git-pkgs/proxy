@@ -392,10 +392,10 @@ func (p terraformProvider) packageName() string {
 }
 
 // purls returns the package and version PURLs a provider's archives are
-// cached under: pkg:terraform/{namespace}/{type}, the type drafted in
-// package-url/purl-spec#889. The PURL leaves the registry out, so a provider
-// is one package on every registry and a denylist entry covers all of them;
-// archiveFilename keeps the registries' archives apart.
+// cached under: pkg:terraform/{namespace}/{type}. The PURL leaves the
+// registry out, so a provider is one package on every registry and a
+// denylist entry covers all of them; archiveFilename keeps the registries'
+// archives apart.
 func (p terraformProvider) purls(version string) (pkgPURL, versionPURL string) {
 	pkg := purl.New(terraformEcosystem, p.namespace, p.name, "", nil)
 	return pkg.String(), pkg.WithVersion(version).String()
