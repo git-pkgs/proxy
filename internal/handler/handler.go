@@ -2110,6 +2110,14 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		return meta, nil
 	}
 
+	// A Terraform module registry may answer a download with the location
+	// in a header, usually with no content, which Terraform reads before
+	// the body. It is stored as the JSON document other registries answer
+	// with.
+	if location := resp.Header.Get(headerTerraformGet); location != "" && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent) {
+		return &upstreamMetadata{body: terraformModuleDownloadDocument(location), contentType: contentTypeJSON, url: upstreamURL}, nil
+	}
+
 	if err := upstreamMetadataStatus(resp); err != nil {
 		return nil, err
 	}

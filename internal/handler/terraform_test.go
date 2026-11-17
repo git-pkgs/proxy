@@ -31,8 +31,9 @@ type fakeTerraformRegistry struct {
 	files *httptest.Server
 
 	available atomic.Bool
-	// providersPath is the providers.v1 entry of service discovery.
-	providersPath string
+	// providersPath is the providers.v1 entry of service discovery, and
+	// modulesPath the modules.v1 one.
+	providersPath, modulesPath string
 	// archive is the content of every provider archive it serves, and
 	// shasum the checksum the download documents give for it.
 	archive string
@@ -44,7 +45,7 @@ type fakeTerraformRegistry struct {
 
 func newFakeTerraformRegistry(t *testing.T) *fakeTerraformRegistry {
 	t.Helper()
-	s := &fakeTerraformRegistry{providersPath: "/v1/providers/", archive: terraformTestArchive, requests: map[string]int{}}
+	s := &fakeTerraformRegistry{providersPath: "/v1/providers/", modulesPath: `"/v1/modules/"`, archive: terraformTestArchive, requests: map[string]int{}}
 	sum := sha256.Sum256([]byte(s.archive))
 	s.shasum = hex.EncodeToString(sum[:])
 	s.available.Store(true)
@@ -95,7 +96,7 @@ func (s *fakeTerraformRegistry) serveAPI(w http.ResponseWriter, r *http.Request)
 	w.Header().Set("Content-Type", "application/json")
 	switch {
 	case r.URL.Path == "/.well-known/terraform.json":
-		_, _ = fmt.Fprintf(w, `{"modules.v1":"/v1/modules/","providers.v1":%q}`, s.providersPath)
+		_, _ = fmt.Fprintf(w, `{"modules.v1":%s,"providers.v1":%q}`, s.modulesPath, s.providersPath)
 	case r.URL.Path == providers+"/hashicorp/random/versions":
 		_, _ = w.Write([]byte(`{"id":"hashicorp/random","versions":[
 			{"version":"3.6.0","protocols":["5.0"],"platforms":[{"os":"linux","arch":"amd64"},{"os":"darwin","arch":"arm64"}]},
@@ -122,6 +123,8 @@ func (s *fakeTerraformRegistry) serveAPI(w http.ResponseWriter, r *http.Request)
 			"download_url": s.files.URL + "/terraform-provider-random/" + version + "/" + filename,
 			"shasum":       s.shasum,
 		})
+	case strings.HasPrefix(r.URL.Path, "/v1/modules/"), strings.HasPrefix(r.URL.Path, "/api/modules/v1/"):
+		s.serveModule(w, r)
 	default:
 		http.NotFound(w, r)
 	}

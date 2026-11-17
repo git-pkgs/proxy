@@ -137,6 +137,30 @@ func (h *GitHandler) mirrorRepository(location string) (gitRepository, error) {
 	return repo, nil
 }
 
+// CloneURL returns the URL a client clones repoURL, an http or https URL
+// of a repository, through the proxy at, as the upstream.git host whose URL
+// its host and path start with serves it. ok is false when no host serves
+// it, or repoURL carries credentials or a query the proxy wouldn't pass on.
+func (h *GitHandler) CloneURL(repoURL string) (cloneURL string, ok bool) {
+	if h == nil || h.baseURL == "" {
+		return "", false
+	}
+	u, err := url.Parse(repoURL)
+	if err != nil || (u.Scheme != "https" && u.Scheme != "http") || u.User != nil || u.RawQuery != "" || u.Fragment != "" {
+		return "", false
+	}
+	repoPath := strings.Trim(u.Path, "/")
+	repo, err := h.mirrorRepository(strings.ToLower(u.Host) + "/" + repoPath)
+	if err != nil {
+		return "", false
+	}
+	suffix := ""
+	if strings.HasSuffix(repoPath, ".git") {
+		suffix = ".git"
+	}
+	return h.baseURL + "/git/" + url.PathEscape(repo.name) + "/" + repo.escapedRepo + suffix, true
+}
+
 // gitLocationPrefix is how a pkg:git PURL names the repositories under an
 // upstream URL: its host and path, ending in a slash. Empty for a URL
 // without a host.
