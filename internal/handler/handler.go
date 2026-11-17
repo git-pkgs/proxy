@@ -1640,6 +1640,9 @@ func (p *Proxy) serveArtifactError(w http.ResponseWriter, err error, clientMsg s
 	if writeUpstreamHeld(w, err) {
 		return
 	}
+	if p.serveUpstreamBlock(w, err) {
+		return
+	}
 	p.Logger.Error("failed to get artifact", "error", err)
 	http.Error(w, clientMsg, http.StatusBadGateway)
 }
@@ -2207,13 +2210,20 @@ func (p *Proxy) refreshMetadataBlob(ecosystem, cacheKey string, meta *upstreamMe
 	if !refreshed {
 		return "", errStale304
 	}
-	if !entry.UpstreamURL.Valid && meta.url != "" {
-		if err := p.DB.SetMetadataUpstreamURL(ecosystem, cacheKey, meta.url); err != nil {
-			p.Logger.Warn("failed to record metadata upstream URL", "ecosystem", ecosystem, "key", cacheKey, "error", err)
-		}
-	}
+	p.recordMetadataUpstreamURL(ecosystem, cacheKey, entry, meta.url)
 	p.recordMetadataRead(entry)
 	return entry.ContentDigest.String, nil
+}
+
+// recordMetadataUpstreamURL records upstreamURL on the cache row entry, a
+// row upstream confirmed with 304, when the row has none yet.
+func (p *Proxy) recordMetadataUpstreamURL(ecosystem, cacheKey string, entry *database.MetadataCacheEntry, upstreamURL string) {
+	if entry.UpstreamURL.Valid || upstreamURL == "" {
+		return
+	}
+	if err := p.DB.SetMetadataUpstreamURL(ecosystem, cacheKey, upstreamURL); err != nil {
+		p.Logger.Warn("failed to record metadata upstream URL", "ecosystem", ecosystem, "key", cacheKey, "error", err)
+	}
 }
 
 // cacheMetadataBlob stores metadata bytes in storage and updates the
@@ -2349,6 +2359,9 @@ func (p *Proxy) proxyCachedWithEncoding(w http.ResponseWriter, r *http.Request, 
 	accept := contentTypeJSON
 	if len(acceptHeaders) > 0 && acceptHeaders[0] != "" {
 		accept = acceptHeaders[0]
+	}
+	if hooks == nil && p.relayStoredMetadata(w, r, upstreamURL, ecosystem, cacheKey, accept, acceptEncoding) {
+		return
 	}
 	res := p.lookupMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, accept, acceptEncoding, nil)
 	if res.err != nil {

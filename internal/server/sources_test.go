@@ -23,6 +23,8 @@ func TestClientName(t *testing.T) {
 		{"bundler/2.4.22 rubygems/3.4.22", "bundler"},
 		{"pacman/7.0.0 (Linux x86_64) libalpm/15.0.0", "pacman"},
 		{"pkg/2.8.4", "pkg"},
+		{"Terraform/1.9.5 (+https://www.terraform.io)", "terraform"},
+		{"OpenTofu/1.8.0", "opentofu"},
 		// Unknown and hostile input collapses, so a User-Agent cannot mint a
 		// new Prometheus time series.
 		{"", unknownClient},

@@ -536,8 +536,10 @@ Every other path is served through the metadata cache (`cache_metadata`
 must be enabled for offline fallback): fresh within `metadata_ttl`, then
 revalidated with the upstream's `ETag`/`Last-Modified`, and served stale with
 a `Warning: 110` header when the upstream fails, refuses or rate-limits the
-request. Metadata responses are buffered up to `metadata_max_size`, so keep
-large mutable downloads (`releases/latest/download/...`) off this route.
+request. Metadata responses are streamed through storage up to
+`metadata_stream_max_size` (see [Metadata size limit](#metadata-size-limit)),
+so keep large mutable downloads (`releases/latest/download/...`) off this
+route.
 
 This is the cache behind [mise](https://mise.jdx.dev)'s aqua backend; see the
 mise section in the README for the client-side `url_replacements`.
@@ -665,6 +667,30 @@ a scanner covers the `freebsd` ecosystem these files are refused with
 official mirror is) and bootstrap pkg without the proxy. Everything else, such
 as signatures and keys, is passed through uncached. When `upstream.freebsd` is empty, a single
 repository named `freebsd` pointing at `https://pkg.freebsd.org` is available;
+configuring any entry replaces that default.
+
+### Terraform and OpenTofu providers
+
+```yaml
+upstream:
+
+  # Provider registries, by the hostname in provider source addresses.
+  terraform:
+    registry.terraform.io: "https://registry.terraform.io"
+    registry.opentofu.org: "https://registry.opentofu.org"
+```
+
+`/terraform/providers/` serves the provider network mirror protocol, e.g.
+`/terraform/providers/registry.terraform.io/hashicorp/aws/index.json`.
+Terraform and OpenTofu only accept an `https:` mirror URL, so serve the proxy
+over TLS. Only
+hostnames listed here are fetched; others get a 404. The registry's service
+discovery document, version lists and download documents use the metadata
+cache (`metadata_ttl`, stale fallback), so enable `cache_metadata` to keep
+`terraform init` working while the registry is down. Provider archives use the
+shared artifact cache, as `pkg:terraform/{namespace}/{type}`, and are checked
+against the registry's `shasum`. Namespace and type are lowercased. When
+`upstream.terraform` is empty, the two registries above are mirrored;
 configuring any entry replaces that default.
 
 ### Alpine APK snapshots
@@ -1414,6 +1440,10 @@ Names and versions are compared the way each ecosystem treats them:
 - A conda entry covers the package in every channel. Add a `channel` qualifier,
   such as `pkg:conda/numpy@1.26.4?channel=conda-forge`, to deny it in one
   channel only.
+- A Terraform or OpenTofu provider entry names the namespace and type in
+  lowercase, without the registry hostname: `pkg:terraform/hashicorp/random@3.6.0`.
+  It covers the provider on every registry in `upstream.terraform`, however
+  the request spells the address.
 
 Denied versions are removed from npm packuments, Cargo sparse indexes, and PyPI
 simple HTML/JSON (files and the JSON `versions` list) and release metadata, including responses served from cached
@@ -1645,7 +1675,7 @@ A new release therefore shows up about a minute after the registry lists it rath
 
 ### Metadata size limit
 
-Upstream metadata responses are buffered in memory before being rewritten and served. `metadata_max_size` caps that buffer to protect against OOM from a misbehaving upstream. Some npm packages with thousands of versions (for example `renovate`) exceed the 100 MB default, so raise this if you see `metadata response exceeds size limit` in the logs. Conda `repodata.json` with cooldown enabled is filtered as it streams and isn't held in memory decompressed. With `cache_metadata` the limit applies to the compressed document as it does without cooldown; one over it is filtered as it streams from the upstream and not cached. With `cache_metadata` and the metadata rewrite cache on, an npm packument is streamed from the upstream into storage and rewritten from there in two passes, so it isn't held in memory and the limit doesn't apply to it; the rewritten copy is kept gzip-compressed. Requests for a single version (`/<package>/<version>`) and tarball downloads read the version from the stored copy the same way. `metadata_stream_max_size` (1 GB by default) caps a document streamed this way; one over it isn't stored, and the stored copy, if any, is served instead.
+Upstream metadata responses are buffered in memory before being rewritten and served. A document the proxy serves as upstream sent it, without rewriting it (for example a Go module list, Conda repodata without cooldown, or a generic metadata path), is instead streamed from the upstream into storage and served from there with `cache_metadata` on and a nonzero `metadata_ttl`, so `metadata_max_size` doesn't apply to it; a `304` from the upstream checks the stored copy against its digest as it streams it, without reading it into memory. `metadata_max_size` caps the buffer to protect against OOM from a misbehaving upstream. Some npm packages with thousands of versions (for example `renovate`) exceed the 100 MB default, so raise this if you see `metadata response exceeds size limit` in the logs. Conda `repodata.json` with cooldown enabled is filtered as it streams and isn't held in memory decompressed. With `cache_metadata` the limit applies to the compressed document as it does without cooldown; one over it is filtered as it streams from the upstream and not cached. With `cache_metadata` and the metadata rewrite cache on, an npm packument is streamed from the upstream into storage and rewritten from there in two passes, so it isn't held in memory and the limit doesn't apply to it; the rewritten copy is kept gzip-compressed. Requests for a single version (`/<package>/<version>`) and tarball downloads read the version from the stored copy the same way. `metadata_stream_max_size` (1 GB by default) caps a document streamed either way; one over it isn't stored, and the stored copy, if any, is served instead.
 
 ```yaml
 metadata_max_size: "100MB"          # default

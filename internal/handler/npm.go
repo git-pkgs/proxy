@@ -426,7 +426,7 @@ func (h *NPMHandler) storedPackument(ctx context.Context, packumentURL, accept, 
 			gone = row.ContentDigest.String
 		}
 	}
-	res := h.proxy.storedMetadata(ctx, "npm", cacheKey, packumentURL, accept, h.packumentStreamValidator(), gone)
+	res := h.proxy.storedMetadata(ctx, "npm", cacheKey, packumentURL, accept, "", h.packumentStreamValidator(), gone)
 	if errors.Is(res.err, errMetadataNotStored) {
 		res.err = errInMemory
 	}
@@ -455,7 +455,7 @@ func (h *NPMHandler) lookupStoredPackument(ctx context.Context, packumentURL, ac
 		return fetched, err
 	}
 	h.proxy.Logger.Warn("stored npm metadata is missing or changed, fetching it again", "url", packumentURL, "error", err)
-	fetched = h.proxy.storedMetadata(ctx, "npm", cacheKey, packumentURL, accept, h.packumentStreamValidator(), fetched.entry.ContentDigest.String)
+	fetched = h.proxy.storedMetadata(ctx, "npm", cacheKey, packumentURL, accept, "", h.packumentStreamValidator(), fetched.entry.ContentDigest.String)
 	if errors.Is(fetched.err, errMetadataNotStored) {
 		fetched.err = errInMemory
 	}
@@ -834,6 +834,9 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 			JSONError(w, http.StatusForbidden, err.Error())
 		default:
 			if writeUpstreamHeld(w, err) {
+				return
+			}
+			if h.proxy.serveUpstreamBlock(w, err) {
 				return
 			}
 			h.proxy.Logger.Error("failed to get artifact", "error", err)
