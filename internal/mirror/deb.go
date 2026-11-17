@@ -3,6 +3,7 @@ package mirror
 import (
 	"context"
 	"fmt"
+	"maps"
 	"net/http"
 	"net/url"
 	"regexp"
@@ -25,8 +26,10 @@ var (
 	debReleasePattern = regexp.MustCompile(`^(debian-\d+|ubuntu-\d+\.\d+)(?:\.\d+)?$`)
 	// debCodenamePattern matches a codename given as the distro qualifier.
 	debCodenamePattern = regexp.MustCompile(`^[a-z]+$`)
-	debArchPattern     = regexp.MustCompile(`^[a-z0-9]+$`)
-	debEpochPattern    = regexp.MustCompile(`^\d+$`)
+	// debArchPattern matches an architecture, such as amd64 or the ports'
+	// hurd-amd64.
+	debArchPattern  = regexp.MustCompile(`^[a-z0-9]+(?:-[a-z0-9]+)*$`)
+	debEpochPattern = regexp.MustCompile(`^\d+$`)
 
 	// debCodenames are the codenames of the Debian and Ubuntu releases,
 	// which their suites are named after. Other releases can be given by
@@ -54,6 +57,14 @@ var (
 type debIndexes struct {
 	mu   sync.Mutex
 	regs map[string]debIndex
+	// allArchs are the architectures whose index is read for Architecture:
+	// all packages, by archive and release.
+	allArchs map[string]debAllArch
+}
+
+type debAllArch struct {
+	arch    string
+	fetched time.Time
 }
 
 type debIndex struct {
@@ -156,7 +167,10 @@ func (m *Mirror) debArtifact(ctx context.Context, archiveURL, codename, arch, na
 	// Architecture: all packages are in every binary-<arch> index.
 	indexArch := arch
 	if arch == "all" {
-		indexArch = "amd64"
+		var err error
+		if indexArch, err = m.debAllArch(ctx, archiveURL, codename); err != nil {
+			return registries.Artifact{}, err
+		}
 	}
 	reg, suites, err := m.debRegistry(ctx, archiveURL, codename, indexArch)
 	if err != nil {
@@ -207,6 +221,59 @@ func debEpoch(epoch string) string {
 	return epoch
 }
 
+// debAllArch returns the architecture whose index is read for
+// Architecture: all packages of release codename: amd64 where the archive's
+// Release lists it or lists none, and otherwise the first it lists, as a
+// ports archive has no amd64.
+func (m *Mirror) debAllArch(ctx context.Context, archiveURL, codename string) (string, error) {
+	key := archiveURL + "\x00" + codename
+	m.deb.mu.Lock()
+	defer m.deb.mu.Unlock()
+	if a, ok := m.deb.allArchs[key]; ok && time.Since(a.fetched) < debIndexTTL {
+		return a.arch, nil
+	}
+	r, _ := m.Versions.(RegistryVersions)
+	client := r.client()
+	arch := "amd64"
+	for _, file := range []string{"InRelease", "Release"} {
+		body, err := client.GetBody(ctx, archiveURL+"/dists/"+codename+"/"+file)
+		if isNotFound(err) {
+			continue
+		}
+		if err != nil {
+			return "", fmt.Errorf("reading the %s of %s: %w", file, codename, err)
+		}
+		arch = debReleaseAllArch(string(body))
+		break
+	}
+	if m.deb.allArchs == nil {
+		m.deb.allArchs = map[string]debAllArch{}
+	}
+	m.deb.allArchs[key] = debAllArch{arch: arch, fetched: time.Now()}
+	return arch, nil
+}
+
+// debReleaseAllArch picks the architecture for Architecture: all packages
+// from a Release's Architectures field.
+func debReleaseAllArch(release string) string {
+	for line := range strings.Lines(release) {
+		value, ok := strings.CutPrefix(line, "Architectures:")
+		if !ok {
+			continue
+		}
+		var listed []string
+		for _, a := range strings.Fields(value) {
+			if a != "all" && debArchPattern.MatchString(a) {
+				listed = append(listed, a)
+			}
+		}
+		if len(listed) > 0 && !slices.Contains(listed, "amd64") {
+			return listed[0]
+		}
+	}
+	return "amd64"
+}
+
 func debIndexKey(archiveURL, codename, arch string) string {
 	return archiveURL + "\x00" + codename + "\x00" + arch
 }
@@ -249,6 +316,9 @@ func (m *Mirror) debRegistry(ctx context.Context, archiveURL, codename, arch str
 	if m.deb.regs == nil {
 		m.deb.regs = map[string]debIndex{}
 	}
+	// Indexes no longer asked for are dropped, rather than kept for the
+	// Mirror's life.
+	maps.DeleteFunc(m.deb.regs, func(_ string, idx debIndex) bool { return time.Since(idx.fetched) >= debIndexTTL })
 	m.deb.regs[key] = debIndex{reg: reg, suites: suites, fetched: time.Now()}
 	return reg, suites, nil
 }

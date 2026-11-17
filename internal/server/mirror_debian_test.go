@@ -30,11 +30,15 @@ type debUpstream struct {
 	hits  map[string]int
 	// fail answers the paths it holds with that status.
 	fail map[string]int
+	// architectures, by archive root, are the architectures its Releases
+	// list, the first of which holds Architecture: all packages. An
+	// archive not in it lists none and holds them in binary-amd64.
+	architectures map[string][]string
 }
 
 func newDebUpstream(t *testing.T) *debUpstream {
 	t.Helper()
-	u := &debUpstream{files: map[string]string{}, hits: map[string]int{}, fail: map[string]int{}}
+	u := &debUpstream{files: map[string]string{}, hits: map[string]int{}, fail: map[string]int{}, architectures: map[string][]string{}}
 	u.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		u.mu.Lock()
 		body, ok := u.files[r.URL.Path]
@@ -68,6 +72,9 @@ func (u *debUpstream) addSuite(root, suite, codename string, pkgs ...debPackage)
 		arch := p.arch
 		if arch == "all" {
 			arch = "amd64"
+			if archs := u.architectures[root]; len(archs) > 0 {
+				arch = archs[0]
+			}
 		}
 		dir := "main/binary-" + arch
 		if indexes[dir] == nil {
@@ -82,7 +89,11 @@ func (u *debUpstream) addSuite(root, suite, codename string, pkgs ...debPackage)
 		dirs = append(dirs, dir)
 	}
 	sort.Strings(dirs)
-	release := "Codename: " + codename + "\nSHA256:\n"
+	release := "Codename: " + codename + "\n"
+	if archs := u.architectures[root]; len(archs) > 0 {
+		release += "Architectures: " + strings.Join(archs, " ") + "\n"
+	}
+	release += "SHA256:\n"
 	for _, dir := range dirs {
 		index := indexes[dir].String()
 		release += fmt.Sprintf(" %s %d %s/Packages\n", sha256Hex(index), len(index), dir)
@@ -183,6 +194,7 @@ func TestMirrorDebianRefusesWhatItCantFind(t *testing.T) {
 	tests := map[string]string{
 		"pkg:deb/debian/curl@7.88.1-10+deb12u8?distro=debian-12":                            "arch",
 		"pkg:deb/debian/curl@7.88.1-10+deb12u8?arch=../../etc&distro=debian-12":             "arch",
+		"pkg:deb/debian/curl@7.88.1-10+deb12u8?arch=-amd64&distro=debian-12":                "arch",
 		"pkg:deb/debian/curl@7.88.1-10+deb12u8?arch=amd64":                                  "distro",
 		"pkg:deb/debian/curl@7.88.1-10+deb12u8?arch=amd64&distro=debian-99":                 "distro",
 		"pkg:deb/debian/curl@7.88.1-10+deb12u8?arch=amd64&distro=Bookworm/../x":             "distro",
@@ -246,5 +258,44 @@ func TestMirrorDebianMatchesArchitectureAllAndEpochZero(t *testing.T) {
 		"pkg:deb/debian/curl@7.88.1-10+deb12u8?arch=amd64&distro=debian-12&epoch=0")
 	if progress.Completed != 2 || progress.Failed != 0 {
 		t.Fatalf("completed = %d, failed = %d, errors = %v", progress.Completed, progress.Failed, progress.Errors)
+	}
+}
+
+// An architecture name can have a hyphen, as Debian's ports have.
+func TestMirrorDebianArchitectureWithHyphen(t *testing.T) {
+	upstream := newDebUpstream(t)
+	upstream.addSuite("/ports", "sid", "sid",
+		debPackage{"hello", "2.10-3", "hurd-amd64", "pool/main/h/hello/hello_2.10-3_hurd-amd64.deb", "hello"},
+	)
+	cfg := config.Default()
+	cfg.Upstream.DebianRepositories = map[string]string{"ports": upstream.URL + "/ports"}
+
+	progress, _ := mirrorWithConfig(t, cfg, "pkg:deb/ports/hello@2.10-3?arch=hurd-amd64&distro=sid")
+	if progress.Completed != 1 || progress.Failed != 0 {
+		t.Fatalf("completed = %d, failed = %d, errors = %v", progress.Completed, progress.Failed, progress.Errors)
+	}
+	if got := upstream.hitsFor("/ports/pool/main/h/hello/hello_2.10-3_hurd-amd64.deb"); got != 1 {
+		t.Errorf("package fetched %d times, want 1", got)
+	}
+}
+
+// An Architecture: all package is looked up in the index of an architecture
+// the archive's Release lists, as a ports archive has no amd64.
+func TestMirrorDebianArchitectureAllOnAPortsArchive(t *testing.T) {
+	upstream := newDebUpstream(t)
+	upstream.architectures["/ports"] = []string{"arm64", "armhf"}
+	upstream.addSuite("/ports", "jammy", "jammy",
+		debPackage{"tzdata", "2024a-0ubuntu0.22.04", "all", "pool/main/t/tzdata/tzdata_2024a-0ubuntu0.22.04_all.deb", "tzdata"},
+	)
+	cfg := config.Default()
+	cfg.Upstream.DebianRepositories = map[string]string{"ports": upstream.URL + "/ports"}
+
+	progress, _ := mirrorWithConfig(t, cfg,
+		"pkg:deb/ports/tzdata@2024a-0ubuntu0.22.04?arch=all&distro=ubuntu-22.04")
+	if progress.Completed != 1 || progress.Failed != 0 {
+		t.Fatalf("completed = %d, failed = %d, errors = %v", progress.Completed, progress.Failed, progress.Errors)
+	}
+	if got := upstream.hitsFor("/ports/dists/jammy/main/binary-amd64/Packages"); got != 0 {
+		t.Errorf("binary-amd64 read %d times, want none", got)
 	}
 }
