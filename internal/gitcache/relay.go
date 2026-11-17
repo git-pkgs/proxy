@@ -127,10 +127,7 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// The request body goes on to the upstream while its response comes
-	// back, so it must stay readable once the response starts: an HTTP/1
-	// server otherwise drains and closes it on the first flush, and the
-	// upstream connection is dropped mid-response.
+	// Keep r.Body readable after the first flush; it is still streaming upstream.
 	_ = http.NewResponseController(w).EnableFullDuplex()
 
 	ctx, cancel := context.WithCancel(r.Context())

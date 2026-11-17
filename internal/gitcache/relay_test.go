@@ -99,10 +99,6 @@ func TestRelayStopsAtLimit(t *testing.T) {
 	}
 }
 
-// TestRelayReadsTheRequestWhileResponding checks the relay keeps passing on
-// the request body after the response has started, as an HTTP/1 server
-// otherwise closes the body on the first flush and the relay cuts off the
-// upstream mid-response.
 func TestRelayReadsTheRequestWhileResponding(t *testing.T) {
 	head := strings.Repeat("x", 64<<10)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
