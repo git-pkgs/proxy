@@ -98,16 +98,23 @@ func (c *Cache) maintain(rp *repo) {
 	}
 	defer unlock()
 	c.clearMaintainLocks(rp.dir)
+	ok := true
 	if _, err := c.run(ctx, rp.dir, "commit-graph", "write", "--reachable", "--split"); err != nil {
 		c.logger.Warn("git cache: writing the commit-graph failed", "repository", rp.key, "error", err)
+		ok = false
 	}
 	if c.bitmapDue(rp) {
 		if _, err := c.run(ctx, rp.dir, "multi-pack-index", "write", "--bitmap"); err != nil {
 			c.logger.Warn("git cache: writing the multi-pack index failed", "repository", rp.key, "error", err)
-		} else {
-			// Not stored on a skip or a failure, so the next run tries again.
-			rp.maintainedAt.Store(rp.refsWritten.Load())
+			ok = false
 		}
+	}
+	// Not stored on a failure, so the next request retries. A bitmap skipped
+	// within the interval still counts as done: otherwise every request
+	// until the interval ran out would rerun maintenance for nothing, and
+	// the bitmaps follow the next fetch that changes the repository.
+	if ok {
+		rp.maintainedAt.Store(rp.refsWritten.Load())
 	}
 	c.preloadIndexes(ctx, rp.dir)
 	c.logger.Debug("git cache: read the serving indexes into the page cache", "repository", rp.key)
@@ -184,26 +191,16 @@ func servingIndexes(dir string) []string {
 	packDir := filepath.Join(dir, "objects", "pack")
 	graphDir := filepath.Join(infoDir, commitGraphsName)
 	var paths []string
-	for _, path := range []string{
+	for _, pattern := range []string{
 		filepath.Join(infoDir, commitGraphName),
 		filepath.Join(graphDir, "commit-graph-chain"),
 		filepath.Join(packDir, midxName),
-	} {
-		if isRegularFile(path) {
-			paths = append(paths, path)
-		}
-	}
-	for _, pattern := range []string{
 		filepath.Join(graphDir, "graph-*.graph"),
 		filepath.Join(packDir, midxName+"-*.bitmap"),
 		filepath.Join(packDir, midxName+"-*.rev"),
 	} {
 		matches, _ := filepath.Glob(pattern)
-		for _, path := range matches {
-			if isRegularFile(path) {
-				paths = append(paths, path)
-			}
-		}
+		paths = append(paths, matches...)
 	}
 	return paths
 }
@@ -226,13 +223,6 @@ func (c *Cache) bitmapDue(rp *repo) bool {
 		return true
 	}
 	return c.opts.MaintenanceInterval <= 0 || time.Since(info.ModTime()) >= c.opts.MaintenanceInterval
-}
-
-// isRegularFile reports whether path names an existing regular file, and
-// not, say, a directory or a socket left in its place.
-func isRegularFile(path string) bool {
-	info, err := os.Stat(path)
-	return err == nil && info.Mode().IsRegular()
 }
 
 // clearMaintainLocks removes the lock files of the index writers, left by a

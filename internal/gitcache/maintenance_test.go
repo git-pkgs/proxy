@@ -102,11 +102,20 @@ func TestMaintenanceInterval(t *testing.T) {
 		t.Error("the multi-pack index was rewritten within the interval")
 	}
 	rp := tc.repo("up/repo.git")
-	if got, covered := rp.refsWritten.Load(), rp.maintainedAt.Load(); got != 2 || covered != 1 {
-		t.Errorf("after the fetch, refsWritten %d, maintainedAt %d; the bitmap should have been skipped", got, covered)
+	if got, covered := rp.refsWritten.Load(), rp.maintainedAt.Load(); got != 2 || covered != 2 {
+		t.Errorf("after the fetch, refsWritten %d, maintainedAt %d; a skipped bitmap still counts as maintained", got, covered)
 	}
 	if after := osStatMtime(t, graphs); !after.After(graphMtime) {
 		t.Error("the commit-graph did not follow the fetch")
+	}
+
+	// A request that changes nothing runs no maintenance, the skipped
+	// bitmap included.
+	tc.logs.Reset()
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	if strings.Contains(tc.logs.String(), "serving indexes") {
+		t.Error("an unchanged request ran maintenance")
 	}
 }
 
@@ -246,9 +255,6 @@ func TestServingIndexes(t *testing.T) {
 			t.Fatal(err)
 		}
 	}
-	if err := os.Mkdir(filepath.Join(graphDir, "graph-dir.graph"), dirPermissions); err != nil {
-		t.Fatal(err)
-	}
 	if err := os.WriteFile(filepath.Join(graphDir, "tmp_graph_partial"), nil, 0o600); err != nil {
 		t.Fatal(err)
 	}
@@ -313,8 +319,8 @@ func TestMaintenancePreloadsSkippedBitmaps(t *testing.T) {
 		t.Error("the multi-pack index was rewritten within the interval")
 	}
 	rp := tc.repo("up/repo.git")
-	if got, covered := rp.refsWritten.Load(), rp.maintainedAt.Load(); got != 2 || covered != 1 {
-		t.Fatalf("after the fetch, refsWritten %d, maintainedAt %d; the bitmap should have been skipped", got, covered)
+	if got, covered := rp.refsWritten.Load(), rp.maintainedAt.Load(); got != 2 || covered != 2 {
+		t.Fatalf("after the fetch, refsWritten %d, maintainedAt %d; a skipped bitmap still counts as maintained", got, covered)
 	}
 	assertReadBack(t, tc, "up/repo.git")
 }

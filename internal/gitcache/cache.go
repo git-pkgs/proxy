@@ -193,8 +193,8 @@ type repo struct {
 	// url is the upstream URL the last successful refresh used.
 	url atomic.Pointer[string]
 	// maintainedAt is the refsWritten count the repository's serving
-	// indexes cover. It is stored only when they were written, so a failed
-	// maintenance run is retried by the next fetch. maintainedAt is written
+	// indexes cover. It is stored only when a run succeeds, so a failed
+	// one is retried by the next request. maintainedAt is written
 	// alone; maintaining and maintainPending are guarded by Cache.mu.
 	maintainedAt    atomic.Int64
 	maintaining     bool
