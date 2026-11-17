@@ -16,11 +16,13 @@ import (
 	"github.com/git-pkgs/registries/fetch"
 )
 
-// servingFetcher answers every fetch with body and records the URLs.
+// servingFetcher answers every fetch with body and records the URLs. It
+// fails the URLs that contain fail, when set.
 type servingFetcher struct {
 	body string
 	mu   sync.Mutex
 	urls []string
+	fail string
 }
 
 func (f *servingFetcher) Fetch(ctx context.Context, url string) (*fetch.Artifact, error) {
@@ -30,7 +32,11 @@ func (f *servingFetcher) Fetch(ctx context.Context, url string) (*fetch.Artifact
 func (f *servingFetcher) FetchWithHeaders(_ context.Context, url string, _ http.Header) (*fetch.Artifact, error) {
 	f.mu.Lock()
 	f.urls = append(f.urls, url)
+	fail := f.fail != "" && strings.Contains(url, f.fail)
 	f.mu.Unlock()
+	if fail {
+		return nil, fmt.Errorf("fetching %s: timeout", url)
+	}
 	return &fetch.Artifact{Body: io.NopCloser(strings.NewReader(f.body)), Size: int64(len(f.body)), ContentType: "application/octet-stream"}, nil
 }
 
@@ -48,6 +54,12 @@ func (f *servingFetcher) reset() {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.urls = nil
+}
+
+func (f *servingFetcher) failing(part string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.fail = part
 }
 
 // stubReleases lists releases by "ecosystem/name".
