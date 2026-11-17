@@ -23,8 +23,9 @@ const rpmIndexTTL = 5 * time.Minute
 
 var (
 	// rpmDistroPattern takes the release from the distro qualifier syft
-	// writes, such as fedora-40 or rocky-9.4.
-	rpmDistroPattern = regexp.MustCompile(`^[a-z][a-z0-9]*-(\d+(?:\.\d+)*)$`)
+	// writes from os-release's ID and VERSION_ID, such as fedora-40,
+	// rocky-9.4 or opensuse-leap-15.6.
+	rpmDistroPattern = regexp.MustCompile(`^[a-z][a-z0-9-]*-(\d+(?:\.\d+)*)$`)
 	rpmArchPattern   = regexp.MustCompile(`^[a-z0-9_]+$`)
 	rpmEpochPattern  = regexp.MustCompile(`^\d+$`)
 
@@ -57,12 +58,11 @@ type rpmIndex struct {
 // default.
 func (m *Mirror) mirrorRPM(ctx context.Context, pv PackageVersion, tracker *progressTracker) {
 	fail := func(err error) { m.recordFailure(tracker, pv, err) }
-	match := rpmDistroPattern.FindStringSubmatch(pv.Qualifiers["distro"])
-	if match == nil {
+	release, major, ok := rpmRelease(pv.Qualifiers["distro"])
+	if !ok {
 		fail(fmt.Errorf("rpm packages need a distro qualifier with the release, such as distro=fedora-40, not %q", pv.Qualifiers["distro"]))
 		return
 	}
-	release := match[1]
 	arch := pv.Qualifiers["arch"]
 	if !rpmArchPattern.MatchString(arch) {
 		fail(fmt.Errorf("rpm packages need an arch qualifier, such as arch=x86_64, not %q", arch))
@@ -78,7 +78,6 @@ func (m *Mirror) mirrorRPM(ctx context.Context, pv PackageVersion, tracker *prog
 	if arch == "noarch" {
 		repoArch = "x86_64"
 	}
-	major, _, _ := strings.Cut(release, ".")
 	replacer := strings.NewReplacer("{release}", release, "{major}", major, "{arch}", repoArch)
 	paths := m.RPMRepositoryPaths
 	if len(paths) == 0 {
@@ -107,6 +106,17 @@ func (m *Mirror) mirrorRPM(ctx context.Context, pv PackageVersion, tracker *prog
 		return
 	}
 	m.recordResult(tracker, pv, result)
+}
+
+// rpmRelease returns the release a distro qualifier names, and its major
+// version.
+func rpmRelease(distro string) (release, major string, ok bool) {
+	match := rpmDistroPattern.FindStringSubmatch(distro)
+	if match == nil {
+		return "", "", false
+	}
+	major, _, _ = strings.Cut(match[1], ".")
+	return match[1], major, true
 }
 
 // rpmArtifact returns the file of name for arch whose version-release is

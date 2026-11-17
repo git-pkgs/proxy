@@ -28,3 +28,28 @@ func TestRPMRegistryDropsExpiredIndexes(t *testing.T) {
 		t.Error("index within its TTL dropped")
 	}
 }
+
+// The release comes from the end of the distro qualifier syft writes from
+// os-release, whose ID may contain hyphens.
+func TestRPMRelease(t *testing.T) {
+	tests := []struct{ distro, release, major string }{
+		{"fedora-40", "40", "40"},
+		{"rocky-9.4", "9.4", "9"},
+		{"opensuse-leap-15.6", "15.6", "15"},
+		{"rhel-8.10", "8.10", "8"},
+		{"fedora", "", ""},
+		{"fedora-", "", ""},
+		{"-40", "", ""},
+		{"Fedora-40", "", ""},
+		{"fedora-40/../x", "", ""},
+		{"fedora-40.x", "", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.distro, func(t *testing.T) {
+			release, major, ok := rpmRelease(tt.distro)
+			if release != tt.release || major != tt.major || ok != (tt.release != "") {
+				t.Errorf("rpmRelease = %q, %q, %v; want %q, %q", release, major, ok, tt.release, tt.major)
+			}
+		})
+	}
+}
