@@ -81,12 +81,14 @@ func (h *GemHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		suffix:      ".gem",
 		parseErr:    "could not parse gem filename",
 		fetchErr:    "failed to fetch gem",
-		parse:       h.parseGemFilename,
+		parse:       GemFilenameIdentity,
 		publishTime: h.publishTime,
 	})
 }
 
-// parseGemFilename extracts name and version from a gem filename.
+// GemFilenameIdentity returns the name and version a gem file is cached
+// under, read from its filename. A platform build's version keeps its
+// platform.
 // e.g., "rails-7.1.0.gem" -> ("rails", "7.1.0")
 // e.g., "aws-sdk-s3-1.142.0.gem" -> ("aws-sdk-s3", "1.142.0")
 // e.g., "sorbet-static-0.5.11002-universal-darwin-22.gem" -> ("sorbet-static", "0.5.11002-universal-darwin-22")
@@ -103,7 +105,7 @@ func (h *GemHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 //
 // Trying every "-<digit>" costs time quadratic in the filename's length, so
 // a filename longer than maxGemFilenameLength is refused.
-func (h *GemHandler) parseGemFilename(filename string) (name, version string) {
+func GemFilenameIdentity(filename string) (name, version string) {
 	if len(filename) > maxGemFilenameLength {
 		return "", ""
 	}
@@ -126,7 +128,7 @@ func (h *GemHandler) parseGemFilename(filename string) (name, version string) {
 	return base[:first], base[first+1:]
 }
 
-// maxGemFilenameLength bounds the gem filenames parseGemFilename accepts.
+// maxGemFilenameLength bounds the gem filenames GemFilenameIdentity accepts.
 // Real gem filenames are a small fraction of this.
 const maxGemFilenameLength = 512
 
