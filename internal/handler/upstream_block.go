@@ -26,8 +26,7 @@ func (p *Proxy) serveUpstreamBlock(w http.ResponseWriter, err error) bool {
 	return true
 }
 
-// upstreamBlockContentType forwards the type the upstream labelled the body
-// with, and falls back to JSON only while that body is still valid JSON.
+// Forward the upstream's type, or JSON only while the body is valid JSON.
 func upstreamBlockContentType(statusErr *fetch.StatusError) string {
 	validJSON := json.Valid([]byte(statusErr.Body))
 	if contentType := statusErr.ContentType; contentType != "" && (validJSON || !jsonMediaType(contentType)) {
@@ -39,7 +38,6 @@ func upstreamBlockContentType(statusErr *fetch.StatusError) string {
 	return "text/plain; charset=utf-8"
 }
 
-// jsonMediaType reports whether a Content-Type names a JSON document.
 func jsonMediaType(contentType string) bool {
 	mediaType, _, err := mime.ParseMediaType(contentType)
 	if err != nil {

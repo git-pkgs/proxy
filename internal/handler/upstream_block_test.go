@@ -106,8 +106,6 @@ func TestServeArtifactErrorForwardsPolicyBlock(t *testing.T) {
 	}
 }
 
-// A policy denial from the upstream reaches the Maven client with the
-// upstream's own status and report body, through the real fetch layer.
 func TestMavenHandler_ForwardsUpstreamPolicyBlock(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set(headerContentType, contentTypeJSON)
@@ -135,8 +133,6 @@ func TestMavenHandler_ForwardsUpstreamPolicyBlock(t *testing.T) {
 	}
 }
 
-// npm keeps its JSON error shape, but a policy denial is passed through as the
-// upstream sent it rather than as a generic 502.
 func TestNPMHandler_ForwardsUpstreamPolicyBlock(t *testing.T) {
 	var upstreamURL string
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -165,8 +161,6 @@ func TestNPMHandler_ForwardsUpstreamPolicyBlock(t *testing.T) {
 	}
 }
 
-// A refused blob is reported the way an OCI registry reports a denial, with
-// the upstream's reason, not as a proxy failure.
 func TestContainerHandler_BlobPolicyBlockIsDenied(t *testing.T) {
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusForbidden)
@@ -194,5 +188,38 @@ func TestContainerHandler_BlobPolicyBlockIsDenied(t *testing.T) {
 	}
 	if !strings.Contains(body, "potentially malicious") {
 		t.Errorf("body = %q, want the upstream reason", body)
+	}
+}
+
+func TestGoHandler_ForwardsUpstreamPolicyBlockOnZip(t *testing.T) {
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !strings.HasSuffix(r.URL.Path, ".zip") {
+			http.NotFound(w, r)
+			return
+		}
+		w.Header().Set(headerContentType, contentTypeJSON)
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = io.WriteString(w, firewallReport)
+	}))
+	defer upstream.Close()
+
+	proxy, _, _, _ := setupTestProxy(t)
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	t.Cleanup(func() { _ = fetcher.Close() })
+	proxy.Fetcher = fetcher
+	proxy.HTTPClient = upstream.Client()
+
+	h := NewGoHandlerWithUpstream(proxy, "http://localhost", upstream.URL)
+	w := httptest.NewRecorder()
+	h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/example.com/module/@v/v1.0.0.zip", nil))
+
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want %d; body: %s", w.Code, http.StatusForbidden, w.Body.String())
+	}
+	if got := w.Body.String(); got != firewallReport {
+		t.Errorf("body = %q, want the upstream report", got)
+	}
+	if got := w.Header().Get(headerContentType); got != contentTypeJSON {
+		t.Errorf("content-type = %q, want %q", got, contentTypeJSON)
 	}
 }
