@@ -495,3 +495,52 @@ func TestCachedVersionPURLs(t *testing.T) {
 		}
 	})
 }
+
+func TestClearExpiredArtifactSkipsHitBeingFlushed(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now()
+		old := now.Add(-48 * time.Hour)
+		seedRetentionArtifact(t, db, "npm", "served", old, old)
+		db.BatchHits(time.Hour, nil)
+		if err := db.RecordArtifactHit("pkg:npm/served@1.0.0", "served.tgz"); err != nil {
+			t.Fatalf("RecordArtifactHit: %v", err)
+		}
+
+		// A flush has taken the hit but not written it yet.
+		taken := db.hits.take()
+		cleared, err := db.ClearExpiredArtifact("pkg:npm/served@1.0.0", "served.tgz",
+			"npm/served/1.0.0/served.tgz", now.Add(-24*time.Hour))
+		db.hits.finish(taken, true)
+		if err != nil || cleared {
+			t.Fatalf("ClearExpiredArtifact(served) = %v, %v, want false, nil", cleared, err)
+		}
+	})
+}
+
+func TestFlushHitsRunsOneAtATime(t *testing.T) {
+	db := createTestDB(t)
+	defer func() { _ = db.Close() }()
+	versionPURL, filename := seedHitTestArtifact(t, db)
+	db.BatchHits(time.Hour, nil)
+	if err := db.RecordArtifactHit(versionPURL, filename); err != nil {
+		t.Fatalf("RecordArtifactHit: %v", err)
+	}
+
+	writing, release := make(chan struct{}), make(chan struct{})
+	db.hits.beforeWrite = func() {
+		close(writing)
+		<-release
+	}
+	done := make(chan error, 1)
+	go func() { done <- db.FlushHits() }()
+	<-writing
+
+	if db.hits.flushMu.TryLock() {
+		db.hits.flushMu.Unlock()
+		t.Error("a second flush could start while the first was writing")
+	}
+	close(release)
+	if err := <-done; err != nil {
+		t.Fatalf("FlushHits: %v", err)
+	}
+}

@@ -127,6 +127,9 @@ func (rl *relay) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Keep r.Body readable after the first flush; it is still streaming upstream.
+	_ = http.NewResponseController(w).EnableFullDuplex()
+
 	ctx, cancel := context.WithCancel(r.Context())
 	defer cancel()
 	defer context.AfterFunc(route.ctx, cancel)()
