@@ -32,15 +32,20 @@ func TestMirrorForgePURLsIntoTheGitCache(t *testing.T) {
 		{"pkg:github/acme/widgets@v1#setup", gitCall{"github.com/acme/widgets", "v1"}},
 		{"pkg:github/acme/widgets", gitCall{"github.com/acme/widgets", ""}},
 		{"pkg:bitbucket/acme/widgets@" + gitTestCommit, gitCall{"bitbucket.org/acme/widgets", gitTestCommit}},
-		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://git.example/acme/widgets.git@"+gitTestCommit), gitCall{"git.example/acme/widgets", gitTestCommit}},
+		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://git.example/acme/widgets.git@"+gitTestCommit), gitCall{"git.example/acme/widgets.git", gitTestCommit}},
 		// The version of a generic package needn't name a ref, so without
 		// one in vcs_url the repository is mirrored without a commit.
 		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://git.example/acme/widgets"), gitCall{"git.example/acme/widgets", ""}},
-		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+ssh://git@git.example/acme/widgets.git"), gitCall{"git.example/acme/widgets", ""}},
+		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+ssh://git@git.example/acme/widgets.git"), gitCall{"git.example/acme/widgets.git", ""}},
 		// An HTTP port is part of the location, as it is of an
 		// upstream.git URL; an SSH port isn't.
 		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://git.example:8443/acme/widgets"), gitCall{"git.example:8443/acme/widgets", ""}},
 		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+ssh://git@git.example:2222/acme/widgets"), gitCall{"git.example/acme/widgets", ""}},
+		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+ssh://git@[2001:db8::1]:2222/acme/widgets"), gitCall{"[2001:db8::1]/acme/widgets", ""}},
+		// An escaped "@" is part of the path, not the start of a ref.
+		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://git.example/acme/tool%40home.git"), gitCall{"git.example/acme/tool@home.git", ""}},
+		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://git.example/acme/tool%40home@v1"), gitCall{"git.example/acme/tool@home", "v1"}},
+		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://git.example/acme/widgets@release%2F1.0"), gitCall{"git.example/acme/widgets", "release/1.0"}},
 		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://Git.Example/acme/widgets/"), gitCall{"git.example/acme/widgets", ""}},
 	}
 	for _, tt := range tests {

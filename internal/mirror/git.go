@@ -60,7 +60,7 @@ func forgeGitRepository(p *purl.PURL) (location, version string, ok bool) {
 
 // vcsGitRepository reads a git vcs_url, such as
 // git+https://github.com/acme/widgets.git@v1.0, as a repository and the ref
-// after its "@", if any.
+// after its last unescaped "@", if any.
 func vcsGitRepository(vcsURL string) (location, ref string, ok bool) {
 	rest, ok := strings.CutPrefix(vcsURL, "git+")
 	if !ok {
@@ -77,15 +77,24 @@ func vcsGitRepository(vcsURL string) (location, ref string, ok bool) {
 	case "https", "http":
 	case "ssh", "git":
 		host = u.Hostname()
+		if strings.Contains(host, ":") {
+			host = "[" + host + "]" // IPv6, as an upstream.git URL writes it
+		}
 	default:
 		return "", "", false
 	}
-	repoPath := u.Path
+	// The ref follows a literal "@"; an escaped one is part of the path.
+	repoPath := u.EscapedPath()
 	if i := strings.LastIndex(repoPath, "@"); i >= 0 {
 		repoPath, ref = repoPath[:i], repoPath[i+1:]
 	}
-	repoPath = strings.TrimSuffix(strings.Trim(path.Clean("/"+repoPath), "/"), ".git")
-	if repoPath == "" || repoPath == "." {
+	// url.Parse checked the escapes, so neither fails.
+	repoPath, _ = url.PathUnescape(repoPath)
+	ref, _ = url.PathUnescape(ref)
+	// A ".git" suffix is kept, as pkg:git keeps it, for an upstream that
+	// serves the repository only under that name.
+	repoPath = strings.Trim(path.Clean("/"+repoPath), "/")
+	if repoPath == "" {
 		return "", "", false
 	}
 	return strings.ToLower(host) + "/" + repoPath, ref, true
