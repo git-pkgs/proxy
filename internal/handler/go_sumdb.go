@@ -409,7 +409,7 @@ func (h *GoHandler) proxySumDB(w http.ResponseWriter, r *http.Request, name, ups
 		case errors.Is(err, ErrUpstreamNotFound):
 			http.Error(w, "not found", http.StatusNotFound)
 		default:
-			if writeUpstreamHeld(w, err) {
+			if h.proxy.writeUpstreamRefusal(w, err) {
 				return
 			}
 			p.Logger.Error("checksum database fetch failed", "url", upstreamURL, "error", err)

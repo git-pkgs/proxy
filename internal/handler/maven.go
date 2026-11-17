@@ -228,7 +228,7 @@ func (h *MavenHandler) writeMetadataError(w http.ResponseWriter, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	if writeUpstreamHeld(w, err) {
+	if h.proxy.writeUpstreamRefusal(w, err) {
 		return
 	}
 	h.proxy.Logger.Error("metadata fetch failed", "error", err)

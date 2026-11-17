@@ -289,7 +289,7 @@ func (h *NPMHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 			}
 			return
 		}
-		if writeUpstreamHeld(w, err) {
+		if h.proxy.writeUpstreamRefusal(w, err) {
 			return
 		}
 		h.proxy.Logger.Error("failed to fetch npm metadata", "error", err)
@@ -401,7 +401,7 @@ func (h *NPMHandler) writeFetchError(w http.ResponseWriter, err error) {
 	switch {
 	case errors.Is(err, ErrUpstreamNotFound):
 		JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
-	case writeUpstreamHeld(w, err):
+	case h.proxy.writeUpstreamRefusal(w, err):
 	default:
 		h.proxy.Logger.Error("failed to fetch npm metadata", "error", err)
 		JSONError(w, http.StatusBadGateway, "failed to fetch from upstream")
@@ -618,7 +618,7 @@ func (h *NPMHandler) handleFilteredNPMVersionMetadata(w http.ResponseWriter, r *
 			JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
 			return
 		}
-		if writeUpstreamHeld(w, err) {
+		if h.proxy.writeUpstreamRefusal(w, err) {
 			return
 		}
 		h.proxy.Logger.Error("failed to fetch npm metadata", "error", err)
@@ -810,7 +810,7 @@ func (h *NPMHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 		if h.proxy.serveCachedDespiteCooldownError(w, r, "npm", packageName, version, h.routes.cacheFilename(packageName, filename), err) {
 			return
 		}
-		if writeUpstreamHeld(w, err) {
+		if h.proxy.writeUpstreamRefusal(w, err) {
 			return
 		}
 		h.proxy.Logger.Warn("cooldown: could not read npm publish time",

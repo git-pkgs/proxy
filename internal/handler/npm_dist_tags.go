@@ -37,7 +37,7 @@ func (h *NPMHandler) handleDistTags(w http.ResponseWriter, r *http.Request) {
 			JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
 			return
 		}
-		if writeUpstreamHeld(w, err) {
+		if h.proxy.writeUpstreamRefusal(w, err) {
 			return
 		}
 		h.proxy.Logger.Error("failed to read npm dist-tags", "package", packageName, "error", err)

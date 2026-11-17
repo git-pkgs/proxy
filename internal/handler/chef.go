@@ -139,7 +139,7 @@ func (h *ChefHandler) serveDocument(w http.ResponseWriter, r *http.Request, docu
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		if writeUpstreamHeld(w, err) {
+		if h.proxy.writeUpstreamRefusal(w, err) {
 			return
 		}
 		h.proxy.Logger.Error("Chef Supermarket request failed", "url", upstreamURL, "error", err)

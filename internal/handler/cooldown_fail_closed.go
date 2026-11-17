@@ -20,7 +20,7 @@ func (p *Proxy) mustFilterMetadata(ecosystem, name string) bool {
 // couldn't be read: 503 with Retry-After when the rate limit gate held the
 // request, 502 otherwise.
 func (p *Proxy) writeCooldownLookupError(w http.ResponseWriter, ecosystem, name string, err error) {
-	if writeUpstreamHeld(w, err) {
+	if p.writeUpstreamRefusal(w, err) {
 		return
 	}
 	p.Logger.Warn("cooldown: could not read publish times",
