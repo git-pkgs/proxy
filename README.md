@@ -966,6 +966,18 @@ host "registry.terraform.io" {
 }
 ```
 
+OpenTofu reads a source without a hostname as `registry.opentofu.org`, so
+point that registry at the proxy in `~/.tofurc`:
+
+```hcl
+host "registry.opentofu.org" {
+  services = {
+    "modules.v1"   = "https://proxy.example.com/terraform/modules/registry.opentofu.org/"
+    "providers.v1" = "https://registry.opentofu.org/v1/providers/"
+  }
+}
+```
+
 The block replaces the registry's service discovery, so keep `providers.v1`
 in it if any provider of that registry is installed directly rather than
 through the mirror. Terraform and OpenTofu both read `host` blocks, though

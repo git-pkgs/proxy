@@ -21,8 +21,9 @@ type terraformModule struct {
 	namespace, name, system string
 }
 
-// moduleFromRequest returns the module a request names, in lowercase, as
-// providerFromRequest does for a provider.
+// moduleFromRequest returns the module a request names. Unlike a provider
+// address, its case is kept, as Terraform keeps it: a registry may match
+// module addresses case-sensitively.
 func (h *TerraformHandler) moduleFromRequest(w http.ResponseWriter, r *http.Request) (terraformModule, bool) {
 	registry, ok := h.registryFromRequest(w, r)
 	if !ok {
@@ -30,9 +31,9 @@ func (h *TerraformHandler) moduleFromRequest(w http.ResponseWriter, r *http.Requ
 	}
 	m := terraformModule{
 		terraformRegistry: registry,
-		namespace:         strings.ToLower(r.PathValue("namespace")),
-		name:              strings.ToLower(r.PathValue("name")),
-		system:            strings.ToLower(r.PathValue("system")),
+		namespace:         r.PathValue("namespace"),
+		name:              r.PathValue("name"),
+		system:            r.PathValue("system"),
 	}
 	for _, part := range []string{m.namespace, m.name, m.system} {
 		if !terraformName.MatchString(part) {
@@ -191,7 +192,8 @@ func (m terraformModule) documentKey(document string) string {
 
 // purl returns the version PURL the denylist checks a module version
 // against: pkg:terraform/{namespace}/{name}@{version}, as purl-spec#889
-// drafts it, without the target system or the registry.
+// drafts it, without the target system or the registry. It is lowercase, so
+// a rule covers every spelling of the address.
 func (m terraformModule) purl(version string) string {
-	return purl.New(terraformEcosystem, m.namespace, m.name, version, nil).String()
+	return purl.New(terraformEcosystem, strings.ToLower(m.namespace), strings.ToLower(m.name), version, nil).String()
 }

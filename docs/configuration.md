@@ -701,7 +701,9 @@ names a Git repository; when an [`upstream.git`](#git-repositories) host
 serves it and the git cache is configured, the location is rewritten to
 `git::{base_url}/git/{name}/{repo}`, keeping the subdirectory and query, so
 the module is cloned through the git cache. Other locations are passed on,
-with a relative one resolved against the registry's URL.
+with a relative one resolved against the registry's URL. Unlike provider addresses, module addresses
+are passed to the registry in the case the client gives them, as Terraform
+keeps it.
 
 ### Alpine APK snapshots
 
@@ -1457,8 +1459,9 @@ Names and versions are compared the way each ecosystem treats them:
 - A Terraform or OpenTofu module entry names the namespace and name in
   lowercase, without the target system or the registry hostname:
   `pkg:terraform/terraform-aws-modules/vpc@5.0.0` covers `vpc/aws` and any
-  other `vpc` module of that namespace. A provider and a module with the same
-  namespace and name share an entry.
+  other `vpc` module of that namespace, however the request spells the
+  address. A provider and a module with the same namespace and name share an
+  entry.
 
 Denied versions are removed from npm packuments, Cargo sparse indexes, and PyPI
 simple HTML/JSON (files and the JSON `versions` list) and release metadata, including responses served from cached

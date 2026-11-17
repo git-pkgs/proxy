@@ -44,8 +44,9 @@ const (
 
 // serveModule serves the Module Registry Protocol for acme/vpc/aws.
 func (s *fakeTerraformRegistry) serveModule(w http.ResponseWriter, r *http.Request) {
-	// TestTerraformModuleDiscovery moves modules.v1 there.
-	r.URL.Path = strings.Replace(r.URL.Path, "/api/modules/v1/", "/v1/modules/", 1)
+	// TestTerraformModuleDiscovery moves modules.v1 there. The address is
+	// matched ignoring case, as the public registries match it.
+	r.URL.Path = strings.ToLower(strings.Replace(r.URL.Path, "/api/modules/v1/", "/v1/modules/", 1))
 	if r.URL.Path == "/v1/modules/acme/broken/aws/versions" {
 		_, _ = w.Write([]byte(`{"modules":[`))
 		return
@@ -180,6 +181,9 @@ func TestTerraformModuleServedWhileRegistryIsDown(t *testing.T) {
 	}
 }
 
+// The denylist ignores the case of a module address, but the registry is
+// asked for the address as the client spelled it: Terraform keeps its case,
+// as a registry may match it case-sensitively.
 func TestTerraformModuleDenylistIgnoresAddressCase(t *testing.T) {
 	s := newFakeTerraformRegistry(t)
 	h, proxy := newTerraformTestHandler(t, s)
@@ -199,8 +203,15 @@ func TestTerraformModuleDenylistIgnoresAddressCase(t *testing.T) {
 	if w := serveTerraformRequest(h, "/modules/"+terraformTestHost+"/Acme/VPC/AWS/1.1.0/download"); w.Code != http.StatusNoContent {
 		t.Errorf("1.1.0 status = %d, want 204: %s", w.Code, w.Body.String())
 	}
+	if got := s.requestCount("/v1/modules/Acme/VPC/AWS/1.1.0/download"); got != 1 {
+		t.Errorf("download requests as spelled = %d, want 1", got)
+	}
+	// Each spelling is its own registry document.
+	if w := serveTerraformRequest(h, terraformTestModule+"1.1.0/download"); w.Code != http.StatusNoContent {
+		t.Errorf("lowercase 1.1.0 status = %d, want 204", w.Code)
+	}
 	if got := s.requestCount("/v1/modules/acme/vpc/aws/1.1.0/download"); got != 1 {
-		t.Errorf("lowercased download requests = %d, want 1", got)
+		t.Errorf("lowercase download requests = %d, want 1", got)
 	}
 }
 
