@@ -14,8 +14,6 @@ import (
 
 const firewallReport = `{"status":403,"title":"Sonatype Firewall Report","detail":"Sonatype has identified this component as potentially malicious and blocked the download."}`
 
-// blockedByUpstream is the error the fetch layer produces for an upstream that
-// refuses an artifact with a policy denial.
 func blockedByUpstream(status int, body string) error {
 	return blockedByUpstreamTyped(status, "", body)
 }
