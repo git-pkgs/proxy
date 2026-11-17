@@ -25,6 +25,17 @@ func midxMtime(t *testing.T, bare string) time.Time {
 	return info.ModTime()
 }
 
+// assertNoCommitGraph fails the test if the repository at bare has a
+// commit-graph, in either layout: with the bitmaps it slows fetches down.
+func assertNoCommitGraph(t *testing.T, bare string) {
+	t.Helper()
+	for _, name := range []string{"commit-graph", "commit-graphs"} {
+		if fileExists(filepath.Join(bare, "objects", "info", name)) {
+			t.Errorf("the repository has a %s", name)
+		}
+	}
+}
+
 func bitmapsOf(t *testing.T, bare string) []string {
 	t.Helper()
 	found, err := filepath.Glob(midxPath(t, bare) + "-*.bitmap")
@@ -35,8 +46,8 @@ func bitmapsOf(t *testing.T, bare string) []string {
 }
 
 // TestMaintenanceWritesIndexes checks that a cloned repository gets the
-// commit-graph and the multi-pack index with reachability bitmaps it is
-// served from, kept up to date with every fetch that changes it.
+// multi-pack index with reachability bitmaps it is served from, kept up to
+// date with every fetch that changes it, and no commit-graph.
 func TestMaintenanceWritesIndexes(t *testing.T) {
 	upstream := newFakeUpstream(t)
 	work := upstream.newRepo("repo")
@@ -48,9 +59,7 @@ func TestMaintenanceWritesIndexes(t *testing.T) {
 	waitIdle(t, tc.Cache)
 	bare := bareRepo(tc)
 
-	if !fileExists(filepath.Join(bare, "objects", "info", commitGraphsName, "commit-graph-chain")) {
-		t.Error("the clone was left without a commit-graph")
-	}
+	assertNoCommitGraph(t, bare)
 	if !fileExists(midxPath(t, bare)) {
 		t.Fatal("the clone was left without a multi-pack index")
 	}
@@ -77,8 +86,8 @@ func TestMaintenanceWritesIndexes(t *testing.T) {
 }
 
 // TestMaintenanceInterval checks that the multi-pack index is rewritten at
-// most once per interval, while the commit-graph, which is incremental,
-// still follows every fetch.
+// most once per interval, and that a run skipped within it is not repeated
+// by every request after.
 func TestMaintenanceInterval(t *testing.T) {
 	upstream := newFakeUpstream(t)
 	work := upstream.newRepo("repo")
@@ -90,8 +99,6 @@ func TestMaintenanceInterval(t *testing.T) {
 	waitIdle(t, tc.Cache)
 	bare := bareRepo(tc)
 	before := midxMtime(t, bare)
-	graphs := filepath.Join(bare, "objects", "info", commitGraphsName)
-	graphMtime := osStatMtime(t, graphs)
 
 	upstream.commit(work, "second")
 	runGit(t, work, "push", "--quiet", "origin", "main")
@@ -104,9 +111,6 @@ func TestMaintenanceInterval(t *testing.T) {
 	rp := tc.repo("up/repo.git")
 	if got, covered := rp.refsWritten.Load(), rp.maintainedAt.Load(); got != 2 || covered != 2 {
 		t.Errorf("after the fetch, refsWritten %d, maintainedAt %d; a skipped bitmap still counts as maintained", got, covered)
-	}
-	if after := osStatMtime(t, graphs); !after.After(graphMtime) {
-		t.Error("the commit-graph did not follow the fetch")
 	}
 
 	// A request that changes nothing runs no maintenance, the skipped
@@ -131,18 +135,15 @@ func TestMaintenanceDisabled(t *testing.T) {
 	if fileExists(midxPath(t, bare)) {
 		t.Error("a multi-pack index was written with maintenance off")
 	}
-	if fileExists(filepath.Join(bare, "objects", "info", commitGraphName)) ||
-		fileExists(filepath.Join(bare, "objects", "info", commitGraphsName)) {
-		t.Error("a commit-graph was written with maintenance off")
-	}
+	assertNoCommitGraph(t, bare)
 	if rp := tc.repo("up/repo.git"); rp.maintainedAt.Load() != 0 {
 		t.Error("a repository was maintained with maintenance off")
 	}
 }
 
-// TestMaintenanceRecoversStaleLocks checks that the lock files a maintenance
+// TestMaintenanceRecoversStaleLocks checks that the lock file a maintenance
 // run killed mid-write leaves behind, which would block every later one,
-// are removed by the next.
+// is removed by the next.
 func TestMaintenanceRecoversStaleLocks(t *testing.T) {
 	upstream := newFakeUpstream(t)
 	work := upstream.newRepo("repo")
@@ -155,16 +156,9 @@ func TestMaintenanceRecoversStaleLocks(t *testing.T) {
 	bare := bareRepo(tc)
 	before := midxMtime(t, bare)
 
-	stale := []string{
-		filepath.Join(bare, "objects", "pack", midxName+".lock"),
-		filepath.Join(bare, "objects", "info", commitGraphName+".lock"),
-		filepath.Join(bare, "objects", "info", commitGraphsName, "commit-graph-chain.lock"),
-		filepath.Join(bare, "objects", "info", commitGraphsName, "tmp_graph_partial"),
-	}
-	for _, path := range stale {
-		if err := os.WriteFile(path, nil, 0o600); err != nil {
-			t.Fatal(err)
-		}
+	lock := filepath.Join(bare, "objects", "pack", midxName+".lock")
+	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+		t.Fatal(err)
 	}
 
 	upstream.commit(work, "second")
@@ -172,25 +166,20 @@ func TestMaintenanceRecoversStaleLocks(t *testing.T) {
 	tc.clone(t, "repo")
 	waitIdle(t, tc.Cache)
 
-	for _, path := range stale {
-		if fileExists(path) {
-			t.Errorf("%s survived maintenance", filepath.Base(path))
-		}
+	if fileExists(lock) {
+		t.Error("the stale lock survived maintenance")
 	}
 	if after := midxMtime(t, bare); !after.After(before) {
 		t.Error("maintenance did not rewrite the multi-pack index past the stale lock")
 	}
-	runGit(t, bare, "commit-graph", "verify")
 }
 
 // TestDirSizeSkipsIndexes checks that the serving indexes, rebuilt from the
 // packs, are not counted as the repository's size.
 func TestDirSizeSkipsIndexes(t *testing.T) {
 	dir := t.TempDir()
-	infoDir := filepath.Join(dir, "objects", "info")
 	packDir := filepath.Join(dir, "objects", "pack")
-	graphDir := filepath.Join(infoDir, commitGraphsName)
-	for _, path := range []string{packDir, graphDir, filepath.Join(dir, "refs", "heads")} {
+	for _, path := range []string{packDir, filepath.Join(dir, "refs", "heads")} {
 		if err := os.MkdirAll(path, dirPermissions); err != nil {
 			t.Fatal(err)
 		}
@@ -208,11 +197,6 @@ func TestDirSizeSkipsIndexes(t *testing.T) {
 		{filepath.Join(packDir, midxName), 7, true},
 		{filepath.Join(packDir, midxName+"-1.bitmap"), 9, true},
 		{filepath.Join(packDir, midxName+".lock"), 0, true},
-		{filepath.Join(infoDir, commitGraphName), 11, true},
-		{filepath.Join(infoDir, commitGraphName+".lock"), 0, true},
-		{filepath.Join(graphDir, "commit-graph-chain"), 3, true},
-		{filepath.Join(graphDir, "graph-0.graph"), 13, true},
-		{filepath.Join(graphDir, "tmp_graph_partial"), 4, true},
 	}
 	var want int64
 	for _, f := range files {
@@ -228,51 +212,29 @@ func TestDirSizeSkipsIndexes(t *testing.T) {
 	}
 }
 
-// TestServingIndexes checks that the serving indexes a repository is
-// served from are found in either commit-graph layout, while stale
-// leftovers and files that are not regular, say a directory, are left out.
+// TestServingIndexes checks that the files a repository is served from are
+// listed, and nothing else.
 func TestServingIndexes(t *testing.T) {
 	dir := t.TempDir()
-	infoDir := filepath.Join(dir, "objects", "info")
 	packDir := filepath.Join(dir, "objects", "pack")
-	graphDir := filepath.Join(infoDir, commitGraphsName)
-	for _, path := range []string{packDir, graphDir} {
-		if err := os.MkdirAll(path, dirPermissions); err != nil {
-			t.Fatal(err)
-		}
+	if err := os.MkdirAll(packDir, dirPermissions); err != nil {
+		t.Fatal(err)
 	}
-	touched := []string{
-		filepath.Join(infoDir, commitGraphName),
-		filepath.Join(graphDir, "commit-graph-chain"),
+	want := []string{
 		filepath.Join(packDir, midxName),
-		filepath.Join(graphDir, "graph-0.graph"),
-		filepath.Join(graphDir, "graph-1.graph"),
 		filepath.Join(packDir, midxName+"-1.bitmap"),
 		filepath.Join(packDir, midxName+"-1.rev"),
 	}
-	for _, path := range touched {
+	for _, path := range append(want, filepath.Join(packDir, midxName+".lock"), filepath.Join(packDir, "pack-1.idx")) {
 		if err := os.WriteFile(path, nil, 0o600); err != nil {
 			t.Fatal(err)
 		}
 	}
-	if err := os.WriteFile(filepath.Join(graphDir, "tmp_graph_partial"), nil, 0o600); err != nil {
-		t.Fatal(err)
-	}
-
-	want := make([]string, len(touched))
-	copy(want, touched)
 	if got := servingIndexes(dir); !slices.Equal(got, want) {
 		t.Errorf("serving indexes listed %v, want %v", got, want)
 	}
-
 	if got := servingIndexes(t.TempDir()); got != nil {
 		t.Errorf("an empty repository listed %v", got)
-	}
-	if err := os.Remove(touched[0]); err != nil {
-		t.Fatal(err)
-	}
-	if got := servingIndexes(dir); slices.Contains(got, touched[0]) {
-		t.Error("a missing commit-graph was listed")
 	}
 }
 
@@ -290,38 +252,6 @@ func TestMaintenancePreloadsIndexes(t *testing.T) {
 	// The clone maintenance writes the indexes and reads them back.
 	tc.clone(t, "repo")
 	waitIdle(t, tc.Cache)
-	assertReadBack(t, tc, "up/repo.git")
-}
-
-// TestMaintenancePreloadsSkippedBitmaps checks that the read-back covers a
-// run that skips the bitmaps, within their maintenance interval: the
-// commit-graph it still writes pays off on the negotiation of the next
-// fetch just the same.
-func TestMaintenancePreloadsSkippedBitmaps(t *testing.T) {
-	upstream := newFakeUpstream(t)
-	work := upstream.newRepo("repo")
-	tc := newTestCache(t, upstream.server.URL, func(o *Options) {
-		o.Maintenance = true
-		o.MaintenanceInterval = time.Hour
-	})
-	tc.clone(t, "repo")
-	waitIdle(t, tc.Cache)
-	bare := bareRepo(tc)
-	before := midxMtime(t, bare)
-	tc.logs.Reset()
-
-	upstream.commit(work, "second")
-	runGit(t, work, "push", "--quiet", "origin", "main")
-	tc.clone(t, "repo")
-	waitIdle(t, tc.Cache)
-
-	if after := midxMtime(t, bare); after != before {
-		t.Error("the multi-pack index was rewritten within the interval")
-	}
-	rp := tc.repo("up/repo.git")
-	if got, covered := rp.refsWritten.Load(), rp.maintainedAt.Load(); got != 2 || covered != 2 {
-		t.Fatalf("after the fetch, refsWritten %d, maintainedAt %d; a skipped bitmap still counts as maintained", got, covered)
-	}
 	assertReadBack(t, tc, "up/repo.git")
 }
 
@@ -453,13 +383,4 @@ func repoIndexFiles(t *testing.T, dir string) []*os.File {
 		t.Cleanup(func() { _ = file.Close() })
 	}
 	return conns
-}
-
-func osStatMtime(t *testing.T, path string) time.Time {
-	t.Helper()
-	info, err := os.Stat(path)
-	if err != nil {
-		t.Fatal(err)
-	}
-	return info.ModTime()
 }

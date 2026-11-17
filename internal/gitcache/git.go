@@ -41,6 +41,12 @@ var gitConfig = [][2]string{
 	// always done after a fetch: gc, and only once its own thresholds
 	// are crossed.
 	{"maintenance.strategy", "incremental"},
+	// No commit-graph. With the reachability bitmaps, git 2.56 reads a
+	// repository's whole commit-graph to find what a fetching client
+	// already has, which made the fetches of clients holding most of the
+	// history slower than without any index. gc writes one by default.
+	{"core.commitGraph", "false"},
+	{"gc.writeCommitGraph", "false"},
 	{"init.defaultBranch", "main"},
 	// Keep every fetched pack as a pack. index-pack writes it to a
 	// temporary file and moves it into place only once complete, whereas a

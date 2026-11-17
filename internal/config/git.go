@@ -117,10 +117,10 @@ type GitConfig struct {
 
 	// MaintenanceInterval is how often the serving indexes of a cached
 	// repository may be rewritten, which spare every clone the walk of the
-	// whole history that otherwise precedes its pack. The commit-graph part
-	// is written after every fetch that changes the repository regardless;
-	// it is incremental and cheap. "0" rewrites the rest after every fetch
-	// too, and "off" writes none. Default: 1h.
+	// whole history that otherwise precedes its pack. They are rewritten
+	// after a fetch that changes the repository once this has passed. "0"
+	// rewrites them after every such fetch, and "off" writes none.
+	// Default: 1h.
 	MaintenanceInterval string `json:"maintenance_interval" yaml:"maintenance_interval"`
 
 	maxSize             int64

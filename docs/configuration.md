@@ -990,17 +990,15 @@ A transfer that receives nothing for 10 minutes is abandoned. Git's automatic
 garbage collection runs as part of fetches, and files over 8MB are kept
 without delta compression, so one large file does not take a fetch's memory.
 
-After a fetch changes a repository, its serving indexes are rewritten in the
-background: an incremental commit-graph, which speeds the commit walks of
-the web UI and of the negotiation of every fetch, and a multi-pack index
-with reachability bitmaps when the one it has is older than
-`maintenance_interval` (an hour by default), which turn the object
-enumeration at the head of a clone from a walk of the whole history into
-bitmap lookups. `maintenance_interval: 0` rewrites the bitmaps after every
-fetch, and `off` turns the maintenance off. At most two repositories are
-maintained at once, packs are never rewritten, and no request is ever held
-for a run. The indexes are rebuilt from the packs, so they are not counted
-by `max_size` or `max_repo_size`.
+After a fetch changes a repository, its serving index is rewritten in the
+background when the one it has is older than `maintenance_interval` (an
+hour by default): a multi-pack index with reachability bitmaps, which turn
+the object enumeration at the head of a clone from a walk of the whole
+history into bitmap lookups. `maintenance_interval: 0` rewrites it after
+every fetch that changes the repository, and `off` turns the maintenance
+off. At most two repositories are maintained at once, packs are never
+rewritten, and no request is ever held for a run. The index is rebuilt
+from the packs, so it is not counted by `max_size` or `max_repo_size`.
 
 With `git` 2.56 or newer, repositories are cached with reftable reference
 storage, which writes a fetch's reference updates to one table rather than

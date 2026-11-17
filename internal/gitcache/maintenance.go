@@ -62,13 +62,11 @@ func (c *Cache) scheduleMaintain(rp *repo) {
 	}()
 }
 
-// maintain writes the indexes a repository is served from: an incremental
-// commit-graph, which speeds up the commit walks of the web UI and of the
-// negotiation of every fetch, and a multi-pack index with reachability
-// bitmaps, which turn the object enumeration at the head of every clone
-// from a walk of the whole history into bitmap lookups. Packs are never
-// rewritten, so a run costs no more than reading them. The indexes are
-// read back afterward, so that a filesystem that does not keep them in
+// maintain writes the indexes a repository is served from: a multi-pack
+// index with reachability bitmaps, which turn the object enumeration at
+// the head of every clone from a walk of the whole history into bitmap
+// lookups. Packs are never rewritten, so a run costs no more than reading
+// them. The indexes are read back afterward, so that a filesystem that does not keep them in
 // the page cache, a network mount or a freshly booted machine say, does
 // not have the next fetch pay for that reading. It runs in the background:
 // requests are never held for it, and neither are fetches for longer than
@@ -97,25 +95,26 @@ func (c *Cache) maintain(rp *repo) {
 		return
 	}
 	defer unlock()
-	c.clearMaintainLocks(rp.dir)
-	ok := true
-	if _, err := c.run(ctx, rp.dir, "commit-graph", "write", "--reachable", "--split"); err != nil {
-		c.logger.Warn("git cache: writing the commit-graph failed", "repository", rp.key, "error", err)
-		ok = false
-	}
-	if c.bitmapDue(rp) {
-		if _, err := c.run(ctx, rp.dir, "multi-pack-index", "write", "--bitmap"); err != nil {
-			c.logger.Warn("git cache: writing the multi-pack index failed", "repository", rp.key, "error", err)
-			ok = false
-		}
-	}
-	// Not stored on a failure, so the next request retries. A bitmap skipped
-	// within the interval still counts as done: otherwise every request
-	// until the interval ran out would rerun maintenance for nothing, and
-	// the bitmaps follow the next fetch that changes the repository.
-	if ok {
+	// Within the interval the run is done without writing anything, or
+	// every request until it ran out would run maintenance again; the
+	// bitmaps follow the next fetch that changes the repository.
+	if !c.bitmapDue(rp) {
 		rp.maintainedAt.Store(rp.refsWritten.Load())
+		return
 	}
+	// A run cut short when the process stopped leaves the index's lock
+	// behind, which would fail every later write. With the write slot
+	// held, it is stale.
+	lock := filepath.Join(rp.dir, "objects", "pack", midxName+".lock")
+	if err := os.Remove(lock); err != nil && !errors.Is(err, fs.ErrNotExist) {
+		c.logger.Warn("git cache: removing a stale maintenance lock", "path", lock, "error", err)
+	}
+	if _, err := c.run(ctx, rp.dir, "multi-pack-index", "write", "--bitmap"); err != nil {
+		// Not stored, so the next request retries.
+		c.logger.Warn("git cache: writing the multi-pack index failed", "repository", rp.key, "error", err)
+		return
+	}
+	rp.maintainedAt.Store(rp.refsWritten.Load())
 	c.preloadIndexes(ctx, rp.dir)
 	c.logger.Debug("git cache: read the serving indexes into the page cache", "repository", rp.key)
 }
@@ -182,24 +181,13 @@ func (c *Cache) preloadCached() {
 }
 
 // servingIndexes returns the index files a repository at dir is served
-// from, that exist: the commit-graph, in either of its layouts, and the
-// multi-pack index, with its reachability bitmaps and reverse indexes
-// beside it. Stale leftovers, the graph layers of an interrupted write,
-// are named tmp_graph_* and left out.
+// from, that exist: the multi-pack index, with its reachability bitmaps
+// and reverse indexes beside it.
 func servingIndexes(dir string) []string {
-	infoDir := filepath.Join(dir, "objects", "info")
 	packDir := filepath.Join(dir, "objects", "pack")
-	graphDir := filepath.Join(infoDir, commitGraphsName)
 	var paths []string
-	for _, pattern := range []string{
-		filepath.Join(infoDir, commitGraphName),
-		filepath.Join(graphDir, "commit-graph-chain"),
-		filepath.Join(packDir, midxName),
-		filepath.Join(graphDir, "graph-*.graph"),
-		filepath.Join(packDir, midxName+"-*.bitmap"),
-		filepath.Join(packDir, midxName+"-*.rev"),
-	} {
-		matches, _ := filepath.Glob(pattern)
+	for _, pattern := range []string{midxName, midxName + "-*.bitmap", midxName + "-*.rev"} {
+		matches, _ := filepath.Glob(filepath.Join(packDir, pattern))
 		paths = append(paths, matches...)
 	}
 	return paths
@@ -223,23 +211,4 @@ func (c *Cache) bitmapDue(rp *repo) bool {
 		return true
 	}
 	return c.opts.MaintenanceInterval <= 0 || time.Since(info.ModTime()) >= c.opts.MaintenanceInterval
-}
-
-// clearMaintainLocks removes the lock files of the index writers, left by a
-// maintenance run cut short when the process stopped, and the graph layers
-// such a run wrote halfway; the index files themselves are renamed into
-// place, so a run interrupted after them leaves them complete. With the
-// repository's write slot held, any of these files that exist are stale.
-func (c *Cache) clearMaintainLocks(dir string) {
-	stale := []string{
-		filepath.Join(dir, "objects", "pack", midxName+".lock"),
-		filepath.Join(dir, "objects", "info", commitGraphName+".lock"),
-		filepath.Join(dir, "objects", "info", commitGraphsName, "commit-graph-chain.lock"),
-	}
-	tmps, _ := filepath.Glob(filepath.Join(dir, "objects", "info", commitGraphsName, "tmp_graph_*"))
-	for _, path := range append(stale, tmps...) {
-		if err := os.Remove(path); err != nil && !errors.Is(err, fs.ErrNotExist) {
-			c.logger.Warn("git cache: removing a stale maintenance lock", "path", path, "error", err)
-		}
-	}
 }
