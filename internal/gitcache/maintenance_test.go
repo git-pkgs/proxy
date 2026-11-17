@@ -426,7 +426,7 @@ func TestMaintenancePreloadsPageCache(t *testing.T) {
 	// A fetch that changes nothing runs no maintenance, so the reading has
 	// to run by hand, just as maintenance runs it.
 	rp := tc.repo("up/repo.git")
-	tc.Cache.maintain(rp)
+	tc.maintain(rp)
 	if after := residentCount(indexes); after != total {
 		t.Errorf("the serving indexes were read back with %d of %d pages resident", after, total)
 	}

@@ -1085,7 +1085,8 @@ Pushing, LFS uploads and locking, and the dumb HTTP protocol are not
 supported. The settings
 under `git` can also be set with `PROXY_GIT_CACHE_DIR`, `PROXY_GIT_MAX_SIZE`,
 `PROXY_GIT_MAX_REPO_SIZE`, `PROXY_GIT_REFRESH_WAIT`,
-`PROXY_GIT_STALE_MAX_AGE` and `PROXY_GIT_WARM_MAX_IDLE`.
+`PROXY_GIT_STALE_MAX_AGE`, `PROXY_GIT_WARM_MAX_IDLE` and
+`PROXY_GIT_MAINTENANCE_INTERVAL`.
 
 ### Maven repositories
 
