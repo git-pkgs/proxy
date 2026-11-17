@@ -2,6 +2,7 @@ package mirror
 
 import (
 	"fmt"
+	"maps"
 	"path"
 	"regexp"
 	"slices"
@@ -31,6 +32,9 @@ type fileEcosystem struct {
 	// cachedVariants names them for the filename cacheKey returns.
 	variants       func(file registries.Artifact) []string
 	cachedVariants func(cacheFilename string) []string
+	// split, when set, moves a file selection the version carries into the
+	// qualifiers, returning the version's release number.
+	split func(pv PackageVersion) (PackageVersion, error)
 	// release, when set, returns the number of the release whose files are
 	// cached under cachedVersion, for an ecosystem where the two differ.
 	release func(cachedVersion string) string
@@ -54,6 +58,24 @@ var fileEcosystems = map[string]fileEcosystem{
 			_, version := handler.GemFilenameIdentity(cacheFilename)
 			_, platform := gemVersionPlatform(version)
 			return []string{platform}
+		},
+		// Gemfile.lock gives a platform build's version with its platform
+		// appended, and so do SBOMs made from one.
+		split: func(pv PackageVersion) (PackageVersion, error) {
+			number, platform, ok := strings.Cut(pv.Version, "-")
+			if !ok {
+				return pv, nil
+			}
+			if q := pv.Qualifiers["platform"]; q != "" && q != platform {
+				return pv, fmt.Errorf("version %s is for platform %s, not platform=%s", pv.Version, platform, q)
+			}
+			qualifiers := maps.Clone(pv.Qualifiers)
+			if qualifiers == nil {
+				qualifiers = map[string]string{}
+			}
+			qualifiers["platform"] = platform
+			pv.Version, pv.Qualifiers = number, qualifiers
+			return pv, nil
 		},
 		release: func(cachedVersion string) string {
 			number, _ := gemVersionPlatform(cachedVersion)

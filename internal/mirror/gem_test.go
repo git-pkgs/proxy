@@ -38,6 +38,10 @@ func TestMirrorGemPlatformBuilds(t *testing.T) {
 		{"pkg:gem/nokogiri@1.13.6", []string{"nokogiri-1.13.6-arm64-darwin.gem", "nokogiri-1.13.6-x86_64-linux.gem", "nokogiri-1.13.6.gem"}},
 		{"pkg:gem/nokogiri@1.13.6?platform=x86_64-linux", []string{"nokogiri-1.13.6-x86_64-linux.gem"}},
 		{"pkg:gem/nokogiri@1.13.6?platform=ruby", []string{"nokogiri-1.13.6.gem"}},
+		// Gemfile.lock, and SBOMs made from one, give a platform build's
+		// version with the platform appended.
+		{"pkg:gem/nokogiri@1.13.6-x86_64-linux", []string{"nokogiri-1.13.6-x86_64-linux.gem"}},
+		{"pkg:gem/nokogiri@1.13.6-x86_64-linux?platform=x86_64-linux", []string{"nokogiri-1.13.6-x86_64-linux.gem"}},
 	}
 	for _, tt := range tests {
 		t.Run(tt.purl, func(t *testing.T) {
@@ -88,6 +92,42 @@ func TestMirrorGemPlatformMatchingNoBuild(t *testing.T) {
 	}
 	if progress.Failed != 1 || len(progress.Errors) != 1 || !strings.Contains(progress.Errors[0].Error, "platform=java") {
 		t.Errorf("progress = %+v, want a failure naming platform=java", progress)
+	}
+}
+
+// A platform in the version that has no build fails under the version as
+// given.
+func TestMirrorGemVersionPlatformMatchingNoBuild(t *testing.T) {
+	m, _ := setupRefreshMirror(t, "gem")
+	m.Versions = stubReleases{"gem/nokogiri": {
+		gemBuilds("1.13.6", 30*24*time.Hour, "ruby", "x86_64-linux"),
+	}}
+
+	progress, err := m.Run(context.Background(), &PURLSource{PURLs: []string{"pkg:gem/nokogiri@1.13.6-java"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if progress.Failed != 1 || len(progress.Errors) != 1 || !strings.Contains(progress.Errors[0].Error, "platform=java") ||
+		progress.Errors[0].Version != "1.13.6-java" {
+		t.Errorf("progress = %+v, want a failure of version 1.13.6-java naming platform=java", progress)
+	}
+}
+
+// A platform in the version and a different one in the qualifier name no
+// build, so the PURL is refused.
+func TestMirrorGemPlatformConflictsWithVersion(t *testing.T) {
+	m, fetcher := setupRefreshMirror(t, "gem")
+	m.Versions = stubReleases{"gem/nokogiri": {
+		gemBuilds("1.13.6", 30*24*time.Hour, "ruby", "x86_64-linux", "arm64-darwin"),
+	}}
+
+	progress, err := m.Run(context.Background(), &PURLSource{PURLs: []string{"pkg:gem/nokogiri@1.13.6-x86_64-linux?platform=arm64-darwin"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if progress.Failed != 1 || len(progress.Errors) != 1 || !strings.Contains(progress.Errors[0].Error, "platform=arm64-darwin") ||
+		len(fetcher.fetched()) != 0 {
+		t.Errorf("progress = %+v, fetched %v; want a failure naming platform=arm64-darwin and nothing fetched", progress, fetcher.fetched())
 	}
 }
 
