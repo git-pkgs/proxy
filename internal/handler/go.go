@@ -215,6 +215,9 @@ func (h *GoHandler) handleDownload(w http.ResponseWriter, r *http.Request, modul
 		if writeUpstreamHeld(w, err) {
 			return
 		}
+		if h.proxy.serveUpstreamBlock(w, err) {
+			return
+		}
 		h.proxy.Logger.Error("failed to get artifact", "error", err)
 		http.Error(w, "failed to fetch module", http.StatusBadGateway)
 		return

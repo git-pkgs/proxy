@@ -66,6 +66,8 @@ var knownClients = map[string]string{
 	"apk":               "apk",
 	"pacman":            "pacman",
 	"pkg":               "pkg",
+	"terraform":         "terraform",
+	"opentofu":          "opentofu",
 	"conda":             "conda",
 	"mamba":             "conda",
 	"conan":             "conan",
