@@ -149,6 +149,10 @@ func TestMetadataPolicyBlockIsForwarded(t *testing.T) {
 		{name: "swift releases", path: "/example/policy-demo", handler: func(p *Proxy, u string) http.Handler {
 			return NewSwiftHandler(p, "http://localhost", u).Routes()
 		}},
+		// A source archive with a cold cache reads the release first.
+		{name: "swift archive", path: "/example/policy-demo/1.0.0.zip", handler: func(p *Proxy, u string) http.Handler {
+			return NewSwiftHandler(p, "http://localhost", u).Routes()
+		}},
 		{name: "go version list", path: "/example.com/policy-demo/@v/list", handler: func(p *Proxy, u string) http.Handler {
 			return NewGoHandlerWithUpstream(p, "http://localhost", u).Routes()
 		}},
@@ -259,12 +263,18 @@ func TestMetadataPolicyBlockServesTheCachedCopy(t *testing.T) {
 	proxy.CacheMetadata = true
 	h := NewNPMHandler(proxy, "http://localhost", upstream.URL).Routes()
 
+	var first string
 	for i, want := range []bool{false, true} {
 		refuse = want
 		w := httptest.NewRecorder()
 		h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/policy-demo", nil))
 		if w.Code != http.StatusOK {
 			t.Fatalf("request %d: status = %d, body = %q; want 200", i+1, w.Code, w.Body.String())
+		}
+		if i == 0 {
+			first = w.Body.String()
+		} else if w.Body.String() != first {
+			t.Errorf("request 2: body = %q, want the cached %q", w.Body.String(), first)
 		}
 	}
 	if refused == 0 {

@@ -658,7 +658,9 @@ func (h *SwiftHandler) writeArtifactError(w http.ResponseWriter, err error) {
 		writeSwiftProblem(w, http.StatusForbidden, err.Error())
 		return
 	}
-	if writeUpstreamHeld(w, err) {
+	// The release metadata an uncached archive is looked up in can be
+	// refused too.
+	if h.proxy.writeUpstreamRefusal(w, err) {
 		return
 	}
 	h.proxy.Logger.Error("Swift archive request failed", "error", err)
