@@ -113,12 +113,18 @@ external database and object-storage configuration options.
 
 Set `deploymentAnnotations` to add annotations to the Deployment itself. For
 example, when Stakater Reloader is installed, the following watches an external
-ConfigMap referenced by the pod and restarts the Deployment when it changes:
+ConfigMap mounted by the pod and restarts the Deployment when it changes:
 
 ```yaml
+config:
+  existingConfigMap: proxy-outbound
 deploymentAnnotations:
   configmap.reloader.stakater.com/reload: proxy-outbound
 ```
+
+The external ConfigMap must already exist in the release namespace and contain
+proxy configuration under `config.existingConfigMapKey` (default: `config.yaml`).
+Keep the annotation value equal to the mounted ConfigMap's name.
 
 The SQLite database needs a local disk or a block-backed volume, even with one
 replica; `ReadWriteOnce` alone doesn't guarantee that, since the storage class
