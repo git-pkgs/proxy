@@ -222,6 +222,7 @@ func TestMirrorDebianRefusesWhatItCantFind(t *testing.T) {
 		"pkg:deb/debian/curl@9.9.9-1?arch=amd64&distro=debian-12":                           "isn't in",
 		"pkg:deb/debian/curl@7.88.1-10+deb12u8?arch=arm64&distro=debian-12":                 "no Debian Packages index",
 		"pkg:deb/debian/curl@7.88.1-10+deb12u8?arch=amd64&distro=debian-13":                 "trixie",
+		"pkg:deb/ubuntu/zlib1g@1.2.11.dfsg-2ubuntu9.2?arch=amd64&distro=ubuntu-26.04":       "resolute",
 		"pkg:deb/debian/openssh-client@9.2p1-2+deb12u3?arch=amd64&distro=debian-12&epoch=2": "isn't in",
 		"pkg:deb/debian/curl@7.88.1-10+deb12u8?arch=amd64&distro=debian-12&epoch=x":         "epoch",
 		"pkg:deb/debian/odd@1.0-1?arch=amd64&distro=debian-12":                              "isn't a package file",
