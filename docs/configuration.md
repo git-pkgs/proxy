@@ -668,12 +668,12 @@ as signatures and keys, is passed through uncached. When `upstream.freebsd` is e
 repository named `freebsd` pointing at `https://pkg.freebsd.org` is available;
 configuring any entry replaces that default.
 
-### Terraform and OpenTofu providers
+### Terraform and OpenTofu providers and modules
 
 ```yaml
 upstream:
 
-  # Provider registries, by the hostname in provider source addresses.
+  # Provider and module registries, by the hostname in source addresses.
   terraform:
     registry.terraform.io: "https://registry.terraform.io"
     registry.opentofu.org: "https://registry.opentofu.org"
@@ -691,6 +691,19 @@ shared artifact cache, as `pkg:terraform/{namespace}/{type}`, and are checked
 against the registry's `shasum`. Namespace and type are lowercased. When
 `upstream.terraform` is empty, the two registries above are mirrored;
 configuring any entry replaces that default.
+
+`/terraform/modules/{hostname}/` serves the module registry protocol for the
+same registries, e.g.
+`/terraform/modules/registry.terraform.io/terraform-aws-modules/vpc/aws/versions`.
+Version lists and download locations go through the metadata cache too. A
+download location such as `git::https://github.com/terraform-aws-modules/terraform-aws-vpc?ref=…`
+names a Git repository; when an [`upstream.git`](#git-repositories) host
+serves it and the git cache is configured, the location is rewritten to
+`git::{base_url}/git/{name}/{repo}`, keeping the subdirectory and query, so
+the module is cloned through the git cache. Other locations are passed on,
+with a relative one resolved against the registry's URL. Unlike provider addresses, module addresses
+are passed to the registry in the case the client gives them, as Terraform
+keeps it.
 
 ### Alpine APK snapshots
 
@@ -1443,6 +1456,12 @@ Names and versions are compared the way each ecosystem treats them:
   lowercase, without the registry hostname: `pkg:terraform/hashicorp/random@3.6.0`.
   It covers the provider on every registry in `upstream.terraform`, however
   the request spells the address.
+- A Terraform or OpenTofu module entry names the namespace and name in
+  lowercase, without the target system or the registry hostname:
+  `pkg:terraform/terraform-aws-modules/vpc@5.0.0` covers `vpc/aws` and any
+  other `vpc` module of that namespace, however the request spells the
+  address. A provider and a module with the same namespace and name share an
+  entry.
 
 Denied versions are removed from npm packuments, Cargo sparse indexes, and PyPI
 simple HTML/JSON (files and the JSON `versions` list) and release metadata, including responses served from cached

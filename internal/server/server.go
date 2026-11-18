@@ -589,6 +589,7 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 	}
 	gitHandler := handler.NewGitHandler(proxy, s.git, s.cfg.Upstream).WithBaseURL(baseURL)
 	r.Mount("/git", http.StripPrefix("/git", gitHandler.Routes()))
+	terraformHandler.WithGit(gitHandler)
 	return gitHandler
 }
 
