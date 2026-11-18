@@ -114,6 +114,8 @@ ingress:
   #    hosts:
   #      - proxy.example.com
 
+# Annotations on the Deployment itself, for example to enable ConfigMap reloading.
+deploymentAnnotations: {}
 podAnnotations: {}
 podLabels: {}
 

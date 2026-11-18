@@ -3,6 +3,10 @@ kind: Deployment
 metadata:
   name: {{ include "proxy.fullname" . }}
   namespace: {{ .Release.Namespace }}
+  {{- with .Values.deploymentAnnotations }}
+  annotations:
+    {{- toYaml . | nindent 4 }}
+  {{- end }}
   labels:
     {{- include "proxy.labels" . | nindent 4 }}
 spec:

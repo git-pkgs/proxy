@@ -111,6 +111,9 @@ using SQLite and filesystem artifact storage under `/data`. See
 [`deploy/charts/proxy/values.yaml`](deploy/charts/proxy/values.yaml) for ingress,
 external database and object-storage configuration options.
 
+Set `deploymentAnnotations` to add annotations to the Deployment itself,
+separately from `podAnnotations`.
+
 The SQLite database needs a local disk or a block-backed volume, even with one
 replica; `ReadWriteOnce` alone doesn't guarantee that, since the storage class
 can still be NFS. If the cluster only offers network filesystem storage, use
