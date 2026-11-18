@@ -989,6 +989,11 @@ func (p *Proxy) coalesceFetch(ctx context.Context, key string, recheck func() (a
 	if f.unrecorded != nil {
 		return p.serveUnrecorded(ctx, f.unrecorded, f.val.artifact, f.val.storagePath)
 	}
+	// A client served by a fetch it joined downloaded the artifact, even
+	// when a mirror run started the fetch.
+	if !mirrorFetch(ctx) {
+		_ = p.DB.RecordArtifactHit(f.val.artifact.PURL, f.val.artifact.Filename)
+	}
 	return p.openStoredArtifact(ctx, f.val.artifact, f.val.storagePath)
 }
 
