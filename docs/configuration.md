@@ -990,19 +990,21 @@ A transfer that receives nothing for 10 minutes is abandoned. Git's automatic
 garbage collection runs as part of fetches, and files over 8MB are kept
 without delta compression, so one large file does not take a fetch's memory.
 
-After a fetch changes a repository, its serving index is rewritten in the
-background when the one it has is older than `maintenance_interval` (an
-hour by default), or once it is, for a fetch that came sooner: a
+Each cached repository gets a serving index, written in the background: a
 multi-pack index with reachability bitmaps, which turn the object
 enumeration at the head of a clone from a walk of the whole history into
-bitmap lookups. `maintenance_interval: 0` rewrites it after every fetch that
-changes the repository, and `off` turns the maintenance off. At most two
-repositories are maintained at once, maintenance never rewrites packs, and
-neither requests nor fetches wait for a run: the fetches that start while
-it writes skip Git's automatic garbage collection, which the next fetch
-runs. The index is rebuilt from the packs, so it is not counted by
-`max_size` or `max_repo_size`, and one that cannot be built on is written
-again from scratch.
+bitmap lookups. A repository gets one on its first use, and when a fetch
+brings packs the index does not cover, it is rewritten once it is older
+than `maintenance_interval` (an hour by default), or when it becomes so,
+for a fetch that came sooner. An index that covers every pack is left as
+it is. `maintenance_interval: 0` rewrites it after every fetch that brings
+a pack, and `off` turns the maintenance off. At most two repositories are
+maintained at once, maintenance never rewrites packs, and neither requests
+nor fetches wait for a run: the fetches that start while it writes skip
+Git's automatic garbage collection, which the next run catches up on
+before it writes. The index is rebuilt from the packs, so it is not counted
+by `max_size` or `max_repo_size`, and one that cannot be built on is
+written again from scratch.
 Maintenance needs `git` 2.56 or newer; with older `git`, or with
 `maintenance_interval: off`, the cache runs `git` as it did before
 maintenance existed.

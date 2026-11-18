@@ -69,7 +69,7 @@ type Options struct {
 	Maintenance bool
 	// MaintenanceInterval is the least time between the bitmap writes of
 	// one repository, which walk all of its objects. Zero rewrites them
-	// whenever a fetch changes the repository.
+	// whenever a fetch brings a pack.
 	MaintenanceInterval time.Duration
 	// Client makes every upstream request, including those of the git
 	// processes the cache runs. Redirects are never followed.
@@ -181,16 +181,19 @@ type repo struct {
 	// url is the upstream URL the last successful refresh used.
 	url atomic.Pointer[string]
 	// maintainedAt is the refsWritten count the repository's serving
-	// indexes cover. It is stored only when a run succeeds, so a failed
-	// one is retried by the next request. maintainedAt is written
+	// indexes cover, -1 for a repository found on disk, whose index the
+	// first refresh checks. It is stored only when a run succeeds, so a
+	// failed one is retried by the next request. maintainedAt is written
 	// alone; maintaining, maintainPending and maintainTimer are guarded
 	// by Cache.mu. indexing is set while a run writes the index, and is
-	// changed only with the write slot held or by the run that set it.
+	// changed only with the write slot held or by the run that set it;
+	// gcSkipped records that a fetch skipped its gc meanwhile.
 	maintainedAt    atomic.Int64
 	maintaining     bool
 	maintainPending bool
 	maintainTimer   *time.Timer
 	indexing        atomic.Bool
+	gcSkipped       atomic.Bool
 }
 
 // repoURL returns the upstream URL the last successful refresh used, or ""
@@ -382,6 +385,9 @@ func (c *Cache) load() error {
 			rp.lastChecked.Store(stampTime(path, checkedStamp))
 			rp.lastUsed.Store(stampTime(path, usedStamp))
 			rp.usedWritten.Store(rp.lastUsed.Load())
+			// Its index may be missing or behind, cached before maintenance
+			// was on or cut short by the last stop.
+			rp.maintainedAt.Store(-1)
 			if data, err := os.ReadFile(filepath.Join(path, urlFile)); err == nil {
 				if u := strings.TrimSpace(string(data)); u != "" {
 					rp.url.Store(&u)
@@ -651,9 +657,12 @@ func (c *Cache) dirSize(dir string) int64 {
 
 // isIndexFile reports whether name is a serving index file, written by
 // maintenance and rebuilt from the packs: a multi-pack index with the
-// reachability bitmaps beside it, or a single-pack bitmap.
+// reachability bitmaps beside it, a single-pack bitmap, or the temporary
+// files of a run writing them. A fetch that measures the repository while
+// a run writes would otherwise count those, and could find it too large.
 func isIndexFile(name string) bool {
-	return strings.HasPrefix(name, midxName) || strings.HasSuffix(name, ".bitmap")
+	return strings.HasPrefix(name, midxName) || strings.HasSuffix(name, ".bitmap") ||
+		strings.HasPrefix(name, "tmp_bitmap_") || strings.HasPrefix(name, "tmp_rev_")
 }
 
 // Stamps are empty files whose modification time records an event, so it

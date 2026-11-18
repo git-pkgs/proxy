@@ -4,6 +4,8 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -325,15 +327,15 @@ func TestMaintenanceAfterInterval(t *testing.T) {
 
 // TestFetchSkipsGCWhileIndexing checks that a fetch that starts while a run
 // writes the index skips the gc that would otherwise end it, which could
-// delete the packs the run reads, and that the fetches after the run do not.
+// delete the packs the run reads, and that the next run runs that gc
+// before writing an index over what it leaves.
 func TestFetchSkipsGCWhileIndexing(t *testing.T) {
 	needGitReady(t)
 	upstream := newFakeUpstream(t)
 	work := upstream.newRepo("repo")
 	tc := newTestCache(t, upstream.server.URL, func(o *Options) {
 		o.Maintenance = true
-		// No run writes after the clone's, so only the test sets indexing.
-		o.MaintenanceInterval = time.Hour
+		o.MaintenanceInterval = 0
 	})
 	tc.clone(t, "repo")
 	waitIdle(t, tc.Cache)
@@ -344,25 +346,35 @@ func TestFetchSkipsGCWhileIndexing(t *testing.T) {
 		found, _ := filepath.Glob(filepath.Join(bare, "objects", "pack", "pack-*.pack"))
 		return len(found)
 	}
-	fetch := func(msg string) {
-		upstream.commit(work, msg)
-		runGit(t, work, "push", "--quiet", "origin", "main")
-		tc.clone(t, "repo")
-		waitIdle(t, tc.Cache)
-	}
 
+	// A run writing the index, as far as the fetches can tell. The runs
+	// they ask for wait, as every slot for a run is taken.
 	rp := tc.repo("up/repo.git")
 	rp.indexing.Store(true)
+	for range maxConcurrentMaintains {
+		tc.maintains <- struct{}{}
+	}
 	for _, msg := range []string{"second", "third", "fourth"} {
-		fetch(msg)
+		upstream.commit(work, msg)
+		runGit(t, work, "push", "--quiet", "origin", "main")
+		// Served once the fetch, and any gc ending it, is done.
+		tc.clone(t, "repo")
 	}
 	if got := packs(); got < 4 {
 		t.Fatalf("%d packs after four fetches while indexing, want one each: gc ran", got)
 	}
+
+	// The write ends, and the runs the fetches asked for go ahead.
 	rp.indexing.Store(false)
-	fetch("fifth")
+	for range maxConcurrentMaintains {
+		<-tc.maintains
+	}
+	waitIdle(t, tc.Cache)
 	if got := packs(); got > 2 {
-		t.Errorf("%d packs after a fetch with no run writing, want gc to repack them", got)
+		t.Errorf("%d packs after the run, want the gc the fetches skipped to have repacked them", got)
+	}
+	if due, _ := tc.indexDue(rp); due {
+		t.Error("the run left the index short of the packs the gc left")
 	}
 }
 
@@ -428,6 +440,9 @@ func TestDirSizeSkipsIndexes(t *testing.T) {
 		{filepath.Join(packDir, midxName), 7, true},
 		{filepath.Join(packDir, midxName+"-1.bitmap"), 9, true},
 		{filepath.Join(packDir, midxName+".lock"), 0, true},
+		// A run's files while it writes.
+		{filepath.Join(packDir, "tmp_bitmap_abc"), 11, true},
+		{filepath.Join(packDir, "tmp_rev_abc"), 3, true},
 	}
 	var want, all int64
 	for _, f := range files {
@@ -445,5 +460,208 @@ func TestDirSizeSkipsIndexes(t *testing.T) {
 	}
 	if got := (&Cache{}).dirSize(dir); got != all {
 		t.Errorf("without maintenance, dirSize counted %d, want %d", got, all)
+	}
+}
+
+// packedRepo returns a bare repository holding n packs, one per commit,
+// fetched as the cache fetches, with no index.
+func packedRepo(t *testing.T, n int) string {
+	t.Helper()
+	work := t.TempDir()
+	runGit(t, work, "init", "--quiet", "--initial-branch", "main")
+	bare := t.TempDir()
+	runGit(t, bare, "init", "--quiet", "--bare")
+	for i := range n {
+		if err := os.WriteFile(filepath.Join(work, "f"), []byte(strconv.Itoa(i)), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		runGit(t, work, "add", "f")
+		runGit(t, work, "commit", "--quiet", "-m", strconv.Itoa(i))
+		runGit(t, bare, "-c", "transfer.unpackLimit=1", "fetch", "--quiet", "--no-auto-maintenance",
+			work, "main:refs/heads/main")
+	}
+	return bare
+}
+
+// packIndexes returns the names of the index files of the packs in bare.
+func packIndexes(t *testing.T, bare string) []string {
+	t.Helper()
+	found, _ := filepath.Glob(filepath.Join(bare, "objects", "pack", "pack-*.idx"))
+	for i, path := range found {
+		found[i] = filepath.Base(path)
+	}
+	return found
+}
+
+// TestIndexedPacks checks that the packs read from a multi-pack index git
+// wrote are the ones it covers, and that a file that is not one, or is cut
+// short, is refused rather than read as covering nothing.
+func TestIndexedPacks(t *testing.T) {
+	needGitReady(t)
+	bare := packedRepo(t, 3)
+	runGit(t, bare, "multi-pack-index", "write", "--bitmap")
+	midx := midxPath(t, bare)
+	got, err := indexedPacks(midx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	want := packIndexes(t, bare)
+	if len(got) != len(want) {
+		t.Fatalf("read %v, want %v", got, want)
+	}
+	for _, name := range want {
+		if !got[name] {
+			t.Errorf("read %v, without %s", got, name)
+		}
+	}
+
+	data, err := os.ReadFile(midx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	broken := filepath.Join(t.TempDir(), midxName)
+	for name, content := range map[string][]byte{
+		"empty":                   nil,
+		"another file":            []byte("PACK\x00\x00\x00\x02\x00\x00\x00\x00"),
+		"cut in the header":       data[:8],
+		"cut in the chunk table":  data[:20],
+		"cut in the pack names":   data[:100],
+		"a pack count off by one": append(append(slices.Clone(data[:8]), 0, 0, 0, 4), data[12:]...),
+	} {
+		if err := os.WriteFile(broken, content, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if packs, err := indexedPacks(broken); err == nil {
+			t.Errorf("%s: read %v", name, packs)
+		}
+	}
+}
+
+// TestIndexDue checks when the serving index is due to be written: when
+// it is missing, has no bitmaps, cannot be read or names a pack that is
+// gone, and when it leaves packs out once the interval has passed, but
+// never while it covers every pack.
+func TestIndexDue(t *testing.T) {
+	needGitReady(t)
+	c := &Cache{opts: Options{MaintenanceInterval: time.Hour}}
+	check := func(name string, rp *repo, wantDue, wantWait bool) {
+		t.Helper()
+		due, wait := c.indexDue(rp)
+		if due != wantDue || (wait > 0) != wantWait {
+			t.Errorf("%s: due %v, wait %v; want due %v, a wait %v", name, due, wait, wantDue, wantWait)
+		}
+	}
+	setUp := func(index ...string) (*repo, string) {
+		bare := packedRepo(t, 2)
+		if len(index) > 0 {
+			runGit(t, bare, append([]string{"multi-pack-index", "write"}, index...)...)
+		}
+		return &repo{dir: bare}, bare
+	}
+
+	check("no packs", &repo{dir: t.TempDir()}, false, false)
+	rp, _ := setUp()
+	check("no index", rp, true, false)
+	rp, _ = setUp("--no-bitmap")
+	check("no bitmaps", rp, true, false)
+	rp, bare := setUp("--bitmap")
+	check("covers every pack", rp, false, false)
+
+	// A pack it leaves out: due once the interval has passed.
+	work := t.TempDir()
+	runGit(t, work, "init", "--quiet", "--initial-branch", "main")
+	runGit(t, work, "commit", "--quiet", "--allow-empty", "-m", "unrelated")
+	runGit(t, bare, "-c", "transfer.unpackLimit=1", "fetch", "--quiet", "--no-auto-maintenance",
+		work, "main:refs/heads/other")
+	check("leaves a pack out, within the interval", rp, false, true)
+	old := time.Now().Add(-2 * time.Hour)
+	if err := os.Chtimes(midxPath(t, bare), old, old); err != nil {
+		t.Fatal(err)
+	}
+	check("leaves a pack out, after the interval", rp, true, false)
+
+	// A pack it names is gone.
+	rp, bare = setUp("--bitmap")
+	gone := strings.TrimSuffix(packIndexes(t, bare)[0], ".idx")
+	matches, _ := filepath.Glob(filepath.Join(bare, "objects", "pack", gone+".*"))
+	for _, path := range matches {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	check("names a pack that is gone", rp, true, false)
+
+	rp, bare = setUp("--bitmap")
+	if err := os.WriteFile(midxPath(t, bare), []byte("not an index"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	check("cannot be read", rp, true, false)
+}
+
+// TestMaintenanceLeavesCoveringIndex checks that a fetch that changes the
+// refs but brings no pack does not rewrite an index that covers every
+// pack, with no interval to hold it back.
+func TestMaintenanceLeavesCoveringIndex(t *testing.T) {
+	needGitReady(t)
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) {
+		o.Maintenance = true
+		o.MaintenanceInterval = 0
+	})
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	bare := bareRepo(tc)
+	before := midxMtime(t, bare)
+	packs := packIndexes(t, bare)
+
+	// A new branch at a commit the cache holds.
+	runGit(t, work, "push", "--quiet", "origin", "main:refs/heads/other")
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+
+	if got := packIndexes(t, bare); len(got) != len(packs) {
+		t.Fatalf("the fetch brought a pack: %v, before %v", got, packs)
+	}
+	// git would leave such an index as it is too; no run gets that far.
+	if writes := strings.Count(tc.logs.String(), "wrote the serving index"); writes != 1 {
+		t.Errorf("%d index writes, want the clone's alone", writes)
+	}
+	if after := midxMtime(t, bare); !after.Equal(before) {
+		t.Error("an index that covers every pack was rewritten")
+	}
+	rp := tc.repo("up/repo.git")
+	if got, covered := rp.refsWritten.Load(), rp.maintainedAt.Load(); got != covered {
+		t.Errorf("refsWritten %d, maintainedAt %d", got, covered)
+	}
+}
+
+// TestMaintenanceChecksIndexAfterRestart checks that a repository found on
+// disk gets its index on its first request, though its upstream has not
+// changed: one cached before maintenance was on, here.
+func TestMaintenanceChecksIndexAfterRestart(t *testing.T) {
+	needGitReady(t)
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	dir := t.TempDir()
+	first := newTestCache(t, upstream.server.URL, func(o *Options) { o.CacheDir = dir })
+	first.clone(t, "repo")
+	waitIdle(t, first.Cache)
+	if err := first.Close(); err != nil {
+		t.Fatal(err)
+	}
+	bare := bareRepo(first)
+	if fileExists(midxPath(t, bare)) {
+		t.Fatal("an index was written with maintenance off")
+	}
+
+	second := newTestCache(t, upstream.server.URL, func(o *Options) {
+		o.CacheDir = dir
+		o.Maintenance = true
+	})
+	second.clone(t, "repo")
+	waitIdle(t, second.Cache)
+	if !fileExists(midxPath(t, bare)) || len(bitmapsOf(t, bare)) == 0 {
+		t.Error("the repository found on disk was left without an index")
 	}
 }

@@ -1,7 +1,12 @@
 package gitcache
 
 import (
+	"bytes"
 	"context"
+	"encoding/binary"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"slices"
@@ -125,11 +130,21 @@ func (c *Cache) maintain(rp *repo) {
 	}
 	// The fetches up to here are the ones this run covers.
 	written := rp.refsWritten.Load()
-	wait, ok := c.indexDue(rp)
-	if !ok || wait > 0 {
+	if rp.gcSkipped.Swap(false) {
+		// The fetches that ran while an index was written skipped the gc
+		// that ends a fetch. It runs here instead, with the write slot held
+		// as in a fetch, and before an index is written over what it leaves.
+		if _, err := c.run(ctx, rp.dir, "maintenance", "run", "--auto", "--quiet"); err != nil {
+			c.logger.Warn("git cache: the gc held back while an index was written failed",
+				"repository", rp.key, "error", err)
+		}
+	}
+	due, wait := c.indexDue(rp)
+	if !due {
 		unlock()
 		// Done without writing anything, or every request until the
-		// interval ran out would run maintenance again.
+		// interval ran out would run maintenance again. Packs left to
+		// index are indexed when it does.
 		rp.maintainedAt.Store(written)
 		if wait > 0 {
 			c.maintainLater(rp, wait)
@@ -145,11 +160,13 @@ func (c *Cache) maintain(rp *repo) {
 	defer rp.indexing.Store(false)
 	c.clearLeftovers(rp)
 	unlock()
+	start := time.Now()
 	if err := c.writeIndex(ctx, rp); err != nil {
 		// Not stored, so the next fetch retries.
 		c.logger.Warn("git cache: writing the multi-pack index failed", "repository", rp.key, "error", err)
 		return
 	}
+	c.logger.Debug("git cache: wrote the serving index", "repository", rp.key, "duration", time.Since(start))
 	rp.maintainedAt.Store(written)
 }
 
@@ -198,34 +215,113 @@ func (c *Cache) clearLeftovers(rp *repo) {
 	}
 }
 
-// indexDue reports how long until the repository's serving index is due
-// to be rewritten: no time when it has no multi-pack index or no bitmaps
-// beside it, else what remains of MaintenanceInterval since it was
-// written. ok is false for a repository with no packs, which has nothing
-// to index.
-func (c *Cache) indexDue(rp *repo) (wait time.Duration, ok bool) {
-	packs, _ := filepath.Glob(filepath.Join(rp.dir, "objects", "pack", "pack-*.idx"))
+// indexDue reports whether the repository's serving index is due to be
+// written, and, when it is not, how long until packs it does not cover
+// make it so. It is due when it is missing, has no bitmaps beside it,
+// cannot be read or names a pack that is gone, and, once
+// MaintenanceInterval has passed since it was written, when there are
+// packs it does not cover. An index that covers every pack is left as it
+// is, and a repository with no packs has nothing to index.
+func (c *Cache) indexDue(rp *repo) (due bool, wait time.Duration) {
+	packDir := filepath.Join(rp.dir, "objects", "pack")
+	packs, _ := filepath.Glob(filepath.Join(packDir, "pack-*.idx"))
 	if len(packs) == 0 {
-		return 0, false
+		return false, 0
 	}
-	midx := filepath.Join(rp.dir, "objects", "pack", midxName)
+	midx := filepath.Join(packDir, midxName)
 	info, err := os.Stat(midx)
 	if err != nil {
-		return 0, true
+		return true, 0
 	}
 	if bitmaps, _ := filepath.Glob(midx + "-*.bitmap"); len(bitmaps) == 0 {
-		return 0, true
+		return true, 0
 	}
-	return max(0, c.opts.MaintenanceInterval-time.Since(info.ModTime())), true
+	indexed, err := indexedPacks(midx)
+	if err != nil {
+		return true, 0
+	}
+	uncovered := false
+	for _, pack := range packs {
+		name := filepath.Base(pack)
+		uncovered = uncovered || !indexed[name]
+		delete(indexed, name)
+	}
+	if len(indexed) > 0 {
+		return true, 0
+	}
+	if !uncovered {
+		return false, 0
+	}
+	if wait := c.opts.MaintenanceInterval - time.Since(info.ModTime()); wait > 0 {
+		return false, wait
+	}
+	return true, 0
+}
+
+// maxPackNames bounds the PNAM chunk indexedPacks reads, far above what
+// the names of any repository's packs take, so a corrupt index cannot
+// make it allocate much.
+const maxPackNames = 64 << 20
+
+// indexedPacks returns the packs the multi-pack index at path covers, by
+// the names of their index files ("pack-<hash>.idx"), read from its PNAM
+// chunk, the index's list of its packs. See gitformat-pack(5).
+func indexedPacks(path string) (map[string]bool, error) {
+	f, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer func() { _ = f.Close() }()
+	// The header: "MIDX", the version, the object ID version, the number
+	// of chunks, the number of base indexes and the number of packs.
+	var header [12]byte
+	if _, err := io.ReadFull(f, header[:]); err != nil {
+		return nil, fmt.Errorf("reading the multi-pack index header: %w", err)
+	}
+	if string(header[:4]) != "MIDX" {
+		return nil, errors.New("not a multi-pack index")
+	}
+	chunks, packs := int(header[6]), binary.BigEndian.Uint32(header[8:])
+	// The chunk table: an ID and an offset per chunk, in file order, then
+	// a terminating entry whose offset is where the last chunk ends.
+	table := make([]byte, (chunks+1)*12)
+	if _, err := io.ReadFull(f, table); err != nil {
+		return nil, fmt.Errorf("reading the multi-pack index chunk table: %w", err)
+	}
+	for i := range chunks {
+		if string(table[i*12:i*12+4]) != "PNAM" {
+			continue
+		}
+		start := binary.BigEndian.Uint64(table[i*12+4:])
+		end := binary.BigEndian.Uint64(table[(i+1)*12+4:])
+		if end < start || end-start > maxPackNames {
+			return nil, errors.New("the multi-pack index's pack names are out of bounds")
+		}
+		names := make([]byte, end-start)
+		if _, err := f.ReadAt(names, int64(start)); err != nil {
+			return nil, fmt.Errorf("reading the multi-pack index's pack names: %w", err)
+		}
+		// NUL-terminated names, padded with NULs to a multiple of four.
+		indexed := map[string]bool{}
+		for _, name := range bytes.Split(bytes.TrimRight(names, "\x00"), []byte{0}) {
+			indexed[string(name)] = true
+		}
+		if uint32(len(indexed)) != packs {
+			return nil, fmt.Errorf("the multi-pack index names %d packs, not the %d its header counts", len(indexed), packs)
+		}
+		return indexed, nil
+	}
+	return nil, errors.New("the multi-pack index has no pack names")
 }
 
 // fetchFlags returns flags for a fetch into the repository, which must
 // hold its write slot. While a maintenance run writes the repository's
 // index, the fetch skips the gc that may end it, which could delete the
-// packs the run is reading; a later fetch runs it.
+// packs the run is reading; the next run runs it.
 func fetchFlags(rp *repo, flags []string) []string {
-	if rp.indexing.Load() {
-		return append(slices.Clip(flags), "--no-auto-maintenance")
+	if !rp.indexing.Load() {
+		return flags
 	}
-	return flags
+	rp.gcSkipped.Store(true)
+	return append(slices.Clip(flags), "--no-auto-maintenance")
 }
