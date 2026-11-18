@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 )
@@ -54,5 +55,22 @@ func TestTransportDoesNotLendCredentialsToARedirectedTokenRequest(t *testing.T) 
 		if strings.Contains(got, "credentialed-token") {
 			t.Fatalf("the registry was sent %q, a token issued with the configured credentials", got)
 		}
+	}
+}
+
+// TestTokenRedirectKeepsCredentialsSpelledDifferently checks a redirect hop
+// whose credentials differ from the realm's only in the case of the header
+// name still gets them.
+func TestTokenRedirectKeepsCredentialsSpelledDifferently(t *testing.T) {
+	transport := NewTransport(http.DefaultTransport, func(rawURL string) (string, string) {
+		if strings.HasPrefix(rawURL, "https://realm.example") {
+			return "Authorization", "Bearer t"
+		}
+		return "authorization", "Bearer t"
+	})
+	hop := configuredTransport{parent: transport, realm: "https://realm.example/token"}
+	target, _ := url.Parse("https://service.example/token")
+	if !hop.sameCredentials(target) {
+		t.Error("credentials differing only in header case were not kept")
 	}
 }

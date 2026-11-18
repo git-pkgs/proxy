@@ -381,7 +381,7 @@ func (t configuredTransport) sameCredentials(u *url.URL) bool {
 	}
 	name, value := t.parent.authForURL(u.String())
 	realmName, realmValue := t.parent.authForURL(t.realm)
-	return name == realmName && value == realmValue
+	return strings.EqualFold(name, realmName) && value == realmValue
 }
 
 func (t *Transport) cachedTokenForRequest(requestURL *url.URL) string {
