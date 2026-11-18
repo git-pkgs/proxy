@@ -248,7 +248,7 @@ func (c *Cache) clone(ctx context.Context, rp *repo, repoURL string, remote remo
 	if _, err := c.setHead(ctx, tmp, remote, ""); err != nil {
 		return err
 	}
-	size := dirSize(tmp)
+	size := c.dirSize(tmp)
 	if c.opts.MaxRepoSize > 0 && size > c.opts.MaxRepoSize {
 		return ErrTooLarge
 	}
@@ -286,7 +286,7 @@ func (c *Cache) update(ctx context.Context, rp *repo, repoURL string, remote rem
 		res := c.newReservation()
 		err = c.fetch(ctx, rp.dir, repoURL, limit, res, refreshFlags, branchesAndTags...)
 		rp.refsWritten.Add(1)
-		res.settle(rp, dirSize(rp.dir))
+		res.settle(rp, c.dirSize(rp.dir))
 		if err != nil {
 			return err
 		}

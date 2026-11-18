@@ -33,14 +33,6 @@ var gitConfig = [][2]string{
 	// started it, and sizes are measured after it.
 	{"gc.autoDetach", "false"},
 	{"maintenance.autoDetach", "false"},
-	// Since git 2.54, the "git maintenance run --auto" that ends a fetch
-	// follows a geometric strategy, which merges the packs whose sizes
-	// are within a factor of two, however large, rewriting the packs a
-	// repository was fetched as and dropping the reachability bitmaps
-	// maintenance writes. The incremental strategy keeps what a Git
-	// server has always done after a fetch: gc, and only once its own
-	// thresholds are crossed. Older git ignores the setting in these runs.
-	{"maintenance.strategy", "incremental"},
 	{"init.defaultBranch", "main"},
 	// Keep every fetched pack as a pack. index-pack writes it to a
 	// temporary file and moves it into place only once complete, whereas a
@@ -64,8 +56,17 @@ var gitConfig = [][2]string{
 }
 
 // maintenanceConfig applies with gitConfig when maintenance writes the
-// serving indexes.
+// serving indexes, which needs git 2.56. Without it, git runs as it did
+// before maintenance existed.
 var maintenanceConfig = [][2]string{
+	// Since git 2.54, the "git maintenance run --auto" that ends a fetch
+	// follows a geometric strategy, which merges the packs whose sizes
+	// are within a factor of two, however large, rewriting the packs a
+	// repository was fetched as and dropping the reachability bitmaps
+	// maintenance writes. The incremental strategy keeps what a Git
+	// server has always done after a fetch: gc, and only once its own
+	// thresholds are crossed.
+	{"maintenance.strategy", "incremental"},
 	// No commit-graph. With the reachability bitmaps, git reads a
 	// repository's whole commit-graph to find what a fetching client
 	// already has, which over NFS with a cold page cache made the fetches

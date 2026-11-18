@@ -697,7 +697,7 @@ func TestNewRemovesRepointedUpstreams(t *testing.T) {
 // reftable with its refs, and served without being cloned again.
 func TestNewMigratesFilesFormatRepositories(t *testing.T) {
 	// Before the fixture, as git older than 2.45 has no --ref-format.
-	if !gitAtLeast(runGit(t, "", "version"), reftableMinor) {
+	if !gitReady(runGit(t, "", "version")) {
 		t.Skip("git is older than 2.56")
 	}
 	upstream := newFakeUpstream(t)
@@ -720,28 +720,20 @@ func TestNewMigratesFilesFormatRepositories(t *testing.T) {
 	tc.clone(t, "repo")
 }
 
-// TestGitAtLeast checks which versions turn reftable and maintenance on,
+// TestGitReady checks which versions turn reftable and maintenance on,
 // across the ways git prints its version.
-func TestGitAtLeast(t *testing.T) {
-	for _, tt := range []struct {
-		out   string
-		minor int
-		want  bool
-	}{
-		{"git version 2.56.1\n", reftableMinor, true},
-		{"git version 2.56.0.windows.1\n", reftableMinor, true},
-		{"git version 2.57.0-rc0\n", reftableMinor, true},
-		{"git version 3.0.0\n", reftableMinor, true},
-		{"git version 2.55.2\n", reftableMinor, false},
-		{"git version 2.39.1 (Apple Git-146)\n", reftableMinor, false},
-		{"git version 2.x\n", reftableMinor, false},
-		{"git version 2.39.1 (Apple Git-146)\n", midxBitmapMinor, true},
-		{"git version 2.38.0\n", midxBitmapMinor, true},
-		{"git version 2.37.7\n", midxBitmapMinor, false},
-		{"git version 2.34.1\n", midxBitmapMinor, false},
+func TestGitReady(t *testing.T) {
+	for out, want := range map[string]bool{
+		"git version 2.56.1\n":                 true,
+		"git version 2.56.0.windows.1\n":       true,
+		"git version 2.57.0-rc0\n":             true,
+		"git version 3.0.0\n":                  true,
+		"git version 2.55.2\n":                 false,
+		"git version 2.39.1 (Apple Git-146)\n": false,
+		"git version 2.x\n":                    false,
 	} {
-		if got := gitAtLeast(tt.out, tt.minor); got != tt.want {
-			t.Errorf("gitAtLeast(%q, %d) = %v, want %v", tt.out, tt.minor, got, tt.want)
+		if got := gitReady(out); got != want {
+			t.Errorf("gitReady(%q) = %v, want %v", out, got, want)
 		}
 	}
 }

@@ -298,15 +298,16 @@ func New(opts Options) (*Cache, error) {
 		c.maxRequestBody = opts.maxRequestBody
 	}
 	out, err := c.command(context.Background(), nil, "version").Output()
-	c.reftable = err == nil && gitAtLeast(string(out), reftableMinor)
-	if !c.reftable {
+	ready := err == nil && gitReady(string(out))
+	c.reftable = ready
+	if !ready {
 		logger.Info("git cache: repositories keep the files reference format, as reftable needs git 2.56 or newer",
 			"version", strings.TrimSpace(string(out)))
-	}
-	if c.opts.Maintenance && (err != nil || !gitAtLeast(string(out), midxBitmapMinor)) {
-		c.opts.Maintenance = false
-		logger.Info("git cache: serving indexes are not written, as they need git 2.38 or newer",
-			"version", strings.TrimSpace(string(out)))
+		if c.opts.Maintenance {
+			c.opts.Maintenance = false
+			logger.Info("git cache: serving indexes are not written, as they need git 2.56 or newer",
+				"version", strings.TrimSpace(string(out)))
+		}
 	}
 	if err := c.load(); err != nil {
 		_ = lock.Close()
@@ -373,7 +374,7 @@ func (c *Cache) load() error {
 			if c.reftable && !hasReftable(path) {
 				c.migrate(rp)
 			}
-			rp.size.Store(dirSize(path))
+			rp.size.Store(c.dirSize(path))
 			rp.lastChecked.Store(stampTime(path, checkedStamp))
 			rp.lastUsed.Store(stampTime(path, usedStamp))
 			rp.usedWritten.Store(rp.lastUsed.Load())
@@ -392,23 +393,16 @@ func (c *Cache) load() error {
 	return nil
 }
 
-const (
-	// reftableMinor is git 2.56, the first with the reftable fixes the
-	// cache relies on.
-	reftableMinor = 56
-	// midxBitmapMinor is git 2.38, the first without the bugs that could
-	// corrupt a multi-pack index rewritten over an existing one, as
-	// maintenance does: 2.36 fixed its bitmap falling out of step with its
-	// object order, 2.38 a change of preferred pack dropping objects.
-	midxBitmapMinor = 38
-)
-
-// gitAtLeast reports whether out, the output of "git version", names git
-// 2.minor or newer.
-func gitAtLeast(out string, minor int) bool {
-	var major, m int
-	_, err := fmt.Sscanf(out, "git version %d.%d", &major, &m)
-	return err == nil && (major > 2 || major == 2 && m >= minor)
+// gitReady reports whether out, the output of "git version", names git
+// 2.56 or newer, the first with the fixes that reftable storage and the
+// serving indexes maintenance writes rely on. For the indexes, those
+// include object lookups that recover when a concurrent repack removes a
+// pack a multi-pack index points to. With older git, the cache runs git as
+// it did before either existed.
+func gitReady(out string) bool {
+	var major, minor int
+	_, err := fmt.Sscanf(out, "git version %d.%d", &major, &minor)
+	return err == nil && (major > 2 || major == 2 && minor >= 56)
 }
 
 // hasReftable reports whether the repository at dir keeps its references in
@@ -633,15 +627,15 @@ func (c *Cache) removeEvicted(removed []string) {
 	}
 }
 
-// dirSize measures the bytes a repository takes on disk. The serving
-// indexes maintenance writes are left out: they are rebuilt from the
-// packs, so counting them could hold a repository above its max_repo_size,
-// for it then to be evicted and cloned again, only to grow the same
-// indexes once more.
-func dirSize(dir string) int64 {
+// dirSize measures the bytes a repository takes on disk. While maintenance
+// is on, the serving indexes it writes are left out: they are rebuilt from
+// the packs, so counting them could hold a repository above its
+// max_repo_size, for it then to be evicted and cloned again, only to grow
+// the same indexes once more.
+func (c *Cache) dirSize(dir string) int64 {
 	var size int64
 	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
-		if err == nil && d.Type().IsRegular() && !isIndexFile(d.Name()) {
+		if err == nil && d.Type().IsRegular() && (!c.opts.Maintenance || !isIndexFile(d.Name())) {
 			if info, err := d.Info(); err == nil {
 				size += info.Size()
 			}

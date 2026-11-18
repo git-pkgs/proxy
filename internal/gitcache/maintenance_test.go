@@ -23,20 +23,29 @@ func midxMtime(t *testing.T, bare string) time.Time {
 	return info.ModTime()
 }
 
-// commitGraphOn reports whether the git processes of tc read and write the
-// commit-graph of the repository at bare, as git configures them.
-func commitGraphOn(t *testing.T, tc *testCache, bare string) bool {
+// needGitReady skips the test when git is too old for maintenance.
+func needGitReady(t *testing.T) {
 	t.Helper()
-	on := true
-	for _, key := range []string{"core.commitGraph", "gc.writeCommitGraph"} {
-		out, err := tc.command(context.Background(), nil, "-C", bare,
-			"config", "--bool", "--default", "true", key).Output()
-		if err != nil {
-			t.Fatalf("git config %s: %v", key, err)
-		}
-		on = on && strings.TrimSpace(string(out)) == "true"
+	if !gitReady(runGit(t, "", "version")) {
+		t.Skip("git is older than 2.56")
 	}
-	return on
+}
+
+// assertMaintenanceConfig fails the test unless the git processes of tc see
+// every setting of maintenanceConfig in the repository at bare when want
+// is set, and none of them when it is not.
+func assertMaintenanceConfig(t *testing.T, tc *testCache, bare string, want bool) {
+	t.Helper()
+	for _, kv := range maintenanceConfig {
+		out, err := tc.command(context.Background(), nil, "-C", bare, "config", "--get", kv[0]).Output()
+		got, set := strings.TrimSpace(string(out)), err == nil
+		switch {
+		case want && got != kv[1]:
+			t.Errorf("%s is %q, want %q", kv[0], got, kv[1])
+		case !want && set:
+			t.Errorf("%s is set to %q with maintenance off", kv[0], got)
+		}
+	}
 }
 
 func bitmapsOf(t *testing.T, bare string) []string {
@@ -50,8 +59,10 @@ func bitmapsOf(t *testing.T, bare string) []string {
 
 // TestMaintenanceWritesIndexes checks that a cloned repository gets the
 // multi-pack index with reachability bitmaps it is served from, kept up to
-// date with every fetch that changes it, and the commit-graph off.
+// date with every fetch that changes it, with the git settings that keep
+// it working.
 func TestMaintenanceWritesIndexes(t *testing.T) {
+	needGitReady(t)
 	upstream := newFakeUpstream(t)
 	work := upstream.newRepo("repo")
 	tc := newTestCache(t, upstream.server.URL, func(o *Options) {
@@ -62,9 +73,7 @@ func TestMaintenanceWritesIndexes(t *testing.T) {
 	waitIdle(t, tc.Cache)
 	bare := bareRepo(tc)
 
-	if commitGraphOn(t, tc, bare) {
-		t.Error("the commit-graph, which slows fetches down with the bitmaps, is on")
-	}
+	assertMaintenanceConfig(t, tc, bare, true)
 	if !fileExists(midxPath(t, bare)) {
 		t.Fatal("the clone was left without a multi-pack index")
 	}
@@ -94,6 +103,7 @@ func TestMaintenanceWritesIndexes(t *testing.T) {
 // most once per interval, and that a run skipped within it still counts as
 // done, so the requests after it do not run maintenance again.
 func TestMaintenanceInterval(t *testing.T) {
+	needGitReady(t)
 	upstream := newFakeUpstream(t)
 	work := upstream.newRepo("repo")
 	tc := newTestCache(t, upstream.server.URL, func(o *Options) {
@@ -120,8 +130,8 @@ func TestMaintenanceInterval(t *testing.T) {
 }
 
 // TestMaintenanceDisabled checks that a cache with maintenance off leaves
-// the clone without the serving indexes, and with the commit-graph, which
-// speeds clones and fetches up when there are no bitmaps.
+// the clone without the serving indexes, and runs git as it did before
+// maintenance existed.
 func TestMaintenanceDisabled(t *testing.T) {
 	upstream := newFakeUpstream(t)
 	upstream.newRepo("repo")
@@ -132,9 +142,7 @@ func TestMaintenanceDisabled(t *testing.T) {
 	if fileExists(midxPath(t, bare)) {
 		t.Error("a multi-pack index was written with maintenance off")
 	}
-	if !commitGraphOn(t, tc, bare) {
-		t.Error("the commit-graph is off with maintenance off")
-	}
+	assertMaintenanceConfig(t, tc, bare, false)
 	if rp := tc.repo("up/repo.git"); rp.maintainedAt.Load() != 0 {
 		t.Error("a repository was maintained with maintenance off")
 	}
@@ -144,6 +152,7 @@ func TestMaintenanceDisabled(t *testing.T) {
 // the repository as used, which would keep one no client asks for warm and
 // ahead in the eviction order.
 func TestMaintenanceIsNotAUse(t *testing.T) {
+	needGitReady(t)
 	upstream := newFakeUpstream(t)
 	upstream.newRepo("repo")
 	tc := newTestCache(t, upstream.server.URL, func(o *Options) {
@@ -172,6 +181,7 @@ func TestMaintenanceIsNotAUse(t *testing.T) {
 // run killed mid-write leaves behind, which would block every later one,
 // is removed by the next.
 func TestMaintenanceRecoversStaleLocks(t *testing.T) {
+	needGitReady(t)
 	upstream := newFakeUpstream(t)
 	work := upstream.newRepo("repo")
 	tc := newTestCache(t, upstream.server.URL, func(o *Options) {
@@ -201,8 +211,9 @@ func TestMaintenanceRecoversStaleLocks(t *testing.T) {
 	}
 }
 
-// TestDirSizeSkipsIndexes checks that the serving indexes, rebuilt from the
-// packs, are not counted as the repository's size.
+// TestDirSizeSkipsIndexes checks that while maintenance is on, the serving
+// indexes, rebuilt from the packs, are not counted as the repository's
+// size, and that with it off, every file is, as before maintenance existed.
 func TestDirSizeSkipsIndexes(t *testing.T) {
 	dir := t.TempDir()
 	packDir := filepath.Join(dir, "objects", "pack")
@@ -225,16 +236,21 @@ func TestDirSizeSkipsIndexes(t *testing.T) {
 		{filepath.Join(packDir, midxName+"-1.bitmap"), 9, true},
 		{filepath.Join(packDir, midxName+".lock"), 0, true},
 	}
-	var want int64
+	var want, all int64
 	for _, f := range files {
 		if err := os.WriteFile(f.path, make([]byte, f.size), 0o600); err != nil {
 			t.Fatal(err)
 		}
+		all += f.size
 		if !f.index {
 			want += f.size
 		}
 	}
-	if got := dirSize(dir); got != want {
-		t.Errorf("dirSize counted %d, want %d", got, want)
+	maintained := &Cache{opts: Options{Maintenance: true}}
+	if got := maintained.dirSize(dir); got != want {
+		t.Errorf("with maintenance, dirSize counted %d, want %d", got, want)
+	}
+	if got := (&Cache{}).dirSize(dir); got != all {
+		t.Errorf("without maintenance, dirSize counted %d, want %d", got, all)
 	}
 }
