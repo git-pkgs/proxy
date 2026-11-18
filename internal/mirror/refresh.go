@@ -172,9 +172,14 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 	return items, nil
 }
 
+// cachedVariants returns the kinds of files clients downloaded. Files a
+// refresh mirrored are left out, so they don't widen later refreshes.
 func cachedVariants(eco fileEcosystem, files []database.UsedFile) map[string]bool {
 	variants := map[string]bool{}
 	for _, f := range files {
+		if !f.Downloaded {
+			continue
+		}
 		for _, v := range eco.cachedVariants(f.Filename) {
 			variants[v] = true
 		}

@@ -298,6 +298,46 @@ func TestRefreshMirrorsTheFileVariantsClientsFetched(t *testing.T) {
 	}
 }
 
+func TestRefreshSelectsVariantsOnlyFromFilesClientsFetched(t *testing.T) {
+	m, fetcher := setupRefreshMirror(t, "wheel")
+	ctx := context.Background()
+	result, err := m.proxy.GetOrFetchArtifactFromURLWithDigest(ctx, "pypi", "demo", "1.0.0", "demo-1.0.0-py3-none-any.whl", "https://files.example/demo-1.0.0-py3-none-any.whl", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = result.Reader.Close()
+	files := func(version string, names ...string) registries.Version {
+		v := registries.Version{Number: version, PublishedAt: time.Now().Add(-30 * 24 * time.Hour)}
+		for _, n := range names {
+			v.Artifacts = append(v.Artifacts, registries.Artifact{Filename: n, URL: "https://files.example/" + n})
+		}
+		return v
+	}
+	releases := []registries.Version{
+		files("1.0.0", "demo-1.0.0-py3-none-any.whl"),
+		files("1.1.0", "demo-1.1.0-py2.py3-none-any.whl"),
+	}
+	m.Versions = stubReleases{"pypi/demo": releases}
+	if _, err := m.Refresh(ctx, Refresh{Top: 10, Since: 24 * time.Hour}); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got := fetchedMatching(fetcher.fetched(), "1.1.0"); len(got) != 1 {
+		t.Fatalf("first refresh fetched %v, want the 1.1.0 wheel", got)
+	}
+
+	// The mirrored py2.py3 wheel adds py2-none-any to its variants, but no
+	// client fetched that kind.
+	m.Versions = stubReleases{"pypi/demo": append(releases,
+		files("1.2.0", "demo-1.2.0-py3-none-any.whl", "demo-1.2.0-py2-none-any.whl"))}
+	fetcher.reset()
+	if _, err := m.Refresh(ctx, Refresh{Top: 10, Since: 24 * time.Hour}); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got, want := fetcher.fetched(), []string{"https://files.example/demo-1.2.0-py3-none-any.whl"}; !slices.Equal(got, want) {
+		t.Errorf("second refresh fetched %v, want %v", got, want)
+	}
+}
+
 func TestFileVariants(t *testing.T) {
 	tests := []struct {
 		ecosystem, cacheFilename, want string

@@ -50,16 +50,16 @@ func TestMostUsedPackages(t *testing.T) {
 		}
 		want := []UsedPackage{
 			{Ecosystem: "cargo", Name: "serde", PURL: "pkg:cargo/serde", Hits: 1, Files: []UsedFile{
-				{Version: "1.0.200", Filename: "serde-1.0.200.crate", UpstreamURL: "https://example.test/serde-1.0.200.crate"},
+				{Version: "1.0.200", Filename: "serde-1.0.200.crate", UpstreamURL: "https://example.test/serde-1.0.200.crate", Downloaded: true},
 			}},
 			// react has more hits than lodash. Every cached file of lodash is
 			// listed, but only recent downloads count.
 			{Ecosystem: "npm", Name: "react", PURL: "pkg:npm/react", Hits: 10, Files: []UsedFile{
-				{Version: "18.3.1", Filename: "react-18.3.1.tgz", UpstreamURL: "https://example.test/react-18.3.1.tgz"},
+				{Version: "18.3.1", Filename: "react-18.3.1.tgz", UpstreamURL: "https://example.test/react-18.3.1.tgz", Downloaded: true},
 			}},
 			{Ecosystem: "npm", Name: "lodash", PURL: "pkg:npm/lodash", Hits: 5, Files: []UsedFile{
-				{Version: "4.17.20", Filename: "lodash-4.17.20.tgz", UpstreamURL: "https://example.test/lodash-4.17.20.tgz"},
-				{Version: "4.17.21", Filename: "lodash-4.17.21.tgz", UpstreamURL: "https://example.test/lodash-4.17.21.tgz"},
+				{Version: "4.17.20", Filename: "lodash-4.17.20.tgz", UpstreamURL: "https://example.test/lodash-4.17.20.tgz", Downloaded: true},
+				{Version: "4.17.21", Filename: "lodash-4.17.21.tgz", UpstreamURL: "https://example.test/lodash-4.17.21.tgz", Downloaded: true},
 			}},
 		}
 		if !reflect.DeepEqual(got, want) {
@@ -113,6 +113,53 @@ func TestMostUsedPackagesSkipsMirroredArtifactsNotDownloaded(t *testing.T) {
 		}
 		if got, err = db.MostUsedPackages(now.Add(-time.Hour), 10); err != nil || len(got) != 1 {
 			t.Errorf("MostUsedPackages = %+v, %v; want lodash once a client downloaded it", got, err)
+		}
+	})
+}
+
+func TestMostUsedPackagesMarksTheFilesClientsDownloaded(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now()
+		seedUsedArtifact(t, db, "npm", "lodash", "4.17.20", "lodash-4.17.20.tgz", 5, now)
+		seedUsedArtifact(t, db, "npm", "lodash", "4.17.21", "lodash-4.17.21.tgz", 0, now)
+		seedUsedArtifact(t, db, "npm", "lodash", "4.17.22", "lodash-4.17.22.tgz", 0, now)
+		seedUsedArtifact(t, db, "npm", "lodash", "4.17.23", "lodash-4.17.23.tgz", 0, now)
+		seedUsedArtifact(t, db, "npm", "lodash", "4.17.24", "lodash-4.17.24.tgz", 0, now)
+		// A refresh mirrored 4.17.21 and 4.17.22, and a client downloaded
+		// 4.17.22 since. A client fetched 4.17.23 without a recorded hit,
+		// and fetched 4.17.24 again after a refresh had mirrored it.
+		for _, u := range []struct {
+			filename string
+			mirrored any
+		}{
+			{"lodash-4.17.21.tgz", now.Add(time.Minute).UTC()},
+			{"lodash-4.17.22.tgz", now.Add(time.Minute).UTC()},
+			{"lodash-4.17.23.tgz", nil},
+			{"lodash-4.17.24.tgz", now.Add(-time.Minute).UTC()},
+		} {
+			if _, err := db.Exec(db.Rebind("UPDATE artifacts SET last_accessed_at = NULL, mirrored_at = ? WHERE filename = ?"),
+				u.mirrored, u.filename); err != nil {
+				t.Fatal(err)
+			}
+		}
+		if err := db.RecordArtifactHit("pkg:npm/lodash@4.17.22", "lodash-4.17.22.tgz"); err != nil {
+			t.Fatal(err)
+		}
+
+		got, err := db.MostUsedPackages(now.Add(-time.Hour), 10)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if len(got) != 1 {
+			t.Fatalf("MostUsedPackages = %+v, want lodash", got)
+		}
+		downloaded := map[string]bool{}
+		for _, f := range got[0].Files {
+			downloaded[f.Version] = f.Downloaded
+		}
+		want := map[string]bool{"4.17.20": true, "4.17.21": false, "4.17.22": true, "4.17.23": true, "4.17.24": true}
+		if !reflect.DeepEqual(downloaded, want) {
+			t.Errorf("downloaded = %v, want %v", downloaded, want)
 		}
 	})
 }
