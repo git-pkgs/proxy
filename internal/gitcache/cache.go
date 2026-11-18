@@ -298,9 +298,14 @@ func New(opts Options) (*Cache, error) {
 		c.maxRequestBody = opts.maxRequestBody
 	}
 	out, err := c.command(context.Background(), nil, "version").Output()
-	c.reftable = err == nil && reftableReady(string(out))
+	c.reftable = err == nil && gitAtLeast(string(out), reftableMinor)
 	if !c.reftable {
 		logger.Info("git cache: repositories keep the files reference format, as reftable needs git 2.56 or newer",
+			"version", strings.TrimSpace(string(out)))
+	}
+	if c.opts.Maintenance && (err != nil || !gitAtLeast(string(out), midxBitmapMinor)) {
+		c.opts.Maintenance = false
+		logger.Info("git cache: serving indexes are not written, as they need git 2.38 or newer",
 			"version", strings.TrimSpace(string(out)))
 	}
 	if err := c.load(); err != nil {
@@ -387,12 +392,23 @@ func (c *Cache) load() error {
 	return nil
 }
 
-// reftableReady reports whether out, the output of "git version", names git
-// 2.56 or newer, the first with the reftable fixes the cache relies on.
-func reftableReady(out string) bool {
-	var major, minor int
-	_, err := fmt.Sscanf(out, "git version %d.%d", &major, &minor)
-	return err == nil && (major > 2 || major == 2 && minor >= 56)
+const (
+	// reftableMinor is git 2.56, the first with the reftable fixes the
+	// cache relies on.
+	reftableMinor = 56
+	// midxBitmapMinor is git 2.38, the first without the bugs that could
+	// corrupt a multi-pack index rewritten over an existing one, as
+	// maintenance does: 2.36 fixed its bitmap falling out of step with its
+	// object order, 2.38 a change of preferred pack dropping objects.
+	midxBitmapMinor = 38
+)
+
+// gitAtLeast reports whether out, the output of "git version", names git
+// 2.minor or newer.
+func gitAtLeast(out string, minor int) bool {
+	var major, m int
+	_, err := fmt.Sscanf(out, "git version %d.%d", &major, &m)
+	return err == nil && (major > 2 || major == 2 && m >= minor)
 }
 
 // hasReftable reports whether the repository at dir keeps its references in

@@ -999,6 +999,8 @@ every fetch that changes the repository, and `off` turns the maintenance
 off. At most two repositories are maintained at once, maintenance never
 rewrites packs, and no request is ever held for a run. The index is rebuilt
 from the packs, so it is not counted by `max_size` or `max_repo_size`.
+The index needs `git` 2.38 or newer, whose multi-pack indexes are free of
+the corruption bugs of earlier versions; with older `git`, none is written.
 
 With `git` 2.56 or newer, repositories are cached with reftable reference
 storage, which writes a fetch's reference updates to one table rather than

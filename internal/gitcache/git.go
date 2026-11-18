@@ -33,13 +33,13 @@ var gitConfig = [][2]string{
 	// started it, and sizes are measured after it.
 	{"gc.autoDetach", "false"},
 	{"maintenance.autoDetach", "false"},
-	// Git 2.56 ends fetches in "git maintenance run --auto" under a
-	// geometric strategy, which merges the packs whose sizes are within
-	// a factor of two, however large, rewriting the packs a repository
-	// was fetched as and dropping the reachability bitmaps maintenance
-	// writes. The incremental strategy keeps what a Git server has
-	// always done after a fetch: gc, and only once its own thresholds
-	// are crossed.
+	// Since git 2.54, the "git maintenance run --auto" that ends a fetch
+	// follows a geometric strategy, which merges the packs whose sizes
+	// are within a factor of two, however large, rewriting the packs a
+	// repository was fetched as and dropping the reachability bitmaps
+	// maintenance writes. The incremental strategy keeps what a Git
+	// server has always done after a fetch: gc, and only once its own
+	// thresholds are crossed. Older git ignores the setting in these runs.
 	{"maintenance.strategy", "incremental"},
 	// No commit-graph. With the reachability bitmaps, git 2.56 reads a
 	// repository's whole commit-graph to find what a fetching client
