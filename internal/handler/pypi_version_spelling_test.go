@@ -68,3 +68,18 @@ func TestPyPIDenylistMatchesVersionSpellings(t *testing.T) {
 		}
 	}
 }
+
+// TestPyPIReleaseTimeTakesTheNewestOfEqualReleases checks releases that
+// compare equal, as old projects can have, decide by the newest of them.
+func TestPyPIReleaseTimeTakesTheNewestOfEqualReleases(t *testing.T) {
+	older, newer := time.Now().Add(-48*time.Hour), time.Now().Add(-time.Hour)
+	times := map[string]time.Time{"1.0": older, "1.0.0": newer, "2.0": {}}
+	for range 20 {
+		if got, ok := releaseTime(times, "1.0.0.0"); !ok || !got.Equal(newer) {
+			t.Fatalf("releaseTime = %v, %v; want %v", got, ok, newer)
+		}
+	}
+	if _, ok := releaseTime(times, "3.0"); ok {
+		t.Error("an unlisted version was found")
+	}
+}

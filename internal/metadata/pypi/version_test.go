@@ -40,6 +40,7 @@ func TestCanonicalVersion(t *testing.T) {
 		"1.0+abc.007":                 "1+abc.7",
 		// Not PEP 440: compared as given.
 		"not a version": "not a version",
+		"1.0po\u017ft1": "1.0po\u017ft1",
 		"1.0-foo":       "1.0-foo",
 		"":              "",
 	} {

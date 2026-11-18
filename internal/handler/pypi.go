@@ -509,13 +509,20 @@ func releaseTime(times map[string]time.Time, version string) (time.Time, bool) {
 	if published, ok := times[version]; ok {
 		return published, true
 	}
+	// Old projects can have releases that compare equal, such as 1.0 and
+	// 1.0.0; the newest decides, so the lookup doesn't depend on map order.
 	canonical := pypi.CanonicalVersion(version)
+	var newest time.Time
+	found := false
 	for release, published := range times {
 		if pypi.CanonicalVersion(release) == canonical {
-			return published, true
+			found = true
+			if published.After(newest) {
+				newest = published
+			}
 		}
 	}
-	return time.Time{}, false
+	return newest, found
 }
 
 // storeUploadTime records a release's newest upload time under the version

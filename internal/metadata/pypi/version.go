@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strconv"
 	"strings"
+	"unicode/utf8"
 )
 
 // pep440Pattern is the PEP 440 version pattern, as packaging spells it.
@@ -25,6 +26,13 @@ var localSeparators = strings.NewReplacer("-", ".", "_", ".")
 // that compares equal. A string that isn't a PEP 440 version is returned as
 // it is.
 func CanonicalVersion(version string) string {
+	// The pattern folds case, which in Go also matches some non-ASCII
+	// letters, such as U+017F for s, that packaging doesn't.
+	for i := range len(version) {
+		if version[i] >= utf8.RuneSelf {
+			return version
+		}
+	}
 	m := pep440Pattern.FindStringSubmatch(version)
 	if m == nil {
 		return version
