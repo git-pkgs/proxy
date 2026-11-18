@@ -172,7 +172,6 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 	return items, nil
 }
 
-// cachedVariants returns the variants of the cached files.
 func cachedVariants(eco fileEcosystem, files []database.UsedFile) map[string]bool {
 	variants := map[string]bool{}
 	for _, f := range files {

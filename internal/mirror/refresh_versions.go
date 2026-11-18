@@ -10,11 +10,10 @@ import (
 
 // newestPerCachedLine returns, for each major line a cached version is on,
 // the newest release of that line that allowed accepts, when it is newer
-// than every cached version of the line, or is the newest cached version
-// and incomplete, when given, reports files of it missing. A line is the major version, or
-// 0.minor below 1.0, as caret ranges read them, and calendar versions are
-// one line. Prereleases and yanked,
-// retracted or deprecated releases are skipped.
+// than every cached version of the line, or equal to it when incomplete
+// reports files of it missing. A line is the major version, or 0.minor
+// below 1.0, as caret ranges read them, and calendar versions are one line.
+// Prereleases and yanked, retracted or deprecated releases are skipped.
 func newestPerCachedLine(ecosystem string, cached []string, releases []registries.Version, allowed, incomplete func(registries.Version) bool) []string {
 	scheme := purl.EcosystemToPURLType(ecosystem)
 	newestCached := map[string]string{}
