@@ -58,7 +58,7 @@ func TestNewestPerCachedLine(t *testing.T) {
 			if allowed == nil {
 				allowed = allowAll
 			}
-			got := newestPerCachedLine("npm", tt.cached, tt.releases, allowed)
+			got := newestPerCachedLine("npm", tt.cached, tt.releases, allowed, nil)
 			if !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("newestPerCachedLine = %v, want %v", got, tt.want)
 			}
@@ -68,11 +68,11 @@ func TestNewestPerCachedLine(t *testing.T) {
 
 func TestNewestPerCachedLineUsesEcosystemOrdering(t *testing.T) {
 	// Maven orders 1.0.10 after 1.0.9, and a gem's 1.0.0.rc1 is a prerelease.
-	got := newestPerCachedLine("maven", []string{"1.0.9"}, releases("1.0.9", "1.0.10"), func(registries.Version) bool { return true })
+	got := newestPerCachedLine("maven", []string{"1.0.9"}, releases("1.0.9", "1.0.10"), func(registries.Version) bool { return true }, nil)
 	if !reflect.DeepEqual(got, []string{"1.0.10"}) {
 		t.Errorf("maven: got %v, want [1.0.10]", got)
 	}
-	got = newestPerCachedLine("gem", []string{"1.0.0"}, releases("1.0.0", "1.0.1.rc1"), func(registries.Version) bool { return true })
+	got = newestPerCachedLine("gem", []string{"1.0.0"}, releases("1.0.0", "1.0.1.rc1"), func(registries.Version) bool { return true }, nil)
 	if got != nil {
 		t.Errorf("gem: got %v, want nothing", got)
 	}
@@ -81,11 +81,11 @@ func TestNewestPerCachedLineUsesEcosystemOrdering(t *testing.T) {
 func TestNewestPerCachedLineCalendarVersions(t *testing.T) {
 	allowAll := func(registries.Version) bool { return true }
 	// certifi and tzdata number releases by year: 2025.1.31 follows 2024.12.14.
-	got := newestPerCachedLine("pypi", []string{"2024.8.30"}, releases("2024.8.30", "2024.12.14", "2025.1.31"), allowAll)
+	got := newestPerCachedLine("pypi", []string{"2024.8.30"}, releases("2024.8.30", "2024.12.14", "2025.1.31"), allowAll, nil)
 	if !reflect.DeepEqual(got, []string{"2025.1.31"}) {
 		t.Errorf("certifi: got %v, want [2025.1.31]", got)
 	}
-	got = newestPerCachedLine("pypi", []string{"2024.2"}, releases("2024.2", "2025.1"), allowAll)
+	got = newestPerCachedLine("pypi", []string{"2024.2"}, releases("2024.2", "2025.1"), allowAll, nil)
 	if !reflect.DeepEqual(got, []string{"2025.1"}) {
 		t.Errorf("tzdata: got %v, want [2025.1]", got)
 	}
