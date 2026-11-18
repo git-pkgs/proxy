@@ -92,7 +92,12 @@ func vcsGitRepository(vcsURL string) (location, ref string, ok bool) {
 	repoPath, _ = url.PathUnescape(repoPath)
 	ref, _ = url.PathUnescape(ref)
 	// The cache takes a tag by its name.
-	ref = strings.TrimPrefix(ref, "refs/tags/")
+	if tag, ok := strings.CutPrefix(ref, "refs/tags/"); ok {
+		if tag == "" {
+			return "", "", false
+		}
+		ref = tag
+	}
 	// A ".git" suffix is kept, as pkg:git keeps it, for an upstream that
 	// serves the repository only under that name.
 	repoPath = strings.Trim(path.Clean("/"+repoPath), "/")

@@ -944,8 +944,9 @@ without a path below them, the URL and the patterns match whatever the case,
 and every spelling of a repository shares one cached copy, kept under the
 lowercased path. Where `git.cache_dir` tells cases apart, a copy an earlier
 version cached under a mixed-case path is no longer cloned from, so the
-repository is fetched again once; the old copy stays listed and can be
-deleted by its spelling, or is evicted by `git.max_size`. When
+repository is fetched again once; the old copy stays listed, and is evicted
+by `git.max_size` or deleted by its spelling once the lowercase copy is
+gone, as a delete removes that first. When
 `upstream.auth` has credentials for an upstream,
 `repos` is required: everyone who can reach the proxy can read every
 repository it serves, so list only those they may read. Per-client
@@ -2114,7 +2115,7 @@ proxy mirror pkg:git/github.com/git-pkgs/purl
 - Without a version the repository's branches and tags are mirrored. A tag as the version has to be one of them, so a tag the upstream doesn't have fails. When the upstream can't be reached, a cached tag is mirrored at the commit it last pointed to, with a warning in the log. A branch name or an abbreviated commit ID as the version fails too; give the full commit ID.
 - With a version, the submodules that commit records are mirrored at the commits it pins, with their submodules in turn. A relative submodule URL is resolved against the repository's, and an `ssh://`, `git://` or `git@host:path` URL names the repository by its host and path. A submodule no `upstream.git` host serves is skipped with a warning in the log, as are all of a commit's submodules when git can't read its `.gitmodules`.
 - SBOMs often name a repository with another package URL: `pkg:github/{owner}/{repo}`, `pkg:bitbucket/{owner}/{repo}`, or `pkg:generic/…?vcs_url=git+https://…`. These are mirrored as the `pkg:git` PURL for `github.com/{owner}/{repo}`, `bitbucket.org/{owner}/{repo}` or the host and path of the `vcs_url`, with the PURL's version, or for a generic package the ref after `@` in the `vcs_url`: a commit ID or a tag, by its name or as `refs/tags/{name}`. They are mirrored only when the `upstream.git` host serving the repository has `repos` naming it; without `repos`, they fail. The PURL types lowercase the owner and repository, which GitHub and Bitbucket ignore the case of, so `pkg:github/Azure/login` is served to a clone of `Azure/login`. That keeps an SBOM job from cloning the repository of every GitHub Action it lists.
-- The git cache is used by one process. While the server runs, the command can't open `git.cache_dir`, so `pkg:git` items fail and the rest are mirrored; use the mirror API instead.
+- The git cache is used by one process. While the server runs, the command can't open `git.cache_dir`, so git repositories, as `pkg:git`, `pkg:github`, `pkg:bitbucket` or a `vcs_url` names them, fail and the rest are mirrored; use the mirror API instead.
 
 ### Scheduled refresh
 

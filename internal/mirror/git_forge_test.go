@@ -154,6 +154,8 @@ func TestForgeGitRepositoryRefuses(t *testing.T) {
 		"pkg:generic/widgets@1.0?vcs_url=" + url.QueryEscape("git+ftp://git.example/acme/widgets"),
 		"pkg:generic/widgets@1.0?vcs_url=" + url.QueryEscape("git+https://git.example/"),
 		"pkg:generic/widgets@1.0?vcs_url=" + url.QueryEscape("git+https:///acme/widgets"),
+		// A tag ref without a tag.
+		"pkg:generic/widgets@1.0?vcs_url=" + url.QueryEscape("git+https://git.example/acme/widgets@refs/tags/"),
 	} {
 		p, err := purl.Parse(s)
 		if err != nil {
