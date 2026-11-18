@@ -41,7 +41,7 @@ var (
 		"debian-14":    "forky",
 		"ubuntu-16.04": "xenial", "ubuntu-18.04": "bionic", "ubuntu-20.04": "focal",
 		"ubuntu-22.04": "jammy", "ubuntu-24.04": "noble", "ubuntu-24.10": "oracular",
-		"ubuntu-25.04": "plucky", "ubuntu-25.10": "questing",
+		"ubuntu-25.04": "plucky", "ubuntu-25.10": "questing", "ubuntu-26.04": "resolute",
 	}
 
 	// debSuffixes name the suites of a release that are read: the release,
