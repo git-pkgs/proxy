@@ -67,6 +67,8 @@ func mirrorWithVersions(t *testing.T, cfg *config.Config, versions mirror.Versio
 	m.APKRepositories = cfg.Upstream.APK
 	m.RPMUpstream = cfg.Upstream.RPM
 	m.RPMRepositoryPaths = cfg.Upstream.RPMRepositoryPaths
+	m.DebianUpstream = cfg.Upstream.Debian
+	m.DebianRepositories = cfg.Upstream.DebianRepositories
 	if versions == nil {
 		m.Versions = NewMirrorVersions(cfg.Upstream, proxy.HTTPClient)
 	}

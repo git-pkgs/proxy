@@ -16,8 +16,9 @@ type PackageVersion struct {
 	Ecosystem string
 	Name      string
 	Version   string
-	// Namespace is the PURL namespace of apk packages, which Name leaves
-	// out. It picks the upstream.apk repository.
+	// Namespace is the PURL namespace of apk and deb packages, which Name
+	// leaves out. It picks the upstream.apk repository, or the Debian
+	// archive.
 	Namespace string
 	// Qualifiers are the PURL qualifiers. Images use repository_url, tag and
 	// arch; PyPI uses file_name, and conda subdir, build and type, to select
@@ -72,7 +73,7 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 
 		ecosystem, name, qualifiers := mirrorTarget(p)
 		var namespace string
-		if ecosystem == "alpine" {
+		if ecosystem == "alpine" || ecosystem == "deb" {
 			namespace = p.Namespace
 		}
 
@@ -151,7 +152,7 @@ func mirrorTarget(p *purl.PURL) (ecosystem, name string, qualifiers map[string]s
 		qualifiers = map[string]string{"uuid": p.Qualifier("uuid")}
 	case "alpine":
 		qualifiers = map[string]string{"arch": p.Qualifier("arch"), "distro": p.Qualifier("distro")}
-	case "rpm":
+	case "rpm", "deb":
 		qualifiers = map[string]string{"arch": p.Qualifier("arch"), "distro": p.Qualifier("distro"), "epoch": p.Qualifier("epoch")}
 	}
 	return ecosystem, name, qualifiers

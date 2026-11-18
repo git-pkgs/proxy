@@ -398,8 +398,8 @@ func (h *SwiftHandler) fetchMetadataWithHeaders(
 	if resp.StatusCode == http.StatusNotFound {
 		return nil, "", nil, ErrUpstreamNotFound
 	}
-	if resp.StatusCode != http.StatusOK {
-		return nil, "", nil, fmt.Errorf("upstream metadata returned %d", resp.StatusCode)
+	if err := upstreamMetadataStatus(resp); err != nil {
+		return nil, "", nil, err
 	}
 
 	body, err := h.proxy.ReadMetadata(resp.Body)
@@ -642,7 +642,7 @@ func (h *SwiftHandler) writeMetadataError(w http.ResponseWriter, err error) {
 		writeSwiftProblem(w, http.StatusNotFound, "not found")
 		return
 	}
-	if writeUpstreamHeld(w, err) {
+	if h.proxy.writeUpstreamRefusal(w, err) {
 		return
 	}
 	h.proxy.Logger.Error("Swift metadata request failed", "error", err)
@@ -658,7 +658,9 @@ func (h *SwiftHandler) writeArtifactError(w http.ResponseWriter, err error) {
 		writeSwiftProblem(w, http.StatusForbidden, err.Error())
 		return
 	}
-	if writeUpstreamHeld(w, err) {
+	// The release metadata an uncached archive is looked up in can be
+	// refused too.
+	if h.proxy.writeUpstreamRefusal(w, err) {
 		return
 	}
 	h.proxy.Logger.Error("Swift archive request failed", "error", err)

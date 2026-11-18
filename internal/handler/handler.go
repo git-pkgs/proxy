@@ -1592,6 +1592,10 @@ var ErrUpstreamNotFound = fmt.Errorf("upstream: %w", fetch.ErrNotFound)
 // upstreamNotFoundError.
 const upstreamNotFoundBodyLimit = 4 << 10
 
+// upstreamStatusBodyLimit bounds the body kept of another refusal of a
+// metadata request.
+const upstreamStatusBodyLimit = 4 << 10
+
 // upstreamNotFoundError is ErrUpstreamNotFound with the start of the
 // upstream's 404 body, for handlers that relay the reason to clients.
 type upstreamNotFoundError struct {
@@ -2110,6 +2114,14 @@ func (p *Proxy) fetchUpstreamMetadata(ctx context.Context, upstreamURL string, e
 		return meta, nil
 	}
 
+	// A Terraform module registry may answer a download with the location
+	// in a header, usually with no content, which Terraform reads before
+	// the body. It is stored as the JSON document other registries answer
+	// with.
+	if location := resp.Header.Get(headerTerraformGet); location != "" && (resp.StatusCode == http.StatusOK || resp.StatusCode == http.StatusNoContent) {
+		return &upstreamMetadata{body: terraformModuleDownloadDocument(location), contentType: contentTypeJSON, url: upstreamURL}, nil
+	}
+
 	if err := upstreamMetadataStatus(resp); err != nil {
 		return nil, err
 	}
@@ -2183,7 +2195,10 @@ func upstreamMetadataStatus(resp *http.Response) error {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, upstreamNotFoundBodyLimit))
 		return &upstreamNotFoundError{body: body}
 	}
-	return fmt.Errorf("upstream returned %d", resp.StatusCode)
+	// The status, body and type are kept, so a policy denial can be
+	// forwarded as upstream sent it.
+	body, _ := io.ReadAll(io.LimitReader(resp.Body, upstreamStatusBodyLimit))
+	return &fetch.StatusError{Code: resp.StatusCode, Body: string(body), ContentType: resp.Header.Get(headerContentType)}
 }
 
 // refreshMetadataBlob records that upstream answered 304 for the cached
@@ -2381,7 +2396,7 @@ func (p *Proxy) writeMetadataFetchError(w http.ResponseWriter, err error) {
 		http.Error(w, "not found", http.StatusNotFound)
 		return
 	}
-	if writeUpstreamHeld(w, err) {
+	if p.writeUpstreamRefusal(w, err) {
 		return
 	}
 	p.Logger.Error("metadata fetch failed", "error", err)

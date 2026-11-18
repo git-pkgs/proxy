@@ -142,29 +142,44 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 	var cached []string
 	seen := map[string]bool{}
 	for _, f := range pkg.Files {
-		if !seen[f.Version] {
-			seen[f.Version] = true
-			cached = append(cached, f.Version)
+		version := f.Version
+		if eco, ok := fileEcosystems[ecosystem]; ok && eco.release != nil {
+			version = eco.release(version)
+		}
+		if !seen[version] {
+			seen[version] = true
+			cached = append(cached, version)
 		}
 	}
 	allowed := func(v registries.Version) bool {
 		return m.proxy == nil || m.proxy.ReleaseAllowed(pkg.Ecosystem, pkg.Name, v.Number, v.PublishedAt)
 	}
 
-	var items []PackageVersion
-	for _, version := range newestPerCachedLine(ecosystem, cached, releases, allowed) {
-		pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: version}
-		if eco, ok := fileEcosystems[ecosystem]; ok {
-			pv.variants = map[string]bool{}
-			for _, f := range pkg.Files {
-				for _, v := range eco.cachedVariants(f.Filename) {
-					pv.variants[v] = true
-				}
-			}
+	eco, files := fileEcosystems[ecosystem]
+	var variants map[string]bool
+	var incomplete func(registries.Version) bool
+	if files {
+		variants = cachedVariants(eco, pkg.Files)
+		incomplete = func(r registries.Version) bool {
+			return eco.missing(PackageVersion{Ecosystem: ecosystem, Name: name, Version: r.Number, variants: variants}, r, pkg.Files)
 		}
-		items = append(items, pv)
+	}
+
+	var items []PackageVersion
+	for _, version := range newestPerCachedLine(ecosystem, cached, releases, allowed, incomplete) {
+		items = append(items, PackageVersion{Ecosystem: ecosystem, Name: name, Version: version, variants: variants})
 	}
 	return items, nil
+}
+
+func cachedVariants(eco fileEcosystem, files []database.UsedFile) map[string]bool {
+	variants := map[string]bool{}
+	for _, f := range files {
+		for _, v := range eco.cachedVariants(f.Filename) {
+			variants[v] = true
+		}
+	}
+	return variants
 }
 
 // refreshable reports whether a refresh lists the releases of an

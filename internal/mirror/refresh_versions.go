@@ -10,11 +10,11 @@ import (
 
 // newestPerCachedLine returns, for each major line a cached version is on,
 // the newest release of that line that allowed accepts, when it is newer
-// than every cached version of the line. A line is the major version, or
-// 0.minor below 1.0, as caret ranges read them, and calendar versions are
-// one line. Prereleases and yanked,
-// retracted or deprecated releases are skipped.
-func newestPerCachedLine(ecosystem string, cached []string, releases []registries.Version, allowed func(registries.Version) bool) []string {
+// than every cached version of the line, or equal to it when incomplete
+// reports files of it missing. A line is the major version, or 0.minor
+// below 1.0, as caret ranges read them, and calendar versions are one line.
+// Prereleases and yanked, retracted or deprecated releases are skipped.
+func newestPerCachedLine(ecosystem string, cached []string, releases []registries.Version, allowed, incomplete func(registries.Version) bool) []string {
 	scheme := purl.EcosystemToPURLType(ecosystem)
 	newestCached := map[string]string{}
 	var lines []string
@@ -32,7 +32,7 @@ func newestPerCachedLine(ecosystem string, cached []string, releases []registrie
 		}
 	}
 
-	newest := map[string]string{}
+	newest := map[string]registries.Version{}
 	for _, r := range releases {
 		line, ok := versionLine(r.Number)
 		if !ok || r.Status != registries.StatusNone || vers.IsPrereleaseWithScheme(r.Number, scheme) {
@@ -41,15 +41,17 @@ func newestPerCachedLine(ecosystem string, cached []string, releases []registrie
 		if _, cachedLine := newestCached[line]; !cachedLine || !allowed(r) {
 			continue
 		}
-		if current, seen := newest[line]; !seen || vers.CompareWithScheme(r.Number, current, scheme) > 0 {
-			newest[line] = r.Number
+		if current, seen := newest[line]; !seen || vers.CompareWithScheme(r.Number, current.Number, scheme) > 0 {
+			newest[line] = r
 		}
 	}
 
 	var out []string
 	for _, line := range lines {
-		if v, ok := newest[line]; ok && vers.CompareWithScheme(v, newestCached[line], scheme) > 0 {
-			out = append(out, v)
+		if r, ok := newest[line]; ok {
+			if c := vers.CompareWithScheme(r.Number, newestCached[line], scheme); c > 0 || c == 0 && incomplete != nil && incomplete(r) {
+				out = append(out, r.Number)
+			}
 		}
 	}
 	return out

@@ -58,6 +58,12 @@ type Mirror struct {
 	RPMUpstream        string
 	RPMRepositoryPaths []string
 
+	// DebianUpstream and DebianRepositories are upstream.debian and
+	// upstream.debian_repositories. An empty DebianUpstream uses
+	// deb.debian.org.
+	DebianUpstream     string
+	DebianRepositories map[string]string
+
 	// RefusePackages, when set, fails every item Images does not take with
 	// this reason instead of fetching it, so nothing is cached.
 	RefusePackages string
@@ -65,6 +71,7 @@ type Mirror struct {
 	cran cranIndex
 	apk  apkIndexes
 	rpm  rpmIndexes
+	deb  debIndexes
 }
 
 // New creates a new Mirror with the given dependencies.
@@ -307,6 +314,10 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 		m.mirrorRPM(ctx, pv, tracker)
 		return
 	}
+	if pv.Ecosystem == "deb" {
+		m.mirrorDeb(ctx, pv, tracker)
+		return
+	}
 	if pv.Ecosystem == "git" {
 		m.mirrorGit(ctx, pv, tracker)
 		return
@@ -389,7 +400,17 @@ func (m *Mirror) mirrorFiles(ctx context.Context, pv PackageVersion, eco fileEco
 			return
 		}
 	}
-	v, err := m.versionFinder().FindVersion(ctx, pv.Ecosystem, pv.Name, pv.Version)
+	// sel is pv with the selection its version carries moved into the
+	// qualifiers; failures and logs keep pv as it was asked for.
+	sel := pv
+	if eco.split != nil {
+		var err error
+		if sel, err = eco.split(pv); err != nil {
+			fail(err)
+			return
+		}
+	}
+	v, err := m.versionFinder().FindVersion(ctx, sel.Ecosystem, sel.Name, sel.Version)
 	if err != nil {
 		fail(fmt.Errorf("listing files: %w", err))
 		return
@@ -397,10 +418,10 @@ func (m *Mirror) mirrorFiles(ctx context.Context, pv PackageVersion, eco fileEco
 	var matched, fetched int
 	var size int64
 	for _, file := range v.Artifacts {
-		if !eco.selects(pv, file) {
+		if !eco.selects(sel, file) {
 			continue
 		}
-		name, version, filename, ok := eco.cacheKey(pv, file)
+		name, version, filename, ok := eco.cacheKey(sel, file)
 		if !ok {
 			continue
 		}
@@ -418,7 +439,7 @@ func (m *Mirror) mirrorFiles(ctx context.Context, pv PackageVersion, eco fileEco
 			size += result.Artifact.Size
 		}
 	}
-	switch selection := eco.selection(pv); {
+	switch selection := eco.selection(sel); {
 	case matched == 0 && selection != "":
 		fail(fmt.Errorf("no file matches %s", selection))
 	case matched == 0:

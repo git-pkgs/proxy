@@ -70,7 +70,7 @@ The proxy never uploads artifact bytes to a scanner. Each scanner is notified wi
 | Arch | Arch Linux | | ✓ |
 | FreeBSD | FreeBSD (ports and pkgbase) | | ✓ |
 | Chef Supermarket | Chef | | ✓ |
-| Terraform/OpenTofu providers | Terraform/OpenTofu | | ✓ |
+| Terraform/OpenTofu providers and modules | Terraform/OpenTofu | | ✓ |
 | Generic | Any | | ✓ |
 | Git | Any | | ✓ |
 | Helm | Kubernetes | Yes | ✓ |
@@ -921,7 +921,7 @@ cached artifacts can be scanned, both kinds of package file are refused while
 a scanner covers `freebsd`; use repositories built with `pkg repo --hash` and
 bootstrap pkg without the proxy.
 
-### Terraform / OpenTofu providers
+### Terraform / OpenTofu providers and modules
 
 The proxy is a provider network mirror. Add it to the CLI configuration
 (`~/.terraformrc`, or `~/.tofurc` for OpenTofu):
@@ -951,6 +951,42 @@ registry's `shasum` before they are served. Each
 records in `.terraform.lock.hcl`. The mirror protocol carries no signatures,
 so Terraform doesn't check the registry's GPG signature for providers
 installed through the proxy.
+
+Modules from a registry, such as `source = "terraform-aws-modules/vpc/aws"`,
+go through the proxy's module registry protocol. Point the registry's
+`modules.v1` service at it with a `host` block in the same CLI
+configuration:
+
+```hcl
+host "registry.terraform.io" {
+  services = {
+    "modules.v1"   = "https://proxy.example.com/terraform/modules/registry.terraform.io/"
+    "providers.v1" = "https://registry.terraform.io/v1/providers/"
+  }
+}
+```
+
+OpenTofu reads a source without a hostname as `registry.opentofu.org`, so
+point that registry at the proxy in `~/.tofurc`:
+
+```hcl
+host "registry.opentofu.org" {
+  services = {
+    "modules.v1"   = "https://proxy.example.com/terraform/modules/registry.opentofu.org/"
+    "providers.v1" = "https://registry.opentofu.org/v1/providers/"
+  }
+}
+```
+
+The block replaces the registry's service discovery, so keep `providers.v1`
+in it if any provider of that registry is installed directly rather than
+through the mirror. Terraform and OpenTofu both read `host` blocks, though
+neither documents them. Most registry modules are fetched from GitHub with
+`git::https://github.com/…`; with `github: "https://github.com"` under
+`upstream.git` and the git cache configured, the proxy points those at
+`/git/github/…`, so the module's code is cached too. Modules sourced from Git
+directly work through `/git` with an `insteadOf` rule (see
+[Git repositories](#git-repositories)).
 
 ### GitHub Releases / mise (aqua backend)
 
@@ -1378,6 +1414,7 @@ Recently cached:
 | `GET /arch/{repository}/*` | Arch Linux pacman repository protocol |
 | `GET /freebsd/{repository}/*` | FreeBSD pkg repository protocol |
 | `GET /terraform/providers/*` | Terraform/OpenTofu provider network mirror protocol |
+| `GET /terraform/modules/*` | Terraform/OpenTofu module registry protocol |
 | `GET /generic/{name}/*` | Generic HTTP download proxy (GitHub release assets, mise/aqua) |
 | `GET /git/{name}/{repo}/info/refs`, `POST /git/{name}/{repo}/git-upload-pack` | Git smart HTTP protocol, read-only |
 | `GET /debian/*` | Debian/APT repository protocol (main archive) |

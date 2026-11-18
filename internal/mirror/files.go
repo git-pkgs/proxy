@@ -2,11 +2,13 @@ package mirror
 
 import (
 	"fmt"
+	"maps"
 	"path"
 	"regexp"
 	"slices"
 	"strings"
 
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/metadata/pypi"
 	"github.com/git-pkgs/registries"
@@ -31,9 +33,56 @@ type fileEcosystem struct {
 	// cachedVariants names them for the filename cacheKey returns.
 	variants       func(file registries.Artifact) []string
 	cachedVariants func(cacheFilename string) []string
+	// split, when set, moves a file selection the version carries into the
+	// qualifiers, returning the version's release number.
+	split func(pv PackageVersion) (PackageVersion, error)
+	// release, when set, returns the number of the release whose files are
+	// cached under cachedVersion, for an ecosystem where the two differ.
+	release func(cachedVersion string) string
 }
 
 var fileEcosystems = map[string]fileEcosystem{
+	// Each platform build of a gem is an artifact of its version. The gem
+	// handler caches a platform build under its version with the platform
+	// appended, as it reads it from the filename.
+	"gem": {
+		qualifiers: []string{"platform"},
+		attrs: func(file registries.Artifact) map[string]string {
+			return map[string]string{"platform": gemArtifactPlatform(file)}
+		},
+		cacheKey: func(_ PackageVersion, file registries.Artifact) (string, string, string, bool) {
+			name, version := handler.GemFilenameIdentity(file.Filename)
+			return name, version, file.Filename, name != ""
+		},
+		variants: func(file registries.Artifact) []string { return []string{gemArtifactPlatform(file)} },
+		cachedVariants: func(cacheFilename string) []string {
+			_, version := handler.GemFilenameIdentity(cacheFilename)
+			_, platform := gemVersionPlatform(version)
+			return []string{platform}
+		},
+		// Gemfile.lock gives a platform build's version with its platform
+		// appended, and so do SBOMs made from one.
+		split: func(pv PackageVersion) (PackageVersion, error) {
+			number, platform, ok := strings.Cut(pv.Version, "-")
+			if !ok {
+				return pv, nil
+			}
+			if q := pv.Qualifiers["platform"]; q != "" && q != platform {
+				return pv, fmt.Errorf("version %s is for platform %s, not platform=%s", pv.Version, platform, q)
+			}
+			qualifiers := maps.Clone(pv.Qualifiers)
+			if qualifiers == nil {
+				qualifiers = map[string]string{}
+			}
+			qualifiers["platform"] = platform
+			pv.Version, pv.Qualifiers = number, qualifiers
+			return pv, nil
+		},
+		release: func(cachedVersion string) string {
+			number, _ := gemVersionPlatform(cachedVersion)
+			return number
+		},
+	},
 	"pypi": {
 		qualifiers: []string{"file_name"},
 		attrs: func(file registries.Artifact) map[string]string {
@@ -80,6 +129,28 @@ var fileEcosystems = map[string]fileEcosystem{
 			return []string{condaVariant(strings.TrimSuffix(subdir, "/"), filename)}
 		},
 	},
+}
+
+// gemRubyPlatform is the platform of a gem built for none, which installs
+// on all of them.
+const gemRubyPlatform = "ruby"
+
+// gemArtifactPlatform returns the platform of a gem build, which the
+// RubyGems adapter gives as "ruby" for a build for none.
+func gemArtifactPlatform(file registries.Artifact) string {
+	platform, _ := file.Metadata["platform"].(string)
+	return platform
+}
+
+// gemVersionPlatform splits a version a gem file is cached under into the
+// release's number and the build's platform. A gem version has no "-", as
+// RubyGems writes one as ".pre.", so the platform follows the first.
+func gemVersionPlatform(version string) (number, platform string) {
+	number, platform, ok := strings.Cut(version, "-")
+	if !ok {
+		platform = gemRubyPlatform
+	}
+	return number, platform
 }
 
 // pypiVariants names a wheel by each combination of its python, ABI and
@@ -185,6 +256,21 @@ func (e fileEcosystem) selects(pv PackageVersion, file registries.Artifact) bool
 		}
 	}
 	return true
+}
+
+// missing reports whether a file of release that pv selects isn't among
+// the cached files, such as one a refresh failed to fetch after fetching
+// another of the release.
+func (e fileEcosystem) missing(pv PackageVersion, release registries.Version, cached []database.UsedFile) bool {
+	for _, file := range release.Artifacts {
+		if !e.selects(pv, file) {
+			continue
+		}
+		if _, _, filename, ok := e.cacheKey(pv, file); ok && !slices.ContainsFunc(cached, func(f database.UsedFile) bool { return f.Filename == filename }) {
+			return true
+		}
+	}
+	return false
 }
 
 // fileQualifiers keeps the qualifiers of a PURL that select files of its
