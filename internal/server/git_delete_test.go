@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -94,6 +95,38 @@ func TestGitRepositoryDeleteFoldsForgeCase(t *testing.T) {
 	})
 	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusOK {
 		t.Errorf("DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
+	}
+}
+
+// Where the cache directory tells cases apart, a mixed-case copy and the
+// lowercase one are each deleted by their own spelling.
+func TestGitRepositoryDeleteKeepsTheOtherSpelling(t *testing.T) {
+	var mixed, lower string
+	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
+		cfg.Upstream.Git = map[string]config.GitUpstream{"github": {URL: "https://github.com", Repos: []string{"Azure/*"}}}
+		cfg.CacheDelete = true
+		dir := filepath.Join(cfg.Git.CacheDir, gitcache.UpstreamDir("github", "https://github.com"))
+		mixed, lower = filepath.Join(dir, "Azure", "Login.git"), filepath.Join(dir, "azure", "login.git")
+		gitCommand(t, "", "init", "--quiet", "--bare", mixed)
+		if _, err := os.Stat(lower); err == nil {
+			t.Skip("the cache directory ignores case")
+		}
+		gitCommand(t, "", "init", "--quiet", "--bare", lower)
+	})
+	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusOK {
+		t.Fatalf("DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
+	}
+	if _, err := os.Stat(mixed); !os.IsNotExist(err) {
+		t.Errorf("the mixed-case copy was not deleted: %v", err)
+	}
+	if _, err := os.Stat(lower); err != nil {
+		t.Errorf("the lowercase copy was deleted: %v", err)
+	}
+	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusOK {
+		t.Fatalf("second DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
+	}
+	if _, err := os.Stat(lower); !os.IsNotExist(err) {
+		t.Errorf("the lowercase copy was not deleted: %v", err)
 	}
 }
 

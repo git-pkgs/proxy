@@ -945,8 +945,7 @@ and every spelling of a repository shares one cached copy, kept under the
 lowercased path. Where `git.cache_dir` tells cases apart, a copy an earlier
 version cached under a mixed-case path is no longer cloned from, so the
 repository is fetched again once; the old copy stays listed, and is evicted
-by `git.max_size` or deleted by its spelling once the lowercase copy is
-gone, as a delete removes that first. When
+by `git.max_size` or deleted by its spelling. When
 `upstream.auth` has credentials for an upstream,
 `repos` is required: everyone who can reach the proxy can read every
 repository it serves, so list only those they may read. Per-client
