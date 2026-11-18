@@ -27,6 +27,7 @@
                 {{if .Refs}}<span class="tabular-nums">{{.Refs}}</span>{{end}}
                 <span class="tabular-nums">{{.Size}}</span>
                 <span class="tabular-nums">{{.Requests}}</span>
+                {{if .Offline}}<span title="The upstream is offline: served as last checked, without contacting it">offline</span>{{end}}
                 {{if .LastChecked}}<span title="Upstream last checked">checked {{.LastChecked}}</span>{{end}}
                 {{if .LastUsed}}<span title="Last read by a client">used {{.LastUsed}}</span>{{end}}
                 {{if $.CacheDelete}}<button type="button" class="cache-delete text-xs px-2 py-1 rounded border border-red-300 text-red-700 hover:bg-red-50 dark:border-red-800 dark:text-red-400 dark:hover:bg-red-950" data-label="Delete">Delete</button>{{end}}

@@ -33,6 +33,9 @@ type GitRepositoryRow struct {
 	Size                  string
 	Requests              string
 	LastChecked, LastUsed string
+	// Offline is set when the repository's upstream is offline, so it is
+	// served as LastChecked left it.
+	Offline bool
 	// LastError names the kind of error the last refresh failed with.
 	LastError, LastErrorAt string
 	// Branch, Commit, Subject and CommitAge describe the newest commit of
@@ -107,6 +110,7 @@ func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, 
 			LastUsed:    formatTimeAgo(repo.LastUsed),
 			LastError:   repo.LastError,
 			LastErrorAt: formatTimeAgo(repo.LastErrorAt),
+			Offline:     upstreams[name].Offline,
 		}
 		if st, ok := rowState(repo, state); ok {
 			row.Branch, row.Subject, row.CommitAge = st.Branch, st.Subject, formatTimeAgo(st.CommitTime)

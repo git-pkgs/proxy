@@ -902,6 +902,7 @@ git:
   refresh_wait: 5s       # then serve the cached copy if the upstream check is slow
   stale_max_age: 24h     # never serve a copy not checked for this long
   warm_max_idle: 30d     # keep checking repositories used within this
+  offline: false         # serve what is cached without contacting any upstream
 ```
 
 Clients reach the proxy through Git's `insteadOf` setting, which rewrites the
@@ -1005,6 +1006,18 @@ refused, and those the configuration no longer serves, are skipped. `warm_max_id
 `stale_max_age` under `20m` (which includes `0`), turns the background
 checks off. They run in `proxy serve` only, each process for its own
 `cache_dir`.
+
+For a site cut off from its Git servers on purpose, or an outage that
+outlasts `stale_max_age`, `offline: true` on an `upstream.git` entry serves
+the repositories cached for it without contacting it; `git.offline: true`
+does so for every entry. A clone or fetch gets branches and tags as last
+fetched, however long ago that was, and the log says it was served offline
+and when the copy was last checked; the git page in the UI marks the
+repository offline. A repository not cached is refused at once (404), and a
+commit the cache lacks is reported missing by Git. The background checks skip
+offline upstreams, `proxy mirror` refuses their `pkg:git` PURLs, and a Git
+LFS batch is answered from the cached objects alone, with the others reported
+not found. Turning it on or off takes a restart.
 
 The proxy runs `git` 2.31 or newer, which must be installed (the Docker image includes it).
 The `git` processes never reach the network themselves: their fetches go
@@ -1120,7 +1133,7 @@ Pushing, LFS uploads and locking, and the dumb HTTP protocol are not
 supported. The settings
 under `git` can also be set with `PROXY_GIT_CACHE_DIR`, `PROXY_GIT_MAX_SIZE`,
 `PROXY_GIT_MAX_REPO_SIZE`, `PROXY_GIT_REFRESH_WAIT`,
-`PROXY_GIT_STALE_MAX_AGE` and `PROXY_GIT_WARM_MAX_IDLE`.
+`PROXY_GIT_STALE_MAX_AGE`, `PROXY_GIT_WARM_MAX_IDLE` and `PROXY_GIT_OFFLINE`.
 
 ### Maven repositories
 

@@ -217,3 +217,45 @@ git:
 		t.Errorf("loaded %+v and %+v", cfg.Upstream.Git, cfg.Git)
 	}
 }
+
+func TestLoadGitOffline(t *testing.T) {
+	load := func(t *testing.T, data string) *Config {
+		t.Helper()
+		path := filepath.Join(t.TempDir(), "config.yaml")
+		if err := os.WriteFile(path, []byte(data), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		cfg, err := Load(path)
+		if err != nil {
+			t.Fatalf("Load: %v", err)
+		}
+		cfg.LoadFromEnv()
+		if err := cfg.Validate(); err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+		return cfg
+	}
+	upstreams := `
+upstream:
+  git:
+    github: https://github.com
+    internal:
+      url: https://git.example.com
+      offline: true
+`
+	cfg := load(t, upstreams)
+	if cfg.Upstream.Git["github"].Offline || !cfg.Upstream.Git["internal"].Offline {
+		t.Errorf("per-upstream offline: %+v", cfg.Upstream.Git)
+	}
+
+	cfg = load(t, upstreams+"git:\n  offline: true\n")
+	if !cfg.Upstream.Git["github"].Offline || !cfg.Upstream.Git["internal"].Offline {
+		t.Errorf("git.offline left an upstream online: %+v", cfg.Upstream.Git)
+	}
+
+	t.Setenv("PROXY_GIT_OFFLINE", "true")
+	cfg = load(t, upstreams)
+	if !cfg.Git.Offline || !cfg.Upstream.Git["github"].Offline {
+		t.Errorf("PROXY_GIT_OFFLINE left an upstream online: %+v", cfg.Upstream.Git)
+	}
+}

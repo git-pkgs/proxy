@@ -181,8 +181,10 @@ type gitTestSetup struct {
 	logs        *syncLog
 	// slow delays every upstream request by half a second.
 	slow atomic.Bool
-	// active counts the requests the handler is serving.
-	active atomic.Int32
+	// active counts the requests the handler is serving, and requests
+	// those the upstream got.
+	active   atomic.Int32
+	requests atomic.Int32
 }
 
 // newGitTestSetup serves the cache with the given server read timeout and,
@@ -213,6 +215,7 @@ func newGitTestSetup(t *testing.T, readTimeout, writeStall time.Duration) *gitTe
 		Env:  []string{"PATH=" + os.Getenv("PATH"), "GIT_PROJECT_ROOT=" + root, "GIT_HTTP_EXPORT_ALL=1"},
 	}
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		g.requests.Add(1)
 		if g.slow.Load() {
 			time.Sleep(500 * time.Millisecond)
 		}

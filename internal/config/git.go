@@ -32,6 +32,12 @@ type GitUpstream struct {
 	// upstream.auth has credentials for the URL, since everyone who can
 	// reach the proxy can read what it serves.
 	Repos []string `json:"repos" yaml:"repos"`
+
+	// Offline serves the repositories cached for this upstream as they are,
+	// without contacting it: no ref check, no fetch, no Git LFS batch
+	// request. A repository or commit the cache lacks fails at once.
+	// git.offline sets it for every upstream.
+	Offline bool `json:"offline" yaml:"offline"`
 }
 
 // UnmarshalYAML accepts a bare URL as well as the object form.
@@ -140,6 +146,10 @@ type GitConfig struct {
 	// within StaleMaxAge through an upstream outage. Accepts a "d" suffix.
 	// "0" turns the background checks off. Default: 30d.
 	WarmMaxIdle string `json:"warm_max_idle" yaml:"warm_max_idle"`
+
+	// Offline sets GitUpstream.Offline for every upstream.git entry, for a
+	// site cut off from its forges.
+	Offline bool `json:"offline" yaml:"offline"`
 
 	maxSize     int64
 	maxRepoSize int64

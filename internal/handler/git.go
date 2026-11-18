@@ -87,6 +87,7 @@ func (h *GitHandler) Routes() http.Handler {
 type gitRequest struct {
 	infoRefs   bool
 	fetchWants bool
+	offline    bool
 	// key names the repository in the cache: {name}-{URL hash}/{repo}.git,
 	// with any .git the client gave removed from repo first, so both
 	// spellings share one copy, and repo lowercased on a host that ignores
@@ -130,7 +131,7 @@ func (h *GitHandler) serve(w http.ResponseWriter, r *http.Request) {
 	defer func() { _ = rc.SetWriteDeadline(time.Now().Add(h.writeStall)) }()
 
 	lease, err := h.cache.Open(r.Context(), req.key, req.repoURL,
-		gitcache.OpenOptions{Refresh: req.infoRefs, FetchWants: req.fetchWants})
+		gitcache.OpenOptions{Refresh: req.infoRefs, FetchWants: req.fetchWants, Offline: req.offline})
 	if err != nil {
 		h.serveError(w, r, err)
 		return
@@ -186,6 +187,7 @@ func (h *GitHandler) parse(r *http.Request) (gitRequest, int, string) {
 	req.key = repo.key
 	req.repoURL = repo.url
 	req.fetchWants = repo.upstream.fetchWants
+	req.offline = repo.upstream.Offline
 	return req, 0, ""
 }
 
@@ -247,17 +249,32 @@ func (h *GitHandler) repository(path string) (gitRepository, int, string) {
 // github-1a2b3c4d/acme/widgets.git: not when its upstream was removed or
 // repointed, or the repos allowlist leaves it out.
 func (h *GitHandler) ServesRepository(dir string) bool {
+	_, ok := h.servedRepository(dir)
+	return ok
+}
+
+// WarmsRepository reports whether the repository in a directory of the
+// cache is checked in the background: one ServesRepository serves from an
+// upstream that isn't offline.
+func (h *GitHandler) WarmsRepository(dir string) bool {
+	repo, ok := h.servedRepository(dir)
+	return ok && !repo.upstream.Offline
+}
+
+// servedRepository resolves a directory of the cache to the repository it
+// serves, reporting false when the configuration serves none.
+func (h *GitHandler) servedRepository(dir string) (gitRepository, bool) {
 	upstreamDir, repoPath, ok := strings.Cut(dir, "/")
 	if !ok {
-		return false
+		return gitRepository{}, false
 	}
 	for name, upstream := range h.upstreams {
 		if upstream.dir == upstreamDir {
-			_, status, _ := h.repository(name + "/" + repoPath)
-			return status == 0
+			repo, status, _ := h.repository(name + "/" + repoPath)
+			return repo, status == 0
 		}
 	}
-	return false
+	return gitRepository{}, false
 }
 
 // validGitSegment checks one segment of a repository path, which becomes both
@@ -316,6 +333,8 @@ func (h *GitHandler) serveError(w http.ResponseWriter, r *http.Request, err erro
 	switch {
 	case errors.Is(err, gitcache.ErrNotFound):
 		http.Error(w, "repository not found", http.StatusNotFound)
+	case errors.Is(err, gitcache.ErrNotCached):
+		http.Error(w, "repository not cached, and the upstream is offline", http.StatusNotFound)
 	case errors.Is(err, gitcache.ErrRefused):
 		http.Error(w, "upstream refused the request", http.StatusBadGateway)
 	case errors.Is(err, gitcache.ErrTooLarge):

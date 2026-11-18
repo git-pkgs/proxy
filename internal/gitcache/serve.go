@@ -49,6 +49,10 @@ type OpenOptions struct {
 	// last refresh found it gone or refused upstream, and refreshed first
 	// when it was not checked within StaleMaxAge.
 	NoCheck bool
+	// Offline serves a cached repository as it is, without contacting the
+	// upstream, however long ago it was checked, and fetches no wants. A
+	// repository not cached is refused with ErrNotCached.
+	Offline bool
 }
 
 // Open returns a lease on the repository cached under key, a relative path
@@ -60,6 +64,9 @@ func (c *Cache) Open(ctx context.Context, key, repoURL string, opts OpenOptions)
 	}
 	rp := c.acquire(key)
 	hit := rp.exists()
+	if opts.Offline {
+		return c.openOffline(rp, opts)
+	}
 	if opts.Refresh {
 		rp.requests.Add(1)
 	}
@@ -81,6 +88,20 @@ func (c *Cache) Open(ctx context.Context, key, repoURL string, opts OpenOptions)
 		return nil, err
 	}
 	return &Lease{cache: c, repo: rp, repoURL: repoURL, hit: hit, fetchWants: opts.FetchWants}, nil
+}
+
+// openOffline returns a lease on rp as cached, or ErrNotCached.
+func (c *Cache) openOffline(rp *repo, opts OpenOptions) (*Lease, error) {
+	if !rp.exists() {
+		c.release(rp)
+		return nil, ErrNotCached
+	}
+	if opts.Refresh {
+		rp.requests.Add(1)
+		c.logger.Info("git cache: upstream offline, serving offline",
+			"repository", rp.key, "checked", time.Unix(0, rp.lastChecked.Load()))
+	}
+	return &Lease{cache: c, repo: rp, hit: true}, nil
 }
 
 // uploadPackGrace is how long past StaleMaxAge a copy is still served
