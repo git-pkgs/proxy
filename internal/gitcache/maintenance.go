@@ -263,6 +263,14 @@ func (c *Cache) indexDue(rp *repo) (due bool, wait time.Duration) {
 // make it allocate much.
 const maxPackNames = 64 << 20
 
+// The layout of a multi-pack index, from gitformat-pack(5): a 12-byte
+// header, then a table of chunks, each a 4-byte ID and an 8-byte offset.
+const (
+	midxHeaderSize = 12
+	midxChunkIDLen = 4
+	midxChunkEntry = midxChunkIDLen + 8
+)
+
 // indexedPacks returns the packs the multi-pack index at path covers, by
 // the names of their index files ("pack-<hash>.idx"), read from its PNAM
 // chunk, the index's list of its packs. See gitformat-pack(5).
@@ -274,7 +282,7 @@ func indexedPacks(path string) (map[string]bool, error) {
 	defer func() { _ = f.Close() }()
 	// The header: "MIDX", the version, the object ID version, the number
 	// of chunks, the number of base indexes and the number of packs.
-	var header [12]byte
+	var header [midxHeaderSize]byte
 	if _, err := io.ReadFull(f, header[:]); err != nil {
 		return nil, fmt.Errorf("reading the multi-pack index header: %w", err)
 	}
@@ -282,18 +290,19 @@ func indexedPacks(path string) (map[string]bool, error) {
 		return nil, errors.New("not a multi-pack index")
 	}
 	chunks, packs := int(header[6]), binary.BigEndian.Uint32(header[8:])
-	// The chunk table: an ID and an offset per chunk, in file order, then
-	// a terminating entry whose offset is where the last chunk ends.
-	table := make([]byte, (chunks+1)*12)
+	// The chunk table: an entry per chunk, in file order, then a
+	// terminating one whose offset is where the last chunk ends.
+	table := make([]byte, (chunks+1)*midxChunkEntry)
 	if _, err := io.ReadFull(f, table); err != nil {
 		return nil, fmt.Errorf("reading the multi-pack index chunk table: %w", err)
 	}
 	for i := range chunks {
-		if string(table[i*12:i*12+4]) != "PNAM" {
+		entry := table[i*midxChunkEntry:]
+		if string(entry[:midxChunkIDLen]) != "PNAM" {
 			continue
 		}
-		start := binary.BigEndian.Uint64(table[i*12+4:])
-		end := binary.BigEndian.Uint64(table[(i+1)*12+4:])
+		start := binary.BigEndian.Uint64(entry[midxChunkIDLen:])
+		end := binary.BigEndian.Uint64(entry[midxChunkEntry+midxChunkIDLen:])
 		if end < start || end-start > maxPackNames {
 			return nil, errors.New("the multi-pack index's pack names are out of bounds")
 		}
