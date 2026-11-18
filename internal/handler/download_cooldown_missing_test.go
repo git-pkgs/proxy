@@ -253,3 +253,64 @@ func TestCondaRefetchedIndexIsReused(t *testing.T) {
 		t.Errorf("repodata fetched %d times, want 2", got)
 	}
 }
+
+// TestCondaConcurrentRefetchesShareOneIndex checks that concurrent downloads
+// of a newly released file, finding it missing from the same kept index,
+// fetch and index repodata past metadata_max_size once between them.
+func TestCondaConcurrentRefetchesShareOneIndex(t *testing.T) {
+	var c downloadCooldownCase
+	for _, candidate := range downloadCooldownCases() {
+		if candidate.ecosystem == "conda" {
+			c = candidate
+		}
+	}
+	now := time.Now()
+	var released atomic.Bool
+	var after atomic.Int32
+	gate := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		times := map[string]time.Time{cooldownOldVersion: now.Add(-30 * 24 * time.Hour)}
+		if released.Load() {
+			after.Add(1)
+			<-gate
+			times[cooldownRecentVersion] = now.Add(-time.Hour)
+		}
+		c.metadata(w, r, times)
+	}))
+	defer upstream.Close()
+	proxy, _, _, fetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	proxy.MetadataMaxSize = 10 // every repodata is streamed
+	fetcher.fetchErr = errors.New("artifact must be served from the cache")
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+	handler := c.handler(proxy, upstream.URL)
+	get := func(version string) int {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, c.path(version), nil))
+		return w.Code
+	}
+	c.seedCachedArtifact(t, proxy, cooldownOldVersion)
+	c.seedCachedArtifact(t, proxy, cooldownRecentVersion)
+	if code := get(cooldownOldVersion); code != http.StatusOK {
+		t.Fatalf("old version: status %d", code)
+	}
+
+	released.Store(true)
+	const downloads = 5
+	codes := make(chan int, downloads)
+	for range downloads {
+		go func() { codes <- get(cooldownRecentVersion) }()
+	}
+	// Lets every download reach the refetch before upstream answers.
+	time.Sleep(200 * time.Millisecond)
+	close(gate)
+	for range downloads {
+		if code := <-codes; code != http.StatusNotFound {
+			t.Errorf("release in cooldown: status %d, want 404", code)
+		}
+	}
+	// The refetch tries the metadata cache's fetch first, then streams.
+	if got := after.Load(); got != 2 {
+		t.Errorf("repodata fetched %d times for %d downloads, want 2", got, downloads)
+	}
+}

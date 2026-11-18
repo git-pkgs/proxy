@@ -585,15 +585,22 @@ func (h *CondaHandler) publishTime(r *http.Request, channel, arch, filename stri
 		// metadata_max_size included.
 		return published, listed && !published.IsZero(), nil
 	}
-	res := h.proxy.refetchLacking(r.Context(), "conda", cacheKey, upstreamURL, "*/*", "gzip", nil)
-	index, err = build(res)
+	// Downloads that found the file missing from the same index share one
+	// refetch and build, which for repodata past metadata_max_size streams
+	// it. Later downloads use the refetched index.
+	refetched, err, _ := h.proxy.sharedProxy().publishIndexes.group.Do(indexKey+"\x00refetch", func() (any, error) {
+		res := h.proxy.refetchLacking(r.Context(), "conda", cacheKey, upstreamURL, "*/*", "gzip", nil)
+		index, err := build(res)
+		if err != nil {
+			return nil, err
+		}
+		storePublishIndex(h.proxy, indexKey, res, index)
+		return index, nil
+	})
 	if err != nil {
 		return time.Time{}, false, err
 	}
-	// Later downloads use the refetched index, not the one that lacked
-	// the file.
-	storePublishIndex(h.proxy, indexKey, res, index)
-	published = index[filename]
+	published = refetched.(map[string]time.Time)[filename]
 	return published, !published.IsZero(), nil
 }
 
