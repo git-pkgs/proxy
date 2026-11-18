@@ -570,7 +570,8 @@ func (h *CondaHandler) publishTime(r *http.Request, channel, arch, filename stri
 	// loaded is what the index was built from, unless an index built
 	// earlier was reused.
 	var loaded *metadataResult
-	index, err := publishIndex(h.proxy, "conda\x00"+cacheKey, func() metadataResult {
+	indexKey := "conda\x00" + cacheKey
+	index, err := publishIndex(h.proxy, indexKey, func() metadataResult {
 		res := h.proxy.lookupMetadata(r.Context(), "conda", cacheKey, upstreamURL, "*/*", "gzip", nil)
 		loaded = &res
 		return res
@@ -584,10 +585,14 @@ func (h *CondaHandler) publishTime(r *http.Request, channel, arch, filename stri
 		// metadata_max_size included.
 		return published, listed && !published.IsZero(), nil
 	}
-	index, err = build(h.proxy.refetchLacking(r.Context(), "conda", cacheKey, upstreamURL, "*/*", "gzip", nil))
+	res := h.proxy.refetchLacking(r.Context(), "conda", cacheKey, upstreamURL, "*/*", "gzip", nil)
+	index, err = build(res)
 	if err != nil {
 		return time.Time{}, false, err
 	}
+	// Later downloads use the refetched index, not the one that lacked
+	// the file.
+	storePublishIndex(h.proxy, indexKey, res, index)
 	published = index[filename]
 	return published, !published.IsZero(), nil
 }

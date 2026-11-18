@@ -205,3 +205,51 @@ func TestPyPIDownloadCooldownRefetchesReleasesLackingTheVersion(t *testing.T) {
 		})
 	}
 }
+
+// TestCondaRefetchedIndexIsReused checks that, without the metadata cache,
+// a repodata index fetched again for a newly released file replaces the one
+// that lacked it, so the next download of the file doesn't fetch it again.
+func TestCondaRefetchedIndexIsReused(t *testing.T) {
+	var c downloadCooldownCase
+	for _, candidate := range downloadCooldownCases() {
+		if candidate.ecosystem == "conda" {
+			c = candidate
+		}
+	}
+	now := time.Now()
+	var released atomic.Bool
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		times := map[string]time.Time{cooldownOldVersion: now.Add(-30 * 24 * time.Hour)}
+		if released.Load() {
+			times[cooldownRecentVersion] = now.Add(-time.Hour)
+		}
+		c.metadata(w, r, times)
+	}))
+	defer upstream.Close()
+	proxy, _, _, fetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	fetcher.fetchErr = errors.New("artifact must be served from the cache")
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+	handler := c.handler(proxy, upstream.URL)
+	get := func(version string) int {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, c.path(version), nil))
+		return w.Code
+	}
+	c.seedCachedArtifact(t, proxy, cooldownOldVersion)
+	c.seedCachedArtifact(t, proxy, cooldownRecentVersion)
+	if code := get(cooldownOldVersion); code != http.StatusOK {
+		t.Fatalf("old version: status %d", code)
+	}
+	released.Store(true)
+	for range 2 {
+		if code := get(cooldownRecentVersion); code != http.StatusNotFound {
+			t.Fatalf("release in cooldown: status %d, want 404", code)
+		}
+	}
+	if got := requests.Load(); got != 2 {
+		t.Errorf("repodata fetched %d times, want 2", got)
+	}
+}

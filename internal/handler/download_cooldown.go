@@ -135,22 +135,7 @@ func publishIndex[V any](p *Proxy, key string, load func() metadataResult, build
 		if err != nil {
 			return nil, err
 		}
-		c.mu.Lock()
-		defer c.mu.Unlock()
-		if c.entries == nil {
-			c.entries = make(map[string]publishIndexEntry)
-		}
-		if _, ok := c.entries[key]; !ok && len(c.entries) >= maxPublishIndexes {
-			for evict := range c.entries {
-				delete(c.entries, evict)
-				break
-			}
-		}
-		entry := publishIndexEntry{digest: res.digest, index: index}
-		if res.digest == "" || !p.CacheMetadata {
-			entry.expires = p.clock().Add(time.Minute)
-		}
-		c.entries[key] = entry
+		storePublishIndex(p, key, res, index)
 		return index, nil
 	})
 	if err != nil {
@@ -165,6 +150,28 @@ func publishIndex[V any](p *Proxy, key string, load func() metadataResult, build
 type listedTime struct {
 	published time.Time
 	ok        bool
+}
+
+// storePublishIndex keeps index, built from res, as publishIndex's entry for
+// key, replacing one built from older bytes.
+func storePublishIndex(p *Proxy, key string, res metadataResult, index any) {
+	c := &p.sharedProxy().publishIndexes
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.entries == nil {
+		c.entries = make(map[string]publishIndexEntry)
+	}
+	if _, ok := c.entries[key]; !ok && len(c.entries) >= maxPublishIndexes {
+		for evict := range c.entries {
+			delete(c.entries, evict)
+			break
+		}
+	}
+	entry := publishIndexEntry{digest: res.digest, index: index}
+	if res.digest == "" || !p.CacheMetadata {
+		entry.expires = p.clock().Add(time.Minute)
+	}
+	c.entries[key] = entry
 }
 
 // readListed reads a version's entry from a metadata document fetched
