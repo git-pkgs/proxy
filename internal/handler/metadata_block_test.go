@@ -285,8 +285,8 @@ func TestMetadataPolicyBlockServesTheCachedCopy(t *testing.T) {
 	}
 }
 
-// A server error or a 429 is logged by its status alone, as before policy
-// denials were kept, not with the upstream's error page.
+// A server error or a 429 is logged by its status alone, not with the
+// upstream's error page.
 func TestUpstreamMetadataStatusKeepsServerErrorsShort(t *testing.T) {
 	for _, code := range []int{http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable} {
 		resp := &http.Response{StatusCode: code, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("<html>an error page</html>"))}
