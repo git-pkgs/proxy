@@ -74,8 +74,11 @@ func (c *Cache) scheduleMaintain(rp *repo) {
 func (c *Cache) maintain(rp *repo) {
 	// The repository may have been evicted since it asked for maintenance;
 	// the one to maintain is whatever is cached under its key now.
+	// Like a background refresh, a run is not a use of the repository:
+	// recording it as one would keep a repository no client asks for warm
+	// and ahead in the eviction order for as long as its upstream changes.
 	rp = c.acquire(rp.key)
-	defer c.release(rp)
+	defer func() { c.drop(rp, rp.exists()) }()
 	if !rp.exists() {
 		return
 	}

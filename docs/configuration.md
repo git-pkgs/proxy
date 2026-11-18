@@ -996,8 +996,8 @@ hour by default): a multi-pack index with reachability bitmaps, which turn
 the object enumeration at the head of a clone from a walk of the whole
 history into bitmap lookups. `maintenance_interval: 0` rewrites it after
 every fetch that changes the repository, and `off` turns the maintenance
-off. At most two repositories are maintained at once, packs are never
-rewritten, and no request is ever held for a run. The index is rebuilt
+off. At most two repositories are maintained at once, maintenance never
+rewrites packs, and no request is ever held for a run. The index is rebuilt
 from the packs, so it is not counted by `max_size` or `max_repo_size`.
 
 With `git` 2.56 or newer, repositories are cached with reftable reference

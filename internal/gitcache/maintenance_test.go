@@ -128,6 +128,34 @@ func TestMaintenanceDisabled(t *testing.T) {
 	}
 }
 
+// TestMaintenanceIsNotAUse checks that a maintenance run does not record
+// the repository as used, which would keep one no client asks for warm and
+// ahead in the eviction order.
+func TestMaintenanceIsNotAUse(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) {
+		o.Maintenance = true
+		o.MaintenanceInterval = 0
+	})
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+
+	rp := tc.repo("up/repo.git")
+	const used = 1
+	rp.lastUsed.Store(used)
+	rp.refsWritten.Add(1)
+	tc.scheduleMaintain(rp)
+	waitIdle(t, tc.Cache)
+
+	if got, covered := rp.refsWritten.Load(), rp.maintainedAt.Load(); got != covered {
+		t.Fatalf("maintenance did not run: refsWritten %d, maintainedAt %d", got, covered)
+	}
+	if got := rp.lastUsed.Load(); got != used {
+		t.Errorf("maintenance recorded a use: lastUsed %d", got)
+	}
+}
+
 // TestMaintenanceRecoversStaleLocks checks that the lock file a maintenance
 // run killed mid-write leaves behind, which would block every later one,
 // is removed by the next.
