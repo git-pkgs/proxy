@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/git-pkgs/proxy/internal/metadata/pypi"
 	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/purl"
 )
@@ -86,7 +87,8 @@ func (p *Policy) Denied(value string) bool {
 	return false
 }
 
-// Versions returns a caller-owned set of denied versions for a package PURL.
+// Versions returns a caller-owned set of denied versions for a package PURL,
+// PyPI's in pypi.CanonicalVersion's form.
 func (p *Policy) Versions(packagePURL string) map[string]bool {
 	if p == nil || len(p.packages) == 0 {
 		return nil
@@ -153,5 +155,11 @@ func identify(pkg *purl.PURL) identity {
 		namespace = ""
 	}
 	key := purl.New(c.Type, namespace, c.Name, "", nil).String()
-	return identity{key: packageurl.PolicyPackageKey(key), channel: channel, version: c.Version}
+	version := c.Version
+	if c.Type == "pypi" {
+		// PyPI accepts files whose names spell a release's version any
+		// way PEP 440 counts as equal, such as 2.0.0.0 for 2.0.0.
+		version = pypi.CanonicalVersion(version)
+	}
+	return identity{key: packageurl.PolicyPackageKey(key), channel: channel, version: version}
 }

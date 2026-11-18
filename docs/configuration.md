@@ -1437,6 +1437,10 @@ Names and versions are compared the way each ecosystem treats them:
   without one.
 - A RubyGems entry also covers that version's platform gems:
   `pkg:gem/nokogiri@1.16.0` denies `nokogiri-1.16.0-x86_64-linux.gem`.
+- PyPI versions are compared as PEP 440 compares them: `pkg:pypi/foo@2.0`
+  also covers `foo-2.0.0-py3-none-any.whl` and `foo-V2.0.0.0-py3-none-any.whl`.
+  PyPI accepts wheels whose filenames spell the release's version any such
+  way, and cooldown and the simple index filters compare versions the same.
 - Composer versions ignore a leading `v`, which Packagist keeps from the tag:
   `pkg:composer/symfony/console@6.1.7` also covers `v6.1.7`.
 - Go versions are matched as written, `pkg:golang/example.com/mod@v1.0.0-RC1`,

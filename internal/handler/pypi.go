@@ -493,12 +493,29 @@ func (h *PyPIHandler) versionInCooldown(r *http.Request, name, version string) (
 	if err != nil {
 		return false, err
 	}
-	publishedAt := times[version]
+	publishedAt, _ := releaseTime(times, version)
 	if publishedAt.IsZero() {
 		return false, nil
 	}
 	publishedAt = h.storeUploadTime(name, version, publishedAt)
 	return !h.proxy.cooldown().IsAllowed("pypi", canonicalPackagePURL("pypi", name), publishedAt), nil
+}
+
+// releaseTime returns the upload time of the release a file's version
+// names, and whether times lists it. Releases are keyed by their normalized
+// version, which a wheel's filename may spell another way PEP 440 counts as
+// equal, such as 2.0.0.0 for 2.0.0.
+func releaseTime(times map[string]time.Time, version string) (time.Time, bool) {
+	if published, ok := times[version]; ok {
+		return published, true
+	}
+	canonical := pypi.CanonicalVersion(version)
+	for release, published := range times {
+		if pypi.CanonicalVersion(release) == canonical {
+			return published, true
+		}
+	}
+	return time.Time{}, false
 }
 
 // storeUploadTime records a release's newest upload time under the version
