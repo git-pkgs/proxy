@@ -53,12 +53,19 @@ type Mirror struct {
 	// the official Alpine mirror as "alpine".
 	APKRepositories map[string]string
 
+	// DebianUpstream and DebianRepositories are upstream.debian and
+	// upstream.debian_repositories. An empty DebianUpstream uses
+	// deb.debian.org.
+	DebianUpstream     string
+	DebianRepositories map[string]string
+
 	// RefusePackages, when set, fails every item Images does not take with
 	// this reason instead of fetching it, so nothing is cached.
 	RefusePackages string
 
 	cran cranIndex
 	apk  apkIndexes
+	deb  debIndexes
 }
 
 // New creates a new Mirror with the given dependencies.
@@ -295,6 +302,10 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 	}
 	if pv.Ecosystem == "alpine" {
 		m.mirrorAPK(ctx, pv, tracker)
+		return
+	}
+	if pv.Ecosystem == "deb" {
+		m.mirrorDeb(ctx, pv, tracker)
 		return
 	}
 	if pv.Ecosystem == "git" {

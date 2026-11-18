@@ -49,15 +49,18 @@ var DefaultTerraformRegistries = map[string]string{
 }
 
 // TerraformHandler serves the Provider Network Mirror Protocol at
-// /terraform/providers/, for Terraform and OpenTofu. The mirror path names
-// the registry hostname of each provider; only configured hostnames are
-// fetched. Version lists and archive locations come from the registry's
+// /terraform/providers/, and the Module Registry Protocol at
+// /terraform/modules/, for Terraform and OpenTofu. The paths name the
+// registry hostname of each provider or module; only configured hostnames
+// are fetched. Version lists and archive locations come from the registry's
 // Provider Registry Protocol, and archives are cached and checked against the
 // registry's shasum.
 type TerraformHandler struct {
 	proxy *Proxy
 	// registries maps hostnames to registry base URLs.
 	registries map[string]string
+	// git, when set, serves the Git repositories modules are fetched from.
+	git *GitHandler
 }
 
 // NewTerraformHandler creates a provider mirror for registries, which maps
@@ -74,19 +77,47 @@ func NewTerraformHandler(proxy *Proxy, registries map[string]string) *TerraformH
 	return h
 }
 
-// Routes returns the HTTP handler for provider mirror requests.
+// WithGit has module downloads from a Git repository that git serves
+// fetched through it.
+func (h *TerraformHandler) WithGit(git *GitHandler) *TerraformHandler {
+	h.git = git
+	return h
+}
+
+// Routes returns the HTTP handler for provider mirror and module registry
+// requests.
 func (h *TerraformHandler) Routes() http.Handler {
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /providers/{hostname}/{namespace}/{type}/{file}", h.handleProviderDocument)
 	mux.HandleFunc("GET /providers/{hostname}/{namespace}/{type}/{version}/{archive}", h.handleArchive)
+	mux.HandleFunc("GET /modules/{hostname}/{namespace}/{name}/{system}/versions", h.handleModuleVersions)
+	mux.HandleFunc("GET /modules/{hostname}/{namespace}/{name}/{system}/{version}/download", h.handleModuleDownload)
 	return mux
+}
+
+// terraformRegistry is a configured registry.
+type terraformRegistry struct {
+	hostname string
+	// baseURL is the registry's base URL.
+	baseURL string
 }
 
 // terraformProvider is a provider on one registry.
 type terraformProvider struct {
-	hostname, namespace, name string
-	// baseURL is the registry's base URL.
-	baseURL string
+	terraformRegistry
+	namespace, name string
+}
+
+// registryFromRequest returns the registry configured for the request's
+// hostname, or answers 404.
+func (h *TerraformHandler) registryFromRequest(w http.ResponseWriter, r *http.Request) (terraformRegistry, bool) {
+	hostname := strings.ToLower(r.PathValue("hostname"))
+	baseURL, ok := h.registries[hostname]
+	if !ok {
+		http.Error(w, "no registry configured for this hostname", http.StatusNotFound)
+		return terraformRegistry{}, false
+	}
+	return terraformRegistry{hostname: hostname, baseURL: baseURL}, true
 }
 
 // providerFromRequest returns the provider a request names, in lowercase:
@@ -94,10 +125,8 @@ type terraformProvider struct {
 // spelling. ok is false when it has already answered: 404 for a hostname with
 // no registry configured, 400 for an invalid namespace or type.
 func (h *TerraformHandler) providerFromRequest(w http.ResponseWriter, r *http.Request) (terraformProvider, bool) {
-	hostname := strings.ToLower(r.PathValue("hostname"))
-	baseURL, ok := h.registries[hostname]
+	registry, ok := h.registryFromRequest(w, r)
 	if !ok {
-		http.Error(w, "no registry configured for this hostname", http.StatusNotFound)
 		return terraformProvider{}, false
 	}
 	namespace, name := strings.ToLower(r.PathValue("namespace")), strings.ToLower(r.PathValue("type"))
@@ -105,7 +134,7 @@ func (h *TerraformHandler) providerFromRequest(w http.ResponseWriter, r *http.Re
 		http.Error(w, "invalid provider address", http.StatusBadRequest)
 		return terraformProvider{}, false
 	}
-	return terraformProvider{hostname: hostname, namespace: namespace, name: name, baseURL: baseURL}, true
+	return terraformProvider{terraformRegistry: registry, namespace: namespace, name: name}, true
 }
 
 // handleProviderDocument serves index.json, the provider's versions, and
@@ -326,20 +355,25 @@ func (h *TerraformHandler) download(ctx context.Context, provider terraformProvi
 // providersURL returns the registry's providers.v1 base URL from its service
 // discovery document, ending in a slash.
 func (h *TerraformHandler) providersURL(ctx context.Context, provider terraformProvider) (string, error) {
-	var discovery struct {
-		Providers string `json:"providers.v1"`
-	}
-	discoveryURL := provider.baseURL + "/.well-known/terraform.json"
-	if _, err := h.fetchRegistryDocument(ctx, provider, "discovery", discoveryURL, &discovery); err != nil {
+	return h.serviceURL(ctx, provider.terraformRegistry, "providers.v1")
+}
+
+// serviceURL returns the base URL of a service, such as providers.v1, from
+// the registry's service discovery document, ending in a slash.
+func (h *TerraformHandler) serviceURL(ctx context.Context, registry terraformRegistry, service string) (string, error) {
+	var discovery map[string]json.RawMessage
+	discoveryURL := registry.baseURL + "/.well-known/terraform.json"
+	if _, err := h.fetchRegistryDocument(ctx, registry, "discovery", discoveryURL, &discovery); err != nil {
 		return "", err
 	}
-	if discovery.Providers == "" {
-		return "", fmt.Errorf("%w: %s has no providers.v1 service", errTerraformDocument, provider.hostname)
+	var serviceURL string
+	if err := json.Unmarshal(discovery[service], &serviceURL); err != nil || serviceURL == "" {
+		return "", fmt.Errorf("%w: %s has no %s service", errTerraformDocument, registry.hostname, service)
 	}
 	base, _ := url.Parse(discoveryURL)
-	ref, err := url.Parse(discovery.Providers)
+	ref, err := url.Parse(serviceURL)
 	if err != nil || (ref.Scheme != "" && ref.Scheme != "https" && ref.Scheme != "http") {
-		return "", fmt.Errorf("%w: providers.v1 %q", errTerraformDocument, discovery.Providers)
+		return "", fmt.Errorf("%w: %s %q", errTerraformDocument, service, serviceURL)
 	}
 	resolved := base.ResolveReference(ref).String()
 	if !strings.HasSuffix(resolved, "/") {
@@ -352,11 +386,11 @@ func (h *TerraformHandler) providersURL(ctx context.Context, provider terraformP
 // cache and decodes it into v. It reports whether the stored copy was served
 // because the registry was unavailable.
 func (h *TerraformHandler) fetchDocument(ctx context.Context, provider terraformProvider, documentKey, upstreamURL string, v any) (bool, error) {
-	return h.fetchRegistryDocument(ctx, provider, "providers/"+provider.namespace+"/"+provider.name+"/"+documentKey, upstreamURL, v)
+	return h.fetchRegistryDocument(ctx, provider.terraformRegistry, "providers/"+provider.namespace+"/"+provider.name+"/"+documentKey, upstreamURL, v)
 }
 
-func (h *TerraformHandler) fetchRegistryDocument(ctx context.Context, provider terraformProvider, documentKey, upstreamURL string, v any) (bool, error) {
-	res := h.proxy.fetchMetadataDocument(ctx, terraformEcosystem, provider.cacheKey(documentKey), upstreamURL, contentTypeJSON, nil)
+func (h *TerraformHandler) fetchRegistryDocument(ctx context.Context, registry terraformRegistry, documentKey, upstreamURL string, v any) (bool, error) {
+	res := h.proxy.fetchMetadataDocument(ctx, terraformEcosystem, registry.cacheKey(documentKey), upstreamURL, contentTypeJSON, nil)
 	if res.err != nil {
 		return false, res.err
 	}
@@ -367,6 +401,12 @@ func (h *TerraformHandler) fetchRegistryDocument(ctx context.Context, provider t
 }
 
 func (h *TerraformHandler) writeError(w http.ResponseWriter, r *http.Request, provider terraformProvider, err error) {
+	h.writeRegistryError(w, r, provider.hostname, "provider", provider.address(), err)
+}
+
+// writeRegistryError answers a failed registry request for the kind
+// ("provider" or "module") at address on hostname.
+func (h *TerraformHandler) writeRegistryError(w http.ResponseWriter, r *http.Request, hostname, kind, address string, err error) {
 	switch {
 	case r.Context().Err() != nil:
 		return // the client left
@@ -374,7 +414,7 @@ func (h *TerraformHandler) writeError(w http.ResponseWriter, r *http.Request, pr
 		http.Error(w, "not found", http.StatusNotFound)
 	case h.proxy.writeUpstreamRefusal(w, err):
 	default:
-		h.proxy.Logger.Error("Terraform registry request failed", "registry", provider.hostname, "provider", provider.address(), "error", err)
+		h.proxy.Logger.Error("Terraform registry request failed", "registry", hostname, kind, address, "error", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)
 	}
 }
@@ -404,14 +444,14 @@ func (p terraformProvider) purls(version string) (pkgPURL, versionPURL string) {
 // upstreamKey identifies the registry's base URL in cache keys, so pointing
 // a hostname at another registry does not serve the previous one's documents
 // or archives.
-func (p terraformProvider) upstreamKey() string {
+func (p terraformRegistry) upstreamKey() string {
 	digest := sha256.Sum256([]byte(p.baseURL))
 	return hex.EncodeToString(digest[:])[:terraformUpstreamKeyLength]
 }
 
 // cacheKey scopes a metadata cache key to the registry's hostname and base
 // URL.
-func (p terraformProvider) cacheKey(documentKey string) string {
+func (p terraformRegistry) cacheKey(documentKey string) string {
 	return p.hostname + "-" + p.upstreamKey() + "/" + documentKey
 }
 

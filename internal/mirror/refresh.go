@@ -155,20 +155,31 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 		return m.proxy == nil || m.proxy.ReleaseAllowed(pkg.Ecosystem, pkg.Name, v.Number, v.PublishedAt)
 	}
 
-	var items []PackageVersion
-	for _, version := range newestPerCachedLine(ecosystem, cached, releases, allowed) {
-		pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: version}
-		if eco, ok := fileEcosystems[ecosystem]; ok {
-			pv.variants = map[string]bool{}
-			for _, f := range pkg.Files {
-				for _, v := range eco.cachedVariants(f.Filename) {
-					pv.variants[v] = true
-				}
-			}
+	eco, files := fileEcosystems[ecosystem]
+	var variants map[string]bool
+	var incomplete func(registries.Version) bool
+	if files {
+		variants = cachedVariants(eco, pkg.Files)
+		incomplete = func(r registries.Version) bool {
+			return eco.missing(PackageVersion{Ecosystem: ecosystem, Name: name, Version: r.Number, variants: variants}, r, pkg.Files)
 		}
-		items = append(items, pv)
+	}
+
+	var items []PackageVersion
+	for _, version := range newestPerCachedLine(ecosystem, cached, releases, allowed, incomplete) {
+		items = append(items, PackageVersion{Ecosystem: ecosystem, Name: name, Version: version, variants: variants})
 	}
 	return items, nil
+}
+
+func cachedVariants(eco fileEcosystem, files []database.UsedFile) map[string]bool {
+	variants := map[string]bool{}
+	for _, f := range files {
+		for _, v := range eco.cachedVariants(f.Filename) {
+			variants[v] = true
+		}
+	}
+	return variants
 }
 
 // refreshable reports whether a refresh lists the releases of an

@@ -189,3 +189,34 @@ func TestGitMirrorCachesSubmodules(t *testing.T) {
 		t.Errorf("cloned lib HEAD %s, want %s", head, libCommit)
 	}
 }
+
+func TestGitCloneURL(t *testing.T) {
+	h := NewGitHandler(nil, nil, config.UpstreamConfig{Git: map[string]config.GitUpstream{
+		"github": {URL: "https://github.com", Repos: []string{"acme/*"}},
+	}}).WithBaseURL("https://proxy.example/")
+	tests := []struct{ repoURL, want string }{
+		{"https://github.com/acme/widgets", "https://proxy.example/git/github/acme/widgets"},
+		{"http://GitHub.com/acme/widgets.git/", "https://proxy.example/git/github/acme/widgets.git"},
+		{"https://github.com/other/widgets", ""},
+		{"https://gitlab.example/acme/widgets", ""},
+		{"ssh://github.com/acme/widgets", ""},
+		{"https://user@github.com/acme/widgets", ""},
+		{"https://github.com/acme/widgets?ref=main", ""},
+		{"https://github.com/acme/widgets#main", ""},
+		{"https://github.com/", ""},
+	}
+	for _, tt := range tests {
+		t.Run(tt.repoURL, func(t *testing.T) {
+			got, ok := h.CloneURL(tt.repoURL)
+			if got != tt.want || ok != (tt.want != "") {
+				t.Errorf("CloneURL = %q, %v; want %q", got, ok, tt.want)
+			}
+		})
+	}
+	// Without a base URL or a Git handler there is nothing to point at.
+	for name, h := range map[string]*GitHandler{"no base URL": NewGitHandler(nil, nil, config.UpstreamConfig{Git: map[string]config.GitUpstream{"github": {URL: "https://github.com"}}}), "nil": nil} {
+		if got, ok := h.CloneURL("https://github.com/acme/widgets"); ok || got != "" {
+			t.Errorf("%s: CloneURL = %q, %v; want none", name, got, ok)
+		}
+	}
+}

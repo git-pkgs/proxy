@@ -8,6 +8,7 @@ import (
 	"slices"
 	"strings"
 
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/proxy/internal/metadata/pypi"
 	"github.com/git-pkgs/registries"
@@ -255,6 +256,21 @@ func (e fileEcosystem) selects(pv PackageVersion, file registries.Artifact) bool
 		}
 	}
 	return true
+}
+
+// missing reports whether a file of release that pv selects isn't among
+// the cached files, such as one a refresh failed to fetch after fetching
+// another of the release.
+func (e fileEcosystem) missing(pv PackageVersion, release registries.Version, cached []database.UsedFile) bool {
+	for _, file := range release.Artifacts {
+		if !e.selects(pv, file) {
+			continue
+		}
+		if _, _, filename, ok := e.cacheKey(pv, file); ok && !slices.ContainsFunc(cached, func(f database.UsedFile) bool { return f.Filename == filename }) {
+			return true
+		}
+	}
+	return false
 }
 
 // fileQualifiers keeps the qualifiers of a PURL that select files of its

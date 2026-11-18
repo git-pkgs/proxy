@@ -140,7 +140,7 @@ func TestNewestPerCachedLineGo(t *testing.T) {
 		{"pseudo-versions are prereleases", []string{"v1.2.3"}, releases("v1.2.3", "v1.2.4-0.20260101000000-abcdefabcdef"), nil},
 	} {
 		t.Run(tt.name, func(t *testing.T) {
-			if got := newestPerCachedLine("golang", tt.cached, tt.releases, allowAll); !reflect.DeepEqual(got, tt.want) {
+			if got := newestPerCachedLine("golang", tt.cached, tt.releases, allowAll, nil); !reflect.DeepEqual(got, tt.want) {
 				t.Errorf("newestPerCachedLine = %v, want %v", got, tt.want)
 			}
 		})

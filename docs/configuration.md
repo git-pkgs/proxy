@@ -668,12 +668,12 @@ as signatures and keys, is passed through uncached. When `upstream.freebsd` is e
 repository named `freebsd` pointing at `https://pkg.freebsd.org` is available;
 configuring any entry replaces that default.
 
-### Terraform and OpenTofu providers
+### Terraform and OpenTofu providers and modules
 
 ```yaml
 upstream:
 
-  # Provider registries, by the hostname in provider source addresses.
+  # Provider and module registries, by the hostname in source addresses.
   terraform:
     registry.terraform.io: "https://registry.terraform.io"
     registry.opentofu.org: "https://registry.opentofu.org"
@@ -691,6 +691,19 @@ shared artifact cache, as `pkg:terraform/{namespace}/{type}`, and are checked
 against the registry's `shasum`. Namespace and type are lowercased. When
 `upstream.terraform` is empty, the two registries above are mirrored;
 configuring any entry replaces that default.
+
+`/terraform/modules/{hostname}/` serves the module registry protocol for the
+same registries, e.g.
+`/terraform/modules/registry.terraform.io/terraform-aws-modules/vpc/aws/versions`.
+Version lists and download locations go through the metadata cache too. A
+download location such as `git::https://github.com/terraform-aws-modules/terraform-aws-vpc?ref=…`
+names a Git repository; when an [`upstream.git`](#git-repositories) host
+serves it and the git cache is configured, the location is rewritten to
+`git::{base_url}/git/{name}/{repo}`, keeping the subdirectory and query, so
+the module is cloned through the git cache. Other locations are passed on,
+with a relative one resolved against the registry's URL. Unlike provider addresses, module addresses
+are passed to the registry in the case the client gives them, as Terraform
+keeps it.
 
 ### Alpine APK snapshots
 
@@ -1448,6 +1461,12 @@ Names and versions are compared the way each ecosystem treats them:
   lowercase, without the registry hostname: `pkg:terraform/hashicorp/random@3.6.0`.
   It covers the provider on every registry in `upstream.terraform`, however
   the request spells the address.
+- A Terraform or OpenTofu module entry names the namespace and name in
+  lowercase, without the target system or the registry hostname:
+  `pkg:terraform/terraform-aws-modules/vpc@5.0.0` covers `vpc/aws` and any
+  other `vpc` module of that namespace, however the request spells the
+  address. A provider and a module with the same namespace and name share an
+  entry.
 
 Denied versions are removed from npm packuments, Cargo sparse indexes, and PyPI
 simple HTML/JSON (files and the JSON `versions` list) and release metadata, including responses served from cached
@@ -2013,6 +2032,8 @@ A CRAN version is mirrored as its source package from `upstream.cran`, for examp
 
 An Alpine package is mirrored from the repository in `upstream.apk` named as the namespace, `alpine` by default, as syft writes it in image SBOMs: `pkg:apk/alpine/busybox@1.36.1-r29?arch=x86_64&distro=alpine-3.20.3`. The `distro` qualifier gives the release (`v3.20`) and `arch` the architecture; packages without either are refused. Edge isn't mirrored: a `distro` with a pre-release suffix, such as `alpine-3.21.0_alpha20240807`, is refused, but an edge system that reports a plain release number can't be told apart and is mirrored from that release. The package is looked up in the `main` and then the `community` `APKINDEX.tar.gz` of that release and cached under the path `/apk/{repository}/{release}/{repo}/{arch}/{file}` serves it from. The file isn't checked by the proxy, as when serving, since the index checksum covers only the package's control section; apk checks it on install. The indexes aren't mirrored, so `apk add` needs the upstream or an index the proxy already cached. Give a version: Alpine repositories keep only the current one.
 
+A Debian package is mirrored from the archive the namespace names: the one in `upstream.debian_repositories` by that name, or else `upstream.debian` for `debian` or no namespace, as syft and trivy write it in image SBOMs: `pkg:deb/debian/curl@7.88.1-10+deb12u8?arch=amd64&distro=debian-12`. The `distro` qualifier gives the release, as `debian-12`, a point release such as `debian-12.4`, `ubuntu-22.04` or a codename such as `bookworm`, and `arch` the architecture; packages without either are refused. The package is looked up in the release's suites the archive serves, of `{codename}`, `{codename}-updates` and `{codename}-security`, through the `Packages` indexes of the components their `Release` lists, such as `stable` in Docker's apt repository, which are checked against the `Release`. A suite whose `Release` lists none is read for `main`, `contrib`, `non-free`, `non-free-firmware`, `restricted`, `universe` and `multiverse`. Debian keeps `{codename}-security` in an archive of its own, `deb.debian.org/debian-security`, which can be added to `upstream.debian_repositories` and named in the namespace. An epoch is matched from the version (`1:9.2p1-2+deb12u3`) or the `epoch` qualifier; without one, a version listed with two epochs is refused. The file is checked against the index's SHA256 and cached under the path `/debian/` serves it from, so apt gets it with the upstream down. The indexes aren't mirrored. Give a version: an archive keeps only the current one of each suite.
+
 | Flag | Default | Description |
 |------|---------|-------------|
 | `--sbom` | | Path to CycloneDX or SPDX SBOM file |
@@ -2143,7 +2164,7 @@ mirror:
 
 For each of those packages a run lists the releases on the configured upstream and mirrors, for each major line a version is cached on, the newest release of that line. A major line is the major version, or `0.minor` below 1.0. Versions numbered by year, such as certifi's `2025.1.31`, are all one line. Prereleases and yanked, retracted or deprecated releases are skipped, and so are releases cooldown still withholds or the denylist names, so a run mirrors what clients would be served rather than the newest published. A release that leaves cooldown later is mirrored by a later run.
 
-- PyPI, conda and gem versions publish many files. Only the kinds clients fetched of earlier versions are mirrored: wheels with the same python and ABI tags for the same OS and architecture, whatever glibc or macOS version they need (and, for `abi3` wheels, whatever minimum Python version), and the sdist; conda packages of the same subdir, build variant (such as `py312` or `_cpython`) and file type; and gems of the same platform.
+- PyPI, conda and gem versions publish many files. Only the kinds clients fetched of earlier versions are mirrored: wheels with the same python and ABI tags for the same OS and architecture, whatever glibc or macOS version they need (and, for `abi3` wheels, whatever minimum Python version), and the sdist; conda packages of the same subdir, build variant (such as `py312` or `_cpython`) and file type; and gems of the same platform. When some of those files of the newest release are cached and others aren't, say because a run failed on one, the next run fetches the missing ones.
 - Debian, Alpine and RPM clients find new versions in repository indexes. A run fetches the `InRelease`, `APKINDEX.tar.gz` and `repomd.xml` files clients fetched within `since` again from upstream, which doesn't count as a client fetching them, reads the `Packages` and primary indexes they point at for the components and architectures of the cached packages, and mirrors the newest file each index lists of a package and architecture when it isn't cached but an older version is. Suites sharing a pool, such as bookworm and trixie, are refreshed each on its own that way. Files are checked against the SHA-256 the index lists, where it lists one. Indexes are found by the URL the metadata cache records with them, which caches from before this release lack until they are next revalidated. This requires `cache_metadata`; without it the proxy logs a warning at startup and refreshes the other ecosystems only.
 - Container images are not refreshed; list the tags to follow in `mirror.schedules`. Arch Linux and FreeBSD packages, Julia packages, which are cached by tree hash, and other ecosystems the mirror can't list versions of are left out too.
 - Hit counts are kept per file since it was cached, so `top` ranks by all downloads of the files used within `since`. A file a run mirrored counts as used only once a client downloads it, so a package nobody fetches drops out after `since`.
