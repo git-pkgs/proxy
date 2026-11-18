@@ -613,3 +613,74 @@ func TestCoalesce_PanicInSharedFetchDoesNotStrandWaiters(t *testing.T) {
 		t.Errorf("in-flight entries after a panic = %d, want 0", n)
 	}
 }
+
+// TestCoalesce_ClientJoiningAMirrorFetchCountsAsADownload checks that a client
+// served by a fetch a mirror run started is recorded as having downloaded the
+// artifact. Otherwise the artifact looks fetched only by the mirror run.
+func TestCoalesce_ClientJoiningAMirrorFetchCountsAsADownload(t *testing.T) {
+	proxy, db, _, _ := setupTestProxy(t)
+	fetcher := &countingFetcher{content: "bytes", delay: fetchHoldTime, entered: make(chan struct{})}
+	proxy.Fetcher = fetcher
+	get := func(ctx context.Context) error {
+		res, err := proxy.GetOrFetchArtifactFromURL(ctx, "npm", "pkg", "1.0.0", "pkg-1.0.0.tgz",
+			"https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz")
+		drain(res)
+		return err
+	}
+
+	mirrored := make(chan error, 1)
+	go func() { mirrored <- get(MirrorFetch(context.Background())) }()
+	<-fetcher.entered
+	if err := get(context.Background()); err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	if err := <-mirrored; err != nil {
+		t.Fatalf("mirror run: %v", err)
+	}
+	if n := fetcher.calls.Load(); n != 1 {
+		t.Fatalf("upstream fetched %d times, want 1 shared fetch", n)
+	}
+
+	a, err := db.GetArtifact("pkg:npm/pkg@1.0.0", "pkg-1.0.0.tgz")
+	if err != nil || a == nil {
+		t.Fatalf("GetArtifact = %+v, %v", a, err)
+	}
+	if !a.LastAccessedAt.Valid || a.HitCount != 1 {
+		t.Errorf("artifact hits = %d, last accessed %v; want the client's download recorded", a.HitCount, a.LastAccessedAt)
+	}
+}
+
+// TestCoalesce_MirrorJoiningAClientFetchIsNotADownload checks the other way
+// round: a mirror run joining a client's fetch records no download.
+func TestCoalesce_MirrorJoiningAClientFetchIsNotADownload(t *testing.T) {
+	proxy, db, _, _ := setupTestProxy(t)
+	fetcher := &countingFetcher{content: "bytes", delay: fetchHoldTime, entered: make(chan struct{})}
+	proxy.Fetcher = fetcher
+	get := func(ctx context.Context) error {
+		res, err := proxy.GetOrFetchArtifactFromURL(ctx, "npm", "pkg", "1.0.0", "pkg-1.0.0.tgz",
+			"https://registry.npmjs.org/pkg/-/pkg-1.0.0.tgz")
+		drain(res)
+		return err
+	}
+
+	client := make(chan error, 1)
+	go func() { client <- get(context.Background()) }()
+	<-fetcher.entered
+	if err := get(MirrorFetch(context.Background())); err != nil {
+		t.Fatalf("mirror run: %v", err)
+	}
+	if err := <-client; err != nil {
+		t.Fatalf("client: %v", err)
+	}
+	if n := fetcher.calls.Load(); n != 1 {
+		t.Fatalf("upstream fetched %d times, want 1 shared fetch", n)
+	}
+
+	a, err := db.GetArtifact("pkg:npm/pkg@1.0.0", "pkg-1.0.0.tgz")
+	if err != nil || a == nil {
+		t.Fatalf("GetArtifact = %+v, %v", a, err)
+	}
+	if a.HitCount != 0 {
+		t.Errorf("artifact hits = %d, want none from the mirror run", a.HitCount)
+	}
+}

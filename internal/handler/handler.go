@@ -565,7 +565,7 @@ func (p *Proxy) readStored(ctx context.Context, pkgPURL, versionPURL, filename s
 
 	if servingHead(ctx) {
 		result.rangeable = readsSeekable(p.Storage)
-		p.recordCacheHit(artifact.Ecosystem, versionPURL, filename)
+		p.recordCacheHit(ctx, artifact.Ecosystem, versionPURL, filename)
 		return result, nil
 	}
 
@@ -573,7 +573,7 @@ func (p *Proxy) readStored(ctx context.Context, pkgPURL, versionPURL, filename s
 		signed, err := p.Storage.SignedURL(ctx, artifact.StoragePath, p.DirectServeTTL)
 		if err == nil {
 			result.RedirectURL = signed
-			p.recordCacheHit(artifact.Ecosystem, versionPURL, filename)
+			p.recordCacheHit(ctx, artifact.Ecosystem, versionPURL, filename)
 			return result, nil
 		}
 		if !errors.Is(err, storage.ErrSignedURLUnsupported) {
@@ -609,12 +609,19 @@ func (p *Proxy) readStored(ctx context.Context, pkgPURL, versionPURL, filename s
 		p.rejectUnusableCacheRecord(artifact, versionPURL, filename, err)
 		return nil, nil
 	}
-	p.recordCacheHit(artifact.Ecosystem, versionPURL, filename)
+	p.recordCacheHit(ctx, artifact.Ecosystem, versionPURL, filename)
 	return result, nil
 }
 
-func (p *Proxy) recordCacheHit(ecosystem, versionPURL, filename string) {
-	_ = p.DB.RecordArtifactHit(versionPURL, filename)
+// recordCacheHit counts a cache hit. A mirror run's read leaves the
+// artifact's hits and last access alone, so it doesn't look like a client
+// download, and keeps it from retention instead.
+func (p *Proxy) recordCacheHit(ctx context.Context, ecosystem, versionPURL, filename string) {
+	if mirrorFetch(ctx) {
+		_ = p.DB.KeepMirroredArtifact(versionPURL, filename)
+	} else {
+		_ = p.DB.RecordArtifactHit(versionPURL, filename)
+	}
 	metrics.RecordArtifactCacheHit(ecosystem)
 }
 
@@ -981,6 +988,11 @@ func (p *Proxy) coalesceFetch(ctx context.Context, key string, recheck func() (a
 	}
 	if f.unrecorded != nil {
 		return p.serveUnrecorded(ctx, f.unrecorded, f.val.artifact, f.val.storagePath)
+	}
+	// A client served by a fetch it joined downloaded the artifact, even
+	// when a mirror run started the fetch.
+	if !mirrorFetch(ctx) {
+		_ = p.DB.RecordArtifactHit(f.val.artifact.PURL, f.val.artifact.Filename)
 	}
 	return p.openStoredArtifact(ctx, f.val.artifact, f.val.storagePath)
 }

@@ -59,6 +59,12 @@ func (m *Mirror) releaseLister() ReleaseLister { //nolint:ireturn // any lister 
 func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
 	ctx = handler.MirrorFetch(ctx)
 	cutoff := time.Now().Add(-r.Since)
+	// Without the buffered hits, this run misses the downloads still in
+	// them, and a later run only sees those still within Since. That is
+	// logged rather than stopping the run.
+	if err := m.db.FlushHits(); err != nil {
+		m.logger.Warn("mirror refresh: failed to write buffered hits", "error", err)
+	}
 	packages, err := m.db.MostUsedPackages(cutoff, r.Top)
 	if err != nil {
 		return nil, fmt.Errorf("listing the most used packages: %w", err)
@@ -134,6 +140,16 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 	if !refreshable(ecosystem) {
 		return nil, nil
 	}
+	eco, files := fileEcosystems[ecosystem]
+	var variants map[string]bool
+	if files {
+		variants = cachedVariants(eco, pkg.Files)
+		if len(variants) == 0 {
+			// Eviction removed every file a client downloaded after the
+			// ranking query ran.
+			return nil, nil
+		}
+	}
 	releases, err := m.releaseLister().ListReleases(ctx, ecosystem, name)
 	if err != nil {
 		return nil, fmt.Errorf("listing releases: %w", err)
@@ -155,11 +171,8 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 		return m.proxy == nil || m.proxy.ReleaseAllowed(pkg.Ecosystem, pkg.Name, v.Number, v.PublishedAt)
 	}
 
-	eco, files := fileEcosystems[ecosystem]
-	var variants map[string]bool
 	var incomplete func(registries.Version) bool
 	if files {
-		variants = cachedVariants(eco, pkg.Files)
 		incomplete = func(r registries.Version) bool {
 			return eco.missing(PackageVersion{Ecosystem: ecosystem, Name: name, Version: r.Number, variants: variants}, r, pkg.Files)
 		}
@@ -172,9 +185,14 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 	return items, nil
 }
 
+// cachedVariants returns the kinds of files clients downloaded. Files a
+// refresh mirrored are left out, so they don't widen later refreshes.
 func cachedVariants(eco fileEcosystem, files []database.UsedFile) map[string]bool {
 	variants := map[string]bool{}
 	for _, f := range files {
+		if !f.Downloaded {
+			continue
+		}
 		for _, v := range eco.cachedVariants(f.Filename) {
 			variants[v] = true
 		}

@@ -12,6 +12,8 @@ import (
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/handler"
 	"github.com/git-pkgs/registries"
 	"github.com/git-pkgs/registries/fetch"
 )
@@ -295,6 +297,147 @@ func TestRefreshMirrorsTheFileVariantsClientsFetched(t *testing.T) {
 	}
 	if progress.Completed != 1 || !slices.Equal(got, want) {
 		t.Errorf("progress = %+v, fetched %v; want %v", progress, got, want)
+	}
+}
+
+func TestRefreshSelectsVariantsOnlyFromFilesClientsFetched(t *testing.T) {
+	m, fetcher := setupRefreshMirror(t, "wheel")
+	ctx := context.Background()
+	result, err := m.proxy.GetOrFetchArtifactFromURLWithDigest(ctx, "pypi", "demo", "1.0.0", "demo-1.0.0-py3-none-any.whl", "https://files.example/demo-1.0.0-py3-none-any.whl", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = result.Reader.Close()
+	files := func(version string, names ...string) registries.Version {
+		v := registries.Version{Number: version, PublishedAt: time.Now().Add(-30 * 24 * time.Hour)}
+		for _, n := range names {
+			v.Artifacts = append(v.Artifacts, registries.Artifact{Filename: n, URL: "https://files.example/" + n})
+		}
+		return v
+	}
+	releases := []registries.Version{
+		files("1.0.0", "demo-1.0.0-py3-none-any.whl"),
+		files("1.1.0", "demo-1.1.0-py2.py3-none-any.whl"),
+	}
+	m.Versions = stubReleases{"pypi/demo": releases}
+	if _, err := m.Refresh(ctx, Refresh{Top: 10, Since: 24 * time.Hour}); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got := fetchedMatching(fetcher.fetched(), "1.1.0"); len(got) != 1 {
+		t.Fatalf("first refresh fetched %v, want the 1.1.0 wheel", got)
+	}
+
+	// The mirrored py2.py3 wheel adds py2-none-any to its variants, but no
+	// client fetched that kind.
+	m.Versions = stubReleases{"pypi/demo": append(releases,
+		files("1.2.0", "demo-1.2.0-py3-none-any.whl", "demo-1.2.0-py2-none-any.whl"))}
+	fetcher.reset()
+	if _, err := m.Refresh(ctx, Refresh{Top: 10, Since: 24 * time.Hour}); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got, want := fetcher.fetched(), []string{"https://files.example/demo-1.2.0-py3-none-any.whl"}; !slices.Equal(got, want) {
+		t.Errorf("second refresh fetched %v, want %v", got, want)
+	}
+}
+
+func TestRefreshRetryDoesNotCountCachedFilesAsDownloaded(t *testing.T) {
+	m, fetcher := setupRefreshMirror(t, "wheel")
+	ctx := context.Background()
+	result, err := m.proxy.GetOrFetchArtifactFromURLWithDigest(ctx, "pypi", "demo", "1.0.0", "demo-1.0.0-py3-none-any.whl", "https://files.example/demo-1.0.0-py3-none-any.whl", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = result.Reader.Close()
+	files := func(version string, names ...string) registries.Version {
+		v := registries.Version{Number: version, PublishedAt: time.Now().Add(-30 * 24 * time.Hour)}
+		for _, n := range names {
+			v.Artifacts = append(v.Artifacts, registries.Artifact{Filename: n, URL: "https://files.example/" + n})
+		}
+		return v
+	}
+	releases := []registries.Version{
+		files("1.0.0", "demo-1.0.0-py3-none-any.whl"),
+		files("1.1.0", "demo-1.1.0-py2.py3-none-any.whl", "demo-1.1.0-1-py3-none-any.whl"),
+	}
+	m.Versions = stubReleases{"pypi/demo": releases}
+	refresh := func() {
+		t.Helper()
+		if _, err := m.Refresh(ctx, Refresh{Top: 10, Since: 24 * time.Hour}); err != nil {
+			t.Fatalf("Refresh: %v", err)
+		}
+	}
+	// The first refresh caches the py2.py3 wheel and fails on the other,
+	// so the second reads the py2.py3 wheel from the cache again.
+	fetcher.failing("1.1.0-1-py3")
+	refresh()
+	old := time.Now().Add(-48 * time.Hour).UTC()
+	if _, err := m.db.Exec(m.db.Rebind("UPDATE artifacts SET fetched_at = ?, mirrored_at = ? WHERE filename = ?"),
+		old, old, "demo-1.1.0-py2.py3-none-any.whl"); err != nil {
+		t.Fatal(err)
+	}
+	fetcher.failing("")
+	fetcher.reset()
+	refresh()
+	if got, want := fetcher.fetched(), []string{"https://files.example/demo-1.1.0-1-py3-none-any.whl"}; !slices.Equal(got, want) {
+		t.Fatalf("retry fetched %v, want %v", got, want)
+	}
+	// The retry read the py2.py3 wheel, which keeps it from retention.
+	maxID, err := m.db.MaxArtifactID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := m.db.GetRetentionCandidates(0, maxID, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range candidates {
+		if c.Filename == "demo-1.1.0-py2.py3-none-any.whl" {
+			t.Errorf("the wheel the retry read is a retention candidate: %+v", c)
+		}
+	}
+
+	m.Versions = stubReleases{"pypi/demo": append(releases,
+		files("1.2.0", "demo-1.2.0-py3-none-any.whl", "demo-1.2.0-py2-none-any.whl"))}
+	fetcher.reset()
+	refresh()
+	if got, want := fetcher.fetched(), []string{"https://files.example/demo-1.2.0-py3-none-any.whl"}; !slices.Equal(got, want) {
+		t.Errorf("refresh after the retry fetched %v, want %v", got, want)
+	}
+}
+
+func TestRefreshSeesBufferedDownloads(t *testing.T) {
+	m, fetcher := setupRefreshMirror(t, "tarball")
+	m.db.BatchHits(time.Hour, nil)
+	result, err := m.proxy.GetOrFetchArtifact(handler.MirrorFetch(context.Background()), "npm", "lodash", "4.17.20", "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = result.Reader.Close()
+	// A client downloads the mirrored version; the hit is still buffered.
+	cacheNPM(t, m, "lodash", "4.17.20")
+	m.Versions = stubReleases{"npm/lodash": oldReleases("4.17.20", "4.17.21")}
+	fetcher.reset()
+
+	if _, err := m.Refresh(context.Background(), Refresh{Top: 10, Since: 24 * time.Hour}); err != nil {
+		t.Fatalf("Refresh: %v", err)
+	}
+	if got := fetchedMatching(fetcher.fetched(), "lodash-4.17.21.tgz"); len(got) != 1 {
+		t.Errorf("fetched %v, want lodash 4.17.21", fetcher.fetched())
+	}
+}
+
+func TestRefreshSkipsAPackageWithNoDownloadedFileKinds(t *testing.T) {
+	m, _ := setupRefreshMirror(t, "wheel")
+	// Listing the releases would fail, but there is nothing to list them
+	// for: eviction removed the file a client downloaded after the ranking
+	// query ran, leaving only one a refresh mirrored.
+	m.Versions = stubReleases{}
+	items, err := m.refreshItems(context.Background(), database.UsedPackage{
+		Ecosystem: "pypi", Name: "demo", PURL: "pkg:pypi/demo",
+		Files: []database.UsedFile{{Version: "1.0.0", Filename: "demo-1.0.0-py3-none-any.whl"}},
+	})
+	if err != nil || len(items) != 0 {
+		t.Errorf("refreshItems = %+v, %v; want none", items, err)
 	}
 }
 
