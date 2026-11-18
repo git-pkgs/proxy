@@ -1,8 +1,10 @@
 package gitcache
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 )
@@ -21,15 +23,20 @@ func midxMtime(t *testing.T, bare string) time.Time {
 	return info.ModTime()
 }
 
-// assertNoCommitGraph fails the test if the repository at bare has a
-// commit-graph, in either layout: with the bitmaps it slows fetches down.
-func assertNoCommitGraph(t *testing.T, bare string) {
+// commitGraphOn reports whether the git processes of tc read and write the
+// commit-graph of the repository at bare, as git configures them.
+func commitGraphOn(t *testing.T, tc *testCache, bare string) bool {
 	t.Helper()
-	for _, name := range []string{"commit-graph", "commit-graphs"} {
-		if fileExists(filepath.Join(bare, "objects", "info", name)) {
-			t.Errorf("the repository has a %s", name)
+	on := true
+	for _, key := range []string{"core.commitGraph", "gc.writeCommitGraph"} {
+		out, err := tc.command(context.Background(), nil, "-C", bare,
+			"config", "--bool", "--default", "true", key).Output()
+		if err != nil {
+			t.Fatalf("git config %s: %v", key, err)
 		}
+		on = on && strings.TrimSpace(string(out)) == "true"
 	}
+	return on
 }
 
 func bitmapsOf(t *testing.T, bare string) []string {
@@ -43,7 +50,7 @@ func bitmapsOf(t *testing.T, bare string) []string {
 
 // TestMaintenanceWritesIndexes checks that a cloned repository gets the
 // multi-pack index with reachability bitmaps it is served from, kept up to
-// date with every fetch that changes it, and no commit-graph.
+// date with every fetch that changes it, and the commit-graph off.
 func TestMaintenanceWritesIndexes(t *testing.T) {
 	upstream := newFakeUpstream(t)
 	work := upstream.newRepo("repo")
@@ -55,7 +62,9 @@ func TestMaintenanceWritesIndexes(t *testing.T) {
 	waitIdle(t, tc.Cache)
 	bare := bareRepo(tc)
 
-	assertNoCommitGraph(t, bare)
+	if commitGraphOn(t, tc, bare) {
+		t.Error("the commit-graph, which slows fetches down with the bitmaps, is on")
+	}
 	if !fileExists(midxPath(t, bare)) {
 		t.Fatal("the clone was left without a multi-pack index")
 	}
@@ -111,7 +120,8 @@ func TestMaintenanceInterval(t *testing.T) {
 }
 
 // TestMaintenanceDisabled checks that a cache with maintenance off leaves
-// the clone without the serving indexes.
+// the clone without the serving indexes, and with the commit-graph, which
+// speeds clones and fetches up when there are no bitmaps.
 func TestMaintenanceDisabled(t *testing.T) {
 	upstream := newFakeUpstream(t)
 	upstream.newRepo("repo")
@@ -122,7 +132,9 @@ func TestMaintenanceDisabled(t *testing.T) {
 	if fileExists(midxPath(t, bare)) {
 		t.Error("a multi-pack index was written with maintenance off")
 	}
-	assertNoCommitGraph(t, bare)
+	if !commitGraphOn(t, tc, bare) {
+		t.Error("the commit-graph is off with maintenance off")
+	}
 	if rp := tc.repo("up/repo.git"); rp.maintainedAt.Load() != 0 {
 		t.Error("a repository was maintained with maintenance off")
 	}

@@ -41,12 +41,6 @@ var gitConfig = [][2]string{
 	// server has always done after a fetch: gc, and only once its own
 	// thresholds are crossed. Older git ignores the setting in these runs.
 	{"maintenance.strategy", "incremental"},
-	// No commit-graph. With the reachability bitmaps, git 2.56 reads a
-	// repository's whole commit-graph to find what a fetching client
-	// already has, which made the fetches of clients holding most of the
-	// history slower than without any index. gc writes one by default.
-	{"core.commitGraph", "false"},
-	{"gc.writeCommitGraph", "false"},
 	{"init.defaultBranch", "main"},
 	// Keep every fetched pack as a pack. index-pack writes it to a
 	// temporary file and moves it into place only once complete, whereas a
@@ -69,6 +63,20 @@ var gitConfig = [][2]string{
 	{"core.bigFileThreshold", "8m"},
 }
 
+// maintenanceConfig applies with gitConfig when maintenance writes the
+// serving indexes.
+var maintenanceConfig = [][2]string{
+	// No commit-graph. With the reachability bitmaps, git reads a
+	// repository's whole commit-graph to find what a fetching client
+	// already has, which over NFS with a cold page cache made the fetches
+	// of clients holding most of the history twice as slow as without any
+	// index (measured with git 2.56). Without the bitmaps the commit-graph
+	// only speeds clones and fetches up, so it stays. gc writes one by
+	// default.
+	{"core.commitGraph", "false"},
+	{"gc.writeCommitGraph", "false"},
+}
+
 // command builds a git process with an environment of its own: none of the
 // proxy's environment is passed on, so no system or user config, credential
 // helper, HTTP proxy setting or GIT_ variable applies, and the only transport
@@ -85,6 +93,9 @@ func (c *Cache) command(ctx context.Context, extraEnv []string, args ...string) 
 		"GIT_ALLOW_PROTOCOL=http",
 	}
 	config := slices.Concat(gitConfig, [][2]string{{"http.lowSpeedTime", strconv.Itoa(c.lowSpeedTime)}})
+	if c.opts.Maintenance {
+		config = append(config, maintenanceConfig...)
+	}
 	env = append(env, "GIT_CONFIG_COUNT="+strconv.Itoa(len(config)))
 	for i, kv := range config {
 		env = append(env,
