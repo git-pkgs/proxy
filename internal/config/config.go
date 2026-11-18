@@ -63,6 +63,7 @@ import (
 	_ "embed"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"maps"
 	"math"
@@ -831,6 +832,13 @@ type UpstreamConfig struct {
 	// Default: https://dl.fedoraproject.org/pub/fedora/linux
 	RPM string `json:"rpm" yaml:"rpm"`
 
+	// RPMRepositoryPaths are the repository directories below upstream.rpm
+	// that proxy mirror looks an RPM package up in, in order, with
+	// {release}, {major} and {arch} taken from the package's distro and
+	// arch qualifiers. Default: Fedora's updates/{release}/Everything/{arch}
+	// and releases/{release}/Everything/{arch}/os.
+	RPMRepositoryPaths []string `json:"rpm_repository_paths" yaml:"rpm_repository_paths"`
+
 	// HomebrewAPI is the upstream Homebrew JSON API URL.
 	// Default: https://formulae.brew.sh/api
 	HomebrewAPI string `json:"homebrew_api" yaml:"homebrew_api"`
@@ -1025,6 +1033,39 @@ func (u *UpstreamConfig) Validate() error {
 				"invalid upstream.debian_repositories name %q: reserved for the upstream.debian archive",
 				name,
 			)
+		}
+	}
+	return validateRPMRepositoryPaths(u.RPMRepositoryPaths)
+}
+
+func validateRPMRepositoryPaths(paths []string) error {
+	for _, p := range paths {
+		if err := validateRPMRepositoryPath(p); err != nil {
+			return fmt.Errorf("invalid upstream.rpm_repository_paths entry %q: %w", p, err)
+		}
+	}
+	return nil
+}
+
+// rpmPathPlaceholder matches the placeholders of an RPM repository path.
+var rpmPathPlaceholder = regexp.MustCompile(`\{(release|major|arch)\}`)
+
+// validateRPMRepositoryPath checks a path below upstream.rpm: relative,
+// without dot segments or a query, and with no placeholders but {release},
+// {major} and {arch}.
+func validateRPMRepositoryPath(p string) error {
+	rest := rpmPathPlaceholder.ReplaceAllString(p, "x")
+	switch {
+	case p == "":
+		return errors.New("empty")
+	case strings.HasPrefix(p, "/") || strings.Contains(p, "://"):
+		return errors.New("not a path relative to upstream.rpm")
+	case strings.ContainsAny(rest, "{}?#\\"):
+		return errors.New("only {release}, {major} and {arch} can be replaced, and it can't have a query")
+	}
+	for _, segment := range strings.Split(p, "/") {
+		if segment == "." || segment == ".." {
+			return errors.New("dot segments aren't allowed")
 		}
 	}
 	return nil

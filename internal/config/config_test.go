@@ -1975,6 +1975,34 @@ func TestGenericUpstreamNamedHosted(t *testing.T) {
 	}
 }
 
+func TestValidateRPMRepositoryPaths(t *testing.T) {
+	tests := []struct {
+		name    string
+		paths   []string
+		wantErr bool
+	}{
+		{"Fedora", []string{"updates/{release}/Everything/{arch}", "releases/{release}/Everything/{arch}/os"}, false},
+		{"major release", []string{"{major}/BaseOS/{arch}/os"}, false},
+		{"empty path", []string{""}, true},
+		{"absolute path", []string{"/updates/{release}"}, true},
+		{"URL", []string{"https://example.com/{release}"}, true},
+		{"dot dot segment", []string{"updates/../{release}"}, true},
+		{"dot segment", []string{"./{release}"}, true},
+		{"unknown placeholder", []string{"{version}/{arch}"}, true},
+		{"unclosed placeholder", []string{"{release/{arch}"}, true},
+		{"query", []string{"{release}?x=1"}, true},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			cfg := Default()
+			cfg.Upstream.RPMRepositoryPaths = tt.paths
+			if err := cfg.Validate(); (err != nil) != tt.wantErr {
+				t.Errorf("Validate() error = %v, wantErr %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
 func TestValidateFreeBSDUpstreams(t *testing.T) {
 	tests := []struct {
 		name    string

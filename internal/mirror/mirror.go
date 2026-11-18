@@ -53,6 +53,11 @@ type Mirror struct {
 	// the official Alpine mirror as "alpine".
 	APKRepositories map[string]string
 
+	// RPMUpstream is upstream.rpm, and RPMRepositoryPaths are
+	// upstream.rpm_repository_paths. Empty ones use Fedora's tree.
+	RPMUpstream        string
+	RPMRepositoryPaths []string
+
 	// DebianUpstream and DebianRepositories are upstream.debian and
 	// upstream.debian_repositories. An empty DebianUpstream uses
 	// deb.debian.org.
@@ -65,6 +70,7 @@ type Mirror struct {
 
 	cran cranIndex
 	apk  apkIndexes
+	rpm  rpmIndexes
 	deb  debIndexes
 }
 
@@ -302,6 +308,10 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 	}
 	if pv.Ecosystem == "alpine" {
 		m.mirrorAPK(ctx, pv, tracker)
+		return
+	}
+	if pv.Ecosystem == "rpm" {
+		m.mirrorRPM(ctx, pv, tracker)
 		return
 	}
 	if pv.Ecosystem == "deb" {
