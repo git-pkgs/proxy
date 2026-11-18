@@ -489,11 +489,19 @@ func (h *PyPIHandler) versionInCooldown(r *http.Request, name, version string) (
 		return false, nil
 	}
 
-	times, err := h.fetchReleaseTimes(r, name)
+	jsonURL := fmt.Sprintf("%s/pypi/%s/json", h.upstreamURL, name)
+	publishedAt, err := readListed(r.Context(), h.proxy, "pypi", name+"/json", jsonURL, contentTypeJSON, "",
+		func(res metadataResult) (time.Time, bool, error) {
+			times, err := h.parseReleaseTimes(res.body)
+			published, listed := times[version]
+			return published, listed, err
+		})
+	if errors.Is(err, ErrUpstreamNotFound) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
-	publishedAt := times[version]
 	if publishedAt.IsZero() {
 		return false, nil
 	}

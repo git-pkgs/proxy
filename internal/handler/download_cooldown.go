@@ -1,6 +1,8 @@
 package handler
 
 import (
+	"context"
+	"fmt"
 	"net/http"
 	"sync"
 	"time"
@@ -156,4 +158,50 @@ func publishIndex[V any](p *Proxy, key string, load func() metadataResult, build
 		return zero, err
 	}
 	return v.(V), nil
+}
+
+// listedTime is a version's publish time as a metadata document gives it.
+// ok is false when the document lists the version without a usable time.
+type listedTime struct {
+	published time.Time
+	ok        bool
+}
+
+// readListed reads a version's entry from a metadata document fetched
+// through the metadata cache. read reports whether the document lists the
+// version at all. A copy cached within metadata_ttl, or served stale, can
+// predate the version, and a download of it would find no publish time and
+// be let through cooldown; such a copy is fetched again and the version read
+// from what upstream lists now. If it can't be fetched, the lookup fails, as
+// when a publish time can't be read.
+func readListed[V any](ctx context.Context, p *Proxy, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding string, read func(metadataResult) (V, bool, error)) (V, error) { //nolint:ireturn // V is what read returns.
+	res := p.lookupMetadata(ctx, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding, nil)
+	if res.err != nil {
+		var zero V
+		return zero, res.err
+	}
+	value, listed, err := read(res)
+	if err != nil || listed || !res.fromCache && !res.stale {
+		return value, err
+	}
+	res = p.refetchLacking(ctx, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding, nil)
+	if res.err != nil {
+		var zero V
+		return zero, res.err
+	}
+	value, _, err = read(res)
+	return value, err
+}
+
+// refetchLacking fetches a cached metadata document again from upstream,
+// for a download of a version the cached copy doesn't list. A stale copy is
+// not upstream's answer, so it is an error.
+func (p *Proxy) refetchLacking(ctx context.Context, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding string, validate func([]byte) error) metadataResult {
+	p.Logger.Info("cooldown: cached metadata lacks the version, fetching it again",
+		"ecosystem", ecosystem, "url", upstreamURL)
+	res := p.refreshMetadata(ctx, ecosystem, cacheKey, upstreamURL, accept, acceptEncoding, validate)
+	if res.err == nil && res.stale {
+		res.err = fmt.Errorf("%s metadata could not be fetched again: %w", ecosystem, res.upstreamErr)
+	}
+	return res
 }
