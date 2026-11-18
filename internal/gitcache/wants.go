@@ -131,7 +131,7 @@ func (c *Cache) fetchWants(ctx context.Context, rp *repo, repoURL string, oids [
 		refspecs[i] = oid + ":" + wantedRef(oid, now)
 	}
 	res := c.newReservation()
-	err = c.fetch(ctx, rp.dir, repoURL, limit, res, []string{"--atomic"}, refspecs...)
+	err = c.fetch(ctx, rp.dir, repoURL, limit, res, fetchFlags(rp, []string{"--atomic"}), refspecs...)
 	rp.refsWritten.Add(1)
 	res.settle(rp, c.dirSize(rp.dir))
 	if err == nil {

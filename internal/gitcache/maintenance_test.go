@@ -177,10 +177,11 @@ func TestMaintenanceIsNotAUse(t *testing.T) {
 	}
 }
 
-// TestMaintenanceRecoversStaleLocks checks that the lock file a maintenance
-// run killed mid-write leaves behind, which would block every later one,
-// is removed by the next.
-func TestMaintenanceRecoversStaleLocks(t *testing.T) {
+// TestMaintenanceClearsLeftovers checks that a run removes what a run or
+// fetch cut short leaves behind: the index's lock, which would block every
+// later run, and temporary files. It also removes the commit-graph, which
+// git does not read while maintenance is on.
+func TestMaintenanceClearsLeftovers(t *testing.T) {
 	needGitReady(t)
 	upstream := newFakeUpstream(t)
 	work := upstream.newRepo("repo")
@@ -193,9 +194,22 @@ func TestMaintenanceRecoversStaleLocks(t *testing.T) {
 	bare := bareRepo(tc)
 	before := midxMtime(t, bare)
 
-	lock := filepath.Join(bare, "objects", "pack", midxName+".lock")
-	if err := os.WriteFile(lock, nil, 0o600); err != nil {
+	packDir := filepath.Join(bare, "objects", "pack")
+	graphs := filepath.Join(bare, "objects", "info", "commit-graphs")
+	if err := os.MkdirAll(graphs, dirPermissions); err != nil {
 		t.Fatal(err)
+	}
+	leftovers := []string{
+		filepath.Join(packDir, midxName+".lock"),
+		filepath.Join(packDir, "tmp_bitmap_abc"),
+		filepath.Join(packDir, "tmp_rev_abc"),
+		filepath.Join(bare, "objects", "info", "commit-graph"),
+		filepath.Join(graphs, "commit-graph-chain"),
+	}
+	for _, path := range leftovers {
+		if err := os.WriteFile(path, nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
 	}
 
 	upstream.commit(work, "second")
@@ -203,11 +217,190 @@ func TestMaintenanceRecoversStaleLocks(t *testing.T) {
 	tc.clone(t, "repo")
 	waitIdle(t, tc.Cache)
 
-	if fileExists(lock) {
-		t.Error("the stale lock survived maintenance")
+	for _, path := range append(leftovers, graphs) {
+		if fileExists(path) {
+			t.Errorf("%s survived maintenance", path)
+		}
 	}
 	if after := midxMtime(t, bare); !after.After(before) {
 		t.Error("maintenance did not rewrite the multi-pack index past the stale lock")
+	}
+}
+
+// TestMaintenanceRewritesBrokenIndex checks that a multi-pack index naming
+// packs that are gone, as a gc running alongside a write leaves, which
+// fails every write that builds on it, is written again from the packs.
+func TestMaintenanceRewritesBrokenIndex(t *testing.T) {
+	needGitReady(t)
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) {
+		o.Maintenance = true
+		o.MaintenanceInterval = 0
+	})
+	tc.clone(t, "repo")
+	// A second pack, so the repack below writes one under a new name.
+	upstream.commit(work, "second")
+	runGit(t, work, "push", "--quiet", "origin", "main")
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	bare := bareRepo(tc)
+	indexFiles := func() []string {
+		found, _ := filepath.Glob(midxPath(t, bare) + "*")
+		return found
+	}
+	saved := map[string][]byte{}
+	for _, path := range indexFiles() {
+		data, err := os.ReadFile(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		saved[path] = data
+	}
+	// A repack deletes the packs the saved index names, and the index is
+	// put back.
+	runGit(t, bare, "repack", "-adq")
+	for _, path := range indexFiles() {
+		if err := os.Remove(path); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, data := range saved {
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := tryGit(t, bare, "multi-pack-index", "write", "--bitmap"); err == nil {
+		t.Fatal("a write built on the stale index succeeded, so the index is not broken")
+	}
+
+	upstream.commit(work, "third")
+	runGit(t, work, "push", "--quiet", "origin", "main")
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+
+	rp := tc.repo("up/repo.git")
+	if got, covered := rp.refsWritten.Load(), rp.maintainedAt.Load(); got != covered {
+		t.Errorf("refsWritten %d, maintainedAt %d: the index was not written", got, covered)
+	}
+	if out, err := tryGit(t, bare, "multi-pack-index", "verify"); err != nil {
+		t.Errorf("multi-pack-index verify: %v\n%s", err, out)
+	}
+	if len(bitmapsOf(t, bare)) == 0 {
+		t.Error("the index was written again without bitmaps")
+	}
+}
+
+// TestMaintenanceAfterInterval checks that a fetch whose run was skipped
+// within the interval is indexed once the interval ends, with no request
+// to set it off.
+func TestMaintenanceAfterInterval(t *testing.T) {
+	needGitReady(t)
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) {
+		o.Maintenance = true
+		o.MaintenanceInterval = time.Hour
+	})
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	bare := bareRepo(tc)
+	// The index looks written an hour ago, less two seconds: the next
+	// fetch falls within the interval, which ends soon after.
+	written := time.Now().Add(-time.Hour + 2*time.Second)
+	if err := os.Chtimes(midxPath(t, bare), written, written); err != nil {
+		t.Fatal(err)
+	}
+
+	upstream.commit(work, "second")
+	runGit(t, work, "push", "--quiet", "origin", "main")
+	tc.clone(t, "repo")
+	waitFor(t, func() bool { return midxMtime(t, bare).After(written) })
+	waitIdle(t, tc.Cache)
+	rp := tc.repo("up/repo.git")
+	if got, covered := rp.refsWritten.Load(), rp.maintainedAt.Load(); got != covered {
+		t.Errorf("refsWritten %d, maintainedAt %d", got, covered)
+	}
+}
+
+// TestFetchSkipsGCWhileIndexing checks that a fetch that starts while a run
+// writes the index skips the gc that would otherwise end it, which could
+// delete the packs the run reads, and that the fetches after the run do not.
+func TestFetchSkipsGCWhileIndexing(t *testing.T) {
+	needGitReady(t)
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) {
+		o.Maintenance = true
+		// No run writes after the clone's, so only the test sets indexing.
+		o.MaintenanceInterval = time.Hour
+	})
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	bare := bareRepo(tc)
+	// gc repacks once the repository has more than two packs.
+	runGit(t, bare, "config", "gc.autoPackLimit", "2")
+	packs := func() int {
+		found, _ := filepath.Glob(filepath.Join(bare, "objects", "pack", "pack-*.pack"))
+		return len(found)
+	}
+	fetch := func(msg string) {
+		upstream.commit(work, msg)
+		runGit(t, work, "push", "--quiet", "origin", "main")
+		tc.clone(t, "repo")
+		waitIdle(t, tc.Cache)
+	}
+
+	rp := tc.repo("up/repo.git")
+	rp.indexing.Store(true)
+	for _, msg := range []string{"second", "third", "fourth"} {
+		fetch(msg)
+	}
+	if got := packs(); got < 4 {
+		t.Fatalf("%d packs after four fetches while indexing, want one each: gc ran", got)
+	}
+	rp.indexing.Store(false)
+	fetch("fifth")
+	if got := packs(); got > 2 {
+		t.Errorf("%d packs after a fetch with no run writing, want gc to repack them", got)
+	}
+}
+
+// TestFailedFetchKeepsRunFiles checks that with maintenance on, a fetch cut
+// off by max_repo_size removes the temporary pack it leaves, and not the
+// temporary files a run may be writing beside it.
+func TestFailedFetchKeepsRunFiles(t *testing.T) {
+	needGitReady(t)
+	upstream := newFakeUpstream(t)
+	work := upstream.newRepo("repo")
+	runGit(t, upstream.bare(), "config", "uploadpack.allowAnySHA1InWant", "true")
+	large := upstream.pushPullRequest(work, 1, randomBytes(200<<10))
+	base := repoSize(t, upstream, "repo")
+	tc := newTestCache(t, upstream.server.URL, func(o *Options) {
+		o.MaxRepoSize = base + 100<<10
+		o.Maintenance = true
+		// No run writes after the clone's, so none clears the file below.
+		o.MaintenanceInterval = time.Hour
+	})
+	tc.clone(t, "repo")
+	waitIdle(t, tc.Cache)
+	packDir := filepath.Join(bareRepo(tc), "objects", "pack")
+	running := filepath.Join(packDir, "tmp_bitmap_abc")
+	if err := os.WriteFile(running, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := fetchByID(t, tc.url("repo"), large); err == nil {
+		t.Fatal("fetched a commit larger than max_repo_size leaves")
+	}
+	waitIdle(t, tc.Cache)
+	for _, pattern := range []string{"tmp_pack_*", "tmp_idx_*"} {
+		if leftovers, _ := filepath.Glob(filepath.Join(packDir, pattern)); len(leftovers) != 0 {
+			t.Errorf("the cut-off transfer left %v", leftovers)
+		}
+	}
+	if !fileExists(running) {
+		t.Error("the failed fetch removed a run's temporary file")
 	}
 }
 

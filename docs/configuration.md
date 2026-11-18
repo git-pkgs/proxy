@@ -992,13 +992,17 @@ without delta compression, so one large file does not take a fetch's memory.
 
 After a fetch changes a repository, its serving index is rewritten in the
 background when the one it has is older than `maintenance_interval` (an
-hour by default): a multi-pack index with reachability bitmaps, which turn
-the object enumeration at the head of a clone from a walk of the whole
-history into bitmap lookups. `maintenance_interval: 0` rewrites it after
-every fetch that changes the repository, and `off` turns the maintenance
-off. At most two repositories are maintained at once, maintenance never
-rewrites packs, and no request is ever held for a run. The index is rebuilt
-from the packs, so it is not counted by `max_size` or `max_repo_size`.
+hour by default), or once it is, for a fetch that came sooner: a
+multi-pack index with reachability bitmaps, which turn the object
+enumeration at the head of a clone from a walk of the whole history into
+bitmap lookups. `maintenance_interval: 0` rewrites it after every fetch that
+changes the repository, and `off` turns the maintenance off. At most two
+repositories are maintained at once, maintenance never rewrites packs, and
+neither requests nor fetches wait for a run: the fetches that start while
+it writes skip Git's automatic garbage collection, which the next fetch
+runs. The index is rebuilt from the packs, so it is not counted by
+`max_size` or `max_repo_size`, and one that cannot be built on is written
+again from scratch.
 Maintenance needs `git` 2.56 or newer; with older `git`, or with
 `maintenance_interval: off`, the cache runs `git` as it did before
 maintenance existed.

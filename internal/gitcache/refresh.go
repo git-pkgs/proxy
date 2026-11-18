@@ -284,7 +284,7 @@ func (c *Cache) update(ctx context.Context, rp *repo, repoURL string, remote rem
 			return err
 		}
 		res := c.newReservation()
-		err = c.fetch(ctx, rp.dir, repoURL, limit, res, refreshFlags, branchesAndTags...)
+		err = c.fetch(ctx, rp.dir, repoURL, limit, res, fetchFlags(rp, refreshFlags), branchesAndTags...)
 		rp.refsWritten.Add(1)
 		res.settle(rp, c.dirSize(rp.dir))
 		if err != nil {
@@ -342,10 +342,18 @@ func (c *Cache) fetch(ctx context.Context, dir, repoURL string, limit int64, res
 	if err != nil {
 		// index-pack leaves its temporary pack behind when its input ends
 		// early. Fetches into a repository run one at a time, so any left
-		// now are this fetch's.
-		leftovers, _ := filepath.Glob(filepath.Join(dir, "objects", "pack", "tmp_*"))
-		for _, path := range leftovers {
-			_ = os.Remove(path)
+		// now are this fetch's. With maintenance on, a run may be writing
+		// its own temporary files beside them, so only index-pack's pack
+		// and index are removed; the next run clears the rest.
+		patterns := []string{"tmp_*"}
+		if c.opts.Maintenance {
+			patterns = []string{"tmp_pack_*", "tmp_idx_*"}
+		}
+		for _, pattern := range patterns {
+			leftovers, _ := filepath.Glob(filepath.Join(dir, "objects", "pack", pattern))
+			for _, path := range leftovers {
+				_ = os.Remove(path)
+			}
 		}
 	}
 	if route.exceeded.Load() {

@@ -183,10 +183,14 @@ type repo struct {
 	// maintainedAt is the refsWritten count the repository's serving
 	// indexes cover. It is stored only when a run succeeds, so a failed
 	// one is retried by the next request. maintainedAt is written
-	// alone; maintaining and maintainPending are guarded by Cache.mu.
+	// alone; maintaining, maintainPending and maintainTimer are guarded
+	// by Cache.mu. indexing is set while a run writes the index, and is
+	// changed only with the write slot held or by the run that set it.
 	maintainedAt    atomic.Int64
 	maintaining     bool
 	maintainPending bool
+	maintainTimer   *time.Timer
+	indexing        atomic.Bool
 }
 
 // repoURL returns the upstream URL the last successful refresh used, or ""
