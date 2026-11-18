@@ -2195,6 +2195,11 @@ func upstreamMetadataStatus(resp *http.Response) error {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, upstreamNotFoundBodyLimit))
 		return &upstreamNotFoundError{body: body}
 	}
+	// A server error or a 429 is logged by its status alone, without the
+	// upstream's error page; as in registries' fetcher, no StatusError.
+	if resp.StatusCode >= http.StatusInternalServerError || resp.StatusCode == http.StatusTooManyRequests {
+		return fmt.Errorf("upstream returned %d", resp.StatusCode)
+	}
 	// The status, body and type are kept, so a policy denial can be
 	// forwarded as upstream sent it.
 	body, _ := io.ReadAll(io.LimitReader(resp.Body, upstreamStatusBodyLimit))

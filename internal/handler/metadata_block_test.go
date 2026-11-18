@@ -3,14 +3,17 @@ package handler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/registries/fetch"
 )
 
 // A firewall that refuses a metadata request reaches the client with its own
@@ -279,5 +282,25 @@ func TestMetadataPolicyBlockServesTheCachedCopy(t *testing.T) {
 	}
 	if refused == 0 {
 		t.Error("the second request wasn't sent upstream")
+	}
+}
+
+// A server error or a 429 is logged by its status alone, as before policy
+// denials were kept, not with the upstream's error page.
+func TestUpstreamMetadataStatusKeepsServerErrorsShort(t *testing.T) {
+	for _, code := range []int{http.StatusTooManyRequests, http.StatusInternalServerError, http.StatusBadGateway, http.StatusServiceUnavailable} {
+		resp := &http.Response{StatusCode: code, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("<html>an error page</html>"))}
+		err := upstreamMetadataStatus(resp)
+		var statusErr *fetch.StatusError
+		if want := fmt.Sprintf("upstream returned %d", code); err == nil || err.Error() != want || errors.As(err, &statusErr) {
+			t.Errorf("%d: error %v, want %q", code, err, want)
+		}
+	}
+	for _, code := range []int{http.StatusForbidden, http.StatusConflict, http.StatusGone} {
+		resp := &http.Response{StatusCode: code, Header: http.Header{}, Body: io.NopCloser(strings.NewReader("denied"))}
+		var statusErr *fetch.StatusError
+		if err := upstreamMetadataStatus(resp); !errors.As(err, &statusErr) || statusErr.Code != code || statusErr.Body != "denied" {
+			t.Errorf("%d: error %v, want a StatusError with the body", code, err)
+		}
 	}
 }
