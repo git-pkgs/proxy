@@ -615,9 +615,11 @@ func (p *Proxy) readStored(ctx context.Context, pkgPURL, versionPURL, filename s
 
 // recordCacheHit counts a cache hit. A mirror run's read leaves the
 // artifact's hits and last access alone, so it doesn't look like a client
-// download.
+// download, and keeps it from retention instead.
 func (p *Proxy) recordCacheHit(ctx context.Context, ecosystem, versionPURL, filename string) {
-	if !mirrorFetch(ctx) {
+	if mirrorFetch(ctx) {
+		_ = p.DB.KeepMirroredArtifact(versionPURL, filename)
+	} else {
 		_ = p.DB.RecordArtifactHit(versionPURL, filename)
 	}
 	metrics.RecordArtifactCacheHit(ecosystem)

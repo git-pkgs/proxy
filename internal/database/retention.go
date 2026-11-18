@@ -141,6 +141,19 @@ func (db *DB) MarkArtifactMirrored(versionPURL, filename string) error {
 	return err
 }
 
+// KeepMirroredArtifact records that a mirror run read a cached artifact
+// again, which keeps it from retention without counting as a client
+// download. An artifact a client fetched and hasn't downloaded since is left
+// alone: marking it mirrored would make it look fetched by a mirror run.
+func (db *DB) KeepMirroredArtifact(versionPURL, filename string) error {
+	_, err := db.Exec(db.Rebind(`
+		UPDATE artifacts SET mirrored_at = ?
+		WHERE version_purl = ? AND filename = ? AND storage_path IS NOT NULL
+		  AND (last_accessed_at IS NOT NULL OR mirrored_at >= fetched_at)
+	`), time.Now().UTC(), versionPURL, filename)
+	return err
+}
+
 // GetArtifactEcosystem returns the packages.ecosystem value of the package an
 // artifact version belongs to, or "" when it has no package record.
 func (db *DB) GetArtifactEcosystem(versionPURL string) (string, error) {

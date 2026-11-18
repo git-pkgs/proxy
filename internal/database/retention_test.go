@@ -544,3 +544,42 @@ func TestFlushHitsRunsOneAtATime(t *testing.T) {
 		t.Fatalf("FlushHits: %v", err)
 	}
 }
+
+func TestKeepMirroredArtifact(t *testing.T) {
+	runWithBothDatabases(t, func(t *testing.T, db *DB) {
+		now := time.Now()
+		cutoff := now.Add(-24 * time.Hour)
+		old := now.Add(-48 * time.Hour)
+		seedRetentionArtifact(t, db, "npm", "mirrored", old, time.Time{})
+		seedRetentionArtifact(t, db, "npm", "served", old, old)
+		seedRetentionArtifact(t, db, "npm", "client-fetched", old, time.Time{})
+		if _, err := db.Exec(db.Rebind("UPDATE artifacts SET mirrored_at = ? WHERE filename = ?"), old.UTC(), "mirrored.tgz"); err != nil {
+			t.Fatal(err)
+		}
+		for _, name := range []string{"mirrored", "served", "client-fetched"} {
+			if err := db.KeepMirroredArtifact("pkg:npm/"+name+"@1.0.0", name+".tgz"); err != nil {
+				t.Fatalf("KeepMirroredArtifact(%s): %v", name, err)
+			}
+		}
+
+		maxID, err := db.MaxArtifactID()
+		if err != nil {
+			t.Fatal(err)
+		}
+		candidates, err := db.GetRetentionCandidates(0, maxID, cutoff)
+		if err != nil {
+			t.Fatal(err)
+		}
+		got := candidateNames(candidates)
+		for _, kept := range []string{"mirrored.tgz", "served.tgz"} {
+			if _, ok := got[kept]; ok {
+				t.Errorf("%s is a retention candidate after a mirror run read it", kept)
+			}
+		}
+		// Marking this one mirrored would make it look fetched by a mirror
+		// run rather than a client.
+		if c, ok := got["client-fetched.tgz"]; !ok || c.MirroredAt.Valid {
+			t.Errorf("client-fetched.tgz = %+v, %v; want it left unmarked", c, ok)
+		}
+	})
+}

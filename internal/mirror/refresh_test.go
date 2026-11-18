@@ -370,8 +370,31 @@ func TestRefreshRetryDoesNotCountCachedFilesAsDownloaded(t *testing.T) {
 	// so the second reads the py2.py3 wheel from the cache again.
 	fetcher.failing("1.1.0-1-py3")
 	refresh()
+	old := time.Now().Add(-48 * time.Hour).UTC()
+	if _, err := m.db.Exec(m.db.Rebind("UPDATE artifacts SET fetched_at = ?, mirrored_at = ? WHERE filename = ?"),
+		old, old, "demo-1.1.0-py2.py3-none-any.whl"); err != nil {
+		t.Fatal(err)
+	}
 	fetcher.failing("")
+	fetcher.reset()
 	refresh()
+	if got, want := fetcher.fetched(), []string{"https://files.example/demo-1.1.0-1-py3-none-any.whl"}; !slices.Equal(got, want) {
+		t.Fatalf("retry fetched %v, want %v", got, want)
+	}
+	// The retry read the py2.py3 wheel, which keeps it from retention.
+	maxID, err := m.db.MaxArtifactID()
+	if err != nil {
+		t.Fatal(err)
+	}
+	candidates, err := m.db.GetRetentionCandidates(0, maxID, time.Now().Add(-24*time.Hour))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, c := range candidates {
+		if c.Filename == "demo-1.1.0-py2.py3-none-any.whl" {
+			t.Errorf("the wheel the retry read is a retention candidate: %+v", c)
+		}
+	}
 
 	m.Versions = stubReleases{"pypi/demo": append(releases,
 		files("1.2.0", "demo-1.2.0-py3-none-any.whl", "demo-1.2.0-py2-none-any.whl"))}
@@ -405,9 +428,10 @@ func TestRefreshSeesBufferedDownloads(t *testing.T) {
 
 func TestRefreshSkipsAPackageWithNoDownloadedFileKinds(t *testing.T) {
 	m, _ := setupRefreshMirror(t, "wheel")
-	m.Versions = stubReleases{"pypi/demo": oldReleases("1.0.0", "1.1.0")}
-	// Eviction removed the file a client downloaded after the ranking query
-	// ran, leaving only one a refresh mirrored.
+	// Listing the releases would fail, but there is nothing to list them
+	// for: eviction removed the file a client downloaded after the ranking
+	// query ran, leaving only one a refresh mirrored.
+	m.Versions = stubReleases{}
 	items, err := m.refreshItems(context.Background(), database.UsedPackage{
 		Ecosystem: "pypi", Name: "demo", PURL: "pkg:pypi/demo",
 		Files: []database.UsedFile{{Version: "1.0.0", Filename: "demo-1.0.0-py3-none-any.whl"}},

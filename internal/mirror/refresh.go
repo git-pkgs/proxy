@@ -59,8 +59,9 @@ func (m *Mirror) releaseLister() ReleaseLister { //nolint:ireturn // any lister 
 func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
 	ctx = handler.MirrorFetch(ctx)
 	cutoff := time.Now().Add(-r.Since)
-	// Without the buffered hits, a recent download is missed until the next
-	// run, which is all it costs, so a failed write doesn't stop this one.
+	// Without the buffered hits, this run misses the downloads still in
+	// them, and a later run only sees those still within Since. That is
+	// logged rather than stopping the run.
 	if err := m.db.FlushHits(); err != nil {
 		m.logger.Warn("mirror refresh: failed to write buffered hits", "error", err)
 	}
@@ -139,6 +140,16 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 	if !refreshable(ecosystem) {
 		return nil, nil
 	}
+	eco, files := fileEcosystems[ecosystem]
+	var variants map[string]bool
+	if files {
+		variants = cachedVariants(eco, pkg.Files)
+		if len(variants) == 0 {
+			// Eviction removed every file a client downloaded after the
+			// ranking query ran.
+			return nil, nil
+		}
+	}
 	releases, err := m.releaseLister().ListReleases(ctx, ecosystem, name)
 	if err != nil {
 		return nil, fmt.Errorf("listing releases: %w", err)
@@ -160,16 +171,8 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 		return m.proxy == nil || m.proxy.ReleaseAllowed(pkg.Ecosystem, pkg.Name, v.Number, v.PublishedAt)
 	}
 
-	eco, files := fileEcosystems[ecosystem]
-	var variants map[string]bool
 	var incomplete func(registries.Version) bool
 	if files {
-		variants = cachedVariants(eco, pkg.Files)
-		if len(variants) == 0 {
-			// Eviction removed every file a client downloaded after the
-			// ranking query ran.
-			return nil, nil
-		}
 		incomplete = func(r registries.Version) bool {
 			return eco.missing(PackageVersion{Ecosystem: ecosystem, Name: name, Version: r.Number, variants: variants}, r, pkg.Files)
 		}
