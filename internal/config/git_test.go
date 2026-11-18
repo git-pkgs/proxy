@@ -84,6 +84,7 @@ func TestGitUpstreamAllowsRepoIgnoresCaseOnForges(t *testing.T) {
 		{"https://github.com", "azure/login", true},
 		{"https://github.com", "Azure/Login", true},
 		{"https://GitHub.com/", "AZURE/login", true},
+		{"https://github.com:443", "azure/login", true},
 		{"https://bitbucket.org", "azure/login", true},
 		{"https://github.com", "datadog/login", false},
 		{"https://gitlab.example", "azure/login", false},

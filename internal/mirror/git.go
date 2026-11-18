@@ -91,6 +91,8 @@ func vcsGitRepository(vcsURL string) (location, ref string, ok bool) {
 	// url.Parse checked the escapes, so neither fails.
 	repoPath, _ = url.PathUnescape(repoPath)
 	ref, _ = url.PathUnescape(ref)
+	// The cache takes a tag by its name.
+	ref = strings.TrimPrefix(ref, "refs/tags/")
 	// A ".git" suffix is kept, as pkg:git keeps it, for an upstream that
 	// serves the repository only under that name.
 	repoPath = strings.Trim(path.Clean("/"+repoPath), "/")
@@ -107,7 +109,8 @@ func (m *Mirror) mirrorGit(ctx context.Context, pv PackageVersion, tracker *prog
 		m.recordFailure(tracker, pv, errNoGitUpstream)
 		return
 	}
-	if pv.listedOnly {
+	// An unavailable cache fails the item with its reason in Mirror.
+	if _, unavailable := m.Git.(UnavailableGit); pv.listedOnly && !unavailable {
 		if listing, ok := m.Git.(GitListing); !ok || !listing.ListsRepository(pv.Name) {
 			m.recordFailure(tracker, pv, fmt.Errorf("%s: pkg:github, pkg:bitbucket and vcs_url PURLs are mirrored only for repositories an upstream.git repos list names", pv.Name))
 			return

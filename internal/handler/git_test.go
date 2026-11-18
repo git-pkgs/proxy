@@ -101,9 +101,10 @@ func TestGitServesRepository(t *testing.T) {
 		{up, false},
 		{up + "/a/../b.git", false},
 		{github + "/azure/login.git", true},
-		// Cached before GitHub paths were folded to lowercase: no clone is
-		// served from it any more.
-		{github + "/Azure/login.git", false},
+		// Cached before GitHub paths were folded to lowercase. Where the
+		// cache directory ignores case it is the same copy; elsewhere no
+		// clone is served from it, and it is warmed only until it goes idle.
+		{github + "/Azure/login.git", true},
 	} {
 		if got := h.ServesRepository(tt.dir); got != tt.ok {
 			t.Errorf("ServesRepository(%q) = %v, want %v", tt.dir, got, tt.ok)

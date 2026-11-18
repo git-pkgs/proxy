@@ -203,8 +203,6 @@ func TestGitRepositoryRowsHideWhatGitRefuses(t *testing.T) {
 		{Key: dir + "/acme/widgets.git", Size: 1, Refused: true, LastError: "refused"},
 		{Key: dir + "/acme/gadgets.git", Size: 2, LastError: "fetch_failed"},
 		{Key: dir + "/other/secret.git", Size: 4},
-		// Cached before GitHub paths were folded to lowercase.
-		{Key: dir + "/Acme/gadgets.git", Size: 8},
 	}, state)
 	if len(rows) != 2 || size != 3 {
 		t.Fatalf("rows %+v, size %d; want the two allowed repositories", rows, size)

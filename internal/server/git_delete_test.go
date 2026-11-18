@@ -96,3 +96,17 @@ func TestGitRepositoryDeleteFoldsForgeCase(t *testing.T) {
 		t.Errorf("DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
 	}
 }
+
+// A copy cached under its mixed-case path before GitHub paths were folded
+// stays removable by that spelling.
+func TestGitRepositoryDeleteRemovesAMixedCaseCopy(t *testing.T) {
+	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
+		cfg.Upstream.Git = map[string]config.GitUpstream{"github": {URL: "https://github.com", Repos: []string{"Azure/*"}}}
+		cfg.CacheDelete = true
+		dir := filepath.Join(cfg.Git.CacheDir, gitcache.UpstreamDir("github", "https://github.com"), "Azure", "Login.git")
+		gitCommand(t, "", "init", "--quiet", "--bare", dir)
+	})
+	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusOK {
+		t.Errorf("DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
+	}
+}

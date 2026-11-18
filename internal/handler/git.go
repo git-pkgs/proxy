@@ -253,10 +253,8 @@ func (h *GitHandler) ServesRepository(dir string) bool {
 	}
 	for name, upstream := range h.upstreams {
 		if upstream.dir == upstreamDir {
-			// A directory cached under another case than the key now is no
-			// longer served from.
-			repo, status, _ := h.repository(name + "/" + repoPath)
-			return status == 0 && repo.key == dir
+			_, status, _ := h.repository(name + "/" + repoPath)
+			return status == 0
 		}
 	}
 	return false

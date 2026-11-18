@@ -78,9 +78,8 @@ func (s *Server) handleGitRepositories(w http.ResponseWriter, r *http.Request) {
 
 // gitRepositoryRows names each cached repository by its upstream and path,
 // and gives the URL it is cloned from through the proxy. Repositories of an
-// upstream no longer configured, that its repos allowlist no longer
-// allows, or cached under a case the upstream no longer keeps, are left
-// out, and a repository the upstream refused shows no
+// upstream no longer configured, or that its repos allowlist no longer
+// allows, are left out, and a repository the upstream refused shows no
 // cached state, as /git serves none of them. state reads what a repository
 // holds, reporting false when it can't. It also returns the rows' total size.
 func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, repos []gitcache.RepositoryStats,
@@ -94,8 +93,7 @@ func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, 
 	for _, repo := range repos {
 		dir, path, _ := strings.Cut(repo.Key, "/")
 		name, ok := names[dir]
-		repoPath := strings.TrimSuffix(path, ".git")
-		if !ok || !upstreams[name].AllowsRepo(repoPath) || upstreams[name].CacheRepo(repoPath) != repoPath {
+		if !ok || !upstreams[name].AllowsRepo(strings.TrimSuffix(path, ".git")) {
 			continue
 		}
 		row := GitRepositoryRow{

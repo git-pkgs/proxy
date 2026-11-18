@@ -78,16 +78,23 @@ func TestGitMirrorCachesCommitForClones(t *testing.T) {
 // a repos list; a host without one serves every repository but lists none.
 func TestGitListsRepository(t *testing.T) {
 	h := NewGitHandler(nil, nil, config.UpstreamConfig{Git: map[string]config.GitUpstream{
-		"github":    {URL: "https://github.com", Repos: []string{"acme/*", "Azure/*"}},
+		"github":    {URL: "https://github.com", Repos: []string{"acme/*"}},
 		"bitbucket": {URL: "https://bitbucket.org"},
+		"azure":     {URL: "https://github.com/Azure", Repos: []string{"login"}},
+		"team":      {URL: "https://git.example/Team", Repos: []string{"x"}},
 	}})
 	for location, want := range map[string]bool{
+		// GitHub ignores case in the upstream's path too.
+		"github.com/azure/login": true,
+		"github.com/azure/other": false,
+		// Other hosts may tell the cases apart.
+		"git.example/Team/x":          true,
+		"git.example/team/x":          false,
 		"github.com/acme/widgets":     true,
 		"github.com/actions/checkout": false,
 		"bitbucket.org/acme/widgets":  false,
 		"codeberg.org/acme/widgets":   false,
 		"github.com/acme/../widgets":  false,
-		"github.com/azure/login":      true,
 	} {
 		if got := h.ListsRepository(location); got != want {
 			t.Errorf("ListsRepository(%q) = %v, want %v", location, got, want)

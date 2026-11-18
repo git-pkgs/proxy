@@ -49,6 +49,8 @@ func TestMirrorForgePURLsIntoTheGitCache(t *testing.T) {
 		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://git.example/acme/tool%40home.git"), gitCall{"git.example/acme/tool@home.git", ""}},
 		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://git.example/acme/tool%40home@v1"), gitCall{"git.example/acme/tool@home", "v1"}},
 		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://git.example/acme/widgets@release%2F1.0"), gitCall{"git.example/acme/widgets", "release/1.0"}},
+		// A full tag ref names the tag.
+		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://git.example/acme/widgets@refs/tags/v1.0"), gitCall{"git.example/acme/widgets", "v1.0"}},
 		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://Git.Example/acme/widgets/"), gitCall{"git.example/acme/widgets", ""}},
 	}
 	for _, tt := range tests {
@@ -106,6 +108,20 @@ func TestMirrorForgePURLWithoutListing(t *testing.T) {
 	}
 	if progress.Failed != 1 || len(git.calls) != 0 {
 		t.Errorf("progress = %+v, calls = %+v; want a failure and no call", progress, git.calls)
+	}
+}
+
+// Where the git cache can't be opened, a forge PURL fails with the reason,
+// as pkg:git does, not for want of a repos list.
+func TestMirrorForgePURLReportsAnUnavailableCache(t *testing.T) {
+	m := setupTestMirror(t, 1)
+	m.Git = UnavailableGit{Reason: "git cache is locked"}
+	progress, err := m.Run(context.Background(), &PURLSource{PURLs: []string{"pkg:github/actions/checkout@v4"}})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if progress.Failed != 1 || len(progress.Errors) != 1 || progress.Errors[0].Error != "git cache is locked" {
+		t.Errorf("progress = %+v, want the cache's reason", progress)
 	}
 }
 

@@ -127,7 +127,9 @@ func (h *GitHandler) mirrorRepository(location string) (gitRepository, error) {
 	var best, bestPrefix, rest string
 	for name, upstream := range h.upstreams {
 		prefix := gitLocationPrefix(upstream.URL)
-		path, ok := strings.CutPrefix(location, prefix)
+		// On a host that ignores case, so does the upstream's path.
+		ok := strings.HasPrefix(location, prefix) || upstream.FoldsCase() && strings.HasPrefix(strings.ToLower(location), strings.ToLower(prefix))
+		path := location[min(len(prefix), len(location)):]
 		if prefix == "" || !ok || path == "" {
 			continue
 		}

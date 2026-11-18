@@ -58,7 +58,7 @@ func (g GitUpstream) AllowsRepo(repo string) bool {
 	if len(g.Repos) == 0 {
 		return true
 	}
-	fold := g.foldsCase()
+	fold := g.FoldsCase()
 	if fold {
 		repo = strings.ToLower(repo)
 	}
@@ -77,18 +77,18 @@ func (g GitUpstream) AllowsRepo(repo string) bool {
 // and pkg:github and pkg:bitbucket PURLs name repositories in lowercase.
 var caseInsensitiveGitHosts = map[string]bool{"github.com": true, "bitbucket.org": true}
 
-// foldsCase reports whether URL is a host that ignores the case of
-// repository paths.
-func (g GitUpstream) foldsCase() bool {
+// FoldsCase reports whether URL is a host that ignores the case of
+// repository paths, whatever its port.
+func (g GitUpstream) FoldsCase() bool {
 	u, err := url.Parse(g.URL)
-	return err == nil && caseInsensitiveGitHosts[strings.ToLower(u.Host)]
+	return err == nil && caseInsensitiveGitHosts[strings.ToLower(u.Hostname())]
 }
 
 // CacheRepo returns the path the cache keeps repo under: lowercased on a
 // host that ignores case, so every spelling shares one copy, and repo
 // itself elsewhere.
 func (g GitUpstream) CacheRepo(repo string) string {
-	if g.foldsCase() {
+	if g.FoldsCase() {
 		return strings.ToLower(repo)
 	}
 	return repo
