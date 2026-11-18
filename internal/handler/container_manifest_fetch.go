@@ -239,7 +239,7 @@ func headRefusal(resp *http.Response) (*capturedResponse, bool) {
 
 // headManifest answers a client HEAD. When the digest upstream names is
 // cached, the tag entry is pointed at it, so the next GET is a cache hit.
-// Otherwise the upstream headers are passed on and nothing is stored.
+// Otherwise only the tag resolution is stored, for a later GET by digest.
 func (h *ContainerHandler) headManifest(ctx context.Context, req manifestRequest, cached *cachedContainerManifest, fromFallback bool) manifestOutcome {
 	resp, err := h.requestManifest(ctx, http.MethodHead, req, req.reference, "")
 	if err != nil {
@@ -256,6 +256,11 @@ func (h *ContainerHandler) headManifest(ctx context.Context, req manifestRequest
 			return manifestOutcome{digestInvalid: true}
 		}
 		if !req.immutable() {
+			key := h.containerManifestSharedCacheKey(req.registryURL, req.name, req.reference, req.cacheAccept)
+			if _, err := h.storeContainerMetadata(ctx, containerManifestTagEcosystem, key, []byte(digest),
+				"", "", "text/plain", "", time.Time{}, time.Now()); err != nil {
+				h.proxy.Logger.Warn("failed to cache tag resolution", "error", err)
+			}
 			if outcome, ok := h.tagFromCachedDigest(ctx, req, cached, fromFallback, resp, digest); ok {
 				return outcome
 			}
