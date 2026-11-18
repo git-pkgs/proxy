@@ -59,6 +59,11 @@ func (m *Mirror) releaseLister() ReleaseLister { //nolint:ireturn // any lister 
 func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
 	ctx = handler.MirrorFetch(ctx)
 	cutoff := time.Now().Add(-r.Since)
+	// Without the buffered hits, a recent download is missed until the next
+	// run, which is all it costs, so a failed write doesn't stop this one.
+	if err := m.db.FlushHits(); err != nil {
+		m.logger.Warn("mirror refresh: failed to write buffered hits", "error", err)
+	}
 	packages, err := m.db.MostUsedPackages(cutoff, r.Top)
 	if err != nil {
 		return nil, fmt.Errorf("listing the most used packages: %w", err)
@@ -160,6 +165,11 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 	var incomplete func(registries.Version) bool
 	if files {
 		variants = cachedVariants(eco, pkg.Files)
+		if len(variants) == 0 {
+			// Eviction removed every file a client downloaded after the
+			// ranking query ran.
+			return nil, nil
+		}
 		incomplete = func(r registries.Version) bool {
 			return eco.missing(PackageVersion{Ecosystem: ecosystem, Name: name, Version: r.Number, variants: variants}, r, pkg.Files)
 		}
