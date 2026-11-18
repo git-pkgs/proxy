@@ -119,4 +119,5 @@ jobs:
             --set 'extraInitContainers[0].name=wait-for-db' \
             --set 'extraInitContainers[0].image=busybox:1.37' \
             --set 'extraInitContainers[0].command={sh,-c,exit 0}' \
+            --set-string 'deploymentAnnotations.reloader\.stakater\.com/auto=true' \
             >/dev/null
