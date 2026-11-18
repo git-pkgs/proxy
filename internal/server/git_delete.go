@@ -37,7 +37,7 @@ func (s *Server) handleGitDelete(w http.ResponseWriter, r *http.Request) {
 		notFound(w, "repository not cached")
 		return
 	}
-	freed, err := s.git.Remove(gitcache.UpstreamDir(name, upstream.URL) + "/" + repo + ".git")
+	freed, err := s.git.Remove(gitcache.UpstreamDir(name, upstream.URL) + "/" + upstream.CacheRepo(repo) + ".git")
 	switch {
 	case errors.Is(err, gitcache.ErrNotCached):
 		notFound(w, "repository not cached")

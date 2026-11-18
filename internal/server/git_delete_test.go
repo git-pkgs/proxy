@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/gitcache"
 )
 
 func TestGitRepositoryDelete(t *testing.T) {
@@ -79,5 +80,19 @@ func TestGitRepositoryDeleteNeedsCacheDelete(t *testing.T) {
 	}
 	if _, body := request(t, http.MethodGet, cfg.BaseURL+"/ui/git", "", nil); !strings.Contains(body, "team/widgets") {
 		t.Error("the repository was deleted without cache_delete")
+	}
+}
+
+// A repository of GitHub is cached under its lowercased path, so it is
+// deleted whatever the case it is named in.
+func TestGitRepositoryDeleteFoldsForgeCase(t *testing.T) {
+	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
+		cfg.Upstream.Git = map[string]config.GitUpstream{"github": {URL: "https://github.com", Repos: []string{"Azure/*"}}}
+		cfg.CacheDelete = true
+		dir := filepath.Join(cfg.Git.CacheDir, gitcache.UpstreamDir("github", "https://github.com"), "azure", "login.git")
+		gitCommand(t, "", "init", "--quiet", "--bare", dir)
+	})
+	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusOK {
+		t.Errorf("DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
 	}
 }

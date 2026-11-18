@@ -925,7 +925,12 @@ HTTPS where it can, without `git`, so the rewrite does not reach them.
 pattern ending in `/**` also matches every repository nested below its
 prefix, so `mediawiki/**` matches `mediawiki/skins/Vector`. An upstream
 without `repos` serves every repository on it, and a repository outside
-`repos` answers 404. When `upstream.auth` has credentials for an upstream,
+`repos` answers 404. GitHub and Bitbucket ignore the case of repository
+paths, so on `https://github.com` and `https://bitbucket.org` the patterns
+match whatever the case, and every spelling of a repository shares one cached
+copy, kept under the lowercased path. A copy cached under another case by an
+earlier version isn't served any more and is fetched again once. When
+`upstream.auth` has credentials for an upstream,
 `repos` is required: everyone who can reach the proxy can read every
 repository it serves, so list only those they may read. Per-client
 permissions are not supported. `upstream.auth` matches credentials by URL, so
@@ -2084,7 +2089,7 @@ proxy mirror pkg:git/github.com/git-pkgs/purl
 - The repository's branches and tags are cached, as a clone through the proxy caches them. A commit on none of them is fetched by ID and kept, like one a client fetches by ID, until a branch or tag includes it, or for seven days from the last mirror run that named it, as long as `git.max_size` doesn't evict the repository. Where `upstream.auth` has credentials for the host, commits aren't fetched by ID, and one on no branch or tag that isn't cached yet fails.
 - Without a version the repository's branches and tags are mirrored. A tag as the version has to be one of them, so a tag the upstream doesn't have fails. When the upstream can't be reached, a cached tag is mirrored at the commit it last pointed to, with a warning in the log. A branch name or an abbreviated commit ID as the version fails too; give the full commit ID.
 - With a version, the submodules that commit records are mirrored at the commits it pins, with their submodules in turn. A relative submodule URL is resolved against the repository's, and an `ssh://`, `git://` or `git@host:path` URL names the repository by its host and path. A submodule no `upstream.git` host serves is skipped with a warning in the log, as are all of a commit's submodules when git can't read its `.gitmodules`.
-- SBOMs often name a repository with another package URL: `pkg:github/{owner}/{repo}`, `pkg:bitbucket/{owner}/{repo}`, or `pkg:generic/…?vcs_url=git+https://…`. These are mirrored as the `pkg:git` PURL for `github.com/{owner}/{repo}`, `bitbucket.org/{owner}/{repo}` or the host and path of the `vcs_url`, with the PURL's version, or for a generic package the ref after `@` in the `vcs_url`. They are mirrored only when the `upstream.git` host serving the repository has `repos` naming it; without `repos`, they fail. That keeps an SBOM job from cloning the repository of every GitHub Action it lists.
+- SBOMs often name a repository with another package URL: `pkg:github/{owner}/{repo}`, `pkg:bitbucket/{owner}/{repo}`, or `pkg:generic/…?vcs_url=git+https://…`. These are mirrored as the `pkg:git` PURL for `github.com/{owner}/{repo}`, `bitbucket.org/{owner}/{repo}` or the host and path of the `vcs_url`, with the PURL's version, or for a generic package the ref after `@` in the `vcs_url`. They are mirrored only when the `upstream.git` host serving the repository has `repos` naming it; without `repos`, they fail. The PURL types lowercase the owner and repository, which GitHub and Bitbucket ignore the case of, so `pkg:github/Azure/login` is served to a clone of `Azure/login`. That keeps an SBOM job from cloning the repository of every GitHub Action it lists.
 - The git cache is used by one process. While the server runs, the command can't open `git.cache_dir`, so `pkg:git` items fail and the rest are mirrored; use the mirror API instead.
 
 ### Scheduled refresh

@@ -109,7 +109,7 @@ func (m *Mirror) mirrorGit(ctx context.Context, pv PackageVersion, tracker *prog
 	}
 	if pv.listedOnly {
 		if listing, ok := m.Git.(GitListing); !ok || !listing.ListsRepository(pv.Name) {
-			m.recordFailure(tracker, pv, fmt.Errorf("%s isn't named by the repos of an upstream.git host, which a repository named by a package URL other than pkg:git has to be", pv.Name))
+			m.recordFailure(tracker, pv, fmt.Errorf("%s: pkg:github, pkg:bitbucket and vcs_url PURLs are mirrored only for repositories an upstream.git repos list names", pv.Name))
 			return
 		}
 	}

@@ -89,7 +89,8 @@ type gitRequest struct {
 	fetchWants bool
 	// key names the repository in the cache: {name}-{URL hash}/{repo}.git,
 	// with any .git the client gave removed from repo first, so both
-	// spellings share one copy.
+	// spellings share one copy, and repo lowercased on a host that ignores
+	// case (config.GitUpstream.CacheRepo).
 	key string
 	// repoURL is the upstream repository, spelled as the client spelled it.
 	repoURL string
@@ -235,7 +236,7 @@ func (h *GitHandler) repository(path string) (gitRepository, int, string) {
 		name:        name,
 		repo:        repo,
 		upstream:    upstream,
-		key:         upstream.dir + "/" + repo + ".git",
+		key:         upstream.dir + "/" + upstream.CacheRepo(repo) + ".git",
 		url:         upstream.URL + "/" + escapedRepo + suffix,
 		escapedRepo: escapedRepo,
 	}, 0, ""
@@ -252,8 +253,10 @@ func (h *GitHandler) ServesRepository(dir string) bool {
 	}
 	for name, upstream := range h.upstreams {
 		if upstream.dir == upstreamDir {
-			_, status, _ := h.repository(name + "/" + repoPath)
-			return status == 0
+			// A directory cached under another case than the key now is no
+			// longer served from.
+			repo, status, _ := h.repository(name + "/" + repoPath)
+			return status == 0 && repo.key == dir
 		}
 	}
 	return false

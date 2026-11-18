@@ -31,6 +31,9 @@ func TestMirrorForgePURLsIntoTheGitCache(t *testing.T) {
 		// A GitHub Action in a subdirectory of its repository.
 		{"pkg:github/acme/widgets@v1#setup", gitCall{"github.com/acme/widgets", "v1"}},
 		{"pkg:github/acme/widgets", gitCall{"github.com/acme/widgets", ""}},
+		// The PURL lowercases a GitHub name; the git cache folds its
+		// clones to match.
+		{"pkg:github/Azure/login@v1", gitCall{"github.com/azure/login", "v1"}},
 		{"pkg:bitbucket/acme/widgets@" + gitTestCommit, gitCall{"bitbucket.org/acme/widgets", gitTestCommit}},
 		{"pkg:generic/widgets@1.0?vcs_url=" + vcs("git+https://git.example/acme/widgets.git@"+gitTestCommit), gitCall{"git.example/acme/widgets.git", gitTestCommit}},
 		// The version of a generic package needn't name a ref, so without

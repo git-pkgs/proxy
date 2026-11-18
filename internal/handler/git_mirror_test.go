@@ -78,7 +78,7 @@ func TestGitMirrorCachesCommitForClones(t *testing.T) {
 // a repos list; a host without one serves every repository but lists none.
 func TestGitListsRepository(t *testing.T) {
 	h := NewGitHandler(nil, nil, config.UpstreamConfig{Git: map[string]config.GitUpstream{
-		"github":    {URL: "https://github.com", Repos: []string{"acme/*"}},
+		"github":    {URL: "https://github.com", Repos: []string{"acme/*", "Azure/*"}},
 		"bitbucket": {URL: "https://bitbucket.org"},
 	}})
 	for location, want := range map[string]bool{
@@ -87,10 +87,27 @@ func TestGitListsRepository(t *testing.T) {
 		"bitbucket.org/acme/widgets":  false,
 		"codeberg.org/acme/widgets":   false,
 		"github.com/acme/../widgets":  false,
+		"github.com/azure/login":      true,
 	} {
 		if got := h.ListsRepository(location); got != want {
 			t.Errorf("ListsRepository(%q) = %v, want %v", location, got, want)
 		}
+	}
+}
+
+// A repository of GitHub is mirrored to the copy a clone of any spelling
+// of its path is served from.
+func TestGitMirrorFoldsForgeCase(t *testing.T) {
+	h := NewGitHandler(nil, nil, config.UpstreamConfig{Git: map[string]config.GitUpstream{
+		"github": {URL: "https://github.com", Repos: []string{"Azure/*"}},
+	}})
+	mirrored, err := h.mirrorRepository("github.com/azure/login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloned, status, _ := h.repository("github/Azure/login.git")
+	if status != 0 || mirrored.key != cloned.key {
+		t.Errorf("mirrored to %q, clone of Azure/login served from %q (status %d)", mirrored.key, cloned.key, status)
 	}
 }
 
