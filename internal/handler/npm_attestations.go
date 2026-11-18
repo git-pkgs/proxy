@@ -46,7 +46,7 @@ func (h *NPMHandler) handleAttestations(w http.ResponseWriter, r *http.Request) 
 
 	inCooldown, err := h.versionInCooldown(packageName, version, metadata)
 	if err != nil {
-		if writeUpstreamHeld(w, err) {
+		if h.proxy.writeUpstreamRefusal(w, err) {
 			return
 		}
 		h.proxy.Logger.Warn("cooldown: could not read npm publish time",
@@ -65,7 +65,7 @@ func (h *NPMHandler) handleAttestations(w http.ResponseWriter, r *http.Request) 
 			JSONError(w, http.StatusNotFound, ErrPackageNotFound.Error())
 			return
 		}
-		if writeUpstreamHeld(w, err) {
+		if h.proxy.writeUpstreamRefusal(w, err) {
 			return
 		}
 		h.proxy.Logger.Error("failed to fetch npm metadata", "error", err)

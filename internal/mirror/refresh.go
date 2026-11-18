@@ -142,9 +142,13 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 	var cached []string
 	seen := map[string]bool{}
 	for _, f := range pkg.Files {
-		if !seen[f.Version] {
-			seen[f.Version] = true
-			cached = append(cached, f.Version)
+		version := f.Version
+		if eco, ok := fileEcosystems[ecosystem]; ok && eco.release != nil {
+			version = eco.release(version)
+		}
+		if !seen[version] {
+			seen[version] = true
+			cached = append(cached, version)
 		}
 	}
 	allowed := func(v registries.Version) bool {

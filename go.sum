@@ -131,12 +131,12 @@ github.com/git-pkgs/integrity v0.2.0 h1:sxpAk7EUllZnTYttOoPTW/Yfe5J2imglpuJiuBUZ
 github.com/git-pkgs/integrity v0.2.0/go.mod h1:vPLb2RB+hR/iCMIgqph0PZbQ7iktXDTK+uupoHQikKk=
 github.com/git-pkgs/magic v0.6.0 h1:fINPe67FEIaFRVlZzhOIDClMkm+gftBroBENa8bHSxQ=
 github.com/git-pkgs/magic v0.6.0/go.mod h1:SXOqcsNmbmpZjJZHEEWnwxprbsFvpwWgTAZrgXp4Jm4=
-github.com/git-pkgs/pom v0.1.8 h1:mXCuWw6XkrKKZb6IurRZyIznYLPhV5AYg5ZO38Uj/l8=
-github.com/git-pkgs/pom v0.1.8/go.mod h1:sQBeYRzjCUn77fcABPn6I/a1aBHFxm55jTmkNxYtGtw=
+github.com/git-pkgs/pom v0.1.9 h1:gP7nqAS+UXITeRXjHhpyrMHRl9K3sRRBzRLV3+TeqHU=
+github.com/git-pkgs/pom v0.1.9/go.mod h1:sQBeYRzjCUn77fcABPn6I/a1aBHFxm55jTmkNxYtGtw=
 github.com/git-pkgs/purl v0.2.1 h1:b46hRlOMbrG6aXjjFJdYixGi5WTh0TLlAnH9iNeuOS0=
 github.com/git-pkgs/purl v0.2.1/go.mod h1:l8rCfvt5iXVrFIcoQ8+vCLOaHhrtEW2id0LENP+IzMw=
-github.com/git-pkgs/registries v0.13.2 h1:3fWinubUZbBEJ+kDii3O5kzqHJMJBmJK1X9FefAow+I=
-github.com/git-pkgs/registries v0.13.2/go.mod h1:UlX6jcAd4ftRBVVNzB4mQg32tfSNCk/L2pO4Wtplnho=
+github.com/git-pkgs/registries v0.14.0 h1:PQbfRFghM6cN2xu1FcDHS2F73yOMATVIBaq+zY/6uSI=
+github.com/git-pkgs/registries v0.14.0/go.mod h1:zgtz1lneDi8olIzAJxnSvSMT7PzChp9dsbFxJVbfyfQ=
 github.com/git-pkgs/sbom v0.1.9 h1:sfF5cJAwmgrm2N4HTXQWjiBe8tdu8xwhjwfAOyDNMfc=
 github.com/git-pkgs/sbom v0.1.9/go.mod h1:KIkZX0v31l62SeFsi2qsQXcZRVrAXvIdPQ4x4en+G2M=
 github.com/git-pkgs/spdx v0.3.6 h1:tbkqeYLKgAcDV1qPZNAkNxpNMTx9EfoNQQhcVEHApzs=

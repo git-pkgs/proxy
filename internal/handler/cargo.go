@@ -118,7 +118,7 @@ func (h *CargoHandler) handleIndex(w http.ResponseWriter, r *http.Request) {
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		if writeUpstreamHeld(w, err) {
+		if h.proxy.writeUpstreamRefusal(w, err) {
 			return
 		}
 		h.proxy.Logger.Error("failed to fetch upstream index", "error", err)

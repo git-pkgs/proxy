@@ -19,11 +19,17 @@ func (p *Proxy) serveUpstreamBlock(w http.ResponseWriter, err error) bool {
 	if statusErr.Code != http.StatusForbidden && statusErr.Code != http.StatusConflict {
 		return false
 	}
-	p.Logger.Warn("upstream refused artifact on policy grounds", "status", statusErr.Code, "detail", statusErr.Body)
+	p.Logger.Warn("upstream refused the request on policy grounds", "status", statusErr.Code, "detail", statusErr.Body)
 	w.Header().Set(headerContentType, upstreamBlockContentType(statusErr))
 	w.WriteHeader(statusErr.Code)
 	_, _ = w.Write([]byte(statusErr.Body))
 	return true
+}
+
+// writeUpstreamRefusal answers a failed metadata fetch that upstream held by
+// rate limiting or refused on policy grounds, and reports whether it did.
+func (p *Proxy) writeUpstreamRefusal(w http.ResponseWriter, err error) bool {
+	return writeUpstreamHeld(w, err) || p.serveUpstreamBlock(w, err)
 }
 
 // Forward the upstream's type, or JSON only while the body is valid JSON.
