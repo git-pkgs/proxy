@@ -372,7 +372,7 @@ func (h *TerraformHandler) writeError(w http.ResponseWriter, r *http.Request, pr
 		return // the client left
 	case errors.Is(err, ErrUpstreamNotFound):
 		http.Error(w, "not found", http.StatusNotFound)
-	case writeUpstreamHeld(w, err):
+	case h.proxy.writeUpstreamRefusal(w, err):
 	default:
 		h.proxy.Logger.Error("Terraform registry request failed", "registry", provider.hostname, "provider", provider.address(), "error", err)
 		http.Error(w, "upstream request failed", http.StatusBadGateway)

@@ -180,7 +180,7 @@ func (h *ComposerHandler) handlePackageMetadata(w http.ResponseWriter, r *http.R
 			http.Error(w, "not found", http.StatusNotFound)
 			return
 		}
-		if writeUpstreamHeld(w, err) {
+		if h.proxy.writeUpstreamRefusal(w, err) {
 			return
 		}
 		h.proxy.Logger.Error("upstream request failed", "error", err)
@@ -513,7 +513,7 @@ func (h *ComposerHandler) upstreamDist(w http.ResponseWriter, r *http.Request, f
 	for _, f := range files {
 		found, err := h.findDownloadURLFromMetadata(r.Context(), f.url, packageName, version)
 		if err != nil {
-			if writeUpstreamHeld(w, err) {
+			if h.proxy.writeUpstreamRefusal(w, err) {
 				return composerDist{}, "", false
 			}
 			h.proxy.Logger.Error("failed to fetch metadata", "error", err, "url", f.url)
@@ -582,8 +582,8 @@ func (h *ComposerHandler) findDownloadURLFromMetadata(ctx context.Context, metaU
 			return composerDist{}, err
 		}
 	}
-	if resp.StatusCode != http.StatusOK {
-		return composerDist{}, fmt.Errorf("upstream metadata returned %d", resp.StatusCode)
+	if err := upstreamMetadataStatus(resp); err != nil {
+		return composerDist{}, err
 	}
 
 	body, err := h.proxy.ReadMetadata(resp.Body)

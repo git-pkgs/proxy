@@ -325,7 +325,7 @@ func (h *NuGetHandler) nugetMetadataError(w http.ResponseWriter, err error) {
 		JSONError(w, http.StatusNotFound, "package metadata not found")
 		return
 	}
-	if writeUpstreamHeld(w, err) {
+	if h.proxy.writeUpstreamRefusal(w, err) {
 		return
 	}
 	h.proxy.Logger.Warn("failed to process NuGet metadata", "error", err)
