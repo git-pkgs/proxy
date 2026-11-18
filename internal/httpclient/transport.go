@@ -248,7 +248,7 @@ func (t *Transport) fetchToken(ctx context.Context, challenge bearerChallenge) (
 		return "", time.Time{}, err
 	}
 
-	client := &http.Client{Transport: configuredTransport{parent: t}}
+	client := &http.Client{Transport: configuredTransport{parent: t, realm: challenge.realm}}
 	for attempt := 0; attempt <= tokenMaxRetries; attempt++ {
 		resp, err := client.Do(req.Clone(ctx))
 		if err != nil {
@@ -355,14 +355,33 @@ func waitForRetry(ctx context.Context, delay time.Duration) error {
 	}
 }
 
+// configuredTransport makes a token request to realm, adding the
+// credentials upstream.auth has for it. trustedWithToken decided on those
+// credentials, so a redirect only gets credentials when they are the same:
+// a realm without any could otherwise redirect to a token service the
+// proxy has credentials for, and have a token issued with them.
 type configuredTransport struct {
 	parent *Transport
+	realm  string
 }
 
 func (t configuredTransport) RoundTrip(req *http.Request) (*http.Response, error) {
 	outbound := cloneRequest(req)
-	t.parent.applyConfiguredAuthentication(outbound)
+	if t.sameCredentials(outbound.URL) {
+		t.parent.applyConfiguredAuthentication(outbound)
+	}
 	return t.parent.base.RoundTrip(outbound)
+}
+
+// sameCredentials reports whether upstream.auth gives u the credentials it
+// gives the realm.
+func (t configuredTransport) sameCredentials(u *url.URL) bool {
+	if t.parent.authForURL == nil {
+		return true
+	}
+	name, value := t.parent.authForURL(u.String())
+	realmName, realmValue := t.parent.authForURL(t.realm)
+	return name == realmName && value == realmValue
 }
 
 func (t *Transport) cachedTokenForRequest(requestURL *url.URL) string {
