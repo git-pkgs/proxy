@@ -420,3 +420,120 @@ func TestContainerHandler_StaleTagDeletedUpstreamRelaysNotFound(t *testing.T) {
 		t.Errorf("body = %q, want the upstream error body", response.Body.String())
 	}
 }
+
+// Docker resolves a tag with HEAD, then fetches only by digest. The HEAD
+// must survive a restart even though the digest wasn't stored at that point.
+func TestContainerHandler_HeadThenDigestOffline(t *testing.T) {
+	for _, method := range []string{http.MethodHead, http.MethodGet} {
+		t.Run(method, func(t *testing.T) {
+			registry := newCountingRegistry(t)
+			body := manifestDoc("head-first")
+			digest := registry.add(body)
+			registry.pointLatest(digest)
+			h := newRevalidateTestHandler(t, registry)
+			pullManifest(t, h, http.MethodHead, "latest")
+			if gets, _ := registry.counts(); gets != 0 {
+				t.Fatal("HEAD fetched an unsolicited body")
+			}
+			pullManifest(t, h, http.MethodGet, digest)
+			registry.server.Close()
+			// New handler, same persisted cache, and expired tag TTL.
+			h = &ContainerHandler{proxy: h.proxy, registryURL: h.registryURL}
+			h.proxy.MetadataTTL = 0
+			response := pullManifest(t, h, method, "latest")
+			if response.Header().Get("Docker-Content-Digest") != digest || response.Header().Get("Content-Type") != ociManifestMediaType {
+				t.Fatalf("lost manifest headers: %v", response.Header())
+			}
+			if method == http.MethodGet && response.Body.String() != body {
+				t.Fatalf("body = %q, want %q", response.Body.String(), body)
+			}
+			if response.Header().Get("Warning") == "" {
+				t.Fatal("missing stale warning")
+			}
+		})
+	}
+}
+
+func TestContainerHandler_HeadResolutionUpstreamFailures(t *testing.T) {
+	for _, status := range []int{http.StatusInternalServerError, http.StatusServiceUnavailable, http.StatusTooManyRequests, http.StatusNotFound, http.StatusUnauthorized} {
+		t.Run(strconv.Itoa(status), func(t *testing.T) {
+			registry := newCountingRegistry(t)
+			digest := registry.add(manifestDoc("a"))
+			registry.pointLatest(digest)
+			h := newRevalidateTestHandler(t, registry)
+			pullManifest(t, h, http.MethodHead, "latest")
+			pullManifest(t, h, http.MethodGet, digest)
+			h.proxy.MetadataTTL = 0
+			h.proxy.HTTPClient = &http.Client{Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
+				return &http.Response{StatusCode: status, Header: make(http.Header), Body: io.NopCloser(strings.NewReader("unavailable")), Request: r}, nil
+			})}
+			for _, method := range []string{http.MethodHead, http.MethodGet} {
+				rec := httptest.NewRecorder()
+				req := httptest.NewRequest(method, "/library/app/manifests/latest", nil)
+				req.Header.Set("Accept", dockerManifestAccept)
+				h.Routes().ServeHTTP(rec, req)
+				want := status
+				if shouldServeStaleManifest(status) {
+					want = http.StatusOK
+					if rec.Header().Get("Docker-Content-Digest") != digest || rec.Header().Get("Warning") == "" {
+						t.Fatalf("lost stale resolution: %v", rec.Header())
+					}
+				}
+				if rec.Code != want {
+					t.Errorf("%s status = %d, want %d", method, rec.Code, want)
+				}
+			}
+		})
+	}
+}
+
+func TestContainerHandler_HeadResolutionMovesBeforeDigestFetched(t *testing.T) {
+	registry := newCountingRegistry(t)
+	first := registry.add(manifestDoc("a"))
+	second := registry.add(manifestDoc("b"))
+	registry.pointLatest(first)
+	h := newRevalidateTestHandler(t, registry)
+	pullManifest(t, h, http.MethodGet, "latest")
+	h.proxy.MetadataTTL = 0
+	registry.pointLatest(second)
+	pullManifest(t, h, http.MethodHead, "latest")
+	pullManifest(t, h, http.MethodGet, second)
+	registry.server.Close()
+	if got := pullManifest(t, h, http.MethodGet, "latest"); got.Body.String() != manifestDoc("b") {
+		t.Fatalf("tag still points at old manifest: %s", got.Body.String())
+	}
+}
+
+func TestContainerHandler_HeadResolutionWithoutBodyDoesNotInventManifest(t *testing.T) {
+	registry := newCountingRegistry(t)
+	digest := registry.add(manifestDoc("a"))
+	registry.pointLatest(digest)
+	h := newRevalidateTestHandler(t, registry)
+	pullManifest(t, h, http.MethodHead, "latest")
+	registry.server.Close()
+	rec := httptest.NewRecorder()
+	h.Routes().ServeHTTP(rec, httptest.NewRequest(http.MethodGet, "/library/app/manifests/latest", nil))
+	if rec.Code != http.StatusBadGateway {
+		t.Fatalf("unfetched body answered %d: %s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestContainerHandler_HeadResolutionTimeoutServesStoredTag(t *testing.T) {
+	registry := newCountingRegistry(t)
+	digest := registry.add(manifestDoc("a"))
+	registry.pointLatest(digest)
+	h := newRevalidateTestHandler(t, registry)
+	pullManifest(t, h, http.MethodHead, "latest")
+	pullManifest(t, h, http.MethodGet, digest)
+	registry.mu.Lock()
+	registry.holdFor = 10
+	registry.holdTimeout = 50 * time.Millisecond
+	registry.mu.Unlock()
+	h.proxy.MetadataTTL = 0
+	h.proxy.HTTPClient.Timeout = 5 * time.Millisecond
+	for _, method := range []string{http.MethodHead, http.MethodGet} {
+		if got := pullManifest(t, h, method, "latest"); got.Header().Get("Docker-Content-Digest") != digest {
+			t.Fatalf("lost digest on timeout: %v", got.Header())
+		}
+	}
+}
