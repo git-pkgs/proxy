@@ -73,6 +73,45 @@ func TestGitUpstreamAllowsRepo(t *testing.T) {
 	}
 }
 
+// GitHub and Bitbucket ignore the case of repository paths, and a
+// pkg:github or pkg:bitbucket PURL lowercases them, so repos patterns match
+// there whatever the case. Other hosts may tell the cases apart.
+func TestGitUpstreamAllowsRepoIgnoresCaseOnForges(t *testing.T) {
+	for _, tt := range []struct {
+		url, repo string
+		want      bool
+	}{
+		{"https://github.com", "azure/login", true},
+		{"https://github.com", "Azure/Login", true},
+		{"https://GitHub.com/", "AZURE/login", true},
+		{"https://github.com:443", "azure/login", true},
+		{"https://bitbucket.org", "azure/login", true},
+		{"https://github.com", "datadog/login", false},
+		{"https://gitlab.example", "azure/login", false},
+		{"https://gitlab.example", "Azure/login", true},
+	} {
+		g := GitUpstream{URL: tt.url, Repos: []string{"Azure/*"}}
+		if got := g.AllowsRepo(tt.repo); got != tt.want {
+			t.Errorf("%s: AllowsRepo(%q) = %v, want %v", tt.url, tt.repo, got, tt.want)
+		}
+	}
+}
+
+// The cache names a repository of GitHub or Bitbucket in lowercase, so a
+// clone of Azure/login is served what the mirror cached for azure/login.
+func TestGitUpstreamCacheRepo(t *testing.T) {
+	for _, tt := range []struct{ url, repo, want string }{
+		{"https://github.com", "Azure/Login", "azure/login"},
+		{"https://bitbucket.org/", "Acme/Widgets", "acme/widgets"},
+		{"https://gitlab.example", "Acme/Widgets", "Acme/Widgets"},
+		{"https://github.example", "Acme/Widgets", "Acme/Widgets"},
+	} {
+		if got := (GitUpstream{URL: tt.url}).CacheRepo(tt.repo); got != tt.want {
+			t.Errorf("%s: CacheRepo(%q) = %q, want %q", tt.url, tt.repo, got, tt.want)
+		}
+	}
+}
+
 func TestValidateGitUpstreams(t *testing.T) {
 	tests := []struct {
 		name     string

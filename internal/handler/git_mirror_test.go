@@ -74,6 +74,50 @@ func TestGitMirrorCachesCommitForClones(t *testing.T) {
 	}
 }
 
+// A repository is listed when the upstream.git host serving it names it in
+// a repos list; a host without one serves every repository but lists none.
+func TestGitListsRepository(t *testing.T) {
+	h := NewGitHandler(nil, nil, config.UpstreamConfig{Git: map[string]config.GitUpstream{
+		"github":    {URL: "https://github.com", Repos: []string{"acme/*"}},
+		"bitbucket": {URL: "https://bitbucket.org"},
+		"azure":     {URL: "https://github.com/Azure", Repos: []string{"login"}},
+		"team":      {URL: "https://git.example/Team", Repos: []string{"x"}},
+	}})
+	for location, want := range map[string]bool{
+		// GitHub ignores case in the upstream's path too.
+		"github.com/azure/login": true,
+		"github.com/azure/other": false,
+		// Other hosts may tell the cases apart.
+		"git.example/Team/x":          true,
+		"git.example/team/x":          false,
+		"github.com/acme/widgets":     true,
+		"github.com/actions/checkout": false,
+		"bitbucket.org/acme/widgets":  false,
+		"codeberg.org/acme/widgets":   false,
+		"github.com/acme/../widgets":  false,
+	} {
+		if got := h.ListsRepository(location); got != want {
+			t.Errorf("ListsRepository(%q) = %v, want %v", location, got, want)
+		}
+	}
+}
+
+// A repository of GitHub is mirrored to the copy a clone of any spelling
+// of its path is served from.
+func TestGitMirrorFoldsForgeCase(t *testing.T) {
+	h := NewGitHandler(nil, nil, config.UpstreamConfig{Git: map[string]config.GitUpstream{
+		"github": {URL: "https://github.com", Repos: []string{"Azure/*"}},
+	}})
+	mirrored, err := h.mirrorRepository("github.com/azure/login")
+	if err != nil {
+		t.Fatal(err)
+	}
+	cloned, status, _ := h.repository("github/Azure/login.git")
+	if status != 0 || mirrored.key != cloned.key {
+		t.Errorf("mirrored to %q, clone of Azure/login served from %q (status %d)", mirrored.key, cloned.key, status)
+	}
+}
+
 func TestGitSubmoduleLocation(t *testing.T) {
 	tests := []struct {
 		repoURL, submoduleURL, want string

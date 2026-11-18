@@ -3,6 +3,7 @@ package config
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
 	"path"
 	"strings"
 	"time"
@@ -51,17 +52,46 @@ func (g *GitUpstream) UnmarshalJSON(data []byte) error {
 	return json.Unmarshal(data, (*plain)(g))
 }
 
-// AllowsRepo reports whether repo, a path under URL, may be served.
+// AllowsRepo reports whether repo, a path under URL, may be served. On a
+// host that ignores case, so do the patterns.
 func (g GitUpstream) AllowsRepo(repo string) bool {
 	if len(g.Repos) == 0 {
 		return true
 	}
+	fold := g.FoldsCase()
+	if fold {
+		repo = strings.ToLower(repo)
+	}
 	for _, pattern := range g.Repos {
+		if fold {
+			pattern = strings.ToLower(pattern)
+		}
 		if matchRepoPattern(pattern, repo) {
 			return true
 		}
 	}
 	return false
+}
+
+// caseInsensitiveGitHosts serve a repository under any case of its path,
+// and pkg:github and pkg:bitbucket PURLs name repositories in lowercase.
+var caseInsensitiveGitHosts = map[string]bool{"github.com": true, "bitbucket.org": true}
+
+// FoldsCase reports whether URL is a host that ignores the case of
+// repository paths, whatever its port.
+func (g GitUpstream) FoldsCase() bool {
+	u, err := url.Parse(g.URL)
+	return err == nil && caseInsensitiveGitHosts[strings.ToLower(u.Hostname())]
+}
+
+// CacheRepo returns the path the cache keeps repo under: lowercased on a
+// host that ignores case, so every spelling shares one copy, and repo
+// itself elsewhere.
+func (g GitUpstream) CacheRepo(repo string) string {
+	if g.FoldsCase() {
+		return strings.ToLower(repo)
+	}
+	return repo
 }
 
 func matchRepoPattern(pattern, repo string) bool {

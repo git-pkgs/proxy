@@ -27,8 +27,9 @@ func TestParseGitRequest(t *testing.T) {
 	h := NewGitHandler(nil, nil, config.UpstreamConfig{Git: map[string]config.GitUpstream{
 		"up":      {URL: "https://git.example/r/"},
 		"limited": {URL: "https://git.example", Repos: []string{"allowed/*"}},
+		"github":  {URL: "https://github.com", Repos: []string{"Azure/*"}},
 	}})
-	up, limited := h.upstreams["up"].dir, h.upstreams["limited"].dir
+	up, limited, github := h.upstreams["up"].dir, h.upstreams["limited"].dir, h.upstreams["github"].dir
 	tests := []struct {
 		method, target string
 		status         int
@@ -51,6 +52,11 @@ func TestParseGitRequest(t *testing.T) {
 		{"GET", "/up/repo/git-upload-pack", http.StatusMethodNotAllowed, "", ""},
 		{"GET", "/limited/allowed/repo/info/refs?service=git-upload-pack", 0, limited + "/allowed/repo.git", "https://git.example/allowed/repo"},
 		{"GET", "/limited/other/repo/info/refs?service=git-upload-pack", http.StatusNotFound, "", ""},
+		{"GET", "/limited/Allowed/repo/info/refs?service=git-upload-pack", http.StatusNotFound, "", ""},
+		// GitHub ignores case: one cached copy for every spelling, fetched
+		// as the client spelled it.
+		{"GET", "/github/Azure/Login/info/refs?service=git-upload-pack", 0, github + "/azure/login.git", "https://github.com/Azure/Login"},
+		{"GET", "/github/azure/login.git/info/refs?service=git-upload-pack", 0, github + "/azure/login.git", "https://github.com/azure/login.git"},
 	}
 	for _, tt := range tests {
 		t.Run(tt.method+" "+tt.target, func(t *testing.T) {
@@ -78,8 +84,9 @@ func TestGitServesRepository(t *testing.T) {
 	h := NewGitHandler(nil, nil, config.UpstreamConfig{Git: map[string]config.GitUpstream{
 		"up":      {URL: "https://git.example/r/"},
 		"limited": {URL: "https://git.example", Repos: []string{"allowed/*"}},
+		"github":  {URL: "https://github.com", Repos: []string{"Azure/*"}},
 	}})
-	up, limited := h.upstreams["up"].dir, h.upstreams["limited"].dir
+	up, limited, github := h.upstreams["up"].dir, h.upstreams["limited"].dir, h.upstreams["github"].dir
 	for _, tt := range []struct {
 		dir string
 		ok  bool
@@ -93,6 +100,11 @@ func TestGitServesRepository(t *testing.T) {
 		{"up-00000000/repo.git", false},
 		{up, false},
 		{up + "/a/../b.git", false},
+		{github + "/azure/login.git", true},
+		// Cached before GitHub paths were folded to lowercase. Where the
+		// cache directory ignores case it is the same copy; elsewhere no
+		// clone is served from it, and it is warmed only until it goes idle.
+		{github + "/Azure/login.git", true},
 	} {
 		if got := h.ServesRepository(tt.dir); got != tt.ok {
 			t.Errorf("ServesRepository(%q) = %v, want %v", tt.dir, got, tt.ok)

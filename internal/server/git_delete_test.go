@@ -4,11 +4,13 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/gitcache"
 )
 
 func TestGitRepositoryDelete(t *testing.T) {
@@ -79,5 +81,65 @@ func TestGitRepositoryDeleteNeedsCacheDelete(t *testing.T) {
 	}
 	if _, body := request(t, http.MethodGet, cfg.BaseURL+"/ui/git", "", nil); !strings.Contains(body, "team/widgets") {
 		t.Error("the repository was deleted without cache_delete")
+	}
+}
+
+// A repository of GitHub is cached under its lowercased path, so it is
+// deleted whatever the case it is named in.
+func TestGitRepositoryDeleteFoldsForgeCase(t *testing.T) {
+	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
+		cfg.Upstream.Git = map[string]config.GitUpstream{"github": {URL: "https://github.com", Repos: []string{"Azure/*"}}}
+		cfg.CacheDelete = true
+		dir := filepath.Join(cfg.Git.CacheDir, gitcache.UpstreamDir("github", "https://github.com"), "azure", "login.git")
+		gitCommand(t, "", "init", "--quiet", "--bare", dir)
+	})
+	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusOK {
+		t.Errorf("DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
+	}
+}
+
+// Where the cache directory tells cases apart, a mixed-case copy and the
+// lowercase one are each deleted by their own spelling.
+func TestGitRepositoryDeleteKeepsTheOtherSpelling(t *testing.T) {
+	var mixed, lower string
+	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
+		cfg.Upstream.Git = map[string]config.GitUpstream{"github": {URL: "https://github.com", Repos: []string{"Azure/*"}}}
+		cfg.CacheDelete = true
+		dir := filepath.Join(cfg.Git.CacheDir, gitcache.UpstreamDir("github", "https://github.com"))
+		mixed, lower = filepath.Join(dir, "Azure", "Login.git"), filepath.Join(dir, "azure", "login.git")
+		gitCommand(t, "", "init", "--quiet", "--bare", mixed)
+		if _, err := os.Stat(lower); err == nil {
+			t.Skip("the cache directory ignores case")
+		}
+		gitCommand(t, "", "init", "--quiet", "--bare", lower)
+	})
+	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusOK {
+		t.Fatalf("DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
+	}
+	if _, err := os.Stat(mixed); !os.IsNotExist(err) {
+		t.Errorf("the mixed-case copy was not deleted: %v", err)
+	}
+	if _, err := os.Stat(lower); err != nil {
+		t.Errorf("the lowercase copy was deleted: %v", err)
+	}
+	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusOK {
+		t.Fatalf("second DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
+	}
+	if _, err := os.Stat(lower); !os.IsNotExist(err) {
+		t.Errorf("the lowercase copy was not deleted: %v", err)
+	}
+}
+
+// A copy cached under its mixed-case path before GitHub paths were folded
+// stays removable by that spelling.
+func TestGitRepositoryDeleteRemovesAMixedCaseCopy(t *testing.T) {
+	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
+		cfg.Upstream.Git = map[string]config.GitUpstream{"github": {URL: "https://github.com", Repos: []string{"Azure/*"}}}
+		cfg.CacheDelete = true
+		dir := filepath.Join(cfg.Git.CacheDir, gitcache.UpstreamDir("github", "https://github.com"), "Azure", "Login.git")
+		gitCommand(t, "", "init", "--quiet", "--bare", dir)
+	})
+	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusOK {
+		t.Errorf("DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
 	}
 }

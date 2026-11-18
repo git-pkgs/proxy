@@ -25,6 +25,14 @@ func (h *GitHandler) Mirror(ctx context.Context, location, version string) (gitc
 	return h.mirror(ctx, location, version, map[string]bool{}, 0)
 }
 
+// ListsRepository reports whether location, as Mirror takes it, is served
+// by an upstream.git host whose repos list names it. A host without a repos
+// list serves every repository but lists none.
+func (h *GitHandler) ListsRepository(location string) bool {
+	repo, err := h.mirrorRepository(location)
+	return err == nil && len(repo.upstream.Repos) > 0
+}
+
 func (h *GitHandler) mirror(ctx context.Context, location, version string, seen map[string]bool, depth int) (gitcache.MirrorResult, error) {
 	repo, err := h.mirrorRepository(location)
 	if err != nil {
@@ -119,7 +127,9 @@ func (h *GitHandler) mirrorRepository(location string) (gitRepository, error) {
 	var best, bestPrefix, rest string
 	for name, upstream := range h.upstreams {
 		prefix := gitLocationPrefix(upstream.URL)
-		path, ok := strings.CutPrefix(location, prefix)
+		// On a host that ignores case, so does the upstream's path.
+		ok := strings.HasPrefix(location, prefix) || upstream.FoldsCase() && strings.HasPrefix(strings.ToLower(location), strings.ToLower(prefix))
+		path := location[min(len(prefix), len(location)):]
 		if prefix == "" || !ok || path == "" {
 			continue
 		}

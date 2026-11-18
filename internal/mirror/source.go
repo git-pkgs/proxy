@@ -34,6 +34,10 @@ type PackageVersion struct {
 	// and checked against digest when there is one. A refresh finds it in
 	// a repository index.
 	fileURL, cacheFilename, digest string
+	// listedOnly marks a git repository named by a package URL other than
+	// pkg:git, which is mirrored only when an upstream.git repos list names
+	// it.
+	listedOnly bool
 }
 
 func (pv PackageVersion) String() string {
@@ -70,43 +74,51 @@ func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 		if err != nil {
 			return fmt.Errorf("parsing PURL %q: %w", purlStr, err)
 		}
-
-		ecosystem, name, qualifiers := mirrorTarget(p)
-		var namespace string
-		if ecosystem == "alpine" || ecosystem == "deb" {
-			namespace = p.Namespace
+		if err := s.enumeratePURL(ctx, versions, p, fn); err != nil {
+			return err
 		}
+	}
+	return nil
+}
 
-		// Images are never expanded to all tags, and conda packages without
-		// a channel aren't listed; both fail when they are mirrored. A Git
-		// repository without a commit is mirrored as a whole.
-		if p.Version != "" || isImageEcosystem(ecosystem) || ecosystem == "git" || (ecosystem == "conda" && !strings.Contains(name, "/")) {
-			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: p.Version, Namespace: namespace, Qualifiers: qualifiers}
-			if isImageEcosystem(ecosystem) {
-				pv.Qualifiers = p.Qualifiers.Map()
-			}
-			if takesPlatforms(ecosystem) {
-				pv.Platforms = s.Platforms
-			}
-			if err := fn(pv); err != nil {
-				return err
-			}
-			continue
-		}
+// enumeratePURL calls fn for each item p names.
+func (s *PURLSource) enumeratePURL(ctx context.Context, versions VersionLister, p *purl.PURL, fn func(PackageVersion) error) error {
+	if location, version, ok := forgeGitRepository(p); ok {
+		return fn(PackageVersion{Ecosystem: "git", Name: location, Version: version, listedOnly: true})
+	}
 
-		// Unversioned: enumerate all versions, or the newest
-		listed, err := s.listVersions(ctx, versions, ecosystem, name)
-		if err != nil {
-			return fmt.Errorf("fetching versions for %s/%s: %w", ecosystem, name, err)
+	ecosystem, name, qualifiers := mirrorTarget(p)
+	var namespace string
+	if ecosystem == "alpine" || ecosystem == "deb" {
+		namespace = p.Namespace
+	}
+
+	// Images are never expanded to all tags, and conda packages without
+	// a channel aren't listed; both fail when they are mirrored. A Git
+	// repository without a commit is mirrored as a whole.
+	if p.Version != "" || isImageEcosystem(ecosystem) || ecosystem == "git" || (ecosystem == "conda" && !strings.Contains(name, "/")) {
+		pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: p.Version, Namespace: namespace, Qualifiers: qualifiers}
+		if isImageEcosystem(ecosystem) {
+			pv.Qualifiers = p.Qualifiers.Map()
 		}
-		for _, v := range listed {
-			pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: v, Namespace: namespace, Qualifiers: qualifiers}
-			if takesPlatforms(ecosystem) {
-				pv.Platforms = s.Platforms
-			}
-			if err := fn(pv); err != nil {
-				return err
-			}
+		if takesPlatforms(ecosystem) {
+			pv.Platforms = s.Platforms
+		}
+		return fn(pv)
+	}
+
+	// Unversioned: enumerate all versions, or the newest
+	listed, err := s.listVersions(ctx, versions, ecosystem, name)
+	if err != nil {
+		return fmt.Errorf("fetching versions for %s/%s: %w", ecosystem, name, err)
+	}
+	for _, v := range listed {
+		pv := PackageVersion{Ecosystem: ecosystem, Name: name, Version: v, Namespace: namespace, Qualifiers: qualifiers}
+		if takesPlatforms(ecosystem) {
+			pv.Platforms = s.Platforms
+		}
+		if err := fn(pv); err != nil {
+			return err
 		}
 	}
 	return nil
