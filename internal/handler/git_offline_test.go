@@ -149,3 +149,21 @@ func TestGitLFSOfflineAnswersFromTheCache(t *testing.T) {
 		t.Errorf("the upstream got %d batches and %d downloads, want none", b, d)
 	}
 }
+
+// TestGitLFSOfflineReportsAFailedCacheRead checks an object whose cache
+// lookup fails is not reported as missing.
+func TestGitLFSOfflineReportsAFailedCacheRead(t *testing.T) {
+	u := newLFSUpstream(t)
+	h := newLFSHandler(t, u)
+	setOffline(h)
+	_ = h.proxy.DB.Close()
+	w := lfsRequest(h, http.MethodPost, "/up/acme/widget.git/info/lfs/objects/batch",
+		lfsBatchBody("download", lfsObject{OID: u.oid, Size: int64(len(lfsTestContent))}))
+	var resp lfsBatchResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil {
+		t.Fatalf("status %d, body %s: %v", w.Code, w.Body, err)
+	}
+	if len(resp.Objects) != 1 || resp.Objects[0].Error == nil || resp.Objects[0].Error.Code != http.StatusInternalServerError {
+		t.Errorf("objects %+v, want a 500 error", resp.Objects)
+	}
+}
