@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -13,8 +14,21 @@ import (
 	"github.com/git-pkgs/proxy/internal/config"
 )
 
+// offline returns a handler for g's cache whose upstream "up" is offline,
+// and the URL it serves "repo" at. It is a handler of its own, as g's
+// server may still be reading g.handler's upstreams.
+func (g *gitTestSetup) offline(t *testing.T) (*GitHandler, string) {
+	t.Helper()
+	h := NewGitHandler(g.handler.proxy, g.handler.cache, config.UpstreamConfig{Git: map[string]config.GitUpstream{
+		"up": {URL: g.upstreamURL, Offline: true},
+	}})
+	server := httptest.NewServer(http.StripPrefix("/git", h.Routes()))
+	t.Cleanup(server.Close)
+	return h, server.URL + "/git/up/repo"
+}
+
 // setOffline turns h's upstream.git entry "up" offline, as git.offline or
-// its offline setting would.
+// its offline setting would. h must not be serving requests.
 func setOffline(h *GitHandler) {
 	upstream := h.upstreams["up"]
 	upstream.Offline = true
@@ -28,10 +42,10 @@ func TestGitOfflineServesTheCachedCopyWithoutTheUpstream(t *testing.T) {
 	runGitCommand(t, g.work, "commit", "--quiet", "--allow-empty", "-m", "second")
 	runGitCommand(t, g.work, "push", "--quiet", "origin", "HEAD:main")
 
-	setOffline(g.handler)
+	_, url := g.offline(t)
 	requests := g.requests.Load()
 	clone := filepath.Join(t.TempDir(), "clone")
-	runGitCommand(t, "", "clone", "--quiet", g.url(), clone)
+	runGitCommand(t, "", "clone", "--quiet", url, clone)
 	if got := runGitCommand(t, clone, "rev-parse", "HEAD"); got != head {
 		t.Errorf("HEAD = %s, want the cached %s", got, head)
 	}
@@ -42,8 +56,8 @@ func TestGitOfflineServesTheCachedCopyWithoutTheUpstream(t *testing.T) {
 
 func TestGitOfflineRefusesARepositoryNotCached(t *testing.T) {
 	g := newGitTestSetup(t, 0, 0)
-	setOffline(g.handler)
-	resp, err := http.Get(g.url() + "/info/refs?service=git-upload-pack")
+	_, url := g.offline(t)
+	resp, err := http.Get(url + "/info/refs?service=git-upload-pack")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -75,9 +89,9 @@ func TestGitWarmsRepository(t *testing.T) {
 
 func TestGitMirrorRefusesAnOfflineUpstream(t *testing.T) {
 	g := newGitTestSetup(t, 0, 0)
-	setOffline(g.handler)
+	h, _ := g.offline(t)
 	location := strings.TrimPrefix(g.upstreamURL, "http://") + "/repo"
-	if _, err := g.handler.Mirror(context.Background(), location, ""); err == nil || !strings.Contains(err.Error(), "offline") {
+	if _, err := h.Mirror(context.Background(), location, ""); err == nil || !strings.Contains(err.Error(), "offline") {
 		t.Errorf("Mirror = %v, want an error saying the upstream is offline", err)
 	}
 	if got := g.requests.Load(); got != 0 {
