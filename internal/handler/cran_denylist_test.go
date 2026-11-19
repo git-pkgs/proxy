@@ -3,7 +3,6 @@ package handler
 import (
 	"net/http"
 	"net/http/httptest"
-	"sync/atomic"
 	"testing"
 )
 
@@ -11,17 +10,11 @@ import (
 // are refused like its source package, cached or not, although they are
 // cached under a version qualified by platform and R version.
 func TestCRANDenylistBlocksBinaries(t *testing.T) {
-	proxy, db, store, _ := setupTestProxy(t)
+	proxy, db, store, fetcher := setupTestProxy(t)
 	seedPackageWithPURL(t, db, store, "cran", "dplyr", "1.1.0_windows_4.3", "dplyr_1.1.0.zip", "cran binary")
 	seedPackageWithPURL(t, db, store, "cran", "dplyr", "1.0.0_windows_4.3", "dplyr_1.0.0.zip", "older binary")
 	setTestDenylist(t, proxy, "pkg:cran/dplyr@1.1.0")
-	var upstreamRequests atomic.Int32
-	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		upstreamRequests.Add(1)
-		_, _ = w.Write([]byte("from upstream"))
-	}))
-	defer upstream.Close()
-	srv := httptest.NewServer(NewCRANHandler(proxy, upstream.URL).Routes())
+	srv := httptest.NewServer(NewCRANHandler(proxy, "http://localhost").Routes())
 	defer srv.Close()
 
 	for path, want := range map[string]int{
@@ -40,7 +33,7 @@ func TestCRANDenylistBlocksBinaries(t *testing.T) {
 			t.Errorf("GET %s: status %d, want %d", path, resp.StatusCode, want)
 		}
 	}
-	if got := upstreamRequests.Load(); got != 0 {
-		t.Errorf("upstream got %d requests, want none", got)
+	if fetcher.fetchCalled {
+		t.Errorf("fetched %s from upstream, want no fetch", fetcher.fetchedURL)
 	}
 }
