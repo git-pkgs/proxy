@@ -60,7 +60,10 @@ func TestProtocolHandlersRejectQueryInPath(t *testing.T) {
 		"/apk/alpine/v3.22/main/x86_64/busybox-1.37.0-r12.apk%23/foo-9.9-r0.apk",
 		"/rpm/Packages/n/nginx-1.24.0-1.fc39.x86_64.rpm%3F/foo-9.9-1.fc39.x86_64.rpm",
 		"/debian/pool/main/c/curl/curl_8.5.0-2_amd64.deb%3F/foo_9.9-1_amd64.deb",
-		"/generic/github/owner/repo/releases/download/v1/tool.tar.gz%3F/other/repo/releases/download/v2/tool.tar.gz",
+		// The generic handler forwards the escaped path, and refuses an
+		// escaped '?' or '#' only on downloads that take no query.
+		"/generic/github/owner/repo/releases/download/v1/tool.tar.gz%3Fx",
+		"/generic/github/owner/repo/releases/download/v1/tool.tar.gz;x",
 		"/pypi/packages/ab/cd/ef/requests-2.31.0.tar.gz%3F/ab/cd/ef/foo-9.9.tar.gz",
 		"/maven/com/google/guava/guava/32.1.3-jre/guava-32.1.3-jre.jar%3F/org/evil/foo/9.9/foo-9.9.jar",
 		"/conda/conda-forge/linux-64/numpy-1.26.0-py312_0.conda%3F%2Ffoo-9.9-py_0.conda",
@@ -89,6 +92,53 @@ func TestProtocolHandlersRejectQueryInPath(t *testing.T) {
 	}
 	if n := transport.hits.Load(); n != 0 {
 		t.Errorf("upstream was contacted %d times", n)
+	}
+}
+
+// TestGenericForwardsEscapedReservedCharacters sends escaped reserved
+// characters through the mounted router. The generic handler forwards the
+// escaped path, so they reach the upstream as they were sent.
+func TestGenericForwardsEscapedReservedCharacters(t *testing.T) {
+	var requested atomic.Value
+	upstream := httptest.NewServer(http.HandlerFunc(func(_ http.ResponseWriter, r *http.Request) {
+		requested.Store(r.RequestURI)
+	}))
+	t.Cleanup(upstream.Close)
+
+	db, err := database.Create(t.TempDir() + "/test.db")
+	if err != nil {
+		t.Fatalf("creating database: %v", err)
+	}
+	t.Cleanup(func() { _ = db.Close() })
+	store, err := storage.OpenBucket(context.Background(), "file://"+t.TempDir())
+	if err != nil {
+		t.Fatalf("opening storage: %v", err)
+	}
+	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
+	t.Cleanup(func() { _ = fetcher.Close() })
+	proxy := handler.NewProxy(db, store, fetcher, fetch.NewResolver(), slog.New(slog.NewTextHandler(io.Discard, nil)))
+	proxy.HTTPClient = upstream.Client()
+
+	cfg := config.Default()
+	cfg.BaseURL = "http://proxy.example"
+	cfg.Upstream.Generic = map[string]string{"deps-dev": upstream.URL}
+	s := &Server{cfg: cfg}
+	r := chi.NewRouter()
+	s.mountProtocolHandlers(r, proxy)
+
+	for _, path := range []string{
+		"/v3alpha/systems/NPM/packages/%40types%2Fnode",
+		"/files/100%25",
+		"/files/x%3Fy=1",
+		"/files/x%23y",
+		"/files/x%3By",
+	} {
+		requested.Store("")
+		w := httptest.NewRecorder()
+		r.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/generic/deps-dev"+path, nil))
+		if got := requested.Load(); w.Code != http.StatusOK || got != path {
+			t.Errorf("GET %s: status = %d, upstream saw %q, want 200 and the same escaped path", path, w.Code, got)
+		}
 	}
 }
 

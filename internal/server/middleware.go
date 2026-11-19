@@ -157,10 +157,16 @@ func requestEcosystem(path string) string {
 // Tomcat and Jetty drop ";params" from a path segment, so 1.0;x/evil-1.0.jar
 // would be served as version 1.0 while the proxy checks 1.0;x. Composer
 // archives are exempt: their upstream URL comes from the package metadata,
-// and git branch versions such as dev-fix/#42 may contain '#' or ';'.
+// and git branch versions such as dev-fix/#42 may contain '#' or ';'. The
+// generic handler forwards the escaped path, so only a literal ';' is refused
+// there; an escaped '?', '#' or ';' reaches the upstream escaped.
 func rejectQueryInPath(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if strings.ContainsAny(r.URL.Path, "?#;") && !strings.HasPrefix(r.URL.Path, "/composer/files/") {
+		path := r.URL.Path
+		if escaped := r.URL.EscapedPath(); strings.HasPrefix(escaped, "/generic/") {
+			path = escaped
+		}
+		if strings.ContainsAny(path, "?#;") && !strings.HasPrefix(path, "/composer/files/") {
 			http.Error(w, "invalid path", http.StatusBadRequest)
 			return
 		}
