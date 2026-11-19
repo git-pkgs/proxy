@@ -90,8 +90,8 @@ github.com/aws/aws-sdk-go-v2/service/ssooidc v1.44.2 h1:OExYCSDAXEg4+rG8Wxfj2Il6
 github.com/aws/aws-sdk-go-v2/service/ssooidc v1.44.2/go.mod h1:2nWa56itI0DoGgOmelqv9V8JgIiGIHZbNlIU4oLPBgw=
 github.com/aws/aws-sdk-go-v2/service/sts v1.51.7 h1:jUQJqK8P6dQMPQtEO+kj1ujg09GZjT3tMMKZrrc9fEw=
 github.com/aws/aws-sdk-go-v2/service/sts v1.51.7/go.mod h1:fFf9S4hwMUZHydGnTC2EgP5c29mpkxaru9QQEBkZISo=
-github.com/aws/smithy-go v1.28.8 h1:aEmdAq7gVCoGCnvf1NnELlu3I6D/nhqrC321FyFiQkQ=
-github.com/aws/smithy-go v1.28.8/go.mod h1:YE2RhdIuDbA5E5bTdciG9KrW3+TiEONeUWCqxX9i1Fc=
+github.com/aws/smithy-go v1.28.9 h1:zkZ058OpNX0iGTK24b+ZUEQSMc11CBA6oO7xtKZfzkY=
+github.com/aws/smithy-go v1.28.9/go.mod h1:YE2RhdIuDbA5E5bTdciG9KrW3+TiEONeUWCqxX9i1Fc=
 github.com/beorn7/perks v1.0.1 h1:VlbKKnNfV8bJzeqoa4cOKqO6bYr3WgKZxO8Z16+hsOM=
 github.com/beorn7/perks v1.0.1/go.mod h1:G2ZrVWU2WbWT9wwq4/hrbKbnv/1ERSJQ0ibhJ6rlkpw=
 github.com/bmatcuk/doublestar v1.1.1/go.mod h1:UD6OnuiIn0yFxxA2le/rnRU1G4RaI4UvFv1sNto9p6w=
