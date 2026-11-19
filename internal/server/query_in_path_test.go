@@ -27,10 +27,10 @@ func (c *countingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 	return nil, errors.New("upstream contacted")
 }
 
-// TestProtocolHandlersRejectQueryInPath sends a path with an encoded '?' or
-// '#' to every mounted ecosystem. Without the guard, most of these fetch the
-// file before the '?' and cache it under the name after it.
-func TestProtocolHandlersRejectQueryInPath(t *testing.T) {
+// newProtocolRouter mounts every protocol handler, fetching upstreams through
+// client, with generic as the configured generic upstreams.
+func newProtocolRouter(t *testing.T, client *http.Client, generic map[string]string) chi.Router {
+	t.Helper()
 	db, err := database.Create(t.TempDir() + "/test.db")
 	if err != nil {
 		t.Fatalf("creating database: %v", err)
@@ -41,8 +41,6 @@ func TestProtocolHandlersRejectQueryInPath(t *testing.T) {
 		t.Fatalf("opening storage: %v", err)
 	}
 
-	transport := &countingTransport{}
-	client := &http.Client{Transport: transport}
 	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(client), fetch.WithMaxRetries(0))
 	t.Cleanup(func() { _ = fetcher.Close() })
 	proxy := handler.NewProxy(db, store, fetcher, fetch.NewResolver(), slog.New(slog.NewTextHandler(io.Discard, nil)))
@@ -50,10 +48,19 @@ func TestProtocolHandlersRejectQueryInPath(t *testing.T) {
 
 	cfg := config.Default()
 	cfg.BaseURL = "http://proxy.example"
-	cfg.Upstream.Generic = map[string]string{"github": "https://github.com"}
+	cfg.Upstream.Generic = generic
 	s := &Server{cfg: cfg}
 	r := chi.NewRouter()
 	s.mountProtocolHandlers(r, proxy)
+	return r
+}
+
+// TestProtocolHandlersRejectQueryInPath sends a path with an encoded '?' or
+// '#' to every mounted ecosystem. Without the guard, most of these fetch the
+// file before the '?' and cache it under the name after it.
+func TestProtocolHandlersRejectQueryInPath(t *testing.T) {
+	transport := &countingTransport{}
+	r := newProtocolRouter(t, &http.Client{Transport: transport}, map[string]string{"github": "https://github.com"})
 
 	for _, target := range []string{
 		"/apk/alpine/v3.22/main/x86_64/busybox-1.37.0-r12.apk%3F/foo-9.9-r0.apk",
@@ -104,27 +111,7 @@ func TestGenericForwardsEscapedReservedCharacters(t *testing.T) {
 		requested.Store(r.RequestURI)
 	}))
 	t.Cleanup(upstream.Close)
-
-	db, err := database.Create(t.TempDir() + "/test.db")
-	if err != nil {
-		t.Fatalf("creating database: %v", err)
-	}
-	t.Cleanup(func() { _ = db.Close() })
-	store, err := storage.OpenBucket(context.Background(), "file://"+t.TempDir())
-	if err != nil {
-		t.Fatalf("opening storage: %v", err)
-	}
-	fetcher := fetch.NewFetcher(fetch.WithHTTPClient(upstream.Client()), fetch.WithMaxRetries(0))
-	t.Cleanup(func() { _ = fetcher.Close() })
-	proxy := handler.NewProxy(db, store, fetcher, fetch.NewResolver(), slog.New(slog.NewTextHandler(io.Discard, nil)))
-	proxy.HTTPClient = upstream.Client()
-
-	cfg := config.Default()
-	cfg.BaseURL = "http://proxy.example"
-	cfg.Upstream.Generic = map[string]string{"deps-dev": upstream.URL}
-	s := &Server{cfg: cfg}
-	r := chi.NewRouter()
-	s.mountProtocolHandlers(r, proxy)
+	r := newProtocolRouter(t, upstream.Client(), map[string]string{"deps-dev": upstream.URL})
 
 	for _, path := range []string{
 		"/v3alpha/systems/NPM/packages/%40types%2Fnode",

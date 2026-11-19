@@ -162,9 +162,15 @@ func (h *GenericHandler) Routes() http.Handler {
 			h.handleHosted(w, r, rest)
 			return
 		}
-		// Upstream paths, patterns and cache keys use the escaped path, where
-		// an escaped slash is not a separator.
-		repository, rest, ok := strings.Cut(strings.TrimPrefix(r.URL.EscapedPath(), "/"), "/")
+		// Everything below uses the escaped path; see GenericHandler. Some
+		// upstreams drop ";params" from a path segment, so a literal ';'
+		// would fetch a different path from the one checked and cached.
+		escapedPath := r.URL.EscapedPath()
+		if strings.Contains(escapedPath, ";") {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		repository, rest, ok := strings.Cut(strings.TrimPrefix(escapedPath, "/"), "/")
 		upstreamURL, found := h.repositories[repository]
 		if !ok || rest == "" || !found || !h.pathAllowed(repository, rest) {
 			http.NotFound(w, r)
@@ -193,6 +199,12 @@ const HostedGenericRepository = config.HostedGenericRepository
 // handleHosted serves a pushed file at {name}/{version}/{file}. Pushed files
 // never come from an upstream, so anything not pushed is a 404.
 func (h *GenericHandler) handleHosted(w http.ResponseWriter, r *http.Request, path string) {
+	// Hosted files are looked up by the decoded path, which takes none of
+	// these, as on the other protocol routes.
+	if strings.ContainsAny(path, "?#;") {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
 	segments := strings.Split(path, "/")
 	if len(segments) != hostedGenericPathSegments {
 		http.NotFound(w, r)
@@ -265,10 +277,11 @@ func matchArtifactPattern(pattern *regexp.Regexp, repository, path string) (gene
 	name := repository
 	if i := pattern.SubexpIndex("name"); i >= 0 && matches[i] != "" {
 		// A name may span segments, as in maven/maven-3.
-		var err error
-		if name, err = url.PathUnescape(matches[i]); err != nil {
+		unescaped, err := url.PathUnescape(matches[i])
+		if err != nil {
 			return genericArtifact{}, false
 		}
+		name = unescaped
 	}
 	version, versionOK := unescapeSegment(matches[pattern.SubexpIndex("version")])
 	filename, filenameOK := unescapeSegment(matches[pattern.SubexpIndex("file")])
