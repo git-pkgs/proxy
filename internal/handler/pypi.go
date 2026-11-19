@@ -506,11 +506,9 @@ func (h *PyPIHandler) versionInCooldown(r *http.Request, name, version string) (
 // version, which a wheel's filename may spell another way PEP 440 counts as
 // equal, such as 2.0.0.0 for 2.0.0.
 func releaseTime(times map[string]time.Time, version string) (time.Time, bool) {
-	if published, ok := times[version]; ok {
-		return published, true
-	}
 	// Old projects can have releases that compare equal, such as 1.0 and
-	// 1.0.0; the newest decides, so the lookup doesn't depend on map order.
+	// 1.0.0; the newest decides whichever spelling is asked for, and the
+	// lookup doesn't depend on map order.
 	canonical := pypi.CanonicalVersion(version)
 	var newest time.Time
 	found := false

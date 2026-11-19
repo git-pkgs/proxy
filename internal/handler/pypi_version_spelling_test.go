@@ -75,9 +75,14 @@ func TestPyPIReleaseTimeTakesTheNewestOfEqualReleases(t *testing.T) {
 	older, newer := time.Now().Add(-48*time.Hour), time.Now().Add(-time.Hour)
 	times := map[string]time.Time{"1.0": older, "1.0.0": newer, "2.0": {}}
 	for range 20 {
-		if got, ok := releaseTime(times, "1.0.0.0"); !ok || !got.Equal(newer) {
-			t.Fatalf("releaseTime = %v, %v; want %v", got, ok, newer)
+		for _, version := range []string{"1.0", "1.0.0", "1.0.0.0"} {
+			if got, ok := releaseTime(times, version); !ok || !got.Equal(newer) {
+				t.Fatalf("releaseTime(%q) = %v, %v; want %v", version, got, ok, newer)
+			}
 		}
+	}
+	if got, ok := releaseTime(times, "2.0"); !ok || !got.IsZero() {
+		t.Errorf("releaseTime(2.0) = %v, %v; want the zero time", got, ok)
 	}
 	if _, ok := releaseTime(times, "3.0"); ok {
 		t.Error("an unlisted version was found")
