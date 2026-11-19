@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"fmt"
 	"net/http"
 	"strings"
 
@@ -136,7 +137,12 @@ func (h *CRANHandler) handleBinaryDownload(w http.ResponseWriter, r *http.Reques
 		return
 	}
 
-	// Include platform and R version in stored version
+	// The stored version includes platform and R version, so the version
+	// itself is checked against the denylist here.
+	if h.proxy.versionDenied("cran", name, version) {
+		h.proxy.serveArtifactError(w, fmt.Errorf("%w: %s", ErrVersionDenied, canonicalVersionPURL("cran", name, version)), "failed to fetch package")
+		return
+	}
 	storageVersion := version + "_" + platform + "_" + rversion
 
 	h.proxy.Logger.Info("cran binary download",
