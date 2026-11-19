@@ -173,6 +173,33 @@ func TestTransportDoesNotSendCredentialedTokenToHostWithOtherCredentials(t *test
 	}
 }
 
+// TestTransportSendsCredentialedTokenToRegistryWithHeaderSpelledDifferently
+// checks that a registry whose credentials differ from the realm's only in
+// the case of the header name is still handed the realm's token.
+func TestTransportSendsCredentialedTokenToRegistryWithHeaderSpelledDifferently(t *testing.T) {
+	var issued atomic.Int32
+	realm := tokenService(t, &issued)
+	var received []string
+	registry := challengingRegistry(t, realm.URL, &received)
+
+	auth := func(rawURL string) (string, string) {
+		switch {
+		case strings.HasPrefix(rawURL, realm.URL):
+			return "Authorization", "Basic Y29ycDpwYXNz"
+		case strings.HasPrefix(rawURL, registry.URL):
+			return "authorization", "Basic Y29ycDpwYXNz"
+		}
+		return "", ""
+	}
+	client := &http.Client{Transport: NewTransport(http.DefaultTransport, auth)}
+	if status := get(t, client, registry.URL+"/v2/corp/private/blobs/sha256:abc"); status != http.StatusOK {
+		t.Fatalf("status = %d, want 200", status)
+	}
+	if got := received[len(received)-1]; got != "Bearer secret-token" {
+		t.Errorf("registry received %q, want the credentialed token", got)
+	}
+}
+
 // TestTransportRequestsPullScopeForRequestedRepository checks that the token
 // is requested for pull access to the repository in the request path, not
 // whatever scope the challenge names.

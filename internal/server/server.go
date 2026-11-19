@@ -556,6 +556,10 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 	genericHandler := handler.NewGenericHandler(proxy, s.cfg.Upstream.Generic, s.cfg.Upstream.GenericArtifacts).
 		WithPaths(s.cfg.Upstream.GenericPaths)
 
+	// The generic handler forwards the escaped path, so an escaped '?', '#'
+	// or ';' stays escaped upstream; it refuses what it can't forward itself.
+	r.With(sandboxUpstreamContent, rejectDotSegments).
+		Mount("/generic", http.StripPrefix("/generic", genericHandler.Routes()))
 	r = r.With(sandboxUpstreamContent, rejectQueryInPath, rejectDotSegments)
 	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))
 	r.Mount("/cargo", http.StripPrefix("/cargo", cargoHandler.Routes()))
@@ -583,7 +587,6 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 	r.Mount("/terraform", http.StripPrefix("/terraform", terraformHandler.Routes()))
 	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
 	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
-	r.Mount("/generic", http.StripPrefix("/generic", genericHandler.Routes()))
 	if s.git == nil {
 		return nil
 	}

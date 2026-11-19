@@ -182,6 +182,28 @@ func TestMissingRepositoryLeavesNothingBehind(t *testing.T) {
 	}
 }
 
+// TestLastUseKeepsAFirstCloneThatLandedSinceItLooked ends a use that found
+// no repository on disk after the first clone has moved into place, as a
+// client that hangs up during that clone can. The repository stays
+// tracked, so its size still counts toward MaxSize.
+func TestLastUseKeepsAFirstCloneThatLandedSinceItLooked(t *testing.T) {
+	upstream := newFakeUpstream(t)
+	upstream.newRepo("repo")
+	tc := newTestCache(t, upstream.server.URL, nil)
+
+	rp := tc.acquire("up/repo.git")
+	tc.clone(t, "repo")
+	waitFor(t, func() bool { return tc.usersOf("up/repo.git") == 1 })
+	tc.drop(rp, false)
+
+	if got := tc.repo("up/repo.git"); got != rp {
+		t.Fatal("forgot a cloned repository")
+	}
+	if rp.size.Load() == 0 {
+		t.Error("cloned repository counts as size 0")
+	}
+}
+
 func TestStaleCopyServedOnlyWithinStaleMaxAge(t *testing.T) {
 	upstream := newFakeUpstream(t)
 	upstream.newRepo("repo")

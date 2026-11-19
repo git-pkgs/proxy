@@ -475,12 +475,20 @@ upstream:
 ```
 
 Only configured upstreams are reachable, so this is not an open HTTP proxy.
+The path is sent to the upstream as the client escaped it, so an escaped slash
+stays inside its segment: `/generic/deps-dev/v3alpha/systems/NPM/packages/%40types%2Fnode`
+fetches `packages/%40types%2Fnode`, not `packages/@types/node`. Escaped and
+unescaped forms of a path are fetched and cached apart, but whether a path is
+allowed or an artifact, and which one, is decided on the unescaped path. A path with
+a literal `;`, or with escapes alongside a character that should have been
+escaped (such as `%3A|x`), answers 400, since it can't be forwarded as sent.
 `generic_paths` limits an upstream to the paths after `/generic/{name}/` that
 its patterns match; any other path answers 404. The patterns use the syntax of
 `upstream.git` `repos`: `path.Match`, where `*` does not cross a `/`, and a
-pattern ending in `/**` also matches every path nested below its prefix. A
-path containing `%`, `?`, `#` or a backslash is refused for an upstream with
-`generic_paths`. The patterns only check the path; the query string is passed
+pattern ending in `/**` also matches every path nested below its prefix. The
+patterns are matched against the unescaped path; a path containing an escaped
+slash, or a `%`, `?`, `#` or backslash once unescaped, is refused for an
+upstream with `generic_paths`. The patterns only check the path; the query string is passed
 on as it is, except for release assets and the built-in artifact paths below,
 which take none. An upstream without `generic_paths` serves every path.
 
@@ -494,7 +502,7 @@ Paths shaped like `{owner}/{repo}/releases/download/{tag}/{asset}` are
 version-pinned GitHub release assets: they are stored in the artifact cache
 and served from it without revalidation, including while the upstream is
 down. A release asset takes no query string; a request for one with a query,
-or with an escaped `?` or `#` in its path, answers 400.
+or with an escaped `?`, `#`, `;` or slash in its path, answers 400.
 
 Upstreams pointed at these hosts get version-pinned paths built in, whatever
 the upstream is named:
@@ -506,17 +514,18 @@ the upstream is named:
 | `https://dl.google.com/go` | `go{version}.{os}-{arch}.tar.gz`, `.zip` and their `.sha256` | the upstream name |
 
 Like release assets, these built-in paths take no query string; a request for
-one with a query answers 400, as does one with an escaped `?` or `#` in its
+one with a query answers 400, as does one with an escaped `?`, `#`, `;` or slash in its
 path. A path that a configured `generic_artifacts` pattern matches first keeps
 its query.
 
 Other upstreams can declare their own version-pinned paths in
 `generic_artifacts`. These are tried before any built-in ones, so a configured
 pattern that overlaps a built-in decides the package name. Each pattern is a regular expression that must match the
-whole path after `/generic/{name}/`, with `version` and `file` named groups
-(single path segments) and an optional `name` group for the package name,
-which otherwise is the upstream name. Matching downloads are cached like
-release assets and listed under the `generic` ecosystem:
+whole unescaped path after `/generic/{name}/`, with `version` and `file` named
+groups (single path segments) and an optional `name` group for the package
+name, which otherwise is the upstream name. Matching downloads are cached like
+release assets and listed under the `generic` ecosystem, and a match with an
+escaped `?`, `#`, `;` or slash in its path answers 400:
 
 ```yaml
 upstream:

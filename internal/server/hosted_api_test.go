@@ -480,6 +480,18 @@ func TestHostedGenericFiles(t *testing.T) {
 			t.Errorf("GET %s status = %d, want 404", path, rec.Code)
 		}
 	}
+	// Hosted files are looked up by the decoded path, which takes no query
+	// characters.
+	for _, path := range []string{
+		"/generic/hosted/tools/1.2.0/" + arm64 + "%3Fx",
+		"/generic/hosted/tools/1.2.0/" + arm64 + "%23x",
+		"/generic/hosted/tools/1.2.0/" + arm64 + "%3Bx",
+		"/generic/hosted/tools/1.2.0/" + arm64 + ";x",
+	} {
+		if rec := s.do(t, http.MethodGet, path, "", ""); rec.Code != http.StatusBadRequest {
+			t.Errorf("GET %s status = %d, want 400", path, rec.Code)
+		}
+	}
 	if *s.fetches != 0 || *s.upstreamRequests != 0 {
 		t.Errorf("hosted generic files went upstream: %d fetches, %d requests", *s.fetches, *s.upstreamRequests)
 	}
