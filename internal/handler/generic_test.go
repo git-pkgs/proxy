@@ -923,11 +923,29 @@ func TestGenericHandler_EscapedSpellingsOfAnArtifact(t *testing.T) {
 }
 
 // When the client's escaping is not valid as sent, Go re-escapes the decoded
-// path, which would turn an escaped slash into a separator upstream.
+// path, which drops the escapes the client sent: an escaped slash would become
+// a separator and %3A a ':'. A path that needs escaping but holds none loses
+// nothing, and is sent escaped.
 func TestGenericHandler_RefusesEscapingThatCannotBeForwarded(t *testing.T) {
-	h := NewGenericHandler(testProxy(), map[string]string{"deps": "https://deps.invalid"})
-	if w := serveGenericRequest(h, "/deps/v3alpha/systems/NPM/packages/%40types%2Fnode|x"); w.Code != http.StatusBadRequest {
-		t.Errorf("status = %d, want 400", w.Code)
+	var requested []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.RequestURI)
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, _, _, _ := setupTestProxy(t)
+	useRealFetcher(t, proxy, upstream)
+	h := NewGenericHandler(proxy, map[string]string{"deps": upstream.URL})
+
+	for _, path := range []string{"/packages/%40types%2Fnode|x", "/files/%3A|x", "/files/%61|x"} {
+		if w := serveGenericRequest(h, "/deps"+path); w.Code != http.StatusBadRequest {
+			t.Errorf("GET %s: status = %d, want 400", path, w.Code)
+		}
+	}
+	if w := serveGenericRequest(h, "/deps/files/a|x"); w.Code != http.StatusOK {
+		t.Errorf("GET /files/a|x: status = %d, want 200", w.Code)
+	}
+	if want := []string{"/files/a%7Cx"}; !slices.Equal(requested, want) {
+		t.Errorf("upstream saw %q, want %q", requested, want)
 	}
 }
 

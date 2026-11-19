@@ -164,11 +164,11 @@ func (h *GenericHandler) Routes() http.Handler {
 		// upstreams drop ";params" from a path segment, so a literal ';'
 		// would fetch a different path from the one checked and cached.
 		// EscapedPath re-escapes the decoded path when the client's escaping
-		// is not valid as sent, which would turn an escaped slash into a
-		// separator.
+		// is not valid as sent, such as %3A|x, which would drop the escapes
+		// the client sent (%3A becomes ':'). Without any, nothing is lost.
 		escapedPath := r.URL.EscapedPath()
 		if strings.Contains(escapedPath, ";") ||
-			(r.URL.RawPath != "" && strings.Count(r.URL.RawPath, "/") != strings.Count(escapedPath, "/")) {
+			(r.URL.RawPath != escapedPath && strings.Contains(r.URL.RawPath, "%")) {
 			http.Error(w, "invalid path", http.StatusBadRequest)
 			return
 		}
