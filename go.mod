@@ -7,7 +7,7 @@ require (
 	github.com/Masterminds/semver/v3 v3.5.0
 	github.com/aws/aws-sdk-go-v2 v1.48.0
 	github.com/aws/aws-sdk-go-v2/config v1.33.14
-	github.com/aws/aws-sdk-go-v2/service/ecr v1.67.3
+	github.com/aws/aws-sdk-go-v2/service/ecr v1.67.6
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.114.10
 	github.com/aws/smithy-go v1.28.9
 	github.com/git-pkgs/archives v0.11.0
