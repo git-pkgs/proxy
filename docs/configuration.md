@@ -1017,7 +1017,11 @@ repository offline. A repository not cached is refused at once (404), and a
 commit the cache lacks is reported missing by Git. The background checks skip
 offline upstreams, `proxy mirror` refuses their `pkg:git` PURLs, and a Git
 LFS batch is answered from the cached objects alone, with the others reported
-not found. Turning it on or off takes a restart.
+not found. `git.max_size` still evicts the repositories of an offline
+upstream like any others, also at startup after the limit is lowered, and an
+evicted one can't be cloned again until the upstream is back; leave enough
+room, or no limit, for a cache that has to last offline. Turning it on or off
+takes a restart.
 
 The proxy runs `git` 2.31 or newer, which must be installed (the Docker image includes it).
 The `git` processes never reach the network themselves: their fetches go
