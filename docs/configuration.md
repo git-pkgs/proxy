@@ -475,12 +475,16 @@ upstream:
 ```
 
 Only configured upstreams are reachable, so this is not an open HTTP proxy.
-`generic_paths` limits an upstream to the paths after `/generic/{name}/` that
+The path is sent to the upstream as the client escaped it, so an escaped slash
+stays inside its segment: `/generic/deps-dev/v3alpha/systems/NPM/packages/%40types%2Fnode`
+fetches `packages/%40types%2Fnode`, not `packages/@types/node`. Escaped and
+unescaped forms of a path are cached apart. `generic_paths` limits an upstream to the paths after `/generic/{name}/` that
 its patterns match; any other path answers 404. The patterns use the syntax of
 `upstream.git` `repos`: `path.Match`, where `*` does not cross a `/`, and a
-pattern ending in `/**` also matches every path nested below its prefix. A
-path containing `%`, `?`, `#` or a backslash is refused for an upstream with
-`generic_paths`. The patterns only check the path; the query string is passed
+pattern ending in `/**` also matches every path nested below its prefix. The
+patterns are matched against the unescaped path; a path containing an escaped
+slash, or a `%`, `?`, `#` or backslash once unescaped, is refused for an
+upstream with `generic_paths`. The patterns only check the path; the query string is passed
 on as it is, except for release assets and the built-in artifact paths below,
 which take none. An upstream without `generic_paths` serves every path.
 
@@ -513,8 +517,10 @@ its query.
 Other upstreams can declare their own version-pinned paths in
 `generic_artifacts`. These are tried before any built-in ones, so a configured
 pattern that overlaps a built-in decides the package name. Each pattern is a regular expression that must match the
-whole path after `/generic/{name}/`, with `version` and `file` named groups
-(single path segments) and an optional `name` group for the package name,
+whole path after `/generic/{name}/` as the client escaped it, with `version`
+and `file` named groups (single path segments; they are unescaped, and an
+escaped slash in either does not match) and an optional `name` group for the
+package name,
 which otherwise is the upstream name. Matching downloads are cached like
 release assets and listed under the `generic` ecosystem:
 

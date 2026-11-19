@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -53,6 +54,8 @@ var builtinGenericArtifacts = map[string][]string{
 // GenericHandler proxies plain HTTP downloads from configured upstream base
 // URLs. Each configured upstream is mounted at /generic/{name}/ and the
 // remaining request path (and query string) is appended to the upstream URL.
+// The path is sent as the client escaped it, so an escaped slash such as the
+// one in deps.dev's packages/%40types%2Fnode stays inside its segment.
 //
 // Only configured upstreams are reachable, so the proxy is not an open HTTP
 // proxy. The handler is the caching layer behind tools that download from
@@ -111,6 +114,22 @@ func (h *GenericHandler) WithPaths(paths map[string][]string) *GenericHandler {
 	return h
 }
 
+// pathAllowed checks an escaped path against the upstream's
+// upstream.generic_paths patterns, which are written unescaped. An escaped
+// slash is refused, since the segments the patterns matched would not be the
+// ones the upstream sees.
+func (h *GenericHandler) pathAllowed(repository, escapedPath string) bool {
+	patterns := h.paths[repository]
+	if len(patterns) == 0 {
+		return true
+	}
+	path, err := url.PathUnescape(escapedPath)
+	if err != nil || strings.Count(path, "/") != strings.Count(escapedPath, "/") {
+		return false
+	}
+	return config.GenericPathAllowed(patterns, path)
+}
+
 func (h *GenericHandler) addArtifactPatterns(into map[string][]*regexp.Regexp, name string, patterns []string) {
 	for _, pattern := range patterns {
 		re, err := config.CompileGenericArtifactPattern(pattern)
@@ -139,21 +158,23 @@ func (h *GenericHandler) Routes() http.Handler {
 			return
 		}
 
-		repository, rest, ok := strings.Cut(path, "/")
-		if repository == HostedGenericRepository && h.proxy.HostedEnabled {
+		if repository, rest, _ := strings.Cut(path, "/"); repository == HostedGenericRepository && h.proxy.HostedEnabled {
 			h.handleHosted(w, r, rest)
 			return
 		}
+		// Upstream paths, patterns and cache keys use the escaped path, where
+		// an escaped slash is not a separator.
+		repository, rest, ok := strings.Cut(strings.TrimPrefix(r.URL.EscapedPath(), "/"), "/")
 		upstreamURL, found := h.repositories[repository]
-		if !ok || rest == "" || !found || !config.GenericPathAllowed(h.paths[repository], rest) {
+		if !ok || rest == "" || !found || !h.pathAllowed(repository, rest) {
 			http.NotFound(w, r)
 			return
 		}
 
 		if artifact, ok := h.parseArtifact(repository, rest); ok {
-			if artifact.noQuery && (r.URL.RawQuery != "" || strings.ContainsAny(rest, "?#")) {
-				// Each distinct query would be fetched and stored again. An
-				// escaped ? or # in the path would reach the upstream as one.
+			if artifact.noQuery && (r.URL.RawQuery != "" || strings.ContainsAny(r.URL.Path, "?#")) {
+				// Each distinct query, or escaped ? or # standing in for one,
+				// would be fetched and stored again.
 				http.Error(w, "this download takes no query string", http.StatusBadRequest)
 				return
 			}
@@ -233,27 +254,38 @@ func (h *GenericHandler) parseArtifact(repository, path string) (genericArtifact
 	return genericArtifact{}, false
 }
 
-// matchArtifactPattern extracts the artifact identity from a path matched by
-// pattern. The version and file must be single, non-empty path segments; the
-// name defaults to the upstream name.
+// matchArtifactPattern extracts the artifact identity from an escaped path
+// matched by pattern. The version and file must be single, non-empty path
+// segments once unescaped; the name defaults to the upstream name.
 func matchArtifactPattern(pattern *regexp.Regexp, repository, path string) (genericArtifact, bool) {
 	matches := pattern.FindStringSubmatch(path)
 	if matches == nil {
 		return genericArtifact{}, false
 	}
-	artifact := genericArtifact{
-		name:     repository,
-		version:  matches[pattern.SubexpIndex("version")],
-		filename: matches[pattern.SubexpIndex("file")],
-	}
+	name := repository
 	if i := pattern.SubexpIndex("name"); i >= 0 && matches[i] != "" {
-		artifact.name = matches[i]
+		// A name may span segments, as in maven/maven-3.
+		var err error
+		if name, err = url.PathUnescape(matches[i]); err != nil {
+			return genericArtifact{}, false
+		}
 	}
-	if artifact.version == "" || artifact.filename == "" ||
-		strings.Contains(artifact.version, "/") || strings.Contains(artifact.filename, "/") {
+	version, versionOK := unescapeSegment(matches[pattern.SubexpIndex("version")])
+	filename, filenameOK := unescapeSegment(matches[pattern.SubexpIndex("file")])
+	if !versionOK || !filenameOK || version == "" || filename == "" {
 		return genericArtifact{}, false
 	}
-	return artifact, true
+	return genericArtifact{name: name, version: version, filename: filename}, true
+}
+
+// unescapeSegment unescapes one segment of an escaped path, reporting false
+// when it is not validly escaped or holds an escaped slash.
+func unescapeSegment(escaped string) (string, bool) {
+	segment, err := url.PathUnescape(escaped)
+	if err != nil || strings.Contains(segment, "/") {
+		return "", false
+	}
+	return segment, true
 }
 
 // githubReleaseAsset is the identity of a version-pinned release download.
@@ -264,19 +296,22 @@ type githubReleaseAsset struct {
 	filename string
 }
 
-// parseGitHubReleaseAsset extracts the release identity from a path shaped
-// like {owner}/{repo}/releases/download/{tag}/{asset}.
+// parseGitHubReleaseAsset extracts the release identity from an escaped path
+// shaped like {owner}/{repo}/releases/download/{tag}/{asset}. No part may hold
+// an escaped slash.
 func parseGitHubReleaseAsset(path string) (githubReleaseAsset, bool) {
 	matches := githubReleaseAssetPattern.FindStringSubmatch(path)
 	if len(matches) != githubReleaseAssetMatchCount {
 		return githubReleaseAsset{}, false
 	}
-	return githubReleaseAsset{
-		owner:    matches[1],
-		repo:     matches[2],
-		tag:      matches[3],
-		filename: matches[4],
-	}, true
+	owner, ownerOK := unescapeSegment(matches[1])
+	repo, repoOK := unescapeSegment(matches[2])
+	tag, tagOK := unescapeSegment(matches[3])
+	filename, filenameOK := unescapeSegment(matches[4])
+	if !ownerOK || !repoOK || !tagOK || !filenameOK {
+		return githubReleaseAsset{}, false
+	}
+	return githubReleaseAsset{owner: owner, repo: repo, tag: tag, filename: filename}, true
 }
 
 // handleArtifact fetches and caches a version-pinned download in the artifact

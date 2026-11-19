@@ -63,6 +63,14 @@ func TestParseGitHubReleaseAsset(t *testing.T) {
 		{"jqlang/jq/releases/download/jq-1.7.1", githubReleaseAsset{}, false},
 		{"jqlang/jq/releases/download/jq-1.7.1/dir/asset", githubReleaseAsset{}, false},
 		{"", githubReleaseAsset{}, false},
+		// Parts are unescaped, and an escaped slash is not a separator.
+		{
+			"jqlang/jq/releases/download/v1.0%2Bbuild/jq%20linux",
+			githubReleaseAsset{owner: "jqlang", repo: "jq", tag: "v1.0+build", filename: "jq linux"},
+			true,
+		},
+		{"jqlang/jq/releases/download/jq-1.7.1/dir%2Fasset", githubReleaseAsset{}, false},
+		{"jqlang/jq/releases/download/jq-1.7.1/bad%zz", githubReleaseAsset{}, false},
 	}
 
 	for _, tt := range tests {
@@ -112,6 +120,14 @@ func TestMatchArtifactPattern(t *testing.T) {
 		{"directory listing", named, "dist/maven/maven-3/3.9.9/binaries/", genericArtifact{}, false},
 		// A file group spanning segments would nest storage paths.
 		{"file with slash", unnamed, "dist/v20.15.0/win-x64/node.exe", genericArtifact{}, false},
+		{"file with escaped slash", named, "dist/maven/maven-3/3.9.9/binaries/a%2Fb.tar.gz", genericArtifact{}, false},
+		{
+			"escaped parts",
+			named,
+			"dist/maven/maven-3/3.9.9%2Bbuild/binaries/maven%20100%25.tar.gz",
+			genericArtifact{name: "maven", version: "3.9.9+build", filename: "maven 100%.tar.gz"},
+			true,
+		},
 	}
 
 	for _, tt := range tests {
@@ -794,6 +810,7 @@ func TestGenericHandler_ServesOnlyConfiguredPaths(t *testing.T) {
 		"/github-api/repos/jqlang/jq/releases/tags/jq-1.7.1",
 		"/github-api/rate_limit",
 		"/open/user/repos",
+		"/github-api/repos/acme/tool/releases/tags/My%20App%20%C3%A9",
 	} {
 		if w := serveGenericRequest(h, target); w.Code != http.StatusOK {
 			t.Errorf("GET %s: status = %d, want 200: %s", target, w.Code, w.Body.String())
@@ -807,13 +824,66 @@ func TestGenericHandler_ServesOnlyConfiguredPaths(t *testing.T) {
 		"/github-api/repos/jqlang/jq/releases",
 		"/github-api/repos/jqlang/jq%3F/releases/x",
 		"/github-api/repos/jqlang/jq/releases/%2575ser",
+		// Matched unescaped, this would be repos/acme/x/releases/y.
+		"/github-api/repos/acme%2Fx/releases/y",
 		"/github-api/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64",
 	} {
 		if w := serveGenericRequest(h, target); w.Code != http.StatusNotFound {
 			t.Errorf("GET %s: status = %d, want 404", target, w.Code)
 		}
 	}
+	if want := "/repos/acme/tool/releases/tags/My%20App%20%C3%A9"; served != 4 || requested[3] != want {
+		t.Errorf("upstream saw %v, want the allowed escaped path %q last", requested, want)
+	}
 	if len(requested) != served {
 		t.Errorf("upstream saw %v for paths outside generic_paths", requested[served:])
+	}
+}
+
+// The upstream must receive the path exactly as the client escaped it: an
+// escaped slash, percent sign or reserved character is part of its segment,
+// not a separator, a query or a fragment. Escaped and literal forms are
+// different upstream resources and are cached apart.
+func TestGenericHandler_ForwardsTheEscapedPath(t *testing.T) {
+	var requested []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.RequestURI)
+		_, _ = io.WriteString(w, "from upstream "+r.RequestURI)
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, _, store, _ := setupTestProxy(t)
+	store.seekable = true
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	useRealFetcher(t, proxy, upstream)
+	h := NewGenericHandler(proxy, map[string]string{"deps": upstream.URL})
+
+	for _, path := range []string{
+		"/v3alpha/systems/NPM/packages/%40types%2Fnode",
+		"/v3alpha/systems/NPM/packages/@types/node",
+		"/v3alpha/systems/NPM/packages/a%2Fb/versions/1.0.0",
+		"/v3alpha/systems/NPM/packages/a/b/versions/1.0.0",
+		"/files/100%25",
+		"/files/%252F",
+		"/files/x%3Fy=1",
+		"/files/x%23y",
+		"/files/%3B%2C%3D%26%2B%24%3A%40%5B%5D%21",
+		// A release asset goes through the artifact cache.
+		"/o/r/releases/download/v1.0%2Bbuild/tool%20100%25.tgz",
+		// An escaped slash in the file is not a release asset.
+		"/o/r/releases/download/v1/dir%2Ftool.tgz",
+	} {
+		requested = nil
+		// Twice: the second response comes from the cache entry for this
+		// exact escaped path.
+		for range 2 {
+			w := serveGenericRequest(h, "/deps"+path)
+			if want := "from upstream " + path; w.Code != http.StatusOK || w.Body.String() != want {
+				t.Errorf("GET %s: status = %d, body = %q, want 200 %q", path, w.Code, w.Body.String(), want)
+			}
+		}
+		if len(requested) != 1 || requested[0] != path {
+			t.Errorf("GET %s: upstream saw %q, want one request for the same escaped path", path, requested)
+		}
 	}
 }
