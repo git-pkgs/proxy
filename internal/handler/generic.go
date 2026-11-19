@@ -172,8 +172,11 @@ func (h *GenericHandler) Routes() http.Handler {
 			http.Error(w, "invalid path", http.StatusBadRequest)
 			return
 		}
-		repository, rest, ok := strings.Cut(strings.TrimPrefix(escapedPath, "/"), "/")
+		escapedRepository, rest, ok := strings.Cut(strings.TrimPrefix(escapedPath, "/"), "/")
+		// Upstream names are configured unescaped, such as "my files".
+		repository, err := url.PathUnescape(escapedRepository)
 		upstreamURL, found := h.repositories[repository]
+		found = found && err == nil
 		decoded, err := url.PathUnescape(rest)
 		sameSegments := err == nil && strings.Count(decoded, "/") == strings.Count(rest, "/")
 		if !ok || rest == "" || !found || !h.pathAllowed(repository, decoded, sameSegments) {

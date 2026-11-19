@@ -930,3 +930,25 @@ func TestGenericHandler_RefusesEscapingThatCannotBeForwarded(t *testing.T) {
 		t.Errorf("status = %d, want 400", w.Code)
 	}
 }
+
+// Upstream names are configured unescaped, and a client escapes the ones that
+// need it.
+func TestGenericHandler_UpstreamNamesAreUnescaped(t *testing.T) {
+	var requested []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.RequestURI)
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, _, _, _ := setupTestProxy(t)
+	useRealFetcher(t, proxy, upstream)
+	h := NewGenericHandler(proxy, map[string]string{"my files": upstream.URL, "münchen": upstream.URL})
+
+	for _, target := range []string{"/my%20files/a%2Fb.txt", "/m%C3%BCnchen/a%2Fb.txt"} {
+		if w := serveGenericRequest(h, target); w.Code != http.StatusOK {
+			t.Errorf("GET %s: status = %d, want 200", target, w.Code)
+		}
+	}
+	if want := []string{"/a%2Fb.txt", "/a%2Fb.txt"}; !slices.Equal(requested, want) {
+		t.Errorf("upstream saw %q, want %q", requested, want)
+	}
+}
