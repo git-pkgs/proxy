@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"fmt"
 	"net/http"
+	"net/url"
 	"regexp"
 	"strings"
 
@@ -53,6 +54,10 @@ var builtinGenericArtifacts = map[string][]string{
 // GenericHandler proxies plain HTTP downloads from configured upstream base
 // URLs. Each configured upstream is mounted at /generic/{name}/ and the
 // remaining request path (and query string) is appended to the upstream URL.
+// The path is sent as the client escaped it, so an escaped slash such as the
+// one in deps.dev's packages/%40types%2Fnode stays inside its segment. What a
+// request is (allowed, an artifact, which artifact) is decided on the
+// unescaped path, so other spellings of a path are checked as the same one.
 //
 // Only configured upstreams are reachable, so the proxy is not an open HTTP
 // proxy. The handler is the caching layer behind tools that download from
@@ -111,6 +116,18 @@ func (h *GenericHandler) WithPaths(paths map[string][]string) *GenericHandler {
 	return h
 }
 
+// pathAllowed checks an unescaped path against the upstream's
+// upstream.generic_paths patterns. A path whose unescaping turned an escaped
+// slash into a separator is refused, since the segments the patterns matched
+// would not be the ones the upstream sees.
+func (h *GenericHandler) pathAllowed(repository, path string, sameSegments bool) bool {
+	patterns := h.paths[repository]
+	if len(patterns) == 0 {
+		return true
+	}
+	return sameSegments && config.GenericPathAllowed(patterns, path)
+}
+
 func (h *GenericHandler) addArtifactPatterns(into map[string][]*regexp.Regexp, name string, patterns []string) {
 	for _, pattern := range patterns {
 		re, err := config.CompileGenericArtifactPattern(pattern)
@@ -139,21 +156,45 @@ func (h *GenericHandler) Routes() http.Handler {
 			return
 		}
 
-		repository, rest, ok := strings.Cut(path, "/")
-		if repository == HostedGenericRepository && h.proxy.HostedEnabled {
+		if repository, rest, _ := strings.Cut(path, "/"); repository == HostedGenericRepository && h.proxy.HostedEnabled {
 			h.handleHosted(w, r, rest)
 			return
 		}
+		// The upstream is sent the escaped path; see GenericHandler. Some
+		// upstreams drop ";params" from a path segment, so a literal ';'
+		// would fetch a different path from the one checked and cached.
+		// EscapedPath re-escapes the decoded path when the client's escaping
+		// is not valid as sent, such as %3A|x, which would drop the escapes
+		// the client sent (%3A becomes ':'). Without any, nothing is lost.
+		escapedPath := r.URL.EscapedPath()
+		if strings.Contains(escapedPath, ";") ||
+			(r.URL.RawPath != escapedPath && strings.Contains(r.URL.RawPath, "%")) {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		escapedRepository, rest, ok := strings.Cut(strings.TrimPrefix(escapedPath, "/"), "/")
+		// Upstream names are configured unescaped, such as "my files".
+		repository, err := url.PathUnescape(escapedRepository)
 		upstreamURL, found := h.repositories[repository]
-		if !ok || rest == "" || !found || !config.GenericPathAllowed(h.paths[repository], rest) {
+		found = found && err == nil
+		decoded, err := url.PathUnescape(rest)
+		sameSegments := err == nil && strings.Count(decoded, "/") == strings.Count(rest, "/")
+		if !ok || rest == "" || !found || !h.pathAllowed(repository, decoded, sameSegments) {
 			http.NotFound(w, r)
 			return
 		}
 
-		if artifact, ok := h.parseArtifact(repository, rest); ok {
-			if artifact.noQuery && (r.URL.RawQuery != "" || strings.ContainsAny(rest, "?#")) {
-				// Each distinct query would be fetched and stored again. An
-				// escaped ? or # in the path would reach the upstream as one.
+		if artifact, ok := h.parseArtifact(repository, decoded); ok {
+			if !sameSegments || strings.ContainsAny(decoded, "?#;") {
+				// An upstream that unescapes an escaped slash would serve this
+				// artifact past the checks on it. An escaped '?' or '#' would
+				// be fetched and stored once per spelling, and an upstream may
+				// drop an escaped ";params" and serve another version.
+				http.Error(w, "invalid path", http.StatusBadRequest)
+				return
+			}
+			if artifact.noQuery && r.URL.RawQuery != "" {
+				// Each distinct query would be fetched and stored again.
 				http.Error(w, "this download takes no query string", http.StatusBadRequest)
 				return
 			}
@@ -172,6 +213,12 @@ const HostedGenericRepository = config.HostedGenericRepository
 // handleHosted serves a pushed file at {name}/{version}/{file}. Pushed files
 // never come from an upstream, so anything not pushed is a 404.
 func (h *GenericHandler) handleHosted(w http.ResponseWriter, r *http.Request, path string) {
+	// Hosted files are looked up by the decoded path, which takes none of
+	// these, as on the other protocol routes.
+	if strings.ContainsAny(path, "?#;") {
+		http.Error(w, "invalid path", http.StatusBadRequest)
+		return
+	}
 	segments := strings.Split(path, "/")
 	if len(segments) != hostedGenericPathSegments {
 		http.NotFound(w, r)
@@ -280,8 +327,10 @@ func parseGitHubReleaseAsset(path string) (githubReleaseAsset, bool) {
 }
 
 // handleArtifact fetches and caches a version-pinned download in the artifact
-// cache. The upstream, full path and query identify the cached bytes, since
-// distinct downloads can have the same captured name, version and filename.
+// cache. The upstream, full path as sent upstream and query identify the
+// cached bytes, since distinct downloads can have the same captured name,
+// version and filename, and an upstream may tell an escaped character from
+// a literal one.
 func (h *GenericHandler) handleArtifact(w http.ResponseWriter, r *http.Request, repository, upstreamURL, path string, artifact genericArtifact) {
 	downloadURL := upstreamURL + "/" + path
 	if r.URL.RawQuery != "" {

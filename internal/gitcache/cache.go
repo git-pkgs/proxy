@@ -485,11 +485,16 @@ func (c *Cache) release(rp *repo) {
 }
 
 // drop ends a use of the repository without recording it as used. exists
-// is whether the repository is cloned.
+// is whether the repository was cloned when the caller looked, before c.mu.
 func (c *Cache) drop(rp *repo, exists bool) {
 	c.mu.Lock()
 	rp.users--
 	idle := rp.users == 0 && c.repos[rp.key] == rp
+	if idle && !exists {
+		// A first clone may have moved into place since; none can once the
+		// last use has ended.
+		exists = rp.exists()
+	}
 	// Forget repositories that never got cloned, such as ones missing upstream.
 	if idle && !exists {
 		delete(c.repos, rp.key)

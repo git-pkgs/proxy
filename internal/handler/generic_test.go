@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -794,6 +795,7 @@ func TestGenericHandler_ServesOnlyConfiguredPaths(t *testing.T) {
 		"/github-api/repos/jqlang/jq/releases/tags/jq-1.7.1",
 		"/github-api/rate_limit",
 		"/open/user/repos",
+		"/github-api/repos/acme/tool/releases/tags/My%20App%20%C3%A9",
 	} {
 		if w := serveGenericRequest(h, target); w.Code != http.StatusOK {
 			t.Errorf("GET %s: status = %d, want 200: %s", target, w.Code, w.Body.String())
@@ -807,13 +809,164 @@ func TestGenericHandler_ServesOnlyConfiguredPaths(t *testing.T) {
 		"/github-api/repos/jqlang/jq/releases",
 		"/github-api/repos/jqlang/jq%3F/releases/x",
 		"/github-api/repos/jqlang/jq/releases/%2575ser",
+		// Matched unescaped, this would be repos/acme/x/releases/y.
+		"/github-api/repos/acme%2Fx/releases/y",
 		"/github-api/jqlang/jq/releases/download/jq-1.7.1/jq-linux-amd64",
 	} {
 		if w := serveGenericRequest(h, target); w.Code != http.StatusNotFound {
 			t.Errorf("GET %s: status = %d, want 404", target, w.Code)
 		}
 	}
+	if want := "/repos/acme/tool/releases/tags/My%20App%20%C3%A9"; served != 4 || requested[3] != want {
+		t.Errorf("upstream saw %v, want the allowed escaped path %q last", requested, want)
+	}
 	if len(requested) != served {
 		t.Errorf("upstream saw %v for paths outside generic_paths", requested[served:])
+	}
+}
+
+// The upstream must receive the path exactly as the client escaped it: an
+// escaped slash, percent sign or reserved character is part of its segment,
+// not a separator, a query or a fragment. Escaped and literal forms are
+// different upstream resources and are cached apart.
+func TestGenericHandler_ForwardsTheEscapedPath(t *testing.T) {
+	var requested []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.RequestURI)
+		_, _ = io.WriteString(w, "from upstream "+r.RequestURI)
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, _, store, _ := setupTestProxy(t)
+	store.seekable = true
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	useRealFetcher(t, proxy, upstream)
+	h := NewGenericHandler(proxy, map[string]string{"deps": upstream.URL})
+
+	for _, path := range []string{
+		"/v3alpha/systems/NPM/packages/%40types%2Fnode",
+		"/v3alpha/systems/NPM/packages/@types/node",
+		"/v3alpha/systems/NPM/packages/a%2Fb/versions/1.0.0",
+		"/v3alpha/systems/NPM/packages/a/b/versions/1.0.0",
+		"/files/100%25",
+		"/files/%252F",
+		"/files/x%3Fy=1",
+		"/files/x%23y",
+		"/files/%3B%2C%3D%26%2B%24%3A%40%5B%5D%21",
+		// A release asset goes through the artifact cache.
+		"/o/r/releases/download/v1.0%2Bbuild/tool%20100%25.tgz",
+		// Unescaped, this is not a release asset either.
+		"/o/r/releases/download/v1/dir%2Ftool.tgz",
+	} {
+		requested = nil
+		// Twice: the second response comes from the cache entry for this
+		// exact escaped path.
+		for range 2 {
+			w := serveGenericRequest(h, "/deps"+path)
+			if want := "from upstream " + path; w.Code != http.StatusOK || w.Body.String() != want {
+				t.Errorf("GET %s: status = %d, body = %q, want 200 %q", path, w.Code, w.Body.String(), want)
+			}
+		}
+		if len(requested) != 1 || requested[0] != path {
+			t.Errorf("GET %s: upstream saw %q, want one request for the same escaped path", path, requested)
+		}
+	}
+}
+
+// Whether a path is an artifact, and which one, is decided on the unescaped
+// path, so another spelling of a denied release is denied too. A path that
+// only unescapes to an artifact, or whose version could be cut short at a
+// ';', is refused rather than served past the checks.
+func TestGenericHandler_EscapedSpellingsOfAnArtifact(t *testing.T) {
+	var requested []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.RequestURI)
+		_, _ = io.WriteString(w, "tool bytes")
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, _, store, _ := setupTestProxy(t)
+	store.seekable = true
+	useRealFetcher(t, proxy, upstream)
+	setTestDenylist(t, proxy, "pkg:generic/o%2Fr@v1")
+	h := NewGenericHandler(proxy, map[string]string{"github": upstream.URL})
+
+	for path, want := range map[string]int{
+		"/o/r/releases/download/v1/tool.tgz":       http.StatusForbidden,
+		"/o/r/%72eleases/download/v1/tool.tgz":     http.StatusForbidden,
+		"/o/r/releases/download/%76%31/tool.tgz":   http.StatusForbidden,
+		"/o%2Fr/releases/download/v1/tool.tgz":     http.StatusBadRequest,
+		"/o/r/releases/download/v1%3Bx/tool.tgz":   http.StatusBadRequest,
+		"/o/r/releases/download/v1/tool.tgz%3Fx=1": http.StatusBadRequest,
+		"/o/r/releases/download/v1/tool.tgz;x":     http.StatusBadRequest,
+	} {
+		if w := serveGenericRequest(h, "/github"+path); w.Code != want {
+			t.Errorf("GET %s: status = %d, want %d", path, w.Code, want)
+		}
+	}
+	if len(requested) != 0 {
+		t.Fatalf("upstream saw %q for denied or refused paths", requested)
+	}
+
+	// An upstream may tell an escaped character from a literal one, so each
+	// spelling is fetched and cached as it was sent.
+	spellings := []string{"/o/r/releases/download/v2/a%3Ab.tgz", "/o/r/releases/download/v2/a:b.tgz"}
+	for range 2 {
+		for _, path := range spellings {
+			if w := serveGenericRequest(h, "/github"+path); w.Code != http.StatusOK {
+				t.Errorf("GET %s: status = %d, want 200", path, w.Code)
+			}
+		}
+	}
+	if want := spellings; !slices.Equal(requested, want) {
+		t.Errorf("upstream saw %q, want %q", requested, want)
+	}
+}
+
+// When the client's escaping is not valid as sent, Go re-escapes the decoded
+// path, which drops the escapes the client sent: an escaped slash would become
+// a separator and %3A a ':'. A path that needs escaping but holds none loses
+// nothing, and is sent escaped.
+func TestGenericHandler_RefusesEscapingThatCannotBeForwarded(t *testing.T) {
+	var requested []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.RequestURI)
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, _, _, _ := setupTestProxy(t)
+	useRealFetcher(t, proxy, upstream)
+	h := NewGenericHandler(proxy, map[string]string{"deps": upstream.URL})
+
+	for _, path := range []string{"/packages/%40types%2Fnode|x", "/files/%3A|x", "/files/%61|x"} {
+		if w := serveGenericRequest(h, "/deps"+path); w.Code != http.StatusBadRequest {
+			t.Errorf("GET %s: status = %d, want 400", path, w.Code)
+		}
+	}
+	if w := serveGenericRequest(h, "/deps/files/a|x"); w.Code != http.StatusOK {
+		t.Errorf("GET /files/a|x: status = %d, want 200", w.Code)
+	}
+	if want := []string{"/files/a%7Cx"}; !slices.Equal(requested, want) {
+		t.Errorf("upstream saw %q, want %q", requested, want)
+	}
+}
+
+// Upstream names are configured unescaped, and a client escapes the ones that
+// need it.
+func TestGenericHandler_UpstreamNamesAreUnescaped(t *testing.T) {
+	var requested []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.RequestURI)
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, _, _, _ := setupTestProxy(t)
+	useRealFetcher(t, proxy, upstream)
+	h := NewGenericHandler(proxy, map[string]string{"my files": upstream.URL, "münchen": upstream.URL})
+
+	for _, target := range []string{"/my%20files/a%2Fb.txt", "/m%C3%BCnchen/a%2Fb.txt"} {
+		if w := serveGenericRequest(h, target); w.Code != http.StatusOK {
+			t.Errorf("GET %s: status = %d, want 200", target, w.Code)
+		}
+	}
+	if want := []string{"/a%2Fb.txt", "/a%2Fb.txt"}; !slices.Equal(requested, want) {
+		t.Errorf("upstream saw %q, want %q", requested, want)
 	}
 }
