@@ -6,6 +6,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"regexp"
+	"slices"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -63,14 +64,6 @@ func TestParseGitHubReleaseAsset(t *testing.T) {
 		{"jqlang/jq/releases/download/jq-1.7.1", githubReleaseAsset{}, false},
 		{"jqlang/jq/releases/download/jq-1.7.1/dir/asset", githubReleaseAsset{}, false},
 		{"", githubReleaseAsset{}, false},
-		// Parts are unescaped, and an escaped slash is not a separator.
-		{
-			"jqlang/jq/releases/download/v1.0%2Bbuild/jq%20linux",
-			githubReleaseAsset{owner: "jqlang", repo: "jq", tag: "v1.0+build", filename: "jq linux"},
-			true,
-		},
-		{"jqlang/jq/releases/download/jq-1.7.1/dir%2Fasset", githubReleaseAsset{}, false},
-		{"jqlang/jq/releases/download/jq-1.7.1/bad%zz", githubReleaseAsset{}, false},
 	}
 
 	for _, tt := range tests {
@@ -120,14 +113,6 @@ func TestMatchArtifactPattern(t *testing.T) {
 		{"directory listing", named, "dist/maven/maven-3/3.9.9/binaries/", genericArtifact{}, false},
 		// A file group spanning segments would nest storage paths.
 		{"file with slash", unnamed, "dist/v20.15.0/win-x64/node.exe", genericArtifact{}, false},
-		{"file with escaped slash", named, "dist/maven/maven-3/3.9.9/binaries/a%2Fb.tar.gz", genericArtifact{}, false},
-		{
-			"escaped parts",
-			named,
-			"dist/maven/maven-3/3.9.9%2Bbuild/binaries/maven%20100%25.tar.gz",
-			genericArtifact{name: "maven", version: "3.9.9+build", filename: "maven 100%.tar.gz"},
-			true,
-		},
 	}
 
 	for _, tt := range tests {
@@ -870,7 +855,7 @@ func TestGenericHandler_ForwardsTheEscapedPath(t *testing.T) {
 		"/files/%3B%2C%3D%26%2B%24%3A%40%5B%5D%21",
 		// A release asset goes through the artifact cache.
 		"/o/r/releases/download/v1.0%2Bbuild/tool%20100%25.tgz",
-		// An escaped slash in the file is not a release asset.
+		// Unescaped, this is not a release asset either.
 		"/o/r/releases/download/v1/dir%2Ftool.tgz",
 	} {
 		requested = nil
@@ -885,5 +870,60 @@ func TestGenericHandler_ForwardsTheEscapedPath(t *testing.T) {
 		if len(requested) != 1 || requested[0] != path {
 			t.Errorf("GET %s: upstream saw %q, want one request for the same escaped path", path, requested)
 		}
+	}
+}
+
+// Whether a path is an artifact, and which one, is decided on the unescaped
+// path, so another spelling of a denied release is denied too. A path that
+// only unescapes to an artifact, or whose version could be cut short at a
+// ';', is refused rather than served past the checks.
+func TestGenericHandler_EscapedSpellingsOfAnArtifact(t *testing.T) {
+	var requested []string
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requested = append(requested, r.RequestURI)
+		_, _ = io.WriteString(w, "tool bytes")
+	}))
+	t.Cleanup(upstream.Close)
+	proxy, _, store, _ := setupTestProxy(t)
+	store.seekable = true
+	useRealFetcher(t, proxy, upstream)
+	setTestDenylist(t, proxy, "pkg:generic/o%2Fr@v1")
+	h := NewGenericHandler(proxy, map[string]string{"github": upstream.URL})
+
+	for path, want := range map[string]int{
+		"/o/r/releases/download/v1/tool.tgz":       http.StatusForbidden,
+		"/o/r/%72eleases/download/v1/tool.tgz":     http.StatusForbidden,
+		"/o/r/releases/download/%76%31/tool.tgz":   http.StatusForbidden,
+		"/o%2Fr/releases/download/v1/tool.tgz":     http.StatusBadRequest,
+		"/o/r/releases/download/v1%3Bx/tool.tgz":   http.StatusBadRequest,
+		"/o/r/releases/download/v1/tool.tgz%3Fx=1": http.StatusBadRequest,
+		"/o/r/releases/download/v1/tool.tgz;x":     http.StatusBadRequest,
+	} {
+		if w := serveGenericRequest(h, "/github"+path); w.Code != want {
+			t.Errorf("GET %s: status = %d, want %d", path, w.Code, want)
+		}
+	}
+	if len(requested) != 0 {
+		t.Fatalf("upstream saw %q for denied or refused paths", requested)
+	}
+
+	// Spellings of one artifact share its cache entry; the first one is
+	// fetched as it was escaped.
+	for _, path := range []string{"/o/r/releases/download/v2/%74ool.tgz", "/o/r/releases/download/v2/tool.tgz"} {
+		if w := serveGenericRequest(h, "/github"+path); w.Code != http.StatusOK {
+			t.Errorf("GET %s: status = %d, want 200", path, w.Code)
+		}
+	}
+	if want := []string{"/o/r/releases/download/v2/%74ool.tgz"}; !slices.Equal(requested, want) {
+		t.Errorf("upstream saw %q, want %q", requested, want)
+	}
+}
+
+// When the client's escaping is not valid as sent, Go re-escapes the decoded
+// path, which would turn an escaped slash into a separator upstream.
+func TestGenericHandler_RefusesEscapingThatCannotBeForwarded(t *testing.T) {
+	h := NewGenericHandler(testProxy(), map[string]string{"deps": "https://deps.invalid"})
+	if w := serveGenericRequest(h, "/deps/v3alpha/systems/NPM/packages/%40types%2Fnode|x"); w.Code != http.StatusBadRequest {
+		t.Errorf("status = %d, want 400", w.Code)
 	}
 }

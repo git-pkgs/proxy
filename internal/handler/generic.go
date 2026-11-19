@@ -55,7 +55,9 @@ var builtinGenericArtifacts = map[string][]string{
 // URLs. Each configured upstream is mounted at /generic/{name}/ and the
 // remaining request path (and query string) is appended to the upstream URL.
 // The path is sent as the client escaped it, so an escaped slash such as the
-// one in deps.dev's packages/%40types%2Fnode stays inside its segment.
+// one in deps.dev's packages/%40types%2Fnode stays inside its segment. What a
+// request is (allowed, an artifact, which artifact) is decided on the
+// unescaped path, so other spellings of a path are the same request.
 //
 // Only configured upstreams are reachable, so the proxy is not an open HTTP
 // proxy. The handler is the caching layer behind tools that download from
@@ -114,20 +116,16 @@ func (h *GenericHandler) WithPaths(paths map[string][]string) *GenericHandler {
 	return h
 }
 
-// pathAllowed checks an escaped path against the upstream's
-// upstream.generic_paths patterns, which are written unescaped. An escaped
-// slash is refused, since the segments the patterns matched would not be the
-// ones the upstream sees.
-func (h *GenericHandler) pathAllowed(repository, escapedPath string) bool {
+// pathAllowed checks an unescaped path against the upstream's
+// upstream.generic_paths patterns. A path whose unescaping turned an escaped
+// slash into a separator is refused, since the segments the patterns matched
+// would not be the ones the upstream sees.
+func (h *GenericHandler) pathAllowed(repository, path string, sameSegments bool) bool {
 	patterns := h.paths[repository]
 	if len(patterns) == 0 {
 		return true
 	}
-	path, err := url.PathUnescape(escapedPath)
-	if err != nil || strings.Count(path, "/") != strings.Count(escapedPath, "/") {
-		return false
-	}
-	return config.GenericPathAllowed(patterns, path)
+	return sameSegments && config.GenericPathAllowed(patterns, path)
 }
 
 func (h *GenericHandler) addArtifactPatterns(into map[string][]*regexp.Regexp, name string, patterns []string) {
@@ -162,29 +160,42 @@ func (h *GenericHandler) Routes() http.Handler {
 			h.handleHosted(w, r, rest)
 			return
 		}
-		// Everything below uses the escaped path; see GenericHandler. Some
+		// The upstream is sent the escaped path; see GenericHandler. Some
 		// upstreams drop ";params" from a path segment, so a literal ';'
 		// would fetch a different path from the one checked and cached.
+		// EscapedPath re-escapes the decoded path when the client's escaping
+		// is not valid as sent, which would turn an escaped slash into a
+		// separator.
 		escapedPath := r.URL.EscapedPath()
-		if strings.Contains(escapedPath, ";") {
+		if strings.Contains(escapedPath, ";") ||
+			(r.URL.RawPath != "" && strings.Count(r.URL.RawPath, "/") != strings.Count(escapedPath, "/")) {
 			http.Error(w, "invalid path", http.StatusBadRequest)
 			return
 		}
 		repository, rest, ok := strings.Cut(strings.TrimPrefix(escapedPath, "/"), "/")
 		upstreamURL, found := h.repositories[repository]
-		if !ok || rest == "" || !found || !h.pathAllowed(repository, rest) {
+		decoded, err := url.PathUnescape(rest)
+		sameSegments := err == nil && strings.Count(decoded, "/") == strings.Count(rest, "/")
+		if !ok || rest == "" || !found || !h.pathAllowed(repository, decoded, sameSegments) {
 			http.NotFound(w, r)
 			return
 		}
 
-		if artifact, ok := h.parseArtifact(repository, rest); ok {
-			if artifact.noQuery && (r.URL.RawQuery != "" || strings.ContainsAny(r.URL.Path, "?#")) {
-				// Each distinct query, or escaped ? or # standing in for one,
-				// would be fetched and stored again.
+		if artifact, ok := h.parseArtifact(repository, decoded); ok {
+			if !sameSegments || strings.ContainsAny(decoded, "?#;") {
+				// An upstream that unescapes an escaped slash would serve this
+				// artifact past the checks on it. An escaped '?' or '#' would
+				// be fetched and stored once per spelling, and an upstream may
+				// drop an escaped ";params" and serve another version.
+				http.Error(w, "invalid path", http.StatusBadRequest)
+				return
+			}
+			if artifact.noQuery && r.URL.RawQuery != "" {
+				// Each distinct query would be fetched and stored again.
 				http.Error(w, "this download takes no query string", http.StatusBadRequest)
 				return
 			}
-			h.handleArtifact(w, r, repository, upstreamURL, rest, artifact)
+			h.handleArtifact(w, r, repository, upstreamURL, rest, decoded, artifact)
 			return
 		}
 
@@ -266,39 +277,27 @@ func (h *GenericHandler) parseArtifact(repository, path string) (genericArtifact
 	return genericArtifact{}, false
 }
 
-// matchArtifactPattern extracts the artifact identity from an escaped path
-// matched by pattern. The version and file must be single, non-empty path
-// segments once unescaped; the name defaults to the upstream name.
+// matchArtifactPattern extracts the artifact identity from a path matched by
+// pattern. The version and file must be single, non-empty path segments; the
+// name defaults to the upstream name.
 func matchArtifactPattern(pattern *regexp.Regexp, repository, path string) (genericArtifact, bool) {
 	matches := pattern.FindStringSubmatch(path)
 	if matches == nil {
 		return genericArtifact{}, false
 	}
-	name := repository
-	if i := pattern.SubexpIndex("name"); i >= 0 && matches[i] != "" {
-		// A name may span segments, as in maven/maven-3.
-		unescaped, err := url.PathUnescape(matches[i])
-		if err != nil {
-			return genericArtifact{}, false
-		}
-		name = unescaped
+	artifact := genericArtifact{
+		name:     repository,
+		version:  matches[pattern.SubexpIndex("version")],
+		filename: matches[pattern.SubexpIndex("file")],
 	}
-	version, versionOK := unescapeSegment(matches[pattern.SubexpIndex("version")])
-	filename, filenameOK := unescapeSegment(matches[pattern.SubexpIndex("file")])
-	if !versionOK || !filenameOK || version == "" || filename == "" {
+	if i := pattern.SubexpIndex("name"); i >= 0 && matches[i] != "" {
+		artifact.name = matches[i]
+	}
+	if artifact.version == "" || artifact.filename == "" ||
+		strings.Contains(artifact.version, "/") || strings.Contains(artifact.filename, "/") {
 		return genericArtifact{}, false
 	}
-	return genericArtifact{name: name, version: version, filename: filename}, true
-}
-
-// unescapeSegment unescapes one segment of an escaped path, reporting false
-// when it is not validly escaped or holds an escaped slash.
-func unescapeSegment(escaped string) (string, bool) {
-	segment, err := url.PathUnescape(escaped)
-	if err != nil || strings.Contains(segment, "/") {
-		return "", false
-	}
-	return segment, true
+	return artifact, true
 }
 
 // githubReleaseAsset is the identity of a version-pinned release download.
@@ -309,29 +308,27 @@ type githubReleaseAsset struct {
 	filename string
 }
 
-// parseGitHubReleaseAsset extracts the release identity from an escaped path
-// shaped like {owner}/{repo}/releases/download/{tag}/{asset}. No part may hold
-// an escaped slash.
+// parseGitHubReleaseAsset extracts the release identity from a path shaped
+// like {owner}/{repo}/releases/download/{tag}/{asset}.
 func parseGitHubReleaseAsset(path string) (githubReleaseAsset, bool) {
 	matches := githubReleaseAssetPattern.FindStringSubmatch(path)
 	if len(matches) != githubReleaseAssetMatchCount {
 		return githubReleaseAsset{}, false
 	}
-	owner, ownerOK := unescapeSegment(matches[1])
-	repo, repoOK := unescapeSegment(matches[2])
-	tag, tagOK := unescapeSegment(matches[3])
-	filename, filenameOK := unescapeSegment(matches[4])
-	if !ownerOK || !repoOK || !tagOK || !filenameOK {
-		return githubReleaseAsset{}, false
-	}
-	return githubReleaseAsset{owner: owner, repo: repo, tag: tag, filename: filename}, true
+	return githubReleaseAsset{
+		owner:    matches[1],
+		repo:     matches[2],
+		tag:      matches[3],
+		filename: matches[4],
+	}, true
 }
 
 // handleArtifact fetches and caches a version-pinned download in the artifact
-// cache. The upstream, full path and query identify the cached bytes, since
-// distinct downloads can have the same captured name, version and filename.
-func (h *GenericHandler) handleArtifact(w http.ResponseWriter, r *http.Request, repository, upstreamURL, path string, artifact genericArtifact) {
-	downloadURL := upstreamURL + "/" + path
+// cache. The upstream, full unescaped path and query identify the cached
+// bytes, since distinct downloads can have the same captured name, version and
+// filename, while spellings of one path are the same download.
+func (h *GenericHandler) handleArtifact(w http.ResponseWriter, r *http.Request, repository, upstreamURL, escapedPath, path string, artifact genericArtifact) {
+	downloadURL := upstreamURL + "/" + escapedPath
 	if r.URL.RawQuery != "" {
 		downloadURL += "?" + r.URL.RawQuery
 	}

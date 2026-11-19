@@ -29,7 +29,7 @@ func (c *countingTransport) RoundTrip(*http.Request) (*http.Response, error) {
 
 // newProtocolRouter mounts every protocol handler, fetching upstreams through
 // client, with generic as the configured generic upstreams.
-func newProtocolRouter(t *testing.T, client *http.Client, generic map[string]string) chi.Router {
+func newProtocolRouter(t *testing.T, client *http.Client, generic map[string]string) *chi.Mux {
 	t.Helper()
 	db, err := database.Create(t.TempDir() + "/test.db")
 	if err != nil {
