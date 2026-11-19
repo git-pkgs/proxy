@@ -57,7 +57,7 @@ var builtinGenericArtifacts = map[string][]string{
 // The path is sent as the client escaped it, so an escaped slash such as the
 // one in deps.dev's packages/%40types%2Fnode stays inside its segment. What a
 // request is (allowed, an artifact, which artifact) is decided on the
-// unescaped path, so other spellings of a path are the same request.
+// unescaped path, so other spellings of a path are checked as the same one.
 //
 // Only configured upstreams are reachable, so the proxy is not an open HTTP
 // proxy. The handler is the caching layer behind tools that download from
@@ -195,7 +195,7 @@ func (h *GenericHandler) Routes() http.Handler {
 				http.Error(w, "this download takes no query string", http.StatusBadRequest)
 				return
 			}
-			h.handleArtifact(w, r, repository, upstreamURL, rest, decoded, artifact)
+			h.handleArtifact(w, r, repository, upstreamURL, rest, artifact)
 			return
 		}
 
@@ -324,11 +324,12 @@ func parseGitHubReleaseAsset(path string) (githubReleaseAsset, bool) {
 }
 
 // handleArtifact fetches and caches a version-pinned download in the artifact
-// cache. The upstream, full unescaped path and query identify the cached
-// bytes, since distinct downloads can have the same captured name, version and
-// filename, while spellings of one path are the same download.
-func (h *GenericHandler) handleArtifact(w http.ResponseWriter, r *http.Request, repository, upstreamURL, escapedPath, path string, artifact genericArtifact) {
-	downloadURL := upstreamURL + "/" + escapedPath
+// cache. The upstream, full path as sent upstream and query identify the
+// cached bytes, since distinct downloads can have the same captured name,
+// version and filename, and an upstream may tell an escaped character from
+// a literal one.
+func (h *GenericHandler) handleArtifact(w http.ResponseWriter, r *http.Request, repository, upstreamURL, path string, artifact genericArtifact) {
+	downloadURL := upstreamURL + "/" + path
 	if r.URL.RawQuery != "" {
 		downloadURL += "?" + r.URL.RawQuery
 	}

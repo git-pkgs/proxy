@@ -907,14 +907,17 @@ func TestGenericHandler_EscapedSpellingsOfAnArtifact(t *testing.T) {
 		t.Fatalf("upstream saw %q for denied or refused paths", requested)
 	}
 
-	// Spellings of one artifact share its cache entry; the first one is
-	// fetched as it was escaped.
-	for _, path := range []string{"/o/r/releases/download/v2/%74ool.tgz", "/o/r/releases/download/v2/tool.tgz"} {
-		if w := serveGenericRequest(h, "/github"+path); w.Code != http.StatusOK {
-			t.Errorf("GET %s: status = %d, want 200", path, w.Code)
+	// An upstream may tell an escaped character from a literal one, so each
+	// spelling is fetched and cached as it was sent.
+	spellings := []string{"/o/r/releases/download/v2/a%3Ab.tgz", "/o/r/releases/download/v2/a:b.tgz"}
+	for range 2 {
+		for _, path := range spellings {
+			if w := serveGenericRequest(h, "/github"+path); w.Code != http.StatusOK {
+				t.Errorf("GET %s: status = %d, want 200", path, w.Code)
+			}
 		}
 	}
-	if want := []string{"/o/r/releases/download/v2/%74ool.tgz"}; !slices.Equal(requested, want) {
+	if want := spellings; !slices.Equal(requested, want) {
 		t.Errorf("upstream saw %q, want %q", requested, want)
 	}
 }

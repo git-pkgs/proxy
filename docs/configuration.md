@@ -478,8 +478,8 @@ Only configured upstreams are reachable, so this is not an open HTTP proxy.
 The path is sent to the upstream as the client escaped it, so an escaped slash
 stays inside its segment: `/generic/deps-dev/v3alpha/systems/NPM/packages/%40types%2Fnode`
 fetches `packages/%40types%2Fnode`, not `packages/@types/node`. Escaped and
-unescaped forms of a metadata path are cached apart; whether a path is allowed
-or an artifact, and which one, is decided on the unescaped path. A path with
+unescaped forms of a path are fetched and cached apart, but whether a path is
+allowed or an artifact, and which one, is decided on the unescaped path. A path with
 a literal `;`, or whose escaping is not valid as sent, answers 400.
 `generic_paths` limits an upstream to the paths after `/generic/{name}/` that
 its patterns match; any other path answers 404. The patterns use the syntax of
