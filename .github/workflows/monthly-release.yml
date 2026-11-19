@@ -1,16 +1,16 @@
-name: Monthly release
+name: Fortnightly release
 
-# Cuts a release on the 1st of each month when main is green and something
-# has merged since the last release: a patch release, or a new minor version
-# if a pull request labelled "breaking" was merged (a new major version from
-# 1.0 on). A breaking release is created as a draft, and its images and chart
+# Cuts a release on the 1st and 15th of each month when main is green and
+# something has merged since the last release: a patch release, or a new minor
+# version if a pull request labelled "breaking" was merged (a new major version
+# from 1.0 on). A breaking release is created as a draft, and its images and chart
 # are published only when someone publishes the draft, after writing the
 # upgrade notes. Scheduled runs only report what they would do until the
 # repository variable MONTHLY_RELEASE is "true".
 
 on:
   schedule:
-    - cron: "0 6 1 * *"
+    - cron: "0 6 1,15 * *"
   workflow_dispatch:
     inputs:
       dry_run:

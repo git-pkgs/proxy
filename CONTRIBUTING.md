@@ -222,11 +222,11 @@ Open an issue before a bigger change: anything that changes behaviour users rely
 
 ## Releases
 
-A release is cut on the 1st of each month by `.github/workflows/monthly-release.yml` when `main` is green and something has merged since the last tag. It is a patch release, or a new minor version if a pull request labelled `breaking` was merged since then (a new major version from 1.0 on), so label pull requests that change behaviour users rely on.
+A release is cut on the 1st and 15th of each month by `.github/workflows/monthly-release.yml` when `main` is green and something has merged since the last tag. It is a patch release, or a new minor version if a pull request labelled `breaking` was merged since then (a new major version from 1.0 on), so label pull requests that change behaviour users rely on.
 
-A patch release is published on its own. A breaking release is created as a draft, without images or a chart: write the upgrade notes in it and publish it, which starts `publish.yml` for the images and the chart. Until then the monthly run releases nothing.
+A patch release is published on its own. A breaking release is created as a draft, without images or a chart: write the upgrade notes in it and publish it, which starts `publish.yml` for the images and the chart. Until then the scheduled runs release nothing.
 
-Scheduled runs only report what they would release until the repository variable `MONTHLY_RELEASE` is set to `true`. The workflow can also be started by hand from the Actions tab, as a dry run by default.
+Scheduled runs only report what they would release until the repository variable `MONTHLY_RELEASE` is set to `true`. The workflow can also be started by hand from the Actions tab, as a dry run by default. To ship a security fix without waiting for the next scheduled run, start it by hand with the dry run unticked once the fix is merged and `main` is green.
 
 To release by hand, push a `v*` tag.
 
