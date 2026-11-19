@@ -101,6 +101,9 @@ type publishIndexEntry struct {
 	digest  string
 	index   any
 	expires time.Time
+	// refetched is set for an index built by a refetch for a version the
+	// document didn't list.
+	refetched bool
 }
 
 // publishIndex reuses parsed documents by digest, or for a minute without one.
@@ -123,19 +126,14 @@ func publishIndex[V any](p *Proxy, key string, load func() metadataResult, build
 			return index, nil
 		}
 		res := load()
-		if res.err == nil && res.digest != "" {
-			c.mu.Lock()
-			entry, ok := c.entries[key]
-			c.mu.Unlock()
-			if ok && entry.digest == res.digest {
-				return entry.index, nil
-			}
+		if index, ok := keptPublishIndex(p, key, res); ok {
+			return index, nil
 		}
 		index, err := build(res)
 		if err != nil {
 			return nil, err
 		}
-		storePublishIndex(p, key, res, index)
+		storePublishIndex(p, key, res, index, false)
 		return index, nil
 	})
 	if err != nil {
@@ -152,9 +150,37 @@ type listedTime struct {
 	ok        bool
 }
 
+// keptPublishIndex returns the index kept for key when it was built from the
+// bytes res read.
+func keptPublishIndex(p *Proxy, key string, res metadataResult) (any, bool) {
+	if res.err != nil || res.digest == "" {
+		return nil, false
+	}
+	c := &p.sharedProxy().publishIndexes
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	if !ok || entry.digest != res.digest {
+		return nil, false
+	}
+	return entry.index, true
+}
+
+// refetchedRecently reports whether the index kept for key was built by a
+// refetch and is within its keep, so a version it doesn't list was missing
+// upstream less than a minute ago.
+func refetchedRecently(p *Proxy, key string) bool {
+	c := &p.sharedProxy().publishIndexes
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	entry, ok := c.entries[key]
+	return ok && entry.refetched && p.clock().Before(entry.expires)
+}
+
 // storePublishIndex keeps index, built from res, as publishIndex's entry for
-// key, replacing one built from older bytes.
-func storePublishIndex(p *Proxy, key string, res metadataResult, index any) {
+// key, replacing one built from older bytes. refetched marks an index built
+// by a refetch.
+func storePublishIndex(p *Proxy, key string, res metadataResult, index any, refetched bool) {
 	c := &p.sharedProxy().publishIndexes
 	c.mu.Lock()
 	defer c.mu.Unlock()
@@ -167,7 +193,7 @@ func storePublishIndex(p *Proxy, key string, res metadataResult, index any) {
 			break
 		}
 	}
-	entry := publishIndexEntry{digest: res.digest, index: index}
+	entry := publishIndexEntry{digest: res.digest, index: index, refetched: refetched}
 	if res.digest == "" || !p.CacheMetadata {
 		entry.expires = p.clock().Add(time.Minute)
 	}

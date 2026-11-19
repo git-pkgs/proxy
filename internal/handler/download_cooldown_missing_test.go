@@ -1,11 +1,13 @@
 package handler
 
 import (
+	"context"
 	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"reflect"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -312,5 +314,174 @@ func TestCondaConcurrentRefetchesShareOneIndex(t *testing.T) {
 	// The refetch tries the metadata cache's fetch first, then streams.
 	if got := after.Load(); got != 2 {
 		t.Errorf("repodata fetched %d times for %d downloads, want 2", got, downloads)
+	}
+}
+
+func condaCooldownCase(t *testing.T) downloadCooldownCase {
+	t.Helper()
+	for _, c := range downloadCooldownCases() {
+		if c.ecosystem == "conda" {
+			return c
+		}
+	}
+	t.Fatal("no conda case")
+	return downloadCooldownCase{}
+}
+
+// TestCondaNeverListedFileRefetchesOncePerKeep checks downloads of a file
+// repodata never lists, without a digest to revalidate it by, refetch it
+// once, and use that index for the rest of its keep.
+func TestCondaNeverListedFileRefetchesOncePerKeep(t *testing.T) {
+	c := condaCooldownCase(t)
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		c.metadata(w, r, map[string]time.Time{cooldownOldVersion: time.Now().Add(-30 * 24 * time.Hour)})
+	}))
+	defer upstream.Close()
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.fetchErr = errors.New("not fetched")
+	proxy.HTTPClient = upstream.Client()
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+	handler := c.handler(proxy, upstream.URL)
+	for range 3 {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, c.path("9.9.9"), nil))
+	}
+	// The first download reads repodata, the second refetches it.
+	if got := requests.Load(); got != 2 {
+		t.Errorf("repodata fetched %d times, want 2", got)
+	}
+}
+
+// TestCondaUnchangedRefetchKeepsItsIndex checks a refetch that finds the
+// repodata unchanged reuses the index kept for it instead of parsing again.
+func TestCondaUnchangedRefetchKeepsItsIndex(t *testing.T) {
+	c := condaCooldownCase(t)
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	var released atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		times := map[string]time.Time{cooldownOldVersion: old}
+		if released.Load() {
+			times[cooldownRecentVersion] = time.Now().Add(-time.Hour)
+		}
+		c.metadata(w, r, times)
+	}))
+	defer upstream.Close()
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.fetchErr = errors.New("not fetched")
+	proxy.HTTPClient = upstream.Client()
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+	handler := c.handler(proxy, upstream.URL)
+	kept := func() uintptr {
+		c := &proxy.sharedProxy().publishIndexes
+		c.mu.Lock()
+		defer c.mu.Unlock()
+		for _, e := range c.entries {
+			return reflect.ValueOf(e.index).Pointer()
+		}
+		return 0
+	}
+	var seen []uintptr
+	for range 3 {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, c.path("9.9.9"), nil))
+		seen = append(seen, kept())
+	}
+	if seen[0] == 0 || seen[1] != seen[0] || seen[2] != seen[0] {
+		t.Errorf("kept indexes %v, want the first one throughout", seen)
+	}
+	released.Store(true)
+	c.seedCachedArtifact(t, proxy, cooldownRecentVersion)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, c.path(cooldownRecentVersion), nil))
+	if w.Code != http.StatusNotFound {
+		t.Errorf("release in cooldown after the refetches: status %d, want 404", w.Code)
+	}
+}
+
+// TestCondaSharedRefetchOutlastsTheFirstClient checks a download joining a
+// refetch of repodata past metadata_max_size gets its answer when the
+// client that started it hangs up.
+func TestCondaSharedRefetchOutlastsTheFirstClient(t *testing.T) {
+	c := condaCooldownCase(t)
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	var released atomic.Bool
+	gate := make(chan struct{})
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		times := map[string]time.Time{cooldownOldVersion: old}
+		if released.Load() {
+			<-gate
+			times[cooldownRecentVersion] = time.Now().Add(-time.Hour)
+		}
+		c.metadata(w, r, times)
+	}))
+	defer upstream.Close()
+	proxy, _, _, fetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	proxy.MetadataMaxSize = 10 // every repodata is streamed
+	fetcher.fetchErr = errors.New("artifact must be served from the cache")
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+	handler := c.handler(proxy, upstream.URL)
+	c.seedCachedArtifact(t, proxy, cooldownOldVersion)
+	c.seedCachedArtifact(t, proxy, cooldownRecentVersion)
+	handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, c.path(cooldownOldVersion), nil))
+
+	released.Store(true)
+	ctx, cancel := context.WithCancel(context.Background())
+	first := make(chan struct{})
+	go func() {
+		defer close(first)
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, c.path(cooldownRecentVersion), nil).WithContext(ctx))
+	}()
+	time.Sleep(100 * time.Millisecond)
+	joined := make(chan int, 1)
+	go func() {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, c.path(cooldownRecentVersion), nil))
+		joined <- w.Code
+	}()
+	time.Sleep(100 * time.Millisecond)
+	cancel()
+	time.Sleep(100 * time.Millisecond)
+	close(gate)
+	if code := <-joined; code != http.StatusNotFound {
+		t.Errorf("joined download: status %d, want 404", code)
+	}
+	<-first
+}
+
+// TestCondaRefetchWithDigestDoesNotHideLaterReleases checks an index a
+// refetch stored with a digest, which keeps it past a minute, doesn't answer
+// "not listed" for a file released after it.
+func TestCondaRefetchWithDigestDoesNotHideLaterReleases(t *testing.T) {
+	c := condaCooldownCase(t)
+	var released atomic.Bool
+	var requests atomic.Int64
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		// Each response differs, so each refetch builds and stores an index.
+		times := map[string]time.Time{cooldownOldVersion: time.UnixMilli(requests.Add(1))}
+		if released.Load() {
+			times[cooldownRecentVersion] = time.Now().Add(-time.Hour)
+		}
+		c.metadata(w, r, times)
+	}))
+	defer upstream.Close()
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.fetchErr = errors.New("not fetched")
+	proxy.HTTPClient = upstream.Client()
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+	handler := c.handler(proxy, upstream.URL)
+	c.seedCachedArtifact(t, proxy, cooldownRecentVersion)
+	for range 2 {
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, c.path("9.9.9"), nil))
+	}
+	released.Store(true)
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, c.path(cooldownRecentVersion), nil))
+	if w.Code != http.StatusNotFound {
+		t.Errorf("release in cooldown: status %d, want 404", w.Code)
 	}
 }
