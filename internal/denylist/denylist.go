@@ -157,8 +157,6 @@ func identify(pkg *purl.PURL) identity {
 	key := purl.New(c.Type, namespace, c.Name, "", nil).String()
 	version := c.Version
 	if c.Type == "pypi" {
-		// PyPI accepts files whose names spell a release's version any
-		// way PEP 440 counts as equal, such as 2.0.0.0 for 2.0.0.
 		version = pypi.CanonicalVersion(version)
 	}
 	return identity{key: packageurl.PolicyPackageKey(key), channel: channel, version: version}

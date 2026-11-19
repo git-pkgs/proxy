@@ -4,6 +4,7 @@ import (
 	"io"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
 	"testing"
 	"time"
@@ -12,21 +13,20 @@ import (
 	"github.com/git-pkgs/registries/fetch"
 )
 
-// pypiWheelSpellings are wheel filenames of release 2.0.0 that PyPI accepts,
-// since it only checks that the filename's version equals the release's
-// under PEP 440.
 var pypiWheelSpellings = []string{
 	"newpkg-2.0.0-py3-none-any.whl",
 	"newpkg-2.0.0.0-py3-none-any.whl",
 	"newpkg-2.0-py3-none-any.whl",
 	"newpkg-V2.0.0-py3-none-any.whl",
+	"newpkg-\u00a02.0.0-py3-none-any.whl",
+	"newpkg-2.0.0\u2003-py3-none-any.whl",
 }
 
 func pypiSpellingRequest(t *testing.T, proxy *Proxy, upstreamURL, filename string) int {
 	t.Helper()
 	h := &PyPIHandler{proxy: proxy, upstreamURL: upstreamURL, proxyURL: "http://localhost"}
 	w := httptest.NewRecorder()
-	h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/packages/packages/ab/cd/ef0123456789/"+filename, nil))
+	h.Routes().ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/packages/packages/ab/cd/ef0123456789/"+url.PathEscape(filename), nil))
 	return w.Code
 }
 
@@ -76,15 +76,12 @@ func TestPyPIReleaseTimeTakesTheNewestOfEqualReleases(t *testing.T) {
 	times := map[string]time.Time{"1.0": older, "1.0.0": newer, "2.0": {}}
 	for range 20 {
 		for _, version := range []string{"1.0", "1.0.0", "1.0.0.0"} {
-			if got, ok := releaseTime(times, version); !ok || !got.Equal(newer) {
-				t.Fatalf("releaseTime(%q) = %v, %v; want %v", version, got, ok, newer)
+			if got := releaseTime(times, version); !got.Equal(newer) {
+				t.Fatalf("releaseTime(%q) = %v, want %v", version, got, newer)
 			}
 		}
 	}
-	if got, ok := releaseTime(times, "2.0"); !ok || !got.IsZero() {
-		t.Errorf("releaseTime(2.0) = %v, %v; want the zero time", got, ok)
-	}
-	if _, ok := releaseTime(times, "3.0"); ok {
-		t.Error("an unlisted version was found")
+	if got := releaseTime(times, "3.0"); !got.IsZero() {
+		t.Errorf("releaseTime(3.0) = %v, want the zero time", got)
 	}
 }
