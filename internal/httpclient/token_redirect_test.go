@@ -56,6 +56,12 @@ func TestTransportDoesNotLendCredentialsToARedirectedTokenRequest(t *testing.T) 
 			t.Fatalf("the registry was sent %q, a token issued with the configured credentials", got)
 		}
 	}
+	if resp.StatusCode != http.StatusOK {
+		t.Errorf("status = %d, want 200", resp.StatusCode)
+	}
+	if got := sent[len(sent)-1]; got != "Bearer anonymous-token" {
+		t.Errorf("registry received %q, want the anonymous token", got)
+	}
 }
 
 // TestTokenRedirectKeepsCredentialsSpelledDifferently checks a redirect hop

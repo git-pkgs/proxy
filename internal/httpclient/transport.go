@@ -138,11 +138,17 @@ func (t *Transport) trustedWithToken(requestURL *url.URL, challenge bearerChalle
 	if realmName == "" || realmValue == "" {
 		return true
 	}
-	if name, value := t.authForURL(requestURL.String()); name == realmName && value == realmValue {
+	if name, value := t.authForURL(requestURL.String()); sameHeader(name, value, realmName, realmValue) {
 		return true
 	}
 	realm, err := url.Parse(challenge.realm)
 	return err == nil && sameTokenService(requestURL, realm)
+}
+
+// sameHeader reports whether two configured authentication headers are the
+// same credentials. Header names are case-insensitive.
+func sameHeader(name, value, otherName, otherValue string) bool {
+	return strings.EqualFold(name, otherName) && value == otherValue
 }
 
 // knownTokenServices maps registry hosts to the token service host they
@@ -381,7 +387,7 @@ func (t configuredTransport) sameCredentials(u *url.URL) bool {
 	}
 	name, value := t.parent.authForURL(u.String())
 	realmName, realmValue := t.parent.authForURL(t.realm)
-	return strings.EqualFold(name, realmName) && value == realmValue
+	return sameHeader(name, value, realmName, realmValue)
 }
 
 func (t *Transport) cachedTokenForRequest(requestURL *url.URL) string {
