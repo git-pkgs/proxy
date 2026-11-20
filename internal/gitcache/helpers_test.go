@@ -69,6 +69,11 @@ func fileExists(path string) bool {
 	return err == nil
 }
 
+// bareRepo is the path of the repository a test's first clone caches.
+func bareRepo(tc *testCache) string {
+	return filepath.Join(tc.dir, "up", "repo.git")
+}
+
 // fakeUpstream serves bare repositories under root with git http-backend.
 type fakeUpstream struct {
 	t      *testing.T
@@ -278,15 +283,16 @@ func (u *fakeUpstream) commit(work, msg string) string {
 	return runGit(u.t, work, "rev-parse", "HEAD")
 }
 
-// waitIdle waits until no request or refresh is using a repository, so a
-// test can inspect or change the cache without racing a request finishing.
+// waitIdle waits until no request, refresh or maintenance run is using a
+// repository, so a test can inspect or change the cache without racing a
+// request finishing.
 func waitIdle(t *testing.T, c *Cache) {
 	t.Helper()
 	waitFor(t, func() bool {
 		c.mu.Lock()
 		defer c.mu.Unlock()
 		for _, rp := range c.repos {
-			if rp.users > 0 {
+			if rp.users > 0 || rp.maintaining {
 				return false
 			}
 		}

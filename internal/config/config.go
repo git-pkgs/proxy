@@ -1684,6 +1684,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Gradle.BuildCache.SweepInterval, "PROXY_GRADLE_BUILD_CACHE_SWEEP_INTERVAL")
 	setEnvString(&c.Health.StorageProbeInterval, "PROXY_HEALTH_STORAGE_PROBE_INTERVAL")
 	setEnvString(&c.Git.CacheDir, "PROXY_GIT_CACHE_DIR")
+	setEnvString(&c.Git.MaintenanceInterval, "PROXY_GIT_MAINTENANCE_INTERVAL")
 	setEnvString(&c.Git.MaxSize, "PROXY_GIT_MAX_SIZE")
 	setEnvString(&c.Git.MaxRepoSize, "PROXY_GIT_MAX_REPO_SIZE")
 	setEnvString(&c.Git.RefreshWait, "PROXY_GIT_REFRESH_WAIT")

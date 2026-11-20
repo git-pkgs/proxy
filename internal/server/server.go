@@ -268,15 +268,17 @@ func (s *Server) configureGitCache(client *http.Client) error {
 		upstreamDirs[name] = gitcache.UpstreamDir(name, upstream.URL)
 	}
 	gitCache, err := gitcache.New(gitcache.Options{
-		CacheDir:    s.cfg.Git.CacheDir,
-		MaxSize:     s.cfg.Git.MaxSizeBytes(),
-		MaxRepoSize: s.cfg.Git.MaxRepoSizeBytes(),
-		RefreshWait: s.cfg.Git.RefreshWaitDuration(),
-		StaleMaxAge: s.cfg.Git.StaleMaxAgeDuration(),
-		WarmMaxIdle: s.cfg.Git.WarmMaxIdleDuration(),
-		Client:      client,
-		Logger:      s.logger,
-		Upstreams:   upstreamDirs,
+		CacheDir:            s.cfg.Git.CacheDir,
+		MaxSize:             s.cfg.Git.MaxSizeBytes(),
+		MaxRepoSize:         s.cfg.Git.MaxRepoSizeBytes(),
+		RefreshWait:         s.cfg.Git.RefreshWaitDuration(),
+		StaleMaxAge:         s.cfg.Git.StaleMaxAgeDuration(),
+		WarmMaxIdle:         s.cfg.Git.WarmMaxIdleDuration(),
+		Maintenance:         s.cfg.Git.MaintenanceEnabled(),
+		MaintenanceInterval: s.cfg.Git.MaintenanceIntervalDuration(),
+		Client:              client,
+		Logger:              s.logger,
+		Upstreams:           upstreamDirs,
 	})
 	if err != nil {
 		return fmt.Errorf("configuring git cache: %w", err)

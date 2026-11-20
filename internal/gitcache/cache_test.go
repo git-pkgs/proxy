@@ -719,7 +719,7 @@ func TestNewRemovesRepointedUpstreams(t *testing.T) {
 // reftable with its refs, and served without being cloned again.
 func TestNewMigratesFilesFormatRepositories(t *testing.T) {
 	// Before the fixture, as git older than 2.45 has no --ref-format.
-	if !reftableReady(runGit(t, "", "version")) {
+	if !gitReady(runGit(t, "", "version")) {
 		t.Skip("git is older than 2.56")
 	}
 	upstream := newFakeUpstream(t)
@@ -742,9 +742,9 @@ func TestNewMigratesFilesFormatRepositories(t *testing.T) {
 	tc.clone(t, "repo")
 }
 
-// TestReftableReady checks which versions turn reftable on, across the ways
-// git prints its version.
-func TestReftableReady(t *testing.T) {
+// TestGitReady checks which versions turn reftable and maintenance on,
+// across the ways git prints its version.
+func TestGitReady(t *testing.T) {
 	for out, want := range map[string]bool{
 		"git version 2.56.1\n":                 true,
 		"git version 2.56.0.windows.1\n":       true,
@@ -754,8 +754,8 @@ func TestReftableReady(t *testing.T) {
 		"git version 2.39.1 (Apple Git-146)\n": false,
 		"git version 2.x\n":                    false,
 	} {
-		if got := reftableReady(out); got != want {
-			t.Errorf("reftableReady(%q) = %v, want %v", out, got, want)
+		if got := gitReady(out); got != want {
+			t.Errorf("gitReady(%q) = %v, want %v", out, got, want)
 		}
 	}
 }

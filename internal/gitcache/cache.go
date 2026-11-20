@@ -61,6 +61,16 @@ type Options struct {
 	MaxRepoSize int64
 	RefreshWait time.Duration
 	StaleMaxAge time.Duration
+	// Maintenance turns on the serving index kept for each repository after
+	// the fetches that change it: a multi-pack index with reachability
+	// bitmaps, which turn the object enumeration of a clone from a walk of
+	// the whole history into bitmap lookups. It is rebuilt from the packs,
+	// so it is not counted in MaxSize or MaxRepoSize.
+	Maintenance bool
+	// MaintenanceInterval is the least time between the bitmap writes of
+	// one repository, which walk all of its objects. Zero rewrites them
+	// whenever a fetch brings a pack.
+	MaintenanceInterval time.Duration
 	// Client makes every upstream request, including those of the git
 	// processes the cache runs. Redirects are never followed.
 	Client *http.Client
@@ -110,6 +120,9 @@ type Cache struct {
 	reftable bool
 	// stateReads lets one RepositoryState read run git at a time.
 	stateReads chan struct{}
+	// maintains lets only maxConcurrentMaintains repositories write their
+	// serving indexes at once.
+	maintains chan struct{}
 
 	ctx    context.Context
 	cancel context.CancelFunc
@@ -167,6 +180,20 @@ type repo struct {
 	refsWritten atomic.Int64
 	// url is the upstream URL the last successful refresh used.
 	url atomic.Pointer[string]
+	// maintainedAt is the refsWritten count the repository's serving
+	// indexes cover, -1 for a repository found on disk, whose index the
+	// first refresh checks. It is stored only when a run succeeds, so a
+	// failed one is retried by the next request. maintainedAt is written
+	// alone; maintaining, maintainPending and maintainTimer are guarded
+	// by Cache.mu. indexing is set while a run writes the index, and is
+	// changed only with the write slot held or by the run that set it;
+	// gcSkipped records that a fetch skipped its gc meanwhile.
+	maintainedAt    atomic.Int64
+	maintaining     bool
+	maintainPending bool
+	maintainTimer   *time.Timer
+	indexing        atomic.Bool
+	gcSkipped       atomic.Bool
 }
 
 // repoURL returns the upstream URL the last successful refresh used, or ""
@@ -258,6 +285,7 @@ func New(opts Options) (*Cache, error) {
 		uploadPacks:     make(chan struct{}, uploadPacks),
 		refListings:     make(chan struct{}, refListings),
 		stateReads:      make(chan struct{}, 1),
+		maintains:       make(chan struct{}, maxConcurrentMaintains),
 		refCheckTimeout: defaultRefCheckTimeout,
 		lowSpeedTime:    defaultLowSpeedTime,
 		maxRequestBody:  defaultMaxRequestBody,
@@ -277,10 +305,16 @@ func New(opts Options) (*Cache, error) {
 		c.maxRequestBody = opts.maxRequestBody
 	}
 	out, err := c.command(context.Background(), nil, "version").Output()
-	c.reftable = err == nil && reftableReady(string(out))
-	if !c.reftable {
+	ready := err == nil && gitReady(string(out))
+	c.reftable = ready
+	if !ready {
 		logger.Info("git cache: repositories keep the files reference format, as reftable needs git 2.56 or newer",
 			"version", strings.TrimSpace(string(out)))
+		if c.opts.Maintenance {
+			c.opts.Maintenance = false
+			logger.Info("git cache: serving indexes are not written, as they need git 2.56 or newer",
+				"version", strings.TrimSpace(string(out)))
+		}
 	}
 	if err := c.load(); err != nil {
 		_ = lock.Close()
@@ -347,10 +381,13 @@ func (c *Cache) load() error {
 			if c.reftable && !hasReftable(path) {
 				c.migrate(rp)
 			}
-			rp.size.Store(dirSize(path))
+			rp.size.Store(c.dirSize(path))
 			rp.lastChecked.Store(stampTime(path, checkedStamp))
 			rp.lastUsed.Store(stampTime(path, usedStamp))
 			rp.usedWritten.Store(rp.lastUsed.Load())
+			// Its index may be missing or behind, cached before maintenance
+			// was on or cut short by the last stop.
+			rp.maintainedAt.Store(-1)
 			if data, err := os.ReadFile(filepath.Join(path, urlFile)); err == nil {
 				if u := strings.TrimSpace(string(data)); u != "" {
 					rp.url.Store(&u)
@@ -366,9 +403,13 @@ func (c *Cache) load() error {
 	return nil
 }
 
-// reftableReady reports whether out, the output of "git version", names git
-// 2.56 or newer, the first with the reftable fixes the cache relies on.
-func reftableReady(out string) bool {
+// gitReady reports whether out, the output of "git version", names git
+// 2.56 or newer, the first with the fixes that reftable storage and the
+// serving indexes maintenance writes rely on. For the indexes, those
+// include object lookups that recover when a concurrent repack removes a
+// pack a multi-pack index points to. With older git, the cache runs git as
+// it did before either existed.
+func gitReady(out string) bool {
 	var major, minor int
 	_, err := fmt.Sscanf(out, "git version %d.%d", &major, &minor)
 	return err == nil && (major > 2 || major == 2 && minor >= 56)
@@ -601,10 +642,15 @@ func (c *Cache) removeEvicted(removed []string) {
 	}
 }
 
-func dirSize(dir string) int64 {
+// dirSize measures the bytes a repository takes on disk. While maintenance
+// is on, the serving indexes it writes are left out: they are rebuilt from
+// the packs, so counting them could hold a repository above its
+// max_repo_size, for it then to be evicted and cloned again, only to grow
+// the same indexes once more.
+func (c *Cache) dirSize(dir string) int64 {
 	var size int64
 	_ = filepath.WalkDir(dir, func(_ string, d fs.DirEntry, err error) error {
-		if err == nil && d.Type().IsRegular() {
+		if err == nil && d.Type().IsRegular() && (!c.opts.Maintenance || !isIndexFile(d.Name())) {
 			if info, err := d.Info(); err == nil {
 				size += info.Size()
 			}
@@ -612,6 +658,16 @@ func dirSize(dir string) int64 {
 		return nil
 	})
 	return size
+}
+
+// isIndexFile reports whether name is a serving index file, written by
+// maintenance and rebuilt from the packs: a multi-pack index with the
+// reachability bitmaps beside it, a single-pack bitmap, or the temporary
+// files of a run writing them. A fetch that measures the repository while
+// a run writes would otherwise count those, and could find it too large.
+func isIndexFile(name string) bool {
+	return strings.HasPrefix(name, midxName) || strings.HasSuffix(name, ".bitmap") ||
+		strings.HasPrefix(name, "tmp_bitmap_") || strings.HasPrefix(name, "tmp_rev_")
 }
 
 // Stamps are empty files whose modification time records an event, so it

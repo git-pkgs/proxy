@@ -17,6 +17,10 @@ const (
 	defaultGitRefreshWait = "5s"
 	defaultGitStaleMaxAge = "24h"
 	defaultGitWarmMaxIdle = "30d"
+
+	// maintenanceOff disables the serving indexes of the git cache.
+	maintenanceOff                = "off"
+	defaultGitMaintenanceInterval = "1h"
 )
 
 // GitUpstream is an upstream.git entry: a Git server's base URL and,
@@ -141,11 +145,22 @@ type GitConfig struct {
 	// "0" turns the background checks off. Default: 30d.
 	WarmMaxIdle string `json:"warm_max_idle" yaml:"warm_max_idle"`
 
-	maxSize     int64
-	maxRepoSize int64
-	refreshWait time.Duration
-	staleMaxAge time.Duration
-	warmMaxIdle time.Duration
+	// MaintenanceInterval is how often the serving indexes of a cached
+	// repository may be rewritten, which spare every clone the walk of the
+	// whole history that otherwise precedes its pack. They are rewritten
+	// for the packs a fetch brings, once this has passed since they were
+	// last written. "0" rewrites them after every such fetch, and "off"
+	// writes none.
+	// Default: 1h.
+	MaintenanceInterval string `json:"maintenance_interval" yaml:"maintenance_interval"`
+
+	maxSize             int64
+	maxRepoSize         int64
+	refreshWait         time.Duration
+	staleMaxAge         time.Duration
+	warmMaxIdle         time.Duration
+	maintenanceInterval time.Duration
+	maintenanceOff      bool
 }
 
 // MaxSizeBytes returns the parsed MaxSize, 0 for no limit. Validate must run first.
@@ -162,6 +177,14 @@ func (g *GitConfig) StaleMaxAgeDuration() time.Duration { return g.staleMaxAge }
 
 // WarmMaxIdleDuration returns the parsed WarmMaxIdle, 0 for off. Validate must run first.
 func (g *GitConfig) WarmMaxIdleDuration() time.Duration { return g.warmMaxIdle }
+
+// MaintenanceIntervalDuration returns the parsed MaintenanceInterval.
+// Validate must run first.
+func (g *GitConfig) MaintenanceIntervalDuration() time.Duration { return g.maintenanceInterval }
+
+// MaintenanceEnabled reports whether the serving indexes are written.
+// Validate must run first.
+func (g *GitConfig) MaintenanceEnabled() bool { return !g.maintenanceOff }
 
 // Validate checks the Git cache settings, applying defaults where unset.
 func (g *GitConfig) Validate() error {
@@ -181,6 +204,11 @@ func (g *GitConfig) Validate() error {
 		g.WarmMaxIdle = defaultGitWarmMaxIdle
 	}
 
+	if g.MaintenanceInterval == "" {
+		g.MaintenanceInterval = defaultGitMaintenanceInterval
+	}
+	g.maintenanceOff = g.MaintenanceInterval == maintenanceOff
+
 	var err error
 	if g.maxSize, err = parseNonNegativeSize("git.max_size", g.MaxSize); err != nil {
 		return err
@@ -196,6 +224,12 @@ func (g *GitConfig) Validate() error {
 	}
 	if g.warmMaxIdle, err = parseRetentionDuration("git.warm_max_idle", g.WarmMaxIdle); err != nil {
 		return err
+	}
+
+	if !g.maintenanceOff {
+		if g.maintenanceInterval, err = parseNonNegativeDuration("git.maintenance_interval", g.MaintenanceInterval); err != nil {
+			return err
+		}
 	}
 	return nil
 }
