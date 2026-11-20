@@ -17,6 +17,7 @@ import (
 
 const (
 	containerManifestCacheEcosystem = "oci-manifest"
+	containerManifestTagEcosystem   = "oci-manifest-tag"
 	containerStaleWarning           = `110 - "Response is Stale"`
 
 	containerAcceptWildcardSpecificity = iota
@@ -175,6 +176,19 @@ func (h *ContainerHandler) loadContainerManifestForAccept(ctx context.Context, r
 	if err != nil {
 		h.proxy.Logger.Warn("failed to read cached container manifest", "error", err)
 		return nil, false
+	}
+	// A client may resolve a tag with HEAD before fetching its body by
+	// digest. Join that persisted resolution to the now-cached body.
+	if !manifestDigestReferencePattern.MatchString(reference) {
+		entry, digest, err := h.loadContainerMetadata(ctx, containerManifestTagEcosystem, cacheKey)
+		if err == nil && entry != nil && manifestDigestReferencePattern.Match(digest) &&
+			(cached == nil || entry.FetchedAt.Time.After(cached.fetchedAt)) {
+			stored, err := h.loadContainerManifest(ctx, h.containerManifestSharedCacheKey(registryURL, name, string(digest), cacheAccept))
+			if err == nil && stored != nil && stored.contentDigest == string(digest) && containerManifestCacheCompatible(accept, stored) {
+				stored.fetchedAt = entry.FetchedAt.Time
+				cached = stored
+			}
+		}
 	}
 	if cached != nil && containerManifestCacheCompatible(accept, cached) {
 		return cached, false
