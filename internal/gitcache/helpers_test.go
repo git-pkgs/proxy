@@ -355,6 +355,12 @@ func newTestCache(t *testing.T, upstreamURL string, configure func(*Options)) *t
 // internal/handler does once it has validated the request, with repo
 // fetched from upstreamURL/{repo}. fetchWants is OpenOptions.FetchWants.
 func testFront(c *Cache, upstreamURL string, fetchWants bool) http.Handler {
+	return testFrontWith(c, upstreamURL, OpenOptions{FetchWants: fetchWants})
+}
+
+// testFrontWith is testFront opening repositories with opts, Refresh set
+// for info/refs.
+func testFrontWith(c *Cache, upstreamURL string, opts OpenOptions) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		path := strings.TrimPrefix(r.URL.Path, "/git/up/")
 		repo, infoRefs := strings.CutSuffix(path, "/info/refs")
@@ -378,9 +384,9 @@ func testFront(c *Cache, upstreamURL string, fetchWants bool) http.Handler {
 			defer req.Close()
 		}
 		lease, err := c.Open(r.Context(), "up/"+strings.TrimSuffix(repo, ".git")+".git", upstreamURL+"/"+repo,
-			OpenOptions{Refresh: infoRefs, FetchWants: fetchWants})
+			OpenOptions{Refresh: infoRefs, FetchWants: opts.FetchWants, Offline: opts.Offline})
 		switch {
-		case errors.Is(err, ErrNotFound):
+		case errors.Is(err, ErrNotFound), errors.Is(err, ErrNotCached):
 			http.Error(w, err.Error(), http.StatusNotFound)
 			return
 		case errors.Is(err, ErrTooLarge), errors.Is(err, ErrCacheFull):

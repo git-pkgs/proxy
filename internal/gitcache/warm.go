@@ -34,8 +34,9 @@ const (
 // quarter of that interval, at least warmMinInterval. Refreshes stop when
 // the cache is closed.
 //
-// serves reports whether the configuration still serves a repository's
-// directory in the cache, such as github-1a2b3c4d/acme/widgets.git.
+// serves reports whether a repository's directory in the cache, such as
+// github-1a2b3c4d/acme/widgets.git, is to be checked: whether the
+// configuration still serves it, from an upstream that is not offline.
 func (c *Cache) Warm(serves func(dir string) bool) {
 	if !c.warmEnabled() {
 		return

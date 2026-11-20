@@ -8,8 +8,8 @@ import (
 )
 
 var (
-	// ErrNotCached is returned by Remove for a repository the cache does
-	// not hold.
+	// ErrNotCached is returned by Remove, and by an offline Open, for a
+	// repository the cache does not hold.
 	ErrNotCached = errors.New("repository is not cached")
 	// ErrInUse is returned by Remove for a repository a clone, a fetch or
 	// a client is using.

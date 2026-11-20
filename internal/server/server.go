@@ -471,7 +471,7 @@ func (s *Server) serve(listener net.Listener) error {
 	s.background.Go(func() { s.startReclaimLoop(bgCtx) })
 	if gitHandler != nil {
 		// Stops when the cache is closed.
-		s.git.Warm(gitHandler.ServesRepository)
+		s.git.Warm(gitHandler.WarmsRepository)
 	}
 
 	if listener != nil {
