@@ -14,16 +14,23 @@ const (
 	convertedListBody  = `{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.list.v2+json","manifests":[]}`
 	convertedAMD64Body = `{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json"}`
 	dockerV2MediaType  = "application/vnd.docker.distribution.manifest.v2+json"
+	wildcardAccept     = dockerV2MediaType + ", */*"
+	dockerListAccept   = dockerManifestListMediaType + ", " + dockerV2MediaType
+	convertedOCIBody   = `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}`
 )
 
-// convertingRegistry answers like distribution: the manifest list for a
-// client that accepts it, else the default platform's manifest.
-func convertingRegistry(t *testing.T) *httptest.Server {
+// convertingRegistry answers like distribution: the index for a client that
+// names its type, else the default platform's manifest. A wildcard doesn't
+// count as naming it.
+func convertingRegistry(t *testing.T, index string) *httptest.Server {
 	t.Helper()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, mediaType := convertedAMD64Body, dockerV2MediaType
-		if containerManifestAccepts(r.Header.Get("Accept"), dockerManifestListMediaType) {
-			body, mediaType = convertedListBody, dockerManifestListMediaType
+		if index == convertedOCIBody && containerManifestNames(r.Header.Get("Accept"), ociImageIndexMediaType) {
+			body, mediaType = index, ociImageIndexMediaType
+		}
+		if index == convertedListBody && containerManifestNames(r.Header.Get("Accept"), dockerManifestListMediaType) {
+			body, mediaType = index, dockerManifestListMediaType
 		}
 		w.Header().Set("Content-Type", mediaType)
 		w.Header().Set("Docker-Content-Digest", sha256Digest([]byte(body)))
@@ -49,20 +56,25 @@ func getManifestWithAccept(t *testing.T, h *ContainerHandler, accept string) str
 // manifest a registry converted for a client without Docker manifest list
 // support doesn't replace, or become, the list other clients share.
 func TestContainerConvertedManifestKeepsTheSharedList(t *testing.T) {
-	for name, order := range map[string][]string{
-		"list cached first":      {dockerClientAccept, ociIndexOnlyAccept, dockerClientAccept},
-		"converted cached first": {ociIndexOnlyAccept, ociIndexOnlyAccept, dockerClientAccept},
+	for name, tc := range map[string]struct {
+		index string
+		order []string
+	}{
+		"list cached first":      {convertedListBody, []string{dockerClientAccept, ociIndexOnlyAccept, dockerClientAccept}},
+		"converted cached first": {convertedListBody, []string{ociIndexOnlyAccept, ociIndexOnlyAccept, dockerClientAccept}},
+		"wildcard client first":  {convertedListBody, []string{wildcardAccept, dockerClientAccept}},
+		"converted OCI index":    {convertedOCIBody, []string{dockerListAccept, dockerClientAccept}},
 	} {
 		t.Run(name, func(t *testing.T) {
-			upstream := convertingRegistry(t)
+			upstream := convertingRegistry(t, tc.index)
 			proxy, _, _, _ := setupTestProxy(t)
 			proxy.HTTPClient = upstream.Client()
 			proxy.MetadataTTL = time.Hour
 			h := &ContainerHandler{proxy: proxy, registryURL: upstream.URL, proxyURL: "http://localhost:8080"}
 
-			for i, accept := range order {
-				want := convertedListBody
-				if accept == ociIndexOnlyAccept {
+			for i, accept := range tc.order {
+				want := tc.index
+				if accept != dockerClientAccept {
 					want = convertedAMD64Body
 				}
 				if got := getManifestWithAccept(t, h, accept); got != want {
@@ -77,7 +89,7 @@ func TestContainerConvertedManifestKeepsTheSharedList(t *testing.T) {
 // is still stored under its digest for every client, with the upstream down.
 func TestContainerConvertedManifestIsSharedByDigest(t *testing.T) {
 	upstreamUp := true
-	registry := convertingRegistry(t)
+	registry := convertingRegistry(t, convertedListBody)
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if !upstreamUp {
 			http.Error(w, "down", http.StatusServiceUnavailable)
@@ -107,7 +119,7 @@ func TestContainerConvertedManifestIsSharedByDigest(t *testing.T) {
 func TestContainerIndexIsSharedFromAClientLackingTheOtherType(t *testing.T) {
 	for mediaType, accept := range map[string]string{
 		ociImageIndexMediaType:      ociIndexOnlyAccept,
-		dockerManifestListMediaType: dockerManifestListMediaType + ", " + dockerV2MediaType,
+		dockerManifestListMediaType: dockerListAccept,
 	} {
 		t.Run(mediaType, func(t *testing.T) {
 			index := `{"schemaVersion":2,"mediaType":"` + mediaType + `","manifests":[]}`

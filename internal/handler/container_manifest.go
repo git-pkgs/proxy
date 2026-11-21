@@ -152,9 +152,21 @@ func containerManifestAcceptsIndex(accept string) bool {
 	return containerManifestAccepts(accept, ociImageIndexMediaType) || containerManifestAccepts(accept, dockerManifestListMediaType)
 }
 
+// containerManifestNames reports whether accept lists mediaType itself.
+// Registries compare Accept values literally, so a wildcard gets a client the
+// converted manifest, not the index.
+func containerManifestNames(accept, mediaType string) bool {
+	for _, value := range strings.Split(accept, ",") {
+		if named, _, err := mime.ParseMediaType(value); err == nil && named == mediaType {
+			return true
+		}
+	}
+	return false
+}
+
 // containerManifestSharable reports whether manifest may go under the shared
 // key of reference. Every client that accepts an index type reads a tag's
-// shared entry, so it takes an index, or what a client accepting both index
+// shared entry, so it takes an index, or what a client naming both index
 // types got: registries convert an index into the default platform's manifest
 // for a client that lacks the index's type, and that manifest must not stand in
 // for the index for the others.
@@ -166,7 +178,7 @@ func containerManifestSharable(reference, cacheAccept string, manifest *cachedCo
 		(mediaType == ociImageIndexMediaType || mediaType == dockerManifestListMediaType) {
 		return true
 	}
-	return containerManifestAccepts(cacheAccept, ociImageIndexMediaType) && containerManifestAccepts(cacheAccept, dockerManifestListMediaType)
+	return containerManifestNames(cacheAccept, ociImageIndexMediaType) && containerManifestNames(cacheAccept, dockerManifestListMediaType)
 }
 
 // containerManifestLegacyCacheKeys are the per-Accept keys older versions
