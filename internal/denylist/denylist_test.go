@@ -59,6 +59,7 @@ func TestEcosystemSpellings(t *testing.T) {
 	}
 	for _, value := range []string{
 		"pkg:pypi/zope-interface@6.0", "pkg:pypi/Zope__Interface@6.0",
+		"pkg:pypi/zope.interface@6.0.0", "pkg:pypi/zope.interface@6", "pkg:pypi/zope.interface@v6.0",
 		"pkg:nuget/newtonsoft.json@13.0.1-beta",
 		"pkg:gem/nokogiri@1.16.0", "pkg:gem/nokogiri@1.16.0-x86_64-linux",
 		"pkg:gem/sorbet-static@0.5.1-universal-darwin-22",
@@ -86,7 +87,8 @@ func TestEcosystemSpellings(t *testing.T) {
 			t.Errorf("unexpected denial: %s", value)
 		}
 	}
-	if !p.Versions("pkg:pypi/zope_interface")["6.0"] {
+	// PyPI versions are kept in packaging's canonical form.
+	if !p.Versions("pkg:pypi/zope_interface")["6"] {
 		t.Error("pypi versions not found under another spelling")
 	}
 }
