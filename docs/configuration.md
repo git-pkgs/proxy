@@ -1414,6 +1414,8 @@ Maven caveats:
 - Maven Central lists versions in version order, not in the order they were published. A patch to an older release line published after a newer release that is out of cooldown stays listed while it is in cooldown, but its files are still refused.
 - SNAPSHOT versions are not held back.
 
+nuget.org reports 1900-01-01 as the publish time of an unlisted version. For a download of one, the proxy reads the time the version was created from its catalog entry instead, so unlisting a new release does not end its cooldown. Unlisted versions stay in the version lists the proxy serves, and one whose registration has no catalog entry on the upstream is let through.
+
 Helm uses each release's `created` time from the repository's `index.yaml`. Releases in cooldown are left out of the index the proxy serves, and their archives aren't served; a release without `created` is let through. Charts pulled over OCI have no publish time and aren't held back.
 
 Cargo, RubyGems, Hex, pub.dev, Conda and Helm check artifact downloads against cooldown, including files cached before the policy changed. When a publish-time lookup fails, an already-cached file is still served; an uncached download fails with 502, or 503 with `Retry-After` when the rate-limit gate holds the request. Conda checks timestamps per file because builds of one version can have different publish times. As in conda, a repodata `timestamp` is read as milliseconds when it is above 253402300799 (the end of year 9999 in seconds) and as seconds otherwise, since some older entries use seconds.
