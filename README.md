@@ -1475,6 +1475,8 @@ The proxy provides REST endpoints for package metadata enrichment, vulnerability
 | `POST /api/outdated` | Check multiple packages for outdated versions |
 | `POST /api/bulk` | Bulk package metadata lookup |
 
+`POST /api/outdated` and `POST /api/bulk` take up to 1000 entries per request and need `Content-Type: application/json`.
+
 #### Get Package Metadata
 
 ```bash

@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -16,7 +17,10 @@ import (
 )
 
 const (
-	maxBodySize            = 1 << 20 // 1 MB
+	maxBodySize = 1 << 20 // 1 MB
+	// maxLookupEntries is how many packages one outdated or bulk request
+	// may name: each is looked up at its registry.
+	maxLookupEntries       = 1000
 	licenseCategoryUnknown = "unknown"
 	defaultSortBy          = "hits"
 )
@@ -383,6 +387,25 @@ func (h *APIHandler) HandleVulnsPath(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// readLookupRequest decodes the JSON body of a lookup request into req, or
+// answers the request and returns false. A browser can only send a JSON
+// content type cross-origin after a CORS preflight, which the proxy never
+// answers, so requiring it stops other sites from sending lookups through a
+// visitor's browser.
+func readLookupRequest(w http.ResponseWriter, r *http.Request, req any) bool {
+	if !isJSONRequest(r) {
+		writeError(w, http.StatusUnsupportedMediaType, ErrCodeUnsupportedMediaType,
+			"Content-Type must be application/json")
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		badRequest(w, "invalid request body")
+		return false
+	}
+	return true
+}
+
 // HandleOutdated handles POST /api/outdated
 // @Summary Check outdated packages
 // @Tags api
@@ -394,15 +417,17 @@ func (h *APIHandler) HandleVulnsPath(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} ErrorResponse
 // @Router /api/outdated [post]
 func (h *APIHandler) HandleOutdated(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req OutdatedRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		badRequest(w, "invalid request body")
+	if !readLookupRequest(w, r, &req) {
 		return
 	}
 
 	if len(req.Packages) == 0 {
 		badRequest(w, "packages list is required")
+		return
+	}
+	if len(req.Packages) > maxLookupEntries {
+		badRequest(w, fmt.Sprintf("at most %d packages per request", maxLookupEntries))
 		return
 	}
 
@@ -440,15 +465,17 @@ func (h *APIHandler) HandleOutdated(w http.ResponseWriter, r *http.Request) {
 // @Failure 500 {object} ErrorResponse
 // @Router /api/bulk [post]
 func (h *APIHandler) HandleBulkLookup(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req BulkRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		badRequest(w, "invalid request body")
+	if !readLookupRequest(w, r, &req) {
 		return
 	}
 
 	if len(req.PURLs) == 0 {
 		badRequest(w, "purls list is required")
+		return
+	}
+	if len(req.PURLs) > maxLookupEntries {
+		badRequest(w, fmt.Sprintf("at most %d purls per request", maxLookupEntries))
 		return
 	}
 
