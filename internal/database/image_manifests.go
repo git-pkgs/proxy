@@ -25,9 +25,15 @@ const (
 // the bind limits of SQLite and PostgreSQL. A variable so tests can lower it.
 var imagePruneBatch = 500
 
-// imagePruneBeforeDelete, when set, runs between what a prune reads and what
-// it deletes. For tests.
-var imagePruneBeforeDelete func()
+// The points of a prune imagePruneHook runs at: after reading the manifests
+// old enough to delete, and before deleting those not kept.
+const (
+	imagePruneRead   = "read"
+	imagePruneDelete = "delete"
+)
+
+// imagePruneHook, when set, runs at those points of a prune. For tests.
+var imagePruneHook func(point string)
 
 // ImageManifest is what one container image manifest of a repository
 // references.
@@ -130,6 +136,19 @@ func (db *DB) PruneImageManifests(packagePURL string, n int, before time.Time) e
 	}
 	defer func() { _ = tx.Rollback() }()
 
+	// Read before what is kept: a manifest tagged after this is either read
+	// as kept or no longer as it is here.
+	var old []imageManifestRow
+	err = tx.Select(&old, db.Rebind(`
+		SELECT digest, tagged_at FROM image_manifests WHERE package_purl = ? AND recorded_at < ?
+	`), packagePURL, before.UnixMilli())
+	if err != nil {
+		return err
+	}
+	if imagePruneHook != nil {
+		imagePruneHook(imagePruneRead)
+	}
+
 	roots, err := db.newestImages(tx, packagePURL, n)
 	if err != nil {
 		return err
@@ -151,21 +170,14 @@ func (db *DB) PruneImageManifests(packagePURL string, n int, before time.Time) e
 		keep[digest] = struct{}{}
 	}
 
-	var old []imageManifestRow
-	err = tx.Select(&old, db.Rebind(`
-		SELECT digest, tagged_at FROM image_manifests WHERE package_purl = ? AND recorded_at < ?
-	`), packagePURL, before.UnixMilli())
-	if err != nil {
-		return err
-	}
 	drop := old[:0]
 	for _, row := range old {
 		if _, ok := keep[row.Digest]; !ok {
 			drop = append(drop, row)
 		}
 	}
-	if imagePruneBeforeDelete != nil {
-		imagePruneBeforeDelete()
+	if imagePruneHook != nil {
+		imagePruneHook(imagePruneDelete)
 	}
 	// Deleted by name in batches: a list of the kept ones can outgrow what
 	// one query may bind.
