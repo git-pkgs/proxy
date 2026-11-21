@@ -961,10 +961,8 @@ func (u *UpstreamConfig) AuthForURL(url string) *AuthConfig {
 
 // Validate checks upstream authentication URL scopes.
 func (u *UpstreamConfig) Validate() error {
-	for pattern := range u.Auth {
-		if _, err := parseAuthURL(pattern); err != nil {
-			return fmt.Errorf("invalid upstream.auth URL %q: %w", pattern, err)
-		}
+	if err := u.validateAuth(); err != nil {
+		return err
 	}
 	if err := validateNamedUpstreams("upstream.helm", u.Helm); err != nil {
 		return err
@@ -2339,6 +2337,38 @@ func (a *AuthConfig) Header() (name, value string) {
 	default:
 		return "", ""
 	}
+}
+
+// validateAuth checks the URL scope and the type of every upstream.auth
+// entry.
+func (u *UpstreamConfig) validateAuth() error {
+	for pattern, auth := range u.Auth {
+		if _, err := parseAuthURL(pattern); err != nil {
+			return fmt.Errorf("invalid upstream.auth URL %q: %w", pattern, err)
+		}
+		switch strings.ToLower(auth.Type) {
+		case "bearer", "basic", "header", "ecr":
+		default:
+			return fmt.Errorf("invalid upstream.auth %q: unknown type %q, must be bearer, basic, header or ecr", pattern, auth.Type)
+		}
+	}
+	return nil
+}
+
+// authWithoutCredentials returns the upstream.auth scopes whose entry has
+// nothing to send, sorted. An ECR entry gets its credentials from AWS.
+func (u *UpstreamConfig) authWithoutCredentials() []string {
+	var scopes []string
+	for pattern, auth := range u.Auth {
+		if strings.EqualFold(auth.Type, "ecr") {
+			continue
+		}
+		if name, value := auth.Header(); name == "" || value == "" {
+			scopes = append(scopes, pattern)
+		}
+	}
+	slices.Sort(scopes)
+	return scopes
 }
 
 // expandEnv expands ${VAR_NAME} references in a string.
