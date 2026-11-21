@@ -197,8 +197,13 @@ func (db *DB) PruneImageManifests(packagePURL string, n int, before time.Time) e
 		if err != nil {
 			return err
 		}
-		if deleted, err := res.RowsAffected(); err != nil || deleted != int64(len(batch)) {
+		deleted, err := res.RowsAffected()
+		if err != nil {
 			return err
+		}
+		if deleted != int64(len(batch)) {
+			// A pull changed one: roll back and leave it to the next prune.
+			return nil
 		}
 	}
 	return tx.Commit()
