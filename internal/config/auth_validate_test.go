@@ -77,3 +77,36 @@ func TestWarningsUpstreamAuthWithoutCredentials(t *testing.T) {
 		}
 	}
 }
+
+// A scope can carry a credential of its own, which the messages naming the
+// scope leave out.
+func TestUpstreamAuthMessagesLeaveOutScopeCredentials(t *testing.T) {
+	const scope = "https://user:scope-pass@registry.example.com/private?api_key=scope-secret"
+	const shown = `"https://registry.example.com/private"`
+
+	cfg := Default()
+	cfg.Upstream.Auth = map[string]AuthConfig{scope: {Type: "bearer"}}
+	var warning string
+	for _, w := range cfg.Warnings() {
+		if strings.Contains(w, "upstream.auth") {
+			warning = w
+		}
+	}
+
+	cfg.Upstream.Auth = map[string]AuthConfig{scope: {Type: "token"}}
+	err := cfg.Validate()
+	if err == nil {
+		t.Fatal("Validate() error = nil, want an unknown type error")
+	}
+
+	for name, message := range map[string]string{"warning": warning, "error": err.Error()} {
+		if !strings.Contains(message, shown) {
+			t.Errorf("%s = %q, want it to name %s", name, message, shown)
+		}
+		for _, secret := range []string{"scope-pass", "scope-secret", "user:", "api_key"} {
+			if strings.Contains(message, secret) {
+				t.Errorf("%s = %q, want it without %q", name, message, secret)
+			}
+		}
+	}
+}

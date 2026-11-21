@@ -2349,14 +2349,24 @@ func (u *UpstreamConfig) validateAuth() error {
 		switch strings.ToLower(auth.Type) {
 		case "bearer", "basic", "header", "ecr":
 		default:
-			return fmt.Errorf("invalid upstream.auth %q: unknown type %q, must be bearer, basic, header or ecr", pattern, auth.Type)
+			return fmt.Errorf("invalid upstream.auth %q: unknown type %q, must be bearer, basic, header or ecr", authScopeName(pattern), auth.Type)
 		}
 	}
 	return nil
 }
 
+// authScopeName returns an upstream.auth scope for a message, without the
+// user information and query a scope can carry credentials in.
+func authScopeName(pattern string) string {
+	parsed, err := parseAuthURL(pattern)
+	if err != nil {
+		return "(invalid URL)"
+	}
+	return (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.Path, RawPath: parsed.RawPath}).String()
+}
+
 // authWithoutCredentials returns the upstream.auth scopes whose entry has
-// nothing to send, sorted. An ECR entry gets its credentials from AWS.
+// nothing to send, as authScopeName gives them, sorted. An ECR entry gets its credentials from AWS.
 func (u *UpstreamConfig) authWithoutCredentials() []string {
 	var scopes []string
 	for pattern, auth := range u.Auth {
@@ -2364,7 +2374,7 @@ func (u *UpstreamConfig) authWithoutCredentials() []string {
 			continue
 		}
 		if name, value := auth.Header(); name == "" || value == "" {
-			scopes = append(scopes, pattern)
+			scopes = append(scopes, authScopeName(pattern))
 		}
 	}
 	slices.Sort(scopes)
