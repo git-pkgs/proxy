@@ -38,6 +38,9 @@ func (h *GitHandler) mirror(ctx context.Context, location, version string, seen 
 	if err != nil {
 		return gitcache.MirrorResult{}, err
 	}
+	if repo.upstream.Offline {
+		return gitcache.MirrorResult{}, fmt.Errorf("%s: upstream %s is offline", location, repo.name)
+	}
 	result, err := h.cache.Mirror(ctx, repo.key, repo.url, version, repo.upstream.fetchWants)
 	if err != nil {
 		return result, err

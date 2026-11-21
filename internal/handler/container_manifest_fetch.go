@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
@@ -194,7 +195,39 @@ func (h *ContainerHandler) revalidateTag(ctx context.Context, req manifestReques
 	case shouldServeStaleManifest(resp.StatusCode):
 		return manifestOutcome{err: fmt.Errorf("upstream status %d", resp.StatusCode)}
 	}
-	return h.getManifest(ctx, req, req.reference, cached, fromFallback)
+	outcome := h.getManifest(ctx, req, req.reference, cached, fromFallback)
+	if outcome.err != nil {
+		if refusal, ok := headRefusal(resp); ok {
+			// The registry has just said the tag is gone or not readable
+			// by this client; the cached copy must not stand in for it.
+			return manifestOutcome{relay: refusal}
+		}
+	}
+	return outcome
+}
+
+// headRefusal turns a HEAD that refused a manifest, or said it no longer
+// exists, into the error response a GET would have got.
+func headRefusal(resp *http.Response) (*capturedResponse, bool) {
+	var code string
+	switch resp.StatusCode {
+	case http.StatusUnauthorized:
+		code = "UNAUTHORIZED"
+	case http.StatusForbidden:
+		code = "DENIED"
+	case http.StatusNotFound, http.StatusGone:
+		code = "MANIFEST_UNKNOWN"
+	default:
+		return nil, false
+	}
+	body, _ := json.Marshal(map[string]any{"errors": []map[string]string{
+		{"code": code, "message": http.StatusText(resp.StatusCode)},
+	}})
+	header := http.Header{headerContentType: {"application/json"}}
+	if challenge := resp.Header.Get("WWW-Authenticate"); challenge != "" {
+		header.Set("WWW-Authenticate", challenge)
+	}
+	return &capturedResponse{status: resp.StatusCode, header: header, body: body}, true
 }
 
 // headManifest answers a client HEAD. When the digest upstream names is

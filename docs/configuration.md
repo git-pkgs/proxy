@@ -911,6 +911,7 @@ git:
   refresh_wait: 5s       # then serve the cached copy if the upstream check is slow
   stale_max_age: 24h     # never serve a copy not checked for this long
   warm_max_idle: 30d     # keep checking repositories used within this
+  offline: false         # serve what is cached without contacting any upstream
 ```
 
 Clients reach the proxy through Git's `insteadOf` setting, which rewrites the
@@ -1014,6 +1015,22 @@ refused, and those the configuration no longer serves, are skipped. `warm_max_id
 `stale_max_age` under `20m` (which includes `0`), turns the background
 checks off. They run in `proxy serve` only, each process for its own
 `cache_dir`.
+
+For a site cut off from its Git servers on purpose, or an outage that
+outlasts `stale_max_age`, `offline: true` on an `upstream.git` entry serves
+the repositories cached for it without contacting it; `git.offline: true`
+does so for every entry. A clone or fetch gets branches and tags as last
+fetched, however long ago that was, and the log says it was served offline
+and when the copy was last checked; the git page in the UI marks the
+repository offline. A repository not cached is refused at once (404), and a
+commit the cache lacks is reported missing by Git. The background checks skip
+offline upstreams, `proxy mirror` refuses their `pkg:git` PURLs, and a Git
+LFS batch is answered from the cached objects alone, with the others reported
+not found. `git.max_size` still evicts the repositories of an offline
+upstream like any others, also at startup after the limit is lowered, and an
+evicted one can't be cloned again until the upstream is back; leave enough
+room, or no limit, for a cache that has to last offline. Turning it on or off
+takes a restart.
 
 The proxy runs `git` 2.31 or newer, which must be installed (the Docker image includes it).
 The `git` processes never reach the network themselves: their fetches go
@@ -1129,7 +1146,7 @@ Pushing, LFS uploads and locking, and the dumb HTTP protocol are not
 supported. The settings
 under `git` can also be set with `PROXY_GIT_CACHE_DIR`, `PROXY_GIT_MAX_SIZE`,
 `PROXY_GIT_MAX_REPO_SIZE`, `PROXY_GIT_REFRESH_WAIT`,
-`PROXY_GIT_STALE_MAX_AGE` and `PROXY_GIT_WARM_MAX_IDLE`.
+`PROXY_GIT_STALE_MAX_AGE`, `PROXY_GIT_WARM_MAX_IDLE` and `PROXY_GIT_OFFLINE`.
 
 ### Maven repositories
 
@@ -1397,6 +1414,8 @@ Maven caveats:
 - Maven Central lists versions in version order, not in the order they were published. A patch to an older release line published after a newer release that is out of cooldown stays listed while it is in cooldown, but its files are still refused.
 - SNAPSHOT versions are not held back.
 
+nuget.org reports 1900-01-01 as the publish time of an unlisted version. For a download of one, the proxy reads the time the version was created from its catalog entry instead, so unlisting a new release does not end its cooldown. Unlisted versions stay in the version lists the proxy serves, and one whose registration has no catalog entry on the upstream is let through.
+
 Helm uses each release's `created` time from the repository's `index.yaml`. Releases in cooldown are left out of the index the proxy serves, and their archives aren't served; a release without `created` is let through. Charts pulled over OCI have no publish time and aren't held back.
 
 Cargo, RubyGems, Hex, pub.dev, Conda and Helm check artifact downloads against cooldown, including files cached before the policy changed. When a publish-time lookup fails, an already-cached file is still served; an uncached download fails with 502, or 503 with `Retry-After` when the rate-limit gate holds the request. Metadata cached within `metadata_ttl`, or served stale, can predate a release; a download of a version (or, for Conda, a file) it doesn't list fetches it again, as for npm and PyPI, and is decided on what the upstream lists now. If it can't be fetched, the lookup has failed. Helm charts are downloaded by digest and aren't covered by this yet. Conda checks timestamps per file because builds of one version can have different publish times. As in conda, a repodata `timestamp` is read as milliseconds when it is above 253402300799 (the end of year 9999 in seconds) and as seconds otherwise, since some older entries use seconds.
@@ -1446,6 +1465,13 @@ Names and versions are compared the way each ecosystem treats them:
   without one.
 - A RubyGems entry also covers that version's platform gems:
   `pkg:gem/nokogiri@1.16.0` denies `nokogiri-1.16.0-x86_64-linux.gem`.
+- PyPI versions are compared in the canonical form of Python's packaging
+  (`canonicalize_version`): `pkg:pypi/foo@2.0` also covers
+  `foo-2.0.0-py3-none-any.whl` and `foo-V2.0.0.0-py3-none-any.whl`, since
+  PyPI accepts wheels whose filenames spell the release's version any way
+  PEP 440 counts as equal. Cooldown and the simple index filters compare
+  versions the same way. A local version is a version of its own:
+  `pkg:pypi/torch@2.0.0` doesn't cover `torch-2.0.0+cpu`.
 - Composer versions ignore a leading `v`, which Packagist keeps from the tag:
   `pkg:composer/symfony/console@6.1.7` also covers `v6.1.7`.
 - Go versions are matched as written, `pkg:golang/example.com/mod@v1.0.0-RC1`,
@@ -1657,7 +1683,7 @@ By default the proxy fetches metadata fresh from upstream on every request. Enab
 
 OCI manifests and tag lists are always cached because cached image blobs cannot be pulled without their manifests and offline clients may need tag resolution. Digest-addressed manifests are immutable and served directly from cache. Tag-addressed manifests and tag lists follow `metadata_ttl`, revalidate when stale, and fall back to the last cached response when the registry is unavailable.
 
-A stale tag is revalidated with a HEAD request carrying the client's `Accept` header, and the `Docker-Content-Digest` it returns is compared with the cached one. If the tag did not move, or moved to a manifest already cached by digest, nothing else is fetched. Otherwise the new manifest is fetched once by digest and stored under the tag and the digest. Docker Hub counts manifest GETs, but not HEADs, against its pull rate limit, so an unchanged tag costs no pulls however often its TTL runs out. A registry whose HEAD response has no digest gets a conditional GET for the tag instead. A client's HEAD request for a stale or uncached tag is passed on as a HEAD; when the digest it returns is cached, the tag is pointed at it, so the GET that follows is served from cache. Concurrent requests for the same manifest share one upstream request, and instances sharing a Postgres database take turns through the same [fetch lease](#several-instances) as other metadata.
+A stale tag is revalidated with a HEAD request carrying the client's `Accept` header, and the `Docker-Content-Digest` it returns is compared with the cached one. If the tag did not move, or moved to a manifest already cached by digest, nothing else is fetched. Otherwise the new manifest is fetched once by digest and stored under the tag and the digest. Docker Hub counts manifest GETs, but not HEADs, against its pull rate limit, so an unchanged tag costs no pulls however often its TTL runs out. A registry whose HEAD response has no digest gets a conditional GET for the tag instead, as does one that answers the HEAD with another status; if that GET then fails, a 401, 403, 404 or 410 from the HEAD is relayed rather than the cached copy served, since the tag is gone or not readable. A client's HEAD request for a stale or uncached tag is passed on as a HEAD; when the digest it returns is cached, the tag is pointed at it, so the GET that follows is served from cache. Concurrent requests for the same manifest share one upstream request, and instances sharing a Postgres database take turns through the same [fetch lease](#several-instances) as other metadata.
 
 ```yaml
 cache_metadata: true

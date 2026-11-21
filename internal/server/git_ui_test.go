@@ -261,3 +261,31 @@ func TestGitCacheGauges(t *testing.T) {
 		t.Errorf("proxy_git_cache_size_bytes = %v, want the repository's size", got)
 	}
 }
+
+// TestGitRepositoryRowsMarkOfflineUpstreams checks the page says which
+// repositories are served without contacting their upstream.
+func TestGitRepositoryRowsMarkOfflineUpstreams(t *testing.T) {
+	upstreams := map[string]config.GitUpstream{
+		"github":   {URL: "https://github.com"},
+		"internal": {URL: "https://git.example", Offline: true},
+	}
+	rows, _ := gitRepositoryRows("http://proxy.example", upstreams, []gitcache.RepositoryStats{
+		{Key: gitcache.UpstreamDir("github", "https://github.com") + "/acme/widgets.git"},
+		{Key: gitcache.UpstreamDir("internal", "https://git.example") + "/team/tools.git"},
+	}, func(string) (gitcache.RepositoryState, bool) { return gitcache.RepositoryState{}, false })
+	offline := map[string]bool{}
+	for _, row := range rows {
+		offline[row.Upstream] = row.Offline
+	}
+	if len(rows) != 2 || offline["github"] || !offline["internal"] {
+		t.Fatalf("rows %+v, want internal's marked offline", rows)
+	}
+
+	w := httptest.NewRecorder()
+	if err := (&Templates{}).Render(w, "git_repositories", GitRepositoriesData{Rows: rows}); err != nil {
+		t.Fatal(err)
+	}
+	if got := strings.Count(w.Body.String(), ">offline<"); got != 1 {
+		t.Errorf("page marks %d repositories offline, want 1:\n%s", got, w.Body)
+	}
+}

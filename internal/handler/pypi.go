@@ -509,6 +509,18 @@ func (h *PyPIHandler) versionInCooldown(r *http.Request, name, version string) (
 	return !h.proxy.cooldown().IsAllowed("pypi", canonicalPackagePURL("pypi", name), publishedAt), nil
 }
 
+// releaseTime returns the newest upload time of the releases equal to version.
+func releaseTime(times map[string]time.Time, version string) time.Time {
+	canonical := pypi.CanonicalVersion(version)
+	var newest time.Time
+	for release, published := range times {
+		if pypi.CanonicalVersion(release) == canonical && published.After(newest) {
+			newest = published
+		}
+	}
+	return newest
+}
+
 // storeUploadTime records a release's newest upload time under the version
 // PURL the file is cached under, so storedCooldown finds it. The time only
 // moves forward: a request that read an older document leaves a newer one,

@@ -159,6 +159,11 @@ func (h *GitHandler) serveLFSBatch(w http.ResponseWriter, r *http.Request, repo 
 		requested[object.OID] = object.Size
 	}
 
+	if repo.upstream.Offline {
+		writeLFSBatch(w, h.lfsCachedBatch(r, repo, req.Objects, lfsObjectError{
+			Code: http.StatusNotFound, Message: lfsNotCachedOffline}))
+		return
+	}
 	upstream, err := h.lfsBatch(r.Context(), repo, req.Ref, req.Objects)
 	if err != nil {
 		if resp, ok := h.lfsBatchFromCache(r, repo, req.Objects, err); ok {
@@ -198,23 +203,13 @@ func (h *GitHandler) lfsBatchFromCache(r *http.Request, repo gitRepository, obje
 	if r.Context().Err() != nil || (errors.As(err, &refused) && refused.status < http.StatusInternalServerError) {
 		return lfsBatchResponse{}, false
 	}
-	resp := newLFSBatchResponse()
-	seen := make(map[string]bool, len(objects))
+	resp := h.lfsCachedBatch(r, repo, objects, lfsObjectError{
+		Code: http.StatusBadGateway, Message: "upstream unavailable and object not cached"})
 	cached := 0
-	for _, object := range objects {
-		if seen[object.OID] {
-			continue
-		}
-		seen[object.OID] = true
-		out := lfsObjectResponse{OID: object.OID, Size: object.Size}
-		if ok, _ := h.proxy.HasCachedArtifact(r.Context(), gitEcosystem, repo.lfsName(), object.OID, object.OID); ok {
-			out.Authenticated = true
-			out.Actions = map[string]lfsAction{"download": {Href: h.lfsObjectURL(repo, object.OID, object.Size)}}
+	for _, object := range resp.Objects {
+		if object.Error == nil {
 			cached++
-		} else {
-			out.Error = &lfsObjectError{Code: http.StatusBadGateway, Message: "upstream unavailable and object not cached"}
 		}
-		resp.Objects = append(resp.Objects, out)
 	}
 	if cached == 0 {
 		return lfsBatchResponse{}, false
@@ -222,6 +217,37 @@ func (h *GitHandler) lfsBatchFromCache(r *http.Request, repo gitRepository, obje
 	h.proxy.Logger.Warn("git: LFS batch request failed, answering from the cache",
 		"repository", repo.key, "cached", cached, "objects", len(resp.Objects), "error", err)
 	return resp, true
+}
+
+// lfsNotCachedOffline answers for an object not cached on an offline
+// upstream.
+const lfsNotCachedOffline = "object not cached, and the upstream is offline"
+
+// lfsCachedBatch answers a batch from the objects cached for repo, each
+// object not cached with missing, and one whose lookup failed with a 500.
+func (h *GitHandler) lfsCachedBatch(r *http.Request, repo gitRepository, objects []lfsObject, missing lfsObjectError) lfsBatchResponse {
+	resp := newLFSBatchResponse()
+	seen := make(map[string]bool, len(objects))
+	for _, object := range objects {
+		if seen[object.OID] {
+			continue
+		}
+		seen[object.OID] = true
+		out := lfsObjectResponse{OID: object.OID, Size: object.Size}
+		ok, err := h.proxy.HasCachedArtifact(r.Context(), gitEcosystem, repo.lfsName(), object.OID, object.OID)
+		switch {
+		case err != nil:
+			h.proxy.Logger.Warn("git: reading the LFS object cache failed", "repository", repo.key, "oid", object.OID, "error", err)
+			out.Error = &lfsObjectError{Code: http.StatusInternalServerError, Message: "reading the cache failed"}
+		case ok:
+			out.Authenticated = true
+			out.Actions = map[string]lfsAction{"download": {Href: h.lfsObjectURL(repo, object.OID, object.Size)}}
+		default:
+			out.Error = &lfsObjectError{Code: missing.Code, Message: missing.Message}
+		}
+		resp.Objects = append(resp.Objects, out)
+	}
+	return resp
 }
 
 func newLFSBatchResponse() lfsBatchResponse {
@@ -242,6 +268,10 @@ func (h *GitHandler) serveLFSObject(w http.ResponseWriter, r *http.Request, repo
 	cached, err := h.proxy.GetCachedArtifact(r.Context(), gitEcosystem, repo.lfsName(), object.OID, object.OID)
 	if err != nil {
 		h.proxy.serveArtifactError(w, err, "failed to read cached LFS object")
+		return
+	}
+	if cached == nil && repo.upstream.Offline {
+		lfsError(w, http.StatusNotFound, lfsNotCachedOffline)
 		return
 	}
 	if cached == nil {

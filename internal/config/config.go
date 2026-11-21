@@ -1689,6 +1689,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Git.RefreshWait, "PROXY_GIT_REFRESH_WAIT")
 	setEnvString(&c.Git.StaleMaxAge, "PROXY_GIT_STALE_MAX_AGE")
 	setEnvString(&c.Git.WarmMaxIdle, "PROXY_GIT_WARM_MAX_IDLE")
+	c.setEnvBool(&c.Git.Offline, "PROXY_GIT_OFFLINE")
 }
 
 // validateAbsoluteURL returns an error if value is not a parseable URL with
@@ -1864,6 +1865,12 @@ func (c *Config) validateComponents() error {
 
 	if err := c.Git.Validate(); err != nil {
 		return err
+	}
+	if c.Git.Offline {
+		for name, git := range c.Upstream.Git {
+			git.Offline = true
+			c.Upstream.Git[name] = git
+		}
 	}
 
 	return c.Gradle.BuildCache.Validate()
