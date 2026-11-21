@@ -152,13 +152,13 @@ func containerManifestAcceptsIndex(accept string) bool {
 	return containerManifestAccepts(accept, ociImageIndexMediaType) || containerManifestAccepts(accept, dockerManifestListMediaType)
 }
 
-// containerManifestNames reports whether accept lists mediaType itself.
-// Registries compare Accept values literally, so a wildcard gets a client the
-// converted manifest, not the index.
+// containerManifestNames reports whether accept lists mediaType itself and
+// doesn't refuse it with q=0. Registries compare Accept values literally, so a
+// wildcard gets a client the converted manifest, not the index.
 func containerManifestNames(accept, mediaType string) bool {
 	for _, value := range strings.Split(accept, ",") {
 		if named, _, err := mime.ParseMediaType(value); err == nil && named == mediaType {
-			return true
+			return containerManifestAccepts(accept, mediaType)
 		}
 	}
 	return false

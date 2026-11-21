@@ -15,22 +15,24 @@ const (
 	convertedAMD64Body = `{"schemaVersion":2,"mediaType":"application/vnd.docker.distribution.manifest.v2+json"}`
 	dockerV2MediaType  = "application/vnd.docker.distribution.manifest.v2+json"
 	wildcardAccept     = dockerV2MediaType + ", */*"
+	refusedListAccept  = ociImageIndexMediaType + ", " + dockerManifestListMediaType + ";q=0, " + dockerV2MediaType
 	dockerListAccept   = dockerManifestListMediaType + ", " + dockerV2MediaType
 	convertedOCIBody   = `{"schemaVersion":2,"mediaType":"application/vnd.oci.image.index.v1+json","manifests":[]}`
 )
 
 // convertingRegistry answers like distribution: the index for a client that
 // names its type, else the default platform's manifest. A wildcard doesn't
-// count as naming it.
+// count as naming it, and neither does a type refused with q=0.
 func convertingRegistry(t *testing.T, index string) *httptest.Server {
 	t.Helper()
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		body, mediaType := convertedAMD64Body, dockerV2MediaType
-		if index == convertedOCIBody && containerManifestNames(r.Header.Get("Accept"), ociImageIndexMediaType) {
-			body, mediaType = index, ociImageIndexMediaType
+		indexType := dockerManifestListMediaType
+		if index == convertedOCIBody {
+			indexType = ociImageIndexMediaType
 		}
-		if index == convertedListBody && containerManifestNames(r.Header.Get("Accept"), dockerManifestListMediaType) {
-			body, mediaType = index, dockerManifestListMediaType
+		if containerManifestNames(r.Header.Get("Accept"), indexType) {
+			body, mediaType = index, indexType
 		}
 		w.Header().Set("Content-Type", mediaType)
 		w.Header().Set("Docker-Content-Digest", sha256Digest([]byte(body)))
@@ -63,6 +65,7 @@ func TestContainerConvertedManifestKeepsTheSharedList(t *testing.T) {
 		"list cached first":      {convertedListBody, []string{dockerClientAccept, ociIndexOnlyAccept, dockerClientAccept}},
 		"converted cached first": {convertedListBody, []string{ociIndexOnlyAccept, ociIndexOnlyAccept, dockerClientAccept}},
 		"wildcard client first":  {convertedListBody, []string{wildcardAccept, dockerClientAccept}},
+		"refused list type":      {convertedListBody, []string{refusedListAccept, dockerClientAccept}},
 		"converted OCI index":    {convertedOCIBody, []string{dockerListAccept, dockerClientAccept}},
 	} {
 		t.Run(name, func(t *testing.T) {
