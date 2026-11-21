@@ -132,10 +132,10 @@ func (h *ContainerHandler) containerManifestCacheKey(registryURL, name, referenc
 
 // containerManifestSharedCacheKey is the key clients with different Accept
 // headers share. A digest names exactly one document. A tag is stored once for
-// all clients that accept an index type, whatever upstream returned for it, so
-// Docker, containerd and Podman read the same entry. Clients without index
-// support keep a key per normalized Accept header, because registries may
-// convert an index into a single platform manifest for them.
+// all clients that accept an index type, so Docker, containerd and Podman read
+// the same entry; containerManifestSharable says what may go there. Clients
+// without index support keep a key per normalized Accept header, because
+// registries may convert an index into a single platform manifest for them.
 func (h *ContainerHandler) containerManifestSharedCacheKey(registryURL, name, reference, cacheAccept string) string {
 	if manifestDigestReferencePattern.MatchString(reference) {
 		identity := strings.Join([]string{registryURL, name, reference}, "\x00")
@@ -150,6 +150,23 @@ func (h *ContainerHandler) containerManifestSharedCacheKey(registryURL, name, re
 
 func containerManifestAcceptsIndex(accept string) bool {
 	return containerManifestAccepts(accept, ociImageIndexMediaType) || containerManifestAccepts(accept, dockerManifestListMediaType)
+}
+
+// containerManifestSharable reports whether manifest may go under the shared
+// key of reference. Every client that accepts an index type reads a tag's
+// shared entry, so it takes an index, or what a client accepting both index
+// types got: registries convert an index into the default platform's manifest
+// for a client that lacks the index's type, and that manifest must not stand in
+// for the index for the others.
+func containerManifestSharable(reference, cacheAccept string, manifest *cachedContainerManifest) bool {
+	if manifestDigestReferencePattern.MatchString(reference) || !containerManifestAcceptsIndex(cacheAccept) {
+		return true
+	}
+	if mediaType, _, err := mime.ParseMediaType(manifest.contentType); err == nil &&
+		(mediaType == ociImageIndexMediaType || mediaType == dockerManifestListMediaType) {
+		return true
+	}
+	return containerManifestAccepts(cacheAccept, ociImageIndexMediaType) && containerManifestAccepts(cacheAccept, dockerManifestListMediaType)
 }
 
 // containerManifestLegacyCacheKeys are the per-Accept keys older versions
@@ -193,7 +210,7 @@ func (h *ContainerHandler) loadContainerManifestForAccept(ctx context.Context, r
 		if cached == nil || !containerManifestCacheCompatible(accept, cached) {
 			continue
 		}
-		if !sharedEntryExists {
+		if !sharedEntryExists && containerManifestSharable(reference, cacheAccept, cached) {
 			if err := h.storeContainerManifest(ctx, cacheKey, cached); err != nil {
 				h.proxy.Logger.Warn("failed to migrate cached container manifest", "error", err)
 			}
@@ -204,9 +221,11 @@ func (h *ContainerHandler) loadContainerManifestForAccept(ctx context.Context, r
 }
 
 func (h *ContainerHandler) storeContainerManifestForAccept(ctx context.Context, registryURL, name, reference, accept, cacheAccept string, manifest *cachedContainerManifest) {
-	cacheKey := h.containerManifestSharedCacheKey(registryURL, name, reference, cacheAccept)
-	if err := h.storeContainerManifest(ctx, cacheKey, manifest); err != nil {
-		h.proxy.Logger.Warn("failed to cache container manifest", "error", err)
+	if containerManifestSharable(reference, cacheAccept, manifest) {
+		cacheKey := h.containerManifestSharedCacheKey(registryURL, name, reference, cacheAccept)
+		if err := h.storeContainerManifest(ctx, cacheKey, manifest); err != nil {
+			h.proxy.Logger.Warn("failed to cache container manifest", "error", err)
+		}
 	}
 
 	h.storeContainerManifestLegacyEntries(ctx, registryURL, name, reference, accept, cacheAccept, manifest)
