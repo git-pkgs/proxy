@@ -195,6 +195,10 @@ func TestPyPIDownloadCooldownRefetchesReleasesLackingTheVersion(t *testing.T) {
 			if code := get("newpkg-9.0.0.tar.gz"); code != http.StatusOK || metadataRequests.Load() != 1 {
 				t.Fatalf("unlisted version: status %d, %d metadata requests; want 200 and 1", code, metadataRequests.Load())
 			}
+			// A listed version spelled another way isn't fetched again either.
+			if code := get("newpkg-1.0.tar.gz"); code != http.StatusOK || metadataRequests.Load() != 1 {
+				t.Fatalf("listed version spelled 1.0: status %d, %d metadata requests; want 200 and 1", code, metadataRequests.Load())
+			}
 			released.Store(true)
 			down.Store(upstreamFails)
 			code := get("newpkg-2.0.0.tar.gz")

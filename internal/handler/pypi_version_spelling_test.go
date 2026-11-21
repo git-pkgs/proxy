@@ -76,12 +76,15 @@ func TestPyPIReleaseTimeTakesTheNewestOfEqualReleases(t *testing.T) {
 	times := map[string]time.Time{"1.0": older, "1.0.0": newer, "2.0": {}}
 	for range 20 {
 		for _, version := range []string{"1.0", "1.0.0", "1.0.0.0"} {
-			if got := releaseTime(times, version); !got.Equal(newer) {
-				t.Fatalf("releaseTime(%q) = %v, want %v", version, got, newer)
+			if got, listed := releaseTime(times, version); !got.Equal(newer) || !listed {
+				t.Fatalf("releaseTime(%q) = %v, %t; want %v, listed", version, got, listed, newer)
 			}
 		}
 	}
-	if got := releaseTime(times, "3.0"); !got.IsZero() {
-		t.Errorf("releaseTime(3.0) = %v, want the zero time", got)
+	if got, listed := releaseTime(times, "2.0.0"); !got.IsZero() || !listed {
+		t.Errorf("releaseTime(2.0.0) = %v, %t; want the zero time, listed", got, listed)
+	}
+	if got, listed := releaseTime(times, "3.0"); !got.IsZero() || listed {
+		t.Errorf("releaseTime(3.0) = %v, %t; want the zero time, not listed", got, listed)
 	}
 }
