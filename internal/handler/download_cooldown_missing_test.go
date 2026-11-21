@@ -485,3 +485,23 @@ func TestCondaRefetchWithDigestDoesNotHideLaterReleases(t *testing.T) {
 		t.Errorf("release in cooldown: status %d, want 404", w.Code)
 	}
 }
+
+// TestRecentRefetchReturnsTheRefetchedIndex checks a lookup that read the
+// index a refetch has since replaced gets the refetched one to read from.
+func TestRecentRefetchReturnsTheRefetchedIndex(t *testing.T) {
+	proxy, _, _, _ := setupTestProxy(t)
+	const key = "conda\x00repodata"
+	storePublishIndex(proxy, key, metadataResult{}, map[string]time.Time{}, false)
+	if _, ok := recentRefetch(proxy, key); ok {
+		t.Fatal("an index no refetch built counts as refetched")
+	}
+	released := time.Now().Add(-time.Hour)
+	storePublishIndex(proxy, key, metadataResult{}, map[string]time.Time{"new.conda": released}, true)
+	index, ok := recentRefetch(proxy, key)
+	if !ok {
+		t.Fatal("refetched index not returned")
+	}
+	if got := index.(map[string]time.Time)["new.conda"]; !got.Equal(released) {
+		t.Errorf("new.conda published %v, want %v", got, released)
+	}
+}

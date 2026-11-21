@@ -166,15 +166,18 @@ func keptPublishIndex(p *Proxy, key string, res metadataResult) (any, bool) {
 	return entry.index, true
 }
 
-// refetchedRecently reports whether the index kept for key was built by a
+// recentRefetch returns the index kept for key when it was built by a
 // refetch and is within its keep, so a version it doesn't list was missing
 // upstream less than a minute ago.
-func refetchedRecently(p *Proxy, key string) bool {
+func recentRefetch(p *Proxy, key string) (any, bool) {
 	c := &p.sharedProxy().publishIndexes
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	entry, ok := c.entries[key]
-	return ok && entry.refetched && p.clock().Before(entry.expires)
+	if !ok || !entry.refetched || !p.clock().Before(entry.expires) {
+		return nil, false
+	}
+	return entry.index, true
 }
 
 // storePublishIndex keeps index, built from res, as publishIndex's entry for

@@ -584,8 +584,16 @@ func (h *CondaHandler) publishTime(r *http.Request, channel, arch, filename stri
 		return time.Time{}, false, err
 	}
 	published, listed := index[filename]
-	if listed || loaded != nil && !loaded.fromCache && !loaded.stale ||
-		refetchedRecently(h.proxy, indexKey) {
+	current := loaded != nil && !loaded.fromCache && !loaded.stale
+	if !listed && !current {
+		// A concurrent refetch may have replaced the index read above, so
+		// the file is looked up in the refetched one.
+		if recent, ok := recentRefetch(h.proxy, indexKey); ok {
+			published, listed = recent.(map[string]time.Time)[filename]
+			current = true
+		}
+	}
+	if listed || current {
 		// Listed, just read from upstream (streamed past metadata_max_size
 		// included), or refetched for a missing file within the last
 		// minute, without a digest to check it is current.
