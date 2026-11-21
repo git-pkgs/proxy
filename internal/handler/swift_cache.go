@@ -107,14 +107,14 @@ func (h *SwiftHandler) storeDocument(ctx context.Context, cacheKey string, doc *
 	}
 }
 
-func swiftReleasesCacheKey(scope, name, rawQuery string) string {
-	return swiftMetadataCacheKey("releases", scope, name, rawQuery)
+func swiftReleasesCacheKey(scope, name, rawQuery, accept string) string {
+	return swiftVariantCacheKey(accept, swiftAcceptJSON, "releases", scope, name, rawQuery)
 }
 
 // swiftManifestCacheKey keys a manifest by its swift-version as a tools
 // version, so the 5.8 of a manifest's alternate link and the 5.8.0 a client
 // requests for it share a key.
-func swiftManifestCacheKey(scope, name, version, rawQuery string) string {
+func swiftManifestCacheKey(scope, name, version, rawQuery, accept string) string {
 	if query, err := url.ParseQuery(rawQuery); err == nil {
 		if tools := query.Get("swift-version"); tools != "" {
 			for strings.Count(tools, ".") > 0 && strings.HasSuffix(tools, ".0") {
@@ -124,5 +124,5 @@ func swiftManifestCacheKey(scope, name, version, rawQuery string) string {
 		}
 		rawQuery = query.Encode()
 	}
-	return swiftMetadataCacheKey("manifest", scope, name, version, rawQuery)
+	return swiftVariantCacheKey(accept, swiftAcceptManifest, "manifest", scope, name, version, rawQuery)
 }

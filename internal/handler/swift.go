@@ -148,8 +148,9 @@ func (h *SwiftHandler) handlePackageReleases(w http.ResponseWriter, r *http.Requ
 	scope, name = canonicalSwiftPackage(scope, name)
 
 	upstreamURL := h.buildUpstreamURL(scope, name, "", "", r.URL.RawQuery)
+	accept := requestAccept(r, swiftAcceptJSON)
 	doc, err := h.fetchDocument(
-		r.Context(), swiftReleasesCacheKey(scope, name, r.URL.RawQuery), upstreamURL, requestAccept(r, swiftAcceptJSON),
+		r.Context(), swiftReleasesCacheKey(scope, name, r.URL.RawQuery, accept), upstreamURL, accept,
 	)
 	if err != nil {
 		h.writeMetadataError(w, err)
@@ -184,8 +185,9 @@ func (h *SwiftHandler) handleRelease(w http.ResponseWriter, r *http.Request) {
 	scope, name = canonicalSwiftPackage(scope, name)
 
 	upstreamURL := h.buildUpstreamURL(scope, name, version, "", r.URL.RawQuery)
+	accept := requestAccept(r, swiftAcceptJSON)
 	body, contentType, err := h.proxy.FetchOrCacheMetadata(
-		r.Context(), "swift", swiftReleaseCacheKey(scope, name, version), upstreamURL, requestAccept(r, swiftAcceptJSON),
+		r.Context(), "swift", swiftReleaseVariantCacheKey(scope, name, version, r.URL.RawQuery, accept), upstreamURL, accept,
 	)
 	if err != nil {
 		h.writeMetadataError(w, err)
@@ -205,8 +207,9 @@ func (h *SwiftHandler) handleManifest(w http.ResponseWriter, r *http.Request) {
 	scope, name = canonicalSwiftPackage(scope, name)
 
 	upstreamURL := h.buildUpstreamURL(scope, name, version, "Package.swift", r.URL.RawQuery)
+	accept := requestAccept(r, swiftAcceptManifest)
 	doc, err := h.fetchDocument(
-		r.Context(), swiftManifestCacheKey(scope, name, version, r.URL.RawQuery), upstreamURL, requestAccept(r, swiftAcceptManifest),
+		r.Context(), swiftManifestCacheKey(scope, name, version, r.URL.RawQuery, accept), upstreamURL, accept,
 	)
 	if err != nil {
 		h.writeMetadataError(w, err)
@@ -225,9 +228,10 @@ func (h *SwiftHandler) handleIdentifiers(w http.ResponseWriter, r *http.Request)
 	}
 
 	upstreamURL := h.upstreamURL + "/identifiers?" + r.URL.RawQuery
-	cacheKey := swiftMetadataCacheKey("identifiers", r.URL.RawQuery)
+	accept := requestAccept(r, swiftAcceptJSON)
+	cacheKey := swiftVariantCacheKey(accept, swiftAcceptJSON, "identifiers", r.URL.RawQuery)
 	body, contentType, err := h.proxy.FetchOrCacheMetadata(
-		r.Context(), "swift", cacheKey, upstreamURL, requestAccept(r, swiftAcceptJSON),
+		r.Context(), "swift", cacheKey, upstreamURL, accept,
 	)
 	if err != nil {
 		h.writeMetadataError(w, err)
@@ -606,8 +610,31 @@ func swiftMetadataCacheKey(parts ...string) string {
 	return hex.EncodeToString(digest[:])
 }
 
+// swiftVariantCacheKey is swiftMetadataCacheKey for a document fetched with
+// the Accept header its client sent: an upstream may answer another media
+// type with another document. The default one adds nothing to the key.
+func swiftVariantCacheKey(accept, fallback string, parts ...string) string {
+	if accept != fallback {
+		parts = append(parts, "accept", accept)
+	}
+	return swiftMetadataCacheKey(parts...)
+}
+
+// swiftReleaseCacheKey keys the release metadata the proxy itself reads, for
+// a source archive's checksum and signature.
 func swiftReleaseCacheKey(scope, name, version string) string {
 	return swiftMetadataCacheKey("release", scope, name, version)
+}
+
+// swiftReleaseVariantCacheKey keys release metadata as a client asked for
+// it, which is swiftReleaseCacheKey for a request with no query and the
+// default Accept header.
+func swiftReleaseVariantCacheKey(scope, name, version, rawQuery, accept string) string {
+	parts := []string{"release", scope, name, version}
+	if rawQuery != "" {
+		parts = append(parts, "query", rawQuery)
+	}
+	return swiftVariantCacheKey(accept, swiftAcceptJSON, parts...)
 }
 
 func requestAccept(r *http.Request, fallback string) string {

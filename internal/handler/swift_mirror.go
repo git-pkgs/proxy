@@ -48,7 +48,7 @@ func (h *SwiftHandler) mirrorReleaseList(ctx context.Context, scope, name string
 	for page := 0; page < maxSwiftReleasePages && !seen[query]; page++ {
 		seen[query] = true
 		upstreamURL := h.buildUpstreamURL(scope, name, "", "", query)
-		doc, err := h.fetchDocument(ctx, swiftReleasesCacheKey(scope, name, query), upstreamURL, swiftAcceptJSON)
+		doc, err := h.fetchDocument(ctx, swiftReleasesCacheKey(scope, name, query, swiftAcceptJSON), upstreamURL, swiftAcceptJSON)
 		if err != nil {
 			return err
 		}
@@ -66,13 +66,13 @@ func (h *SwiftHandler) mirrorReleaseList(ctx context.Context, scope, name string
 // for the alternate links it rewrites.
 func (h *SwiftHandler) mirrorManifests(ctx context.Context, scope, name, version string) error {
 	upstreamURL := h.buildUpstreamURL(scope, name, version, "Package.swift", "")
-	doc, err := h.fetchDocument(ctx, swiftManifestCacheKey(scope, name, version, ""), upstreamURL, swiftAcceptManifest)
+	doc, err := h.fetchDocument(ctx, swiftManifestCacheKey(scope, name, version, "", swiftAcceptManifest), upstreamURL, swiftAcceptManifest)
 	if err != nil {
 		return err
 	}
 	for _, query := range swiftLinkQueries(doc.link, "alternate", upstreamURL) {
 		alternateURL := h.buildUpstreamURL(scope, name, version, "Package.swift", query)
-		if _, err := h.fetchDocument(ctx, swiftManifestCacheKey(scope, name, version, query), alternateURL, swiftAcceptManifest); err != nil {
+		if _, err := h.fetchDocument(ctx, swiftManifestCacheKey(scope, name, version, query, swiftAcceptManifest), alternateURL, swiftAcceptManifest); err != nil {
 			return fmt.Errorf("%s: %w", query, err)
 		}
 	}
