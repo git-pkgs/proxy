@@ -1463,6 +1463,13 @@ Names and versions are compared the way each ecosystem treats them:
   without one.
 - A RubyGems entry also covers that version's platform gems:
   `pkg:gem/nokogiri@1.16.0` denies `nokogiri-1.16.0-x86_64-linux.gem`.
+- PyPI versions are compared in the canonical form of Python's packaging
+  (`canonicalize_version`): `pkg:pypi/foo@2.0` also covers
+  `foo-2.0.0-py3-none-any.whl` and `foo-V2.0.0.0-py3-none-any.whl`, since
+  PyPI accepts wheels whose filenames spell the release's version any way
+  PEP 440 counts as equal. Cooldown and the simple index filters compare
+  versions the same way. A local version is a version of its own:
+  `pkg:pypi/torch@2.0.0` doesn't cover `torch-2.0.0+cpu`.
 - Composer versions ignore a leading `v`, which Packagist keeps from the tag:
   `pkg:composer/symfony/console@6.1.7` also covers `v6.1.7`.
 - Go versions are matched as written, `pkg:golang/example.com/mod@v1.0.0-RC1`,
