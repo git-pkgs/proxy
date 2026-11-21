@@ -38,11 +38,11 @@ func TestCanonicalVersion(t *testing.T) {
 		"1.0a1.post2.dev3":            "1a1.post2.dev3",
 		"1.0+Ubuntu-1_2":              "1+ubuntu.1.2",
 		"1.0+abc.007":                 "1+abc.7",
+		"1.0po\u017ft1":               "1.post1",
+		"\u00a02.0.0":                 "2",
+		"2.0.0\u2003":                 "2",
 		// Not PEP 440: compared as given.
 		"not a version": "not a version",
-		"1.0po\u017ft1": "1.post1",
-		"\u00a02.0.0":   "2",
-		"2.0.0\u2003":   "2",
 		"1.0-foo":       "1.0-foo",
 		"":              "",
 	} {
