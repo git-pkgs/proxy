@@ -97,6 +97,8 @@ type nugetTimes struct {
 	Version      string
 	Published    string
 	CatalogEntry nugetCatalogTimes
+	// CatalogLink is the catalogEntry of a standalone leaf, a link.
+	CatalogLink string
 	// Items is nil unless the node has an items array.
 	Items []nugetTimes
 }
@@ -186,6 +188,8 @@ func (t *nugetTimes) decode(dec *jsontext.Decoder, depth int, scratch *[]byte) e
 			err = t.decodeItems(dec, depth, scratch)
 		case kind == nugetMemberCatalogEntry && value == '{':
 			err = t.CatalogEntry.decode(dec, scratch)
+		case kind == nugetMemberCatalogEntry && value == '"' && depth == 0:
+			t.CatalogLink, err = readNuGetString(dec, scratch)
 		case kind == nugetMemberID && value == '"' && depth == 1:
 			t.ID, err = readNuGetString(dec, scratch)
 		case kind == nugetMemberVersion && value == '"':
@@ -393,7 +397,59 @@ func (h *NuGetHandler) nugetDownloadAllowed(ctx context.Context, id, version str
 		return false, err
 	}
 	_, published := leaf.release()
+	if nugetUnlistedTime(published) {
+		// No time is one nugetPublishedAllowed lets through.
+		if published, err = h.nugetCatalogCreated(ctx, leaf.CatalogLink); err != nil {
+			return false, err
+		}
+	}
 	return h.nugetPublishedAllowed(id, version, published), nil
+}
+
+// nugetUnlistedYear is the year of the publish time nuget.org reports for an
+// unlisted version, whenever it was published.
+const nugetUnlistedYear = 1900
+
+func nugetUnlistedTime(published string) bool {
+	when, err := time.Parse(time.RFC3339, published)
+	return err == nil && when.Year() == nugetUnlistedYear
+}
+
+// nugetCatalogCreated returns the time the catalog entry at link says its
+// version was created, or nothing if the link is not one into the upstream
+// or the entry has no such time.
+func (h *NuGetHandler) nugetCatalogCreated(ctx context.Context, link string) (string, error) {
+	path, ok := h.nugetCatalogPath(link)
+	if !ok {
+		return "", nil
+	}
+	var entry struct {
+		Created string `json:"created"`
+	}
+	err := h.readNuGetMetadata(ctx, path, func(body []byte) error {
+		entry.Created = ""
+		if err := json.Unmarshal(body, &entry); err != nil {
+			return fmt.Errorf("parsing NuGet catalog entry: %w", err)
+		}
+		return nil
+	})
+	return entry.Created, err
+}
+
+// nugetCatalogPath returns the path below the upstream of a catalog entry
+// link, and whether the link is one into the upstream.
+func (h *NuGetHandler) nugetCatalogPath(link string) (string, bool) {
+	upstream, err := url.Parse(h.upstreamURL)
+	if err != nil {
+		return "", false
+	}
+	target, err := url.Parse(link)
+	if err != nil || target.Scheme != upstream.Scheme || target.Host != upstream.Host ||
+		!strings.HasPrefix(target.Path, upstream.Path+"/") || containsPathTraversal(target.Path) ||
+		target.RawQuery != "" || target.Fragment != "" {
+		return "", false
+	}
+	return strings.TrimPrefix(target.Path, upstream.Path), true
 }
 
 // Missing/invalid timestamps retain the existing permissive behavior, but
