@@ -1214,7 +1214,7 @@ Configure authentication for private upstream registries. The same authenticatio
 
 The `type` is `bearer`, `basic`, `header` or `ecr`; any other value fails the configuration check. An entry that ends up with nothing to send, such as a token whose `${VAR_NAME}` is unset, is still the match for its scope, so requests under it go out without credentials. The proxy logs a warning naming each such entry at startup.
 
-OCI registries that return a Bearer challenge from a `/v2/{repository}/…` endpoint are handled automatically. The proxy discovers the token realm from `WWW-Authenticate`, applies any configured credentials for the token URL, and reuses the token until shortly before it expires. The token is always requested for pull access to the repository being fetched (`repository:{repository}:pull`), whatever scope the challenge names.
+OCI registries that return a Bearer challenge from a `/v2/{repository}/…` endpoint are handled automatically. The proxy discovers the token realm from `WWW-Authenticate`, applies any configured credentials for the token URL, and reuses the token until shortly before it expires. The token is always requested for pull access to the repository being fetched (`repository:{repository}:pull`), whatever scope the challenge names. If the token URL redirects, the redirected request only carries credentials when the redirect target is configured with the same ones as the token URL, so a token URL that redirects to a token service with its own credentials needs those credentials configured for both.
 
 A token fetched with credentials configured for the token URL is only fetched for, and sent to, a registry that is trusted with it: one on the same host and port as the token service, one configured with the same credentials as the token URL, or Docker Hub (`registry-1.docker.io` and `index.docker.io` with `auth.docker.io`) and GitLab.com (`registry.gitlab.com` with `gitlab.com`). Sharing a parent domain is not enough, so `team-a.jfrog.io` is not trusted with tokens from `team-b.jfrog.io`. Any other host that answers with a challenge naming that token service gets its 401 back, so it cannot obtain a token minted from your credentials. Tokens from a token service with no configured credentials are anonymous and are fetched for any registry, as before. If your registry and its token service are on different hosts, such as a self-hosted GitLab with its registry on its own hostname, configure the same credentials for both URLs:
 
@@ -1416,6 +1416,8 @@ Maven caveats:
 - Maven Central lists versions in version order, not in the order they were published. A patch to an older release line published after a newer release that is out of cooldown stays listed while it is in cooldown, but its files are still refused.
 - SNAPSHOT versions are not held back.
 
+nuget.org reports 1900-01-01 as the publish time of an unlisted version. For a download of one, the proxy reads the time the version was created from its catalog entry instead, so unlisting a new release does not end its cooldown. Unlisted versions stay in the version lists the proxy serves, and one whose registration has no catalog entry on the upstream is let through.
+
 Helm uses each release's `created` time from the repository's `index.yaml`. Releases in cooldown are left out of the index the proxy serves, and their archives aren't served; a release without `created` is let through. Charts pulled over OCI have no publish time and aren't held back.
 
 Cargo, RubyGems, Hex, pub.dev, Conda and Helm check artifact downloads against cooldown, including files cached before the policy changed. When a publish-time lookup fails, an already-cached file is still served; an uncached download fails with 502, or 503 with `Retry-After` when the rate-limit gate holds the request. Conda checks timestamps per file because builds of one version can have different publish times. As in conda, a repodata `timestamp` is read as milliseconds when it is above 253402300799 (the end of year 9999 in seconds) and as seconds otherwise, since some older entries use seconds.
@@ -1465,6 +1467,13 @@ Names and versions are compared the way each ecosystem treats them:
   without one.
 - A RubyGems entry also covers that version's platform gems:
   `pkg:gem/nokogiri@1.16.0` denies `nokogiri-1.16.0-x86_64-linux.gem`.
+- PyPI versions are compared in the canonical form of Python's packaging
+  (`canonicalize_version`): `pkg:pypi/foo@2.0` also covers
+  `foo-2.0.0-py3-none-any.whl` and `foo-V2.0.0.0-py3-none-any.whl`, since
+  PyPI accepts wheels whose filenames spell the release's version any way
+  PEP 440 counts as equal. Cooldown and the simple index filters compare
+  versions the same way. A local version is a version of its own:
+  `pkg:pypi/torch@2.0.0` doesn't cover `torch-2.0.0+cpu`.
 - Composer versions ignore a leading `v`, which Packagist keeps from the tag:
   `pkg:composer/symfony/console@6.1.7` also covers `v6.1.7`.
 - Go versions are matched as written, `pkg:golang/example.com/mod@v1.0.0-RC1`,
@@ -1676,7 +1685,7 @@ By default the proxy fetches metadata fresh from upstream on every request. Enab
 
 OCI manifests and tag lists are always cached because cached image blobs cannot be pulled without their manifests and offline clients may need tag resolution. Digest-addressed manifests are immutable and served directly from cache. Tag-addressed manifests and tag lists follow `metadata_ttl`, revalidate when stale, and fall back to the last cached response when the registry is unavailable.
 
-A stale tag is revalidated with a HEAD request carrying the client's `Accept` header, and the `Docker-Content-Digest` it returns is compared with the cached one. If the tag did not move, or moved to a manifest already cached by digest, nothing else is fetched. Otherwise the new manifest is fetched once by digest and stored under the tag and the digest. Docker Hub counts manifest GETs, but not HEADs, against its pull rate limit, so an unchanged tag costs no pulls however often its TTL runs out. A registry whose HEAD response has no digest gets a conditional GET for the tag instead. A client's HEAD request for a stale or uncached tag is passed on as a HEAD; when the digest it returns is cached, the tag is pointed at it, so the GET that follows is served from cache. Concurrent requests for the same manifest share one upstream request, and instances sharing a Postgres database take turns through the same [fetch lease](#several-instances) as other metadata.
+A stale tag is revalidated with a HEAD request carrying the client's `Accept` header, and the `Docker-Content-Digest` it returns is compared with the cached one. If the tag did not move, or moved to a manifest already cached by digest, nothing else is fetched. Otherwise the new manifest is fetched once by digest and stored under the tag and the digest. Docker Hub counts manifest GETs, but not HEADs, against its pull rate limit, so an unchanged tag costs no pulls however often its TTL runs out. A registry whose HEAD response has no digest gets a conditional GET for the tag instead, as does one that answers the HEAD with another status; if that GET then fails, a 401, 403, 404 or 410 from the HEAD is relayed rather than the cached copy served, since the tag is gone or not readable. A client's HEAD request for a stale or uncached tag is passed on as a HEAD; when the digest it returns is cached, the tag is pointed at it, so the GET that follows is served from cache. Concurrent requests for the same manifest share one upstream request, and instances sharing a Postgres database take turns through the same [fetch lease](#several-instances) as other metadata.
 
 ```yaml
 cache_metadata: true
