@@ -489,11 +489,19 @@ func (h *PyPIHandler) versionInCooldown(r *http.Request, name, version string) (
 		return false, nil
 	}
 
-	times, err := h.fetchReleaseTimes(r, name)
+	jsonURL := fmt.Sprintf("%s/pypi/%s/json", h.upstreamURL, name)
+	publishedAt, err := readListed(r.Context(), h.proxy, "pypi", name+"/json", jsonURL, contentTypeJSON, "",
+		func(res metadataResult) (time.Time, bool, error) {
+			times, err := h.parseReleaseTimes(res.body)
+			published, listed := releaseTime(times, version)
+			return published, listed, err
+		})
+	if errors.Is(err, ErrUpstreamNotFound) {
+		return false, nil
+	}
 	if err != nil {
 		return false, err
 	}
-	publishedAt := releaseTime(times, version)
 	if publishedAt.IsZero() {
 		return false, nil
 	}
@@ -501,16 +509,20 @@ func (h *PyPIHandler) versionInCooldown(r *http.Request, name, version string) (
 	return !h.proxy.cooldown().IsAllowed("pypi", canonicalPackagePURL("pypi", name), publishedAt), nil
 }
 
-// releaseTime returns the newest upload time of the releases equal to version.
-func releaseTime(times map[string]time.Time, version string) time.Time {
+// releaseTime returns the newest upload time of the releases equal to
+// version, and whether there is such a release.
+func releaseTime(times map[string]time.Time, version string) (newest time.Time, listed bool) {
 	canonical := pypi.CanonicalVersion(version)
-	var newest time.Time
 	for release, published := range times {
-		if pypi.CanonicalVersion(release) == canonical && published.After(newest) {
+		if pypi.CanonicalVersion(release) != canonical {
+			continue
+		}
+		listed = true
+		if published.After(newest) {
 			newest = published
 		}
 	}
-	return newest
+	return newest, listed
 }
 
 // storeUploadTime records a release's newest upload time under the version
