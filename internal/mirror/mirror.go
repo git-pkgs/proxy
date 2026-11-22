@@ -64,6 +64,11 @@ type Mirror struct {
 	DebianUpstream     string
 	DebianRepositories map[string]string
 
+	// Disabled reports whether disabled_ecosystems turns off an item's
+	// ecosystem, given as the PURL type. Such items fail without being
+	// fetched. Nil turns none off.
+	Disabled func(ecosystem string) bool
+
 	// RefusePackages, when set, fails every item Images does not take with
 	// this reason instead of fetching it, so nothing is cached.
 	RefusePackages string
@@ -258,6 +263,10 @@ func (m *Mirror) mirrorRecovered(ctx context.Context, item PackageVersion, track
 }
 
 func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *progressTracker) {
+	if m.Disabled != nil && m.Disabled(pv.Ecosystem) {
+		m.recordFailure(tracker, pv, fmt.Errorf("%s is turned off on this proxy", pv.Ecosystem))
+		return
+	}
 	if isImageEcosystem(pv.Ecosystem) && m.Images != nil {
 		m.mirrorImage(ctx, pv, tracker)
 		return

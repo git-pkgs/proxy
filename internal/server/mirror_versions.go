@@ -36,6 +36,7 @@ func (s *Server) newMirror(proxy *handler.Proxy, workers int) *mirror.Mirror {
 		m.Git = handler.NewGitHandler(proxy, s.git, s.cfg.Upstream)
 	}
 	UseMirrorUpstreams(m, s.cfg.Upstream, proxy.HTTPClient)
+	m.Disabled = s.cfg.EcosystemDisabled
 	return m
 }
 

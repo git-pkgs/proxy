@@ -631,6 +631,7 @@ func newCommandMirror(cfg *config.Config, proxy *handler.Proxy, images *handler.
 	m.Bottles = handler.NewHomebrewHandler(proxy, cfg.Upstream.HomebrewAPI)
 	m.Charts = handler.NewHelmHandler(proxy, cfg.BaseURL, cfg.Upstream.Helm)
 	server.UseMirrorUpstreams(m, cfg.Upstream, proxy.HTTPClient)
+	m.Disabled = cfg.EcosystemDisabled
 	if cfg.Scanning.Enabled {
 		refuseUnscannedMirroring(m)
 	}

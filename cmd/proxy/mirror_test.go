@@ -2,14 +2,18 @@ package main
 
 import (
 	"errors"
+	"io"
+	"log/slog"
 	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
 
+	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/mirror"
+	"github.com/git-pkgs/proxy/internal/server"
 )
 
 // mirrorTestEnv carries the mirror command's arguments into the helper
@@ -211,4 +215,15 @@ func TestMirrorFailureProcess(*testing.T) {
 		"pkg:bogus/foo@1.0.0",
 	}
 	main()
+}
+
+func TestCommandMirrorRefusesDisabledEcosystems(t *testing.T) {
+	cfg := config.Default()
+	cfg.DisabledEcosystems = []string{"pypi"}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	proxy, images := server.NewMirrorProxy(cfg, nil, nil, logger)
+	m := newCommandMirror(cfg, proxy, images, nil, nil, logger, 1)
+	if m.Disabled == nil || !m.Disabled("pypi") || m.Disabled("npm") {
+		t.Errorf("Disabled doesn't follow disabled_ecosystems")
+	}
 }

@@ -149,6 +149,11 @@ type Config struct {
 	// Upstream configures upstream registry URLs (optional overrides).
 	Upstream UpstreamConfig `json:"upstream" yaml:"upstream"`
 
+	// DisabledEcosystems turns ecosystems off by key (npm, pypi, oci, ...):
+	// their routes answer 404, they are left off the install page, and
+	// mirroring refuses their packages. What is cached for them stays.
+	DisabledEcosystems []string `json:"disabled_ecosystems" yaml:"disabled_ecosystems"`
+
 	// Cooldown configures version age filtering to mitigate supply chain attacks.
 	Cooldown CooldownConfig `json:"cooldown" yaml:"cooldown"`
 
@@ -1615,6 +1620,7 @@ func (c *Config) LoadFromEnv() {
 	setEnvString(&c.Log.Level, "PROXY_LOG_LEVEL")
 	setEnvString(&c.Log.Format, "PROXY_LOG_FORMAT")
 	setEnvString(&c.AccessLog.Path, "PROXY_ACCESS_LOG_PATH")
+	setEnvStringSlice(&c.DisabledEcosystems, "PROXY_DISABLED_ECOSYSTEMS")
 	setEnvStringSlice(&c.Upstream.AllowPrivateHosts, "PROXY_UPSTREAM_ALLOW_PRIVATE_HOSTS")
 	c.setEnvBool(&c.Upstream.AllowLoopback, "PROXY_UPSTREAM_ALLOW_LOOPBACK")
 	setEnvString(&c.Upstream.NPM, "PROXY_UPSTREAM_NPM")
@@ -1834,6 +1840,10 @@ func (c *Config) validateComponents() error {
 	}
 
 	if err := c.validateUpstream(); err != nil {
+		return err
+	}
+
+	if err := c.validateDisabledEcosystems(); err != nil {
 		return err
 	}
 

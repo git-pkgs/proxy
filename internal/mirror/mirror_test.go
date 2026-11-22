@@ -9,6 +9,7 @@ import (
 	"os"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -349,4 +350,53 @@ func TestMirrorRefusePackagesLeavesImagesToImages(t *testing.T) {
 	if len(progress.Errors) != 1 || progress.Errors[0].Error != "images refused" {
 		t.Errorf("errors = %+v, want the image refusal", progress.Errors)
 	}
+}
+
+// A turned-off ecosystem's items fail without being fetched, images and
+// Homebrew included, and the others are mirrored as before.
+func TestMirrorRunRefusesDisabledEcosystems(t *testing.T) {
+	m := setupTestMirror(t, 1)
+	fetcher := &recordingFetcher{}
+	m.proxy.Fetcher = fetcher
+	images := &recordingImages{}
+	m.Images = images
+	m.Disabled = func(ecosystem string) bool { return ecosystem == "npm" || ecosystem == "docker" || ecosystem == "brew" }
+
+	source := &PURLSource{PURLs: []string{"pkg:npm/lodash@4.17.21", "pkg:docker/library/alpine@3.20", "pkg:brew/wget@1.24.5", "pkg:cargo/serde@1.0.0"}}
+	progress, err := m.Run(context.Background(), source)
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	refused := map[string]bool{}
+	for _, e := range progress.Errors {
+		if strings.Contains(e.Error, "turned off") {
+			refused[e.Ecosystem] = true
+		}
+	}
+	for _, eco := range []string{"npm", "docker", "brew"} {
+		if !refused[eco] {
+			t.Errorf("%s item wasn't refused as turned off: %+v", eco, progress.Errors)
+		}
+	}
+	if refused["cargo"] {
+		t.Errorf("cargo item was refused")
+	}
+	for _, u := range fetcher.fetched() {
+		if strings.Contains(u, "lodash") {
+			t.Errorf("turned-off npm item was fetched: %s", u)
+		}
+	}
+	if images.calls.Load() != 0 {
+		t.Errorf("turned-off image was handed to Images")
+	}
+	if len(fetcher.fetched()) == 0 {
+		t.Errorf("cargo item wasn't fetched")
+	}
+}
+
+type recordingImages struct{ calls atomic.Int32 }
+
+func (r *recordingImages) MirrorImage(context.Context, handler.ImageRef, []handler.Platform) (handler.ImageResult, error) {
+	r.calls.Add(1)
+	return handler.ImageResult{}, errors.New("not mirrored")
 }
