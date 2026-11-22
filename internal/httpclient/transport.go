@@ -81,6 +81,9 @@ func NewTransport(base http.RoundTripper, authForURL AuthFunc) *Transport {
 
 // RoundTrip implements http.RoundTripper.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if !t.redirectKeepsCredentials(req) {
+		return t.base.RoundTrip(req)
+	}
 	hasExplicitAuthorization := req.Header.Get("Authorization") != ""
 	outbound := cloneRequest(req)
 	t.applyAuthentication(outbound, hasExplicitAuthorization)
@@ -119,6 +122,28 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.applyConfiguredAuthentication(retry)
 	retry.Header.Set("Authorization", "Bearer "+token)
 	return t.base.RoundTrip(retry)
+}
+
+// redirectKeepsCredentials reports whether a request may get authentication
+// added. A redirect hop upstream.auth has credentials for only may when it
+// gives the request the redirects started from the same ones: that
+// request's route was checked against generic_paths and git repos, and a
+// redirect from an upstream must not reach past them with another scope's
+// credentials.
+func (t *Transport) redirectKeepsCredentials(req *http.Request) bool {
+	if t.authForURL == nil {
+		return true
+	}
+	name, value := t.authForURL(req.URL.String())
+	if name == "" || value == "" {
+		return true
+	}
+	origin := req
+	for origin.Response != nil && origin.Response.Request != nil {
+		origin = origin.Response.Request
+	}
+	originName, originValue := t.authForURL(origin.URL.String())
+	return sameHeader(name, value, originName, originValue)
 }
 
 // trustedWithToken reports whether a token from challenge's realm may be
