@@ -2339,8 +2339,6 @@ func (a *AuthConfig) Header() (name, value string) {
 	}
 }
 
-// validateAuth checks the URL scope and the type of every upstream.auth
-// entry.
 func (u *UpstreamConfig) validateAuth() error {
 	for pattern, auth := range u.Auth {
 		if _, err := parseAuthURL(pattern); err != nil {
@@ -2365,8 +2363,7 @@ func authScopeName(pattern string) string {
 	return (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.Path, RawPath: parsed.RawPath}).String()
 }
 
-// authWithoutCredentials returns the upstream.auth scopes whose entry has
-// nothing to send, as authScopeName gives them, sorted. An ECR entry gets its credentials from AWS.
+// An ECR entry gets its credentials from AWS.
 func (u *UpstreamConfig) authWithoutCredentials() []string {
 	var scopes []string
 	for pattern, auth := range u.Auth {
