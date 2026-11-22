@@ -149,27 +149,27 @@ func (h *PubHandler) discardVersionPage(name, version, filename string) {
 // sharing the metadata cache with handlePackageMetadata.
 func (h *PubHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, error) {
 	upstreamURL := fmt.Sprintf("%s/api/packages/%s", h.upstreamURL, name)
-	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "pub", name, upstreamURL)
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	var metadata struct {
-		Versions []struct {
-			Version   string `json:"version"`
-			Published string `json:"published"`
-		} `json:"versions"`
-	}
-	if err := json.Unmarshal(body, &metadata); err != nil {
-		return time.Time{}, false, err
-	}
-	for _, v := range metadata.Versions {
-		if v.Version != version {
-			continue
-		}
-		published, err := time.Parse(time.RFC3339, v.Published)
-		return published, err == nil, nil
-	}
-	return time.Time{}, false, nil
+	listed, err := readListed(r.Context(), h.proxy, "pub", name, upstreamURL, contentTypeJSON, "",
+		func(res metadataResult) (listedTime, bool, error) {
+			var metadata struct {
+				Versions []struct {
+					Version   string `json:"version"`
+					Published string `json:"published"`
+				} `json:"versions"`
+			}
+			if err := json.Unmarshal(res.body, &metadata); err != nil {
+				return listedTime{}, false, err
+			}
+			for _, v := range metadata.Versions {
+				if v.Version != version {
+					continue
+				}
+				published, err := time.Parse(time.RFC3339, v.Published)
+				return listedTime{published, err == nil}, true, nil
+			}
+			return listedTime{}, false, nil
+		})
+	return listed.published, listed.ok, err
 }
 
 // handlePackageMetadata proxies package metadata and rewrites archive URLs.

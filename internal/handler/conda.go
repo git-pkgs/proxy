@@ -4,6 +4,7 @@ import (
 	"bufio"
 	"bytes"
 	"compress/gzip"
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -552,25 +553,72 @@ func (h *CondaHandler) metadataCacheKey(urlPath string) string {
 }
 
 // publishTime streams compressed repodata when it exceeds metadata_max_size.
+// Repodata that doesn't list the file can predate it, so it is fetched
+// again and the file looked up in what upstream lists now (readListed).
 func (h *CondaHandler) publishTime(r *http.Request, channel, arch, filename string) (time.Time, bool, error) {
 	repodataPath := "/" + channel + "/" + arch + "/repodata.json"
 	cacheKey := h.metadataCacheKey(repodataPath)
-	index, err := publishIndex(h.proxy, "conda\x00"+cacheKey, func() metadataResult {
-		return h.proxy.lookupMetadata(r.Context(), "conda", cacheKey, h.upstreamURL+repodataPath, "*/*", "gzip", nil)
-	}, func(res metadataResult) (map[string]time.Time, error) {
+	upstreamURL := h.upstreamURL + repodataPath
+	// The index is built once for the downloads joining it, so a client
+	// that hangs up doesn't fail the others.
+	ctx := context.WithoutCancel(r.Context())
+	build := func(res metadataResult) (map[string]time.Time, error) {
 		if errors.Is(res.err, ErrMetadataTooLarge) {
-			return h.streamRepodataIndex(r, h.upstreamURL+repodataPath)
+			return h.streamRepodataIndex(ctx, upstreamURL)
 		}
 		if res.err != nil {
 			return nil, res.err
 		}
 		return h.indexRepodata(res.body, res.contentEncoding)
+	}
+	// loaded is what the index was built from, unless an index built
+	// earlier was reused.
+	var loaded *metadataResult
+	indexKey := "conda\x00" + cacheKey
+	index, err := publishIndex(h.proxy, indexKey, func() metadataResult {
+		res := h.proxy.lookupMetadata(ctx, "conda", cacheKey, upstreamURL, "*/*", "gzip", nil)
+		loaded = &res
+		return res
+	}, build)
+	if err != nil {
+		return time.Time{}, false, err
+	}
+	published, listed := index[filename]
+	current := loaded != nil && !loaded.fromCache && !loaded.stale
+	if !listed && !current {
+		// A concurrent refetch may have replaced the index read above, so
+		// the file is looked up in the refetched one.
+		if recent, ok := recentRefetch(h.proxy, indexKey); ok {
+			published, listed = recent.(map[string]time.Time)[filename]
+			current = true
+		}
+	}
+	if listed || current {
+		// Listed, just read from upstream (streamed past metadata_max_size
+		// included), or refetched for a missing file within the last
+		// minute, without a digest to check it is current.
+		return published, listed && !published.IsZero(), nil
+	}
+	// Downloads that found the file missing from the same index share one
+	// refetch and build, which for repodata past metadata_max_size streams
+	// it. Later downloads use the refetched index.
+	refetched, err, _ := h.proxy.sharedProxy().publishIndexes.group.Do(indexKey+"\x00refetch", func() (any, error) {
+		res := h.proxy.refetchLacking(ctx, "conda", cacheKey, upstreamURL, "*/*", "gzip", nil)
+		if index, ok := keptPublishIndex(h.proxy, indexKey, res); ok {
+			return index, nil
+		}
+		index, err := build(res)
+		if err != nil {
+			return nil, err
+		}
+		storePublishIndex(h.proxy, indexKey, res, index, true)
+		return index, nil
 	})
 	if err != nil {
 		return time.Time{}, false, err
 	}
-	published, ok := index[filename]
-	return published, ok, nil
+	published = refetched.(map[string]time.Time)[filename]
+	return published, !published.IsZero(), nil
 }
 
 // indexRepodata indexes a cached repodata.json body.
@@ -587,8 +635,8 @@ func (h *CondaHandler) indexRepodata(body []byte, encoding string) (map[string]t
 }
 
 // streamRepodataIndex indexes repodata.json as it streams from upstream.
-func (h *CondaHandler) streamRepodataIndex(r *http.Request, upstreamURL string) (map[string]time.Time, error) {
-	req, err := http.NewRequestWithContext(r.Context(), http.MethodGet, upstreamURL, nil)
+func (h *CondaHandler) streamRepodataIndex(ctx context.Context, upstreamURL string) (map[string]time.Time, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, upstreamURL, nil)
 	if err != nil {
 		return nil, err
 	}
@@ -614,7 +662,7 @@ func (h *CondaHandler) streamRepodataIndex(r *http.Request, upstreamURL string) 
 }
 
 // readRepodataIndex maps each package file in a repodata.json to its
-// timestamp, leaving out files without one. It reads the document as it
+// timestamp, or the zero time for a file without one. It reads the document as it
 // streams, under the same bound as filterRepodata, so the decompressed size
 // is not limited by metadata_max_size.
 func readRepodataIndex(r io.Reader) (map[string]time.Time, error) {
@@ -629,7 +677,11 @@ func readRepodataIndex(r io.Reader) (map[string]time.Time, error) {
 				return err
 			}
 			var e repodataEntry
-			if json.Unmarshal(raw, &e) == nil && e.Timestamp != 0 {
+			if json.Unmarshal(raw, &e) != nil {
+				return nil
+			}
+			index[entry.Key] = time.Time{}
+			if e.Timestamp != 0 {
 				index[entry.Key] = condaTime(e.Timestamp)
 			}
 			return nil

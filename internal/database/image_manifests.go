@@ -25,6 +25,16 @@ const (
 // the bind limits of SQLite and PostgreSQL. A variable so tests can lower it.
 var imagePruneBatch = 500
 
+// The points of a prune imagePruneHook runs at: after reading the manifests
+// old enough to delete, and before deleting those not kept.
+const (
+	imagePruneRead   = "read"
+	imagePruneDelete = "delete"
+)
+
+// imagePruneHook, when set, runs at those points of a prune. For tests.
+var imagePruneHook func(point string)
+
 // ImageManifest is what one container image manifest of a repository
 // references.
 type ImageManifest struct {
@@ -36,6 +46,11 @@ type ImageManifest struct {
 	// TaggedAt is when a tag was last found to point at the manifest, or
 	// zero for one only asked for by digest.
 	TaggedAt time.Time
+}
+
+// imageReader is the database or a transaction on it.
+type imageReader interface {
+	Select(dest any, query string, args ...any) error
 }
 
 type imageManifestRow struct {
@@ -108,20 +123,45 @@ func (db *DB) ImageManifestRepositories() ([]string, error) {
 // were recorded before the given time. The time leaves a manifest recorded
 // shortly before the one that references it in place. What the tags point
 // at stays for ImageTagsContaining.
+//
+// A pull can tag one of the manifests while the prune runs. On SQLite the
+// transaction holds the only writer, so the pull records its manifest after
+// the prune. On PostgreSQL each delete checks that its manifests are as they
+// were read and that no tag points at them, and the prune deletes nothing
+// when one is not: what it references was not read as kept either.
 func (db *DB) PruneImageManifests(packagePURL string, n int, before time.Time) error {
-	roots, err := db.newestImages(packagePURL, n)
+	tx, err := db.Beginx()
+	if err != nil {
+		return err
+	}
+	defer func() { _ = tx.Rollback() }()
+
+	// Read before what is kept: a manifest tagged after this is either read
+	// as kept or no longer as it is here.
+	var old []imageManifestRow
+	err = tx.Select(&old, db.Rebind(`
+		SELECT digest, tagged_at FROM image_manifests WHERE package_purl = ? AND recorded_at < ?
+	`), packagePURL, before.UnixMilli())
+	if err != nil {
+		return err
+	}
+	if imagePruneHook != nil {
+		imagePruneHook(imagePruneRead)
+	}
+
+	roots, err := db.newestImages(tx, packagePURL, n)
 	if err != nil {
 		return err
 	}
 	var tagged []imageManifestRow
-	err = db.Select(&tagged, db.Rebind(`
+	err = tx.Select(&tagged, db.Rebind(`
 		SELECT digest, refs FROM image_manifests WHERE package_purl = ?
 			AND digest IN (SELECT digest FROM image_tags WHERE package_purl = ?)
 	`), packagePURL, packagePURL)
 	if err != nil {
 		return err
 	}
-	_, manifests, err := db.walkImages(packagePURL, append(roots, tagged...))
+	_, manifests, err := db.walkImages(tx, packagePURL, append(roots, tagged...))
 	if err != nil {
 		return err
 	}
@@ -130,32 +170,43 @@ func (db *DB) PruneImageManifests(packagePURL string, n int, before time.Time) e
 		keep[digest] = struct{}{}
 	}
 
-	var old []string
-	err = db.Select(&old, db.Rebind(`
-		SELECT digest FROM image_manifests WHERE package_purl = ? AND recorded_at < ?
-	`), packagePURL, before.UnixMilli())
-	if err != nil {
-		return err
-	}
 	drop := old[:0]
-	for _, digest := range old {
-		if _, ok := keep[digest]; !ok {
-			drop = append(drop, digest)
+	for _, row := range old {
+		if _, ok := keep[row.Digest]; !ok {
+			drop = append(drop, row)
 		}
+	}
+	if imagePruneHook != nil {
+		imagePruneHook(imagePruneDelete)
 	}
 	// Deleted by name in batches: a list of the kept ones can outgrow what
 	// one query may bind.
 	for start := 0; start < len(drop); start += imagePruneBatch {
 		batch := drop[start:min(start+imagePruneBatch, len(drop))]
-		query, args, err := sqlx.In(`DELETE FROM image_manifests WHERE package_purl = ? AND digest IN (?)`, packagePURL, batch)
-		if err != nil {
-			return fmt.Errorf("building prune query: %w", err)
+		args := make([]any, 0, 2+2*len(batch)) //nolint:mnd // two per manifest, two for the repository
+		args = append(args, packagePURL)
+		for _, row := range batch {
+			args = append(args, row.Digest, row.TaggedAt)
 		}
-		if _, err := db.Exec(db.Rebind(query), args...); err != nil {
+		args = append(args, packagePURL)
+		res, err := tx.Exec(db.Rebind(`
+			DELETE FROM image_manifests WHERE package_purl = ?
+				AND (`+strings.TrimSuffix(strings.Repeat("(digest = ? AND tagged_at = ?) OR ", len(batch)), " OR ")+`)
+				AND digest NOT IN (SELECT digest FROM image_tags WHERE package_purl = ?)
+		`), args...)
+		if err != nil {
 			return err
 		}
+		deleted, err := res.RowsAffected()
+		if err != nil {
+			return err
+		}
+		if deleted != int64(len(batch)) {
+			// A pull changed one: roll back and leave it to the next prune.
+			return nil
+		}
 	}
-	return nil
+	return tx.Commit()
 }
 
 // ImageManifestRefs returns the digests a recorded manifest of a repository
@@ -178,17 +229,17 @@ func (db *DB) ImageManifestRefs(packagePURL, digest string) ([]string, error) {
 // reference, themselves included, and those among them that are recorded
 // manifests.
 func (db *DB) walkNewestImages(packagePURL string, n int) (map[string]struct{}, []string, error) {
-	rows, err := db.newestImages(packagePURL, n)
+	rows, err := db.newestImages(db, packagePURL, n)
 	if err != nil {
 		return nil, nil, err
 	}
-	return db.walkImages(packagePURL, rows)
+	return db.walkImages(db, packagePURL, rows)
 }
 
 // walkImages returns every digest the given manifests of a repository
 // reference, themselves included, and those among them that are recorded
 // manifests.
-func (db *DB) walkImages(packagePURL string, roots []imageManifestRow) (map[string]struct{}, []string, error) {
+func (db *DB) walkImages(q imageReader, packagePURL string, roots []imageManifestRow) (map[string]struct{}, []string, error) {
 	digests := map[string]struct{}{}
 	for _, row := range roots {
 		digests[row.Digest] = struct{}{}
@@ -211,7 +262,7 @@ func (db *DB) walkImages(packagePURL string, roots []imageManifestRow) (map[stri
 		if depth == imageWalkDepth {
 			break
 		}
-		if rows, err = db.imageManifestRows(packagePURL, next); err != nil {
+		if rows, err = db.imageManifestRows(q, packagePURL, next); err != nil {
 			return nil, nil, err
 		}
 	}
@@ -223,12 +274,12 @@ func (db *DB) walkImages(packagePURL string, roots []imageManifestRow) (map[stri
 // platform's manifest to a client that accepts no index, so a tagged
 // manifest that another tagged one references is that image seen another
 // way: it is no image of its own and lends the other its tag time.
-func (db *DB) newestImages(packagePURL string, n int) ([]imageManifestRow, error) {
+func (db *DB) newestImages(q imageReader, packagePURL string, n int) ([]imageManifestRow, error) {
 	if n <= 0 {
 		return nil, nil
 	}
 	var rows []imageManifestRow
-	err := db.Select(&rows, db.Rebind(`
+	err := q.Select(&rows, db.Rebind(`
 		SELECT digest, refs, tagged_at FROM image_manifests
 		WHERE package_purl = ? AND tagged_at > 0
 	`), packagePURL)
@@ -274,7 +325,7 @@ func (db *DB) newestImages(packagePURL string, n int) ([]imageManifestRow, error
 }
 
 // imageManifestRows returns the recorded manifests among digests.
-func (db *DB) imageManifestRows(packagePURL string, digests []string) ([]imageManifestRow, error) {
+func (db *DB) imageManifestRows(q imageReader, packagePURL string, digests []string) ([]imageManifestRow, error) {
 	var rows []imageManifestRow
 	for start := 0; start < len(digests); start += imageWalkBatch {
 		batch := digests[start:min(start+imageWalkBatch, len(digests))]
@@ -285,7 +336,7 @@ func (db *DB) imageManifestRows(packagePURL string, digests []string) ([]imageMa
 			return nil, fmt.Errorf("building image manifest query: %w", err)
 		}
 		var found []imageManifestRow
-		if err := db.Select(&found, db.Rebind(query), args...); err != nil {
+		if err := q.Select(&found, db.Rebind(query), args...); err != nil {
 			return nil, err
 		}
 		rows = append(rows, found...)

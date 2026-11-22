@@ -57,13 +57,14 @@ var (
 // proxy. Links for the versions in filteredVersions are removed entirely.
 func RewriteSimpleHTML(body []byte, filteredVersions map[string]bool, o Options) []byte {
 	if len(filteredVersions) > 0 {
+		filteredVersions = canonicalVersions(filteredVersions)
 		body = simpleLinkRe.ReplaceAllFunc(body, func(match []byte) []byte {
 			innerMatch := simpleLinkTextRe.FindSubmatch(match)
 			if len(innerMatch) < minSubmatchParts {
 				return match
 			}
 			_, version := FilenameIdentity(strings.TrimSpace(string(innerMatch[1])))
-			if version != "" && filteredVersions[version] {
+			if version != "" && filteredVersions[CanonicalVersion(version)] {
 				return nil
 			}
 			return match
@@ -119,6 +120,7 @@ func RewriteDownloadHrefs(body []byte, o Options) []byte {
 // single quotes, entity escaping and nested link text without reserializing
 // the rest of the index.
 func FilterSimpleHTMLLinks(body []byte, versions map[string]bool) []byte {
+	versions = canonicalVersions(versions)
 	if len(versions) == 0 {
 		return body
 	}
@@ -158,7 +160,7 @@ func deniedSimpleLink(token html.Token, versions map[string]bool) bool {
 			continue
 		}
 		_, version := FilenameIdentity(path.Base(u.Path))
-		if versions[version] {
+		if versions[CanonicalVersion(version)] {
 			return true
 		}
 	}
@@ -177,6 +179,7 @@ func RewriteSimpleJSON(body []byte, filteredVersions map[string]bool, o Options)
 	if !ok {
 		return nil, errors.New("pypi simple json response has no files array")
 	}
+	filteredVersions = canonicalVersions(filteredVersions)
 
 	rewrittenFiles := make([]any, 0, len(files))
 	for _, file := range files {
@@ -188,7 +191,7 @@ func RewriteSimpleJSON(body []byte, filteredVersions map[string]bool, o Options)
 
 		if filename, ok := entry["filename"].(string); ok {
 			_, version := FilenameIdentity(filename)
-			if version != "" && filteredVersions[version] {
+			if version != "" && filteredVersions[CanonicalVersion(version)] {
 				continue
 			}
 		}
@@ -204,7 +207,7 @@ func RewriteSimpleJSON(body []byte, filteredVersions map[string]bool, o Options)
 	if versions, ok := metadata["versions"].([]any); ok && len(filteredVersions) > 0 {
 		keptVersions := make([]any, 0, len(versions))
 		for _, v := range versions {
-			if version, ok := v.(string); ok && filteredVersions[version] {
+			if version, ok := v.(string); ok && filteredVersions[CanonicalVersion(version)] {
 				continue
 			}
 			keptVersions = append(keptVersions, v)

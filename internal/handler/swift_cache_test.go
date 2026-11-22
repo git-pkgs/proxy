@@ -87,7 +87,7 @@ func TestSwiftCorruptManifestRefetched(t *testing.T) {
 	}
 
 	get()
-	entry, err := db.GetMetadataCache("swift", swiftManifestCacheKey("apple", "example", "1.0.0", ""))
+	entry, err := db.GetMetadataCache("swift", swiftManifestCacheKey("apple", "example", "1.0.0", "", swiftAcceptManifest))
 	if err != nil || entry == nil {
 		t.Fatalf("manifest not cached: %v", err)
 	}
@@ -111,14 +111,14 @@ func TestSwiftCorruptManifestRefetched(t *testing.T) {
 }
 
 func TestSwiftManifestCacheKeyIgnoresToolsVersionZeros(t *testing.T) {
-	key := swiftManifestCacheKey("apple", "example", "1.0.0", "swift-version=5.8")
-	if got := swiftManifestCacheKey("apple", "example", "1.0.0", "swift-version=5.8.0"); got != key {
+	key := swiftManifestCacheKey("apple", "example", "1.0.0", "swift-version=5.8", swiftAcceptManifest)
+	if got := swiftManifestCacheKey("apple", "example", "1.0.0", "swift-version=5.8.0", swiftAcceptManifest); got != key {
 		t.Error("5.8.0 and 5.8 have different keys")
 	}
-	if got := swiftManifestCacheKey("apple", "example", "1.0.0", "swift-version=5.9"); got == key {
+	if got := swiftManifestCacheKey("apple", "example", "1.0.0", "swift-version=5.9", swiftAcceptManifest); got == key {
 		t.Error("5.9 and 5.8 share a key")
 	}
-	if got := swiftManifestCacheKey("apple", "example", "1.0.0", ""); got == key {
+	if got := swiftManifestCacheKey("apple", "example", "1.0.0", "", swiftAcceptManifest); got == key {
 		t.Error("Package.swift and the 5.8 manifest share a key")
 	}
 }

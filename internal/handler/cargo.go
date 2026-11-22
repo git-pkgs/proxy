@@ -194,28 +194,29 @@ func (h *CargoHandler) applyCooldownFiltering(downstreamResponse http.ResponseWr
 
 // publishTime reads a crate version's pubtime from the sparse index, sharing
 // the index cache with handleIndex. Entries published before crates.io
-// recorded pubtime have none.
+// recorded pubtime have none. A cached index that doesn't list the version
+// is fetched again (readListed).
 func (h *CargoHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, error) {
 	upstreamURL := fmt.Sprintf("%s/%s", h.indexURL, h.buildIndexPath(name))
-	body, _, err := h.proxy.FetchOrCacheMetadata(r.Context(), "cargo", name, upstreamURL, "text/plain")
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	for line := range bytes.SplitSeq(body, []byte("\n")) {
-		if len(bytes.TrimSpace(line)) == 0 {
-			continue
-		}
-		var entry crateIndexEntry
-		if err := json.Unmarshal(line, &entry); err != nil {
-			return time.Time{}, false, err
-		}
-		if entry.Version != version {
-			continue
-		}
-		published, err := time.Parse(time.RFC3339, entry.PublishTime)
-		return published, err == nil, nil
-	}
-	return time.Time{}, false, nil
+	listed, err := readListed(r.Context(), h.proxy, "cargo", name, upstreamURL, "text/plain", "",
+		func(res metadataResult) (listedTime, bool, error) {
+			for line := range bytes.SplitSeq(res.body, []byte("\n")) {
+				if len(bytes.TrimSpace(line)) == 0 {
+					continue
+				}
+				var entry crateIndexEntry
+				if err := json.Unmarshal(line, &entry); err != nil {
+					return listedTime{}, false, err
+				}
+				if entry.Version != version {
+					continue
+				}
+				published, err := time.Parse(time.RFC3339, entry.PublishTime)
+				return listedTime{published, err == nil}, true, nil
+			}
+			return listedTime{}, false, nil
+		})
+	return listed.published, listed.ok, err
 }
 
 // buildIndexPath builds the sparse index path for a crate name.
