@@ -148,10 +148,7 @@ func TestHandlersAskCooldownThroughRecorder(t *testing.T) {
 func TestHandlerRewriteExpiresWithWithheldVersion(t *testing.T) {
 	for _, c := range validatorCases {
 		t.Run(c.ecosystem, func(t *testing.T) {
-			// The newest version is published 2h before a time between
-			// start and the end of the request, to the second.
-			start := time.Now()
-			u := cooldownUpstream(t)
+			u, published := cooldownUpstreamPublished(t)
 			proxy, _, clock := validatorProxyWithDB(t, u, time.Hour)
 			// Cooldown compares with the wall clock, so the proxy's clock
 			// follows it here.
@@ -163,7 +160,6 @@ func TestHandlerRewriteExpiresWithWithheldVersion(t *testing.T) {
 			if rec := serve(handler, c.path, nil); rec.Code != http.StatusOK {
 				t.Fatalf("status %d", rec.Code)
 			}
-			end := time.Now()
 			proxy.rewrites.mu.Lock()
 			defer proxy.rewrites.mu.Unlock()
 			if len(proxy.rewrites.entries) != 1 {
@@ -171,10 +167,8 @@ func TestHandlerRewriteExpiresWithWithheldVersion(t *testing.T) {
 			}
 			for _, el := range proxy.rewrites.entries {
 				expires := el.Value.(*rewriteEntry).expires
-				// With a 3h cooldown it is available an hour after then.
-				earliest, latest := start.Add(time.Hour).Add(-time.Second), end.Add(time.Hour)
-				if expires.Before(earliest) || expires.After(latest) {
-					t.Errorf("rewrite expires %v, want between %v and %v, when the withheld version is available", expires, earliest, latest)
+				if want := published.Add(3 * time.Hour); !expires.Equal(want) {
+					t.Errorf("rewrite expires %v, want %v, when the withheld version is available", expires, want)
 				}
 			}
 		})
