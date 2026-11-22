@@ -50,17 +50,18 @@ func TestLookupEndpointsLimitTheirRequests(t *testing.T) {
 		path   string
 		handle http.HandlerFunc
 		body   func(n int) string
+		limit  int
 	}{
-		{"/api/outdated", h.HandleOutdated, outdatedBody},
-		{"/api/bulk", h.HandleBulkLookup, bulkBody},
+		{"/api/outdated", h.HandleOutdated, outdatedBody, 100},
+		{"/api/bulk", h.HandleBulkLookup, bulkBody, 1000},
 	}
 	for _, e := range endpoints {
 		for _, tt := range []struct {
 			name, contentType string
 			entries, want     int
 		}{
-			{"at the limit", "application/json", maxLookupEntries, http.StatusOK},
-			{"over the limit", "application/json", maxLookupEntries + 1, http.StatusBadRequest},
+			{"at the limit", "application/json", e.limit, http.StatusOK},
+			{"over the limit", "application/json", e.limit + 1, http.StatusBadRequest},
 			{"with a charset", "application/json; charset=utf-8", 1, http.StatusOK},
 			{"no content type", "", 1, http.StatusUnsupportedMediaType},
 			{"a form's content type", "text/plain", 1, http.StatusUnsupportedMediaType},
@@ -71,8 +72,8 @@ func TestLookupEndpointsLimitTheirRequests(t *testing.T) {
 				if w.Code != tt.want {
 					t.Fatalf("status = %d, want %d: %s", w.Code, tt.want, w.Body)
 				}
-				if tt.want == http.StatusBadRequest && !strings.Contains(w.Body.String(), fmt.Sprint(maxLookupEntries)) {
-					t.Errorf("body = %s, want it to name the limit of %d", w.Body, maxLookupEntries)
+				if tt.want == http.StatusBadRequest && !strings.Contains(w.Body.String(), fmt.Sprint(e.limit)) {
+					t.Errorf("body = %s, want it to name the limit of %d", w.Body, e.limit)
 				}
 			})
 		}
