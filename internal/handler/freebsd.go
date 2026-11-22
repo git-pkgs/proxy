@@ -67,15 +67,23 @@ func NewFreeBSDHandler(proxy *Proxy, proxyURL string, repositories map[string]st
 	h := &FreeBSDHandler{
 		proxy:        proxy,
 		proxyURL:     strings.TrimSuffix(proxyURL, "/"),
-		repositories: make(map[string]string, len(repositories)),
-	}
-	for name, repositoryURL := range repositories {
-		h.repositories[name] = strings.TrimSuffix(repositoryURL, "/")
-	}
-	if len(h.repositories) == 0 {
-		h.repositories[defaultFreeBSDRepositoryName] = defaultFreeBSDUpstream
+		repositories: FreeBSDRepositories(repositories),
 	}
 	return h
+}
+
+// FreeBSDRepositories returns the upstream.freebsd repositories by name
+// without trailing slashes, or the official FreeBSD mirror as "freebsd"
+// when none are configured.
+func FreeBSDRepositories(configured map[string]string) map[string]string {
+	repositories := make(map[string]string, len(configured))
+	for name, repositoryURL := range configured {
+		repositories[name] = strings.TrimSuffix(repositoryURL, "/")
+	}
+	if len(repositories) == 0 {
+		repositories[defaultFreeBSDRepositoryName] = defaultFreeBSDUpstream
+	}
+	return repositories
 }
 
 // Routes returns the HTTP handler for pkg requests.

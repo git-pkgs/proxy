@@ -45,15 +45,23 @@ func NewArchHandler(proxy *Proxy, proxyURL string, repositories map[string]strin
 	h := &ArchHandler{
 		proxy:        proxy,
 		proxyURL:     strings.TrimSuffix(proxyURL, "/"),
-		repositories: make(map[string]string, len(repositories)),
-	}
-	for name, repositoryURL := range repositories {
-		h.repositories[name] = strings.TrimSuffix(repositoryURL, "/")
-	}
-	if len(h.repositories) == 0 {
-		h.repositories[defaultArchRepositoryName] = defaultArchUpstream
+		repositories: ArchRepositories(repositories),
 	}
 	return h
+}
+
+// ArchRepositories returns the upstream.arch repositories by name without
+// trailing slashes, or the Arch Linux GeoIP mirror as "archlinux" when none
+// are configured.
+func ArchRepositories(configured map[string]string) map[string]string {
+	repositories := make(map[string]string, len(configured))
+	for name, repositoryURL := range configured {
+		repositories[name] = strings.TrimSuffix(repositoryURL, "/")
+	}
+	if len(repositories) == 0 {
+		repositories[defaultArchRepositoryName] = defaultArchUpstream
+	}
+	return repositories
 }
 
 // Routes returns the HTTP handler for pacman requests.

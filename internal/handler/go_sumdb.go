@@ -100,14 +100,20 @@ func (p *goSumDBProbes) recordFailure(name string, start time.Time) {
 // clients have no route to the database of their own.
 func (h *GoHandler) SetSumDBs(sumDBs map[string]string, offline bool) {
 	h.sumDBOffline = offline
-	if len(sumDBs) == 0 {
-		h.sumDBs = map[string]string{defaultGoSumDBName: defaultGoSumDBURL}
-		return
+	h.sumDBs = GoSumDBs(sumDBs)
+}
+
+// GoSumDBs returns the upstream.go_sumdbs checksum databases by name without
+// trailing slashes, or sum.golang.org when none are configured.
+func GoSumDBs(configured map[string]string) map[string]string {
+	if len(configured) == 0 {
+		return map[string]string{defaultGoSumDBName: defaultGoSumDBURL}
 	}
-	h.sumDBs = make(map[string]string, len(sumDBs))
-	for name, sumDBURL := range sumDBs {
-		h.sumDBs[name] = strings.TrimSuffix(sumDBURL, "/")
+	sumDBs := make(map[string]string, len(configured))
+	for name, sumDBURL := range configured {
+		sumDBs[name] = strings.TrimSuffix(sumDBURL, "/")
 	}
+	return sumDBs
 }
 
 // handleSumDB serves checksum database requests that the go command sends
