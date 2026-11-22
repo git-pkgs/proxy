@@ -961,10 +961,8 @@ func (u *UpstreamConfig) AuthForURL(url string) *AuthConfig {
 
 // Validate checks upstream authentication URL scopes.
 func (u *UpstreamConfig) Validate() error {
-	for pattern := range u.Auth {
-		if _, err := parseAuthURL(pattern); err != nil {
-			return fmt.Errorf("invalid upstream.auth URL %q: %w", pattern, err)
-		}
+	if err := u.validateAuth(); err != nil {
+		return err
 	}
 	if err := validateNamedUpstreams("upstream.helm", u.Helm); err != nil {
 		return err
@@ -2339,6 +2337,45 @@ func (a *AuthConfig) Header() (name, value string) {
 	default:
 		return "", ""
 	}
+}
+
+func (u *UpstreamConfig) validateAuth() error {
+	for pattern, auth := range u.Auth {
+		if _, err := parseAuthURL(pattern); err != nil {
+			return fmt.Errorf("invalid upstream.auth URL %q: %w", authScopeName(pattern), err)
+		}
+		switch strings.ToLower(auth.Type) {
+		case "bearer", "basic", "header", "ecr":
+		default:
+			return fmt.Errorf("invalid upstream.auth %q: unknown type %q, must be bearer, basic, header or ecr", authScopeName(pattern), auth.Type)
+		}
+	}
+	return nil
+}
+
+// authScopeName returns an upstream.auth scope for a message, without the
+// user information and query a scope can carry credentials in.
+func authScopeName(pattern string) string {
+	parsed, err := url.Parse(pattern)
+	if err != nil {
+		return "(invalid URL)"
+	}
+	return (&url.URL{Scheme: parsed.Scheme, Host: parsed.Host, Path: parsed.Path, RawPath: parsed.RawPath}).String()
+}
+
+// An ECR entry gets its credentials from AWS.
+func (u *UpstreamConfig) authWithoutCredentials() []string {
+	var scopes []string
+	for pattern, auth := range u.Auth {
+		if strings.EqualFold(auth.Type, "ecr") {
+			continue
+		}
+		if name, value := auth.Header(); name == "" || value == "" {
+			scopes = append(scopes, authScopeName(pattern))
+		}
+	}
+	slices.Sort(scopes)
+	return scopes
 }
 
 // expandEnv expands ${VAR_NAME} references in a string.

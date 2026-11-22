@@ -144,6 +144,9 @@ func (c *Config) Warnings() []string {
 	if c.Mirror.Refresh != nil && !c.CacheMetadata {
 		warnings = append(warnings, "mirror.refresh without cache_metadata does not refresh Debian, Alpine or RPM packages: their indexes are found through the metadata cache")
 	}
+	for _, scope := range c.Upstream.authWithoutCredentials() {
+		warnings = append(warnings, fmt.Sprintf("upstream.auth %q has nothing to send, so requests under it go out without credentials: its token, username, header name or header value is empty, after expanding ${VAR} references", scope))
+	}
 	return warnings
 }
 
