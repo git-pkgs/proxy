@@ -32,11 +32,6 @@ func TestDownloadCooldownRefetchesMetadataLackingTheVersion(t *testing.T) {
 	}
 
 	for _, c := range downloadCooldownCases() {
-		if c.ecosystem == "helm" {
-			// Charts are downloaded by digest, which a stale index lacks
-			// differently; not covered here.
-			continue
-		}
 		// expired has the cached copy past metadata_ttl, so it is served
 		// stale while the upstream is down.
 		for _, variant := range []struct {
@@ -125,9 +120,6 @@ func checkRefetch(t *testing.T, c downloadCooldownCase, before, after map[string
 func TestDownloadCooldownFetchesUnlistedVersionOnce(t *testing.T) {
 	times := map[string]time.Time{cooldownOldVersion: time.Now().Add(-30 * 24 * time.Hour)}
 	for _, c := range downloadCooldownCases() {
-		if c.ecosystem == "helm" {
-			continue
-		}
 		t.Run(c.ecosystem, func(t *testing.T) {
 			requests := func(version string) int32 {
 				var n atomic.Int32
@@ -508,4 +500,81 @@ func TestRecentRefetchReturnsTheRefetchedIndex(t *testing.T) {
 	if got := index.(map[string]time.Time)["new.conda"]; !got.Equal(released) {
 		t.Errorf("new.conda published %v, want %v", got, released)
 	}
+}
+
+// TestHelmChartMissingFromCachedIndexIsFetched checks a chart download that
+// an index cached within metadata_ttl doesn't list, past its cooldown, is
+// served from what upstream's index lists now.
+func TestHelmChartMissingFromCachedIndexIsFetched(t *testing.T) {
+	c := helmCooldownCase(t)
+	old := time.Now().Add(-30 * 24 * time.Hour)
+	var released atomic.Bool
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		times := map[string]time.Time{cooldownOldVersion: old}
+		if released.Load() {
+			times[cooldownRecentVersion] = old
+		}
+		c.metadata(w, r, times)
+	}))
+	defer upstream.Close()
+	proxy, _, _, fetcher := setupTestProxy(t)
+	proxy.HTTPClient = upstream.Client()
+	proxy.CacheMetadata = true
+	proxy.MetadataTTL = time.Hour
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+	fetcher.artifact = &fetch.Artifact{Body: io.NopCloser(strings.NewReader(chartContent(cooldownRecentVersion)))}
+	handler := c.handler(proxy, upstream.URL)
+	get := func(version string) int {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, c.path(version), nil))
+		return w.Code
+	}
+
+	c.seedCachedArtifact(t, proxy, cooldownOldVersion)
+	if code := get(cooldownOldVersion); code != http.StatusOK {
+		t.Fatalf("old chart: status %d", code)
+	}
+	released.Store(true)
+	if code := get(cooldownRecentVersion); code != http.StatusOK {
+		t.Errorf("chart listed upstream past its cooldown: status %d, want 200", code)
+	}
+}
+
+// TestHelmNeverListedChartRefetchesOncePerKeep is
+// TestCondaNeverListedFileRefetchesOncePerKeep for Helm.
+func TestHelmNeverListedChartRefetchesOncePerKeep(t *testing.T) {
+	c := helmCooldownCase(t)
+	var requests atomic.Int32
+	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests.Add(1)
+		c.metadata(w, r, map[string]time.Time{cooldownOldVersion: time.Now().Add(-30 * 24 * time.Hour)})
+	}))
+	defer upstream.Close()
+	proxy, _, _, fetcher := setupTestProxy(t)
+	fetcher.fetchErr = errors.New("not fetched")
+	proxy.HTTPClient = upstream.Client()
+	proxy.Cooldown = &cooldown.Config{Default: "7d"}
+	handler := c.handler(proxy, upstream.URL)
+	for range 3 {
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, httptest.NewRequest(http.MethodGet, c.path("9.9.9"), nil))
+		if w.Code != http.StatusNotFound {
+			t.Fatalf("unlisted chart: status %d, want 404", w.Code)
+		}
+	}
+	// The first download reads the index, the second refetches it.
+	if got := requests.Load(); got != 2 {
+		t.Errorf("index fetched %d times, want 2", got)
+	}
+}
+
+func helmCooldownCase(t *testing.T) downloadCooldownCase {
+	t.Helper()
+	for _, c := range downloadCooldownCases() {
+		if c.ecosystem == "helm" {
+			return c
+		}
+	}
+	t.Fatal("no helm case")
+	return downloadCooldownCase{}
 }

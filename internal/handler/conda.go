@@ -571,53 +571,19 @@ func (h *CondaHandler) publishTime(r *http.Request, channel, arch, filename stri
 		}
 		return h.indexRepodata(res.body, res.contentEncoding)
 	}
-	// loaded is what the index was built from, unless an index built
-	// earlier was reused.
-	var loaded *metadataResult
-	indexKey := "conda\x00" + cacheKey
-	index, err := publishIndex(h.proxy, indexKey, func() metadataResult {
-		res := h.proxy.lookupMetadata(ctx, "conda", cacheKey, upstreamURL, "*/*", "gzip", nil)
-		loaded = &res
-		return res
-	}, build)
-	if err != nil {
-		return time.Time{}, false, err
-	}
-	published, listed := index[filename]
-	current := loaded != nil && !loaded.fromCache && !loaded.stale
-	if !listed && !current {
-		// A concurrent refetch may have replaced the index read above, so
-		// the file is looked up in the refetched one.
-		if recent, ok := recentRefetch(h.proxy, indexKey); ok {
-			published, listed = recent.(map[string]time.Time)[filename]
-			current = true
-		}
-	}
-	if listed || current {
-		// Listed, just read from upstream (streamed past metadata_max_size
-		// included), or refetched for a missing file within the last
-		// minute, without a digest to check it is current.
-		return published, listed && !published.IsZero(), nil
-	}
-	// Downloads that found the file missing from the same index share one
-	// refetch and build, which for repodata past metadata_max_size streams
-	// it. Later downloads use the refetched index.
-	refetched, err, _ := h.proxy.sharedProxy().publishIndexes.group.Do(indexKey+"\x00refetch", func() (any, error) {
-		res := h.proxy.refetchLacking(ctx, "conda", cacheKey, upstreamURL, "*/*", "gzip", nil)
-		if index, ok := keptPublishIndex(h.proxy, indexKey, res); ok {
-			return index, nil
-		}
-		index, err := build(res)
-		if err != nil {
-			return nil, err
-		}
-		storePublishIndex(h.proxy, indexKey, res, index, true)
-		return index, nil
+	index, err := listingPublishIndex(h.proxy, "conda\x00"+cacheKey, func() metadataResult {
+		return h.proxy.lookupMetadata(ctx, "conda", cacheKey, upstreamURL, "*/*", "gzip", nil)
+	}, func() metadataResult {
+		// For repodata past metadata_max_size, build streams it again.
+		return h.proxy.refetchLacking(ctx, "conda", cacheKey, upstreamURL, "*/*", "gzip", nil)
+	}, build, func(index map[string]time.Time) bool {
+		_, listed := index[filename]
+		return listed
 	})
 	if err != nil {
 		return time.Time{}, false, err
 	}
-	published = refetched.(map[string]time.Time)[filename]
+	published := index[filename]
 	return published, !published.IsZero(), nil
 }
 
