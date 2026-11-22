@@ -2344,7 +2344,7 @@ func (a *AuthConfig) Header() (name, value string) {
 func (u *UpstreamConfig) validateAuth() error {
 	for pattern, auth := range u.Auth {
 		if _, err := parseAuthURL(pattern); err != nil {
-			return fmt.Errorf("invalid upstream.auth URL %q: %w", pattern, err)
+			return fmt.Errorf("invalid upstream.auth URL %q: %w", authScopeName(pattern), err)
 		}
 		switch strings.ToLower(auth.Type) {
 		case "bearer", "basic", "header", "ecr":
@@ -2358,7 +2358,7 @@ func (u *UpstreamConfig) validateAuth() error {
 // authScopeName returns an upstream.auth scope for a message, without the
 // user information and query a scope can carry credentials in.
 func authScopeName(pattern string) string {
-	parsed, err := parseAuthURL(pattern)
+	parsed, err := url.Parse(pattern)
 	if err != nil {
 		return "(invalid URL)"
 	}

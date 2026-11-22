@@ -110,3 +110,26 @@ func TestUpstreamAuthMessagesLeaveOutScopeCredentials(t *testing.T) {
 		}
 	}
 }
+
+// An invalid scope is named without its credentials too.
+func TestInvalidUpstreamAuthScopeLeavesOutItsCredentials(t *testing.T) {
+	for scope, shown := range map[string]string{
+		"https://user:scope-pass@/private?api_key=scope-secret": `"https:///private"`,
+		"https://user:scope-pass@host/%zz?api_key=scope-secret": `"(invalid URL)"`,
+	} {
+		cfg := Default()
+		cfg.Upstream.Auth = map[string]AuthConfig{scope: {Type: "bearer", Token: "t"}}
+		err := cfg.Validate()
+		if err == nil {
+			t.Fatalf("%s: Validate() error = nil, want an invalid URL error", shown)
+		}
+		if !strings.Contains(err.Error(), shown) {
+			t.Errorf("Validate() error = %q, want it to name %s", err, shown)
+		}
+		for _, secret := range []string{"scope-pass", "scope-secret", "user:", "api_key"} {
+			if strings.Contains(err.Error(), secret) {
+				t.Errorf("Validate() error = %q, want it without %q", err, secret)
+			}
+		}
+	}
+}
