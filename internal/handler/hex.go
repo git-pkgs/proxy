@@ -3,12 +3,12 @@ package handler
 import (
 	"bytes"
 	"compress/gzip"
-	"encoding/json"
 	"fmt"
 	"net/http"
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/metadata/hex"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"google.golang.org/protobuf/encoding/protowire"
 )
@@ -89,11 +89,7 @@ func (h *HexHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 // Hex package names can't contain a hyphen, so the first one separates the
 // name from a version that may carry hyphens of its own.
 func (h *HexHandler) parseTarballFilename(filename string) (name, version string) {
-	name, version, ok := strings.Cut(strings.TrimSuffix(filename, ".tar"), "-")
-	if !ok || name == "" || version == "" {
-		return "", ""
-	}
-	return name, version
+	return hex.TarballIdentity(filename)
 }
 
 // hexAPIURL is the Hex HTTP API base URL for fetching package metadata with timestamps.
@@ -213,32 +209,15 @@ func (h *HexHandler) packageVersions(doc metadataResult) ([]string, error) {
 	return packageReleaseVersions(payload)
 }
 
-// hexRelease represents a version entry from the Hex API.
-type hexRelease struct {
-	Version    string `json:"version"`
-	InsertedAt string `json:"inserted_at"`
-}
-
-// hexPackageAPI represents the Hex API response for a package.
-type hexPackageAPI struct {
-	Releases []hexRelease `json:"releases"`
-}
+// hexPackageAPI and hexRelease are the Hex API package response.
+type (
+	hexPackageAPI = hex.APIPackage
+	hexRelease    = hex.APIRelease
+)
 
 // parseHexReleases reads the publish times from a Hex API package response.
 func parseHexReleases(body []byte) (publishTimes, error) {
-	var pkg hexPackageAPI
-	if err := json.Unmarshal(body, &pkg); err != nil {
-		return nil, err
-	}
-	times := make(publishTimes, len(pkg.Releases))
-	for _, release := range pkg.Releases {
-		insertedAt, err := time.Parse(time.RFC3339Nano, release.InsertedAt)
-		if err != nil {
-			insertedAt = time.Time{}
-		}
-		times[release.Version] = insertedAt
-	}
-	return times, nil
+	return hex.ReleaseTimes(body)
 }
 
 func (h *HexHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, bool, error) {
@@ -248,6 +227,16 @@ func (h *HexHandler) publishTime(r *http.Request, name, version string) (time.Ti
 // signedPayload decompresses a gzipped Signed message, with the metadata
 // limit applied to the decompressed size, and returns its payload.
 func (h *HexHandler) signedPayload(gzippedData []byte) ([]byte, error) {
+	signed, err := h.decompressSigned(gzippedData)
+	if err != nil {
+		return nil, err
+	}
+	return hex.Payload(signed)
+}
+
+// decompressSigned gunzips a Signed message with the metadata limit
+// applied to the decompressed size.
+func (h *HexHandler) decompressSigned(gzippedData []byte) ([]byte, error) {
 	gr, err := gzip.NewReader(bytes.NewReader(gzippedData))
 	if err != nil {
 		return nil, err
@@ -257,175 +246,40 @@ func (h *HexHandler) signedPayload(gzippedData []byte) ([]byte, error) {
 		return nil, err
 	}
 	_ = gr.Close()
-
-	// Parse Signed message: field 1 = payload (bytes), field 2 = signature (bytes)
-	payload, err := extractProtobufBytes(signed, 1)
-	if err != nil {
-		return nil, fmt.Errorf("extracting payload: %w", err)
-	}
-	return payload, nil
+	return signed, nil
 }
 
 // packageReleaseVersions lists the versions of the releases in a Package
 // message.
 func packageReleaseVersions(payload []byte) ([]string, error) {
-	var versions []string
-	_, err := filterPackageReleases(payload, nil, func(version string) {
-		versions = append(versions, version)
-	})
-	return versions, err
+	return hex.ReleaseVersions(payload)
 }
 
-// filterSignedPackage decompresses gzipped data, decodes the Signed protobuf wrapper,
-// filters releases from the Package payload, and re-encodes as gzipped protobuf
-// (without the original signature since the payload has changed).
+// filterSignedPackage decompresses gzipped data, with the metadata limit
+// applied, and returns it gzipped without the releases filteredVersions
+// holds and without the signature, since the payload has changed.
 func (h *HexHandler) filterSignedPackage(gzippedData []byte, filteredVersions map[string]bool) ([]byte, error) {
-	payload, err := h.signedPayload(gzippedData)
+	signed, err := h.decompressSigned(gzippedData)
 	if err != nil {
 		return nil, err
 	}
-
-	// Filter releases from the Package message
-	filteredPayload, err := filterPackageReleases(payload, filteredVersions, nil)
-	if err != nil {
-		return nil, fmt.Errorf("filtering releases: %w", err)
-	}
-
-	// Re-encode Signed message with modified payload and no signature
-	var newSigned []byte
-	newSigned = protowire.AppendTag(newSigned, 1, protowire.BytesType)
-	newSigned = protowire.AppendBytes(newSigned, filteredPayload)
-
-	// Gzip compress
-	var buf bytes.Buffer
-	gw := gzip.NewWriter(&buf)
-	if _, err := gw.Write(newSigned); err != nil {
-		return nil, err
-	}
-	if err := gw.Close(); err != nil {
-		return nil, err
-	}
-
-	return buf.Bytes(), nil
+	return hex.FilterSigned(signed, filteredVersions)
 }
 
-// filterPackageReleases filters releases from a Package protobuf message,
-// calling seen, when not nil, with the version of each release.
-// Package: field 1 = releases (repeated), field 2 = name, field 3 = repository
+// filterPackageReleases filters releases from a Package protobuf message
+// (see hex.FilterReleases).
 func filterPackageReleases(payload []byte, filteredVersions map[string]bool, seen func(string)) ([]byte, error) {
-	var result []byte
-	data := payload
-
-	for len(data) > 0 {
-		num, wtype, n := protowire.ConsumeTag(data)
-		if n < 0 {
-			return nil, fmt.Errorf("invalid protobuf tag")
-		}
-
-		tagBytes := data[:n]
-		data = data[n:]
-
-		var fieldBytes []byte
-		switch wtype {
-		case protowire.BytesType:
-			v, vn := protowire.ConsumeBytes(data)
-			if vn < 0 {
-				return nil, fmt.Errorf("invalid protobuf bytes field")
-			}
-			fieldBytes = data[:vn]
-			data = data[vn:]
-
-			if num == 1 { // releases field
-				version := extractReleaseVersion(v)
-				if seen != nil {
-					seen(version)
-				}
-				if filteredVersions[version] {
-					continue // skip this release
-				}
-			}
-		case protowire.VarintType:
-			_, vn := protowire.ConsumeVarint(data)
-			if vn < 0 {
-				return nil, fmt.Errorf("invalid protobuf varint")
-			}
-			fieldBytes = data[:vn]
-			data = data[vn:]
-		default:
-			return nil, fmt.Errorf("unexpected wire type %d", wtype)
-		}
-
-		result = append(result, tagBytes...)
-		result = append(result, fieldBytes...)
-	}
-
-	return result, nil
+	return hex.FilterReleases(payload, filteredVersions, seen)
 }
 
-// extractReleaseVersion extracts the version string from a Release protobuf message.
-// Release: field 1 = version (string)
+// extractReleaseVersion extracts the version string from a Release message.
 func extractReleaseVersion(release []byte) string {
-	data := release
-	for len(data) > 0 {
-		num, wtype, n := protowire.ConsumeTag(data)
-		if n < 0 {
-			return ""
-		}
-		data = data[n:]
-
-		switch wtype {
-		case protowire.BytesType:
-			v, vn := protowire.ConsumeBytes(data)
-			if vn < 0 {
-				return ""
-			}
-			if num == 1 {
-				return string(v)
-			}
-			data = data[vn:]
-		case protowire.VarintType:
-			_, vn := protowire.ConsumeVarint(data)
-			if vn < 0 {
-				return ""
-			}
-			data = data[vn:]
-		default:
-			return ""
-		}
-	}
-	return ""
+	return hex.ReleaseVersion(release)
 }
 
 // extractProtobufBytes extracts a bytes field from a protobuf message by field number.
 func extractProtobufBytes(data []byte, fieldNum protowire.Number) ([]byte, error) {
-	for len(data) > 0 {
-		num, wtype, n := protowire.ConsumeTag(data)
-		if n < 0 {
-			return nil, fmt.Errorf("invalid protobuf tag")
-		}
-		data = data[n:]
-
-		switch wtype {
-		case protowire.BytesType:
-			v, vn := protowire.ConsumeBytes(data)
-			if vn < 0 {
-				return nil, fmt.Errorf("invalid protobuf bytes")
-			}
-			if num == fieldNum {
-				return v, nil
-			}
-			data = data[vn:]
-		case protowire.VarintType:
-			_, vn := protowire.ConsumeVarint(data)
-			if vn < 0 {
-				return nil, fmt.Errorf("invalid protobuf varint")
-			}
-			data = data[vn:]
-		default:
-			return nil, fmt.Errorf("unexpected wire type %d", wtype)
-		}
-	}
-	return nil, fmt.Errorf("field %d not found", fieldNum)
+	return hex.BytesField(data, fieldNum)
 }
 
 // proxyCached forwards a request with metadata caching.
