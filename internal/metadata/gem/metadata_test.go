@@ -5,6 +5,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/git-pkgs/cooldown"
 )
 
 const index = "---\n" +
@@ -26,11 +28,55 @@ func TestIndexVersions(t *testing.T) {
 	}
 }
 
+// windowPolicy holds a version back until window has passed since it was
+// published, as judged at the evaluation time it is given.
+type windowPolicy struct {
+	disabled  bool
+	window    time.Duration
+	evaluated []time.Time
+	purls     []string
+}
+
+func (p *windowPolicy) Enabled() bool { return !p.disabled }
+
+func (p *windowPolicy) Evaluate(ecosystem, packagePURL string, publishedAt, evaluatedAt time.Time) cooldown.Decision {
+	p.evaluated = append(p.evaluated, evaluatedAt)
+	p.purls = append(p.purls, ecosystem+" "+packagePURL)
+	availableAt := publishedAt.Add(p.window)
+	return cooldown.Decision{Allowed: !evaluatedAt.Before(availableAt), AvailableAt: availableAt}
+}
+
+var now = time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+
+// published gives every version in index a time: 1.1.0 and the platform
+// build of 2.0.0 an hour ago, the others a month ago.
+func published() map[string]time.Time {
+	old, recent := now.AddDate(0, -1, 0), now.Add(-time.Hour)
+	return map[string]time.Time{
+		"1":                  old,
+		"1.0.0":              old,
+		"1.1.0":              recent,
+		"2.0.0-x86_64-linux": recent,
+		"2.0.0":              old,
+	}
+}
+
+type withheldVersion struct {
+	name, version string
+	publishedAt   time.Time
+}
+
 func TestFilterIndex(t *testing.T) {
-	var reported []string
-	out, kept := FilterIndex([]byte(index), func(v string) bool {
-		return v == "1.1.0" || v == "2.0.0-x86_64-linux"
-	}, func(v string) { reported = append(reported, v) })
+	policy := &windowPolicy{window: 72 * time.Hour}
+	var reported []withheldVersion
+	out, kept := FilterIndex("demo", []byte(index), Options{
+		Cooldown:    policy,
+		EvaluatedAt: now,
+		Published:   published(),
+		OnWithheld: func(name, version string, publishedAt time.Time) {
+			reported = append(reported, withheldVersion{name, version, publishedAt})
+		},
+	})
 
 	wantOut := "---\n1 |checksum:zzz\n1.0.0 |checksum:aaa\n\n2.0.0\n"
 	if string(out) != wantOut {
@@ -39,34 +85,89 @@ func TestFilterIndex(t *testing.T) {
 	if want := []string{"1", "1.0.0", "2.0.0"}; !slices.Equal(kept, want) {
 		t.Errorf("kept = %q, want %q", kept, want)
 	}
-	if want := []string{"1.1.0", "2.0.0-x86_64-linux"}; !slices.Equal(reported, want) {
-		t.Errorf("onWithheld got %q, want %q", reported, want)
+	recent := now.Add(-time.Hour)
+	want := []withheldVersion{{"demo", "1.1.0", recent}, {"demo", "2.0.0-x86_64-linux", recent}}
+	if !slices.Equal(reported, want) {
+		t.Errorf("OnWithheld got %v, want %v", reported, want)
+	}
+	if len(policy.purls) != 5 || slices.ContainsFunc(policy.purls, func(p string) bool { return p != "gem pkg:gem/demo" }) {
+		t.Errorf("policy asked about %q, want gem pkg:gem/demo for each of the 5 versions", policy.purls)
+	}
+	if slices.ContainsFunc(policy.evaluated, func(at time.Time) bool { return !at.Equal(now) }) {
+		t.Errorf("policy evaluated at %v, want only %v", policy.evaluated, now)
 	}
 }
 
 func TestFilterIndexWithholdsNothing(t *testing.T) {
-	out, kept := FilterIndex([]byte(index), func(string) bool { return false }, nil)
-	if string(out) != index+"\n" {
-		t.Errorf("FilterIndex output = %q, want the index with a final newline", out)
+	tests := map[string]Options{
+		"no policy":       {Published: published(), WithholdUnknown: true},
+		"policy disabled": {Cooldown: &windowPolicy{disabled: true, window: 72 * time.Hour}, EvaluatedAt: now, WithholdUnknown: true},
+		"all old enough":  {Cooldown: &windowPolicy{window: 30 * time.Minute}, EvaluatedAt: now, Published: published()},
 	}
-	if len(kept) != 5 {
-		t.Errorf("kept = %q, want 5 versions", kept)
+	for name, o := range tests {
+		t.Run(name, func(t *testing.T) {
+			o.OnWithheld = func(_, version string, _ time.Time) { t.Errorf("withheld %s", version) }
+			out, kept := FilterIndex("demo", []byte(index), o)
+			if string(out) != index+"\n" {
+				t.Errorf("FilterIndex output = %q, want the index with a final newline", out)
+			}
+			if len(kept) != 5 {
+				t.Errorf("kept = %q, want 5 versions", kept)
+			}
+		})
 	}
 }
 
-func TestFilterIndexNeverAsksAboutHeaderOrBlankLines(t *testing.T) {
-	FilterIndex([]byte(index), func(v string) bool {
-		if v == "---" || v == "" || strings.Contains(v, " ") {
-			t.Errorf("withheld asked about %q", v)
-		}
-		return false
-	}, nil)
+// A version the times don't have is kept, unless the caller says its times
+// are too old to trust: then it is held back, with no publish time to
+// report.
+func TestFilterIndexVersionWithoutTime(t *testing.T) {
+	times := published()
+	delete(times, "1.0.0")
+	o := Options{Cooldown: &windowPolicy{window: 30 * time.Minute}, EvaluatedAt: now, Published: times}
+
+	if _, kept := FilterIndex("demo", []byte(index), o); !slices.Contains(kept, "1.0.0") {
+		t.Errorf("kept = %q, want 1.0.0 in it", kept)
+	}
+
+	var reported []withheldVersion
+	o.WithholdUnknown = true
+	o.OnWithheld = func(name, version string, publishedAt time.Time) {
+		reported = append(reported, withheldVersion{name, version, publishedAt})
+	}
+	out, kept := FilterIndex("demo", []byte(index), o)
+	if slices.Contains(kept, "1.0.0") || strings.Contains(string(out), "1.0.0 ") {
+		t.Errorf("kept = %q, output = %q; want 1.0.0 held back", kept, out)
+	}
+	if want := []withheldVersion{{"demo", "1.0.0", time.Time{}}}; !slices.Equal(reported, want) {
+		t.Errorf("OnWithheld got %v, want %v", reported, want)
+	}
+}
+
+// A version whose time didn't parse is kept, whatever WithholdUnknown says.
+func TestFilterIndexKeepsVersionWithZeroTime(t *testing.T) {
+	times := published()
+	times["1.1.0"] = time.Time{}
+	policy := &windowPolicy{window: 72 * time.Hour}
+	_, kept := FilterIndex("demo", []byte(index), Options{
+		Cooldown: policy, EvaluatedAt: now, Published: times, WithholdUnknown: true,
+	})
+	if want := []string{"1", "1.0.0", "1.1.0", "2.0.0"}; !slices.Equal(kept, want) {
+		t.Errorf("kept = %q, want %q", kept, want)
+	}
+	if len(policy.evaluated) != 4 {
+		t.Errorf("policy evaluated %d versions, want 4: not the one without a time", len(policy.evaluated))
+	}
 }
 
 func TestFilterIndexWithoutOnWithheld(t *testing.T) {
-	out, _ := FilterIndex([]byte("1.0.0 |x\n"), func(string) bool { return true }, nil)
-	if string(out) != "" {
-		t.Errorf("FilterIndex output = %q, want empty", out)
+	out, kept := FilterIndex("demo", []byte("1.0.0 |x\n"), Options{
+		Cooldown:    &windowPolicy{window: 72 * time.Hour},
+		EvaluatedAt: now,
+		Published:   map[string]time.Time{"1.0.0": now},
+	})
+	if string(out) != "" || kept != nil {
+		t.Errorf("FilterIndex = %q, %q; want nothing kept", out, kept)
 	}
 }
 

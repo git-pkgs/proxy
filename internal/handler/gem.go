@@ -131,9 +131,7 @@ func (h *GemHandler) handleCompactIndex(w http.ResponseWriter, r *http.Request) 
 			if err != nil {
 				return nil, nil, err
 			}
-			out, kept := h.filterIndex(body, name, func(version string) bool {
-				return docs.withheld(h.proxy, "gem", name, version)
-			})
+			out, kept := h.filterIndex(body, name, docs)
 			return out, kept, nil
 		})
 	if err != nil {
@@ -177,12 +175,24 @@ func (h *GemHandler) indexVersions(doc metadataResult) ([]string, error) {
 	return gem.IndexVersions(body), nil
 }
 
-// filterIndex returns the compact index without the lines of versions
-// withheld reports, and the versions it kept.
-func (h *GemHandler) filterIndex(body []byte, name string, withheld func(string) bool) ([]byte, []string) {
-	return gem.FilterIndex(body, withheld, func(version string) {
-		h.proxy.Logger.Info("cooldown: filtering gem version", "gem", name, "version", version)
+// filterIndex returns the compact index without the lines of the versions
+// cooldown holds back, by the publish times in docs, and the versions it
+// kept; see gem.FilterIndex.
+func (h *GemHandler) filterIndex(body []byte, name string, docs timedDocuments) ([]byte, []string) {
+	return gem.FilterIndex(name, body, gem.Options{
+		Cooldown:        h.proxy.cooldown(),
+		EvaluatedAt:     h.proxy.clock(),
+		Published:       docs.published,
+		WithholdUnknown: docs.withholdUnknown,
+		OnWithheld:      h.cooldownFiltered,
 	})
+}
+
+// cooldownFiltered logs a version a compact index was served without and
+// records it for the package page.
+func (h *GemHandler) cooldownFiltered(name, version string, publishedAt time.Time) {
+	h.proxy.Logger.Info("cooldown: filtering gem version", "gem", name, "version", version)
+	h.proxy.recordWithheld("gem", name, version, publishedAt)
 }
 
 // gemVersion is a version entry from the RubyGems versions API.
