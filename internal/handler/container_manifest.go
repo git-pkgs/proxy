@@ -5,31 +5,27 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"fmt"
-	"mime"
 	"net/http"
 	"regexp"
 	"slices"
-	"sort"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/git-pkgs/proxy/internal/metadata/oci"
 )
 
 const (
 	containerManifestCacheEcosystem = "oci-manifest"
 	containerStaleWarning           = `110 - "Response is Stale"`
-
-	containerAcceptWildcardSpecificity = iota
-	containerAcceptTypeWildcardSpecificity
-	containerAcceptExactSpecificity
 )
 
 const (
 	// containerManifestIndexCacheClass replaces the Accept header in tag cache
 	// keys for clients that accept an index type.
 	containerManifestIndexCacheClass = "index"
-	ociImageIndexMediaType           = "application/vnd.oci.image.index.v1+json"
-	dockerManifestListMediaType      = "application/vnd.docker.distribution.manifest.list.v2+json"
+	ociImageIndexMediaType           = oci.ImageIndexMediaType
+	dockerManifestListMediaType      = oci.DockerManifestListMediaType
 )
 
 var manifestDigestReferencePattern = regexp.MustCompile(`^[a-z0-9]+:[a-f0-9]+$`)
@@ -149,19 +145,13 @@ func (h *ContainerHandler) containerManifestSharedCacheKey(registryURL, name, re
 }
 
 func containerManifestAcceptsIndex(accept string) bool {
-	return containerManifestAccepts(accept, ociImageIndexMediaType) || containerManifestAccepts(accept, dockerManifestListMediaType)
+	return oci.AcceptsIndex(accept)
 }
 
 // containerManifestNames reports whether accept lists mediaType itself and
-// doesn't refuse it with q=0. Registries compare Accept values literally, so a
-// wildcard gets a client the converted manifest, not the index.
+// doesn't refuse it with q=0; see oci.Names.
 func containerManifestNames(accept, mediaType string) bool {
-	for _, value := range strings.Split(accept, ",") {
-		if named, _, err := mime.ParseMediaType(value); err == nil && named == mediaType {
-			return containerManifestAccepts(accept, mediaType)
-		}
-	}
-	return false
+	return oci.Names(accept, mediaType)
 }
 
 // containerManifestSharable reports whether manifest may go under the shared
@@ -174,8 +164,7 @@ func containerManifestSharable(reference, cacheAccept string, manifest *cachedCo
 	if manifestDigestReferencePattern.MatchString(reference) || !containerManifestAcceptsIndex(cacheAccept) {
 		return true
 	}
-	if mediaType, _, err := mime.ParseMediaType(manifest.contentType); err == nil &&
-		(mediaType == ociImageIndexMediaType || mediaType == dockerManifestListMediaType) {
+	if oci.IsIndexMediaType(manifest.contentType) {
 		return true
 	}
 	return containerManifestNames(cacheAccept, ociImageIndexMediaType) && containerManifestNames(cacheAccept, dockerManifestListMediaType)
@@ -348,136 +337,23 @@ func containerManifestAccept(r *http.Request) string {
 	if accept := strings.Join(r.Header.Values("Accept"), ", "); accept != "" {
 		return accept
 	}
-	return strings.Join([]string{
-		"application/vnd.oci.image.manifest.v1+json",
-		"application/vnd.oci.image.index.v1+json",
-		"application/vnd.docker.distribution.manifest.v2+json",
-		"application/vnd.docker.distribution.manifest.list.v2+json",
-		"application/vnd.docker.distribution.manifest.v1+prettyjws",
-	}, ", ")
+	return oci.DefaultManifestAccept
 }
 
+// normalizeContainerManifestAccept is accept in the form cache keys use;
+// see oci.NormalizeAccept.
 func normalizeContainerManifestAccept(accept string) string {
-	mediaTypes := make(map[string]struct{})
-	for _, value := range strings.Split(accept, ",") {
-		value = strings.TrimSpace(value)
-		if value == "" {
-			continue
-		}
-		mediaType, params, err := mime.ParseMediaType(value)
-		if err != nil {
-			mediaTypes[strings.ToLower(value)] = struct{}{}
-			continue
-		}
-		paramKeys := make([]string, 0, len(params))
-		for key := range params {
-			paramKeys = append(paramKeys, key)
-		}
-		sort.Strings(paramKeys)
-		canonical := strings.ToLower(mediaType)
-		for _, key := range paramKeys {
-			value := params[key]
-			if strings.EqualFold(key, "q") {
-				if quality, err := strconv.ParseFloat(value, 64); err == nil {
-					if quality == 1 {
-						continue
-					}
-					value = strconv.FormatFloat(quality, 'g', -1, 64)
-				}
-			}
-			canonical += ";" + strings.ToLower(key) + "=" + value
-		}
-		mediaTypes[canonical] = struct{}{}
-	}
-	canonicalMediaTypes := make([]string, 0, len(mediaTypes))
-	for mediaType := range mediaTypes {
-		canonicalMediaTypes = append(canonicalMediaTypes, mediaType)
-	}
-	sort.Strings(canonicalMediaTypes)
-	return strings.Join(canonicalMediaTypes, ",")
+	return oci.NormalizeAccept(accept)
 }
 
+// containerManifestAccepts reports whether accept allows contentType; see
+// oci.Accepts.
 func containerManifestAccepts(accept, contentType string) bool {
-	contentType, contentParams, err := mime.ParseMediaType(contentType)
-	if err != nil {
-		return false
-	}
-	contentType = strings.ToLower(contentType)
-	contentMajor, contentMinor, found := strings.Cut(contentType, "/")
-	if !found {
-		return false
-	}
-
-	bestMediaTypeSpecificity := -1
-	bestParameterSpecificity := 0
-	bestQuality := 0.0
-	for _, value := range strings.Split(accept, ",") {
-		mediaType, params, err := mime.ParseMediaType(strings.TrimSpace(value))
-		if err != nil {
-			continue
-		}
-		mediaType = strings.ToLower(mediaType)
-		major, minor, found := strings.Cut(mediaType, "/")
-		if found && containerAcceptRangeMatches(major, minor, params, contentMajor, contentMinor, contentParams) {
-			mediaTypeSpecificity, parameterSpecificity := containerAcceptSpecificity(major, minor, params)
-			if mediaTypeSpecificity > bestMediaTypeSpecificity ||
-				(mediaTypeSpecificity == bestMediaTypeSpecificity && parameterSpecificity > bestParameterSpecificity) {
-				bestMediaTypeSpecificity = mediaTypeSpecificity
-				bestParameterSpecificity = parameterSpecificity
-				bestQuality = containerAcceptQuality(params)
-			}
-		}
-	}
-	return bestQuality > 0
+	return oci.Accepts(accept, contentType)
 }
 
 func containerManifestCacheCompatible(accept string, manifest *cachedContainerManifest) bool {
 	return manifest.contentType == "" || containerManifestAccepts(accept, manifest.contentType)
-}
-
-func containerAcceptRangeMatches(major, minor string, params map[string]string, contentMajor, contentMinor string, contentParams map[string]string) bool {
-	if (major != "*" && major != contentMajor) || (minor != "*" && minor != contentMinor) {
-		return false
-	}
-	for key, value := range params {
-		if strings.EqualFold(key, "q") {
-			continue
-		}
-		if contentParams[key] != value {
-			return false
-		}
-	}
-	return true
-}
-
-func containerAcceptSpecificity(major, minor string, params map[string]string) (int, int) {
-	parameterSpecificity := 0
-	for key := range params {
-		if !strings.EqualFold(key, "q") {
-			parameterSpecificity++
-		}
-	}
-
-	switch {
-	case major == "*" && minor == "*":
-		return containerAcceptWildcardSpecificity, parameterSpecificity
-	case major == "*" || minor == "*":
-		return containerAcceptTypeWildcardSpecificity, parameterSpecificity
-	default:
-		return containerAcceptExactSpecificity, parameterSpecificity
-	}
-}
-
-func containerAcceptQuality(params map[string]string) float64 {
-	value, ok := params["q"]
-	if !ok {
-		return 1
-	}
-	quality, err := strconv.ParseFloat(value, 64)
-	if err != nil || quality < 0 || quality > 1 {
-		return 0
-	}
-	return quality
 }
 
 func copyContainerManifestHeaders(destination, source http.Header) {

@@ -15,6 +15,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/metadata/oci"
 	"golang.org/x/sync/errgroup"
 )
 
@@ -36,7 +37,7 @@ var (
 	// Grammar from the OCI distribution spec.
 	mirrorNamePattern   = regexp.MustCompile(`^[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*(/[a-z0-9]+((\.|_|__|-+)[a-z0-9]+)*)*$`)
 	mirrorTagPattern    = regexp.MustCompile(`^[a-zA-Z0-9_][a-zA-Z0-9._-]{0,127}$`)
-	mirrorDigestPattern = regexp.MustCompile(`^(sha256:[a-f0-9]{64}|sha512:[a-f0-9]{128})$`)
+	mirrorDigestPattern = oci.DigestPattern
 )
 
 // dockerHubMirrorAliases are registry hosts that name Docker Hub in image
@@ -103,27 +104,13 @@ type ImageResult struct {
 	Warnings []string
 }
 
-type ociDescriptor struct {
-	MediaType   string            `json:"mediaType"`
-	Digest      string            `json:"digest"`
-	URLs        []string          `json:"urls"`
-	Platform    *ociPlatform      `json:"platform"`
-	Annotations map[string]string `json:"annotations"`
-}
-
-type ociPlatform struct {
-	OS           string `json:"os"`
-	Architecture string `json:"architecture"`
-	Variant      string `json:"variant"`
-}
-
-type ociManifest struct {
-	SchemaVersion int             `json:"schemaVersion"`
-	MediaType     string          `json:"mediaType"`
-	Manifests     []ociDescriptor `json:"manifests"`
-	Config        *ociDescriptor  `json:"config"`
-	Layers        []ociDescriptor `json:"layers"`
-}
+// ociDescriptor, ociPlatform and ociManifest are the manifest documents the
+// mirror reads (see the oci package).
+type (
+	ociDescriptor = oci.Descriptor
+	ociPlatform   = oci.Platform
+	ociManifest   = oci.Manifest
+)
 
 type imageMirror struct {
 	h            *ContainerHandler

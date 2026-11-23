@@ -1,17 +1,12 @@
 package handler
 
 import (
-	"encoding/json"
 	"regexp"
-	"slices"
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/metadata/oci"
 )
-
-// maxImageManifestRefs is how many references of one manifest are recorded.
-// A manifest with more is not recorded.
-const maxImageManifestRefs = 4096
 
 // imageSubjectTagPattern matches the tags that hold what refers to an image
 // rather than an image of their own: the referrers tag schema, and the
@@ -70,29 +65,8 @@ func (h *ContainerHandler) recordImageManifest(cacheName, reference string, mani
 	}
 }
 
-// imageManifestRefs returns the digests of the manifests an index lists, or
-// of the config and layers of an image manifest. It returns nil for a
-// document that names none, or more than maxImageManifestRefs.
+// imageManifestRefs returns the digests a manifest references; see
+// oci.ManifestRefs.
 func imageManifestRefs(body []byte) []string {
-	var manifest ociManifest
-	if len(body) == 0 || json.Unmarshal(body, &manifest) != nil {
-		return nil
-	}
-	descriptors := slices.Concat(manifest.Manifests, manifest.Layers)
-	if manifest.Config != nil {
-		descriptors = append(descriptors, *manifest.Config)
-	}
-	seen := make(map[string]struct{}, len(descriptors))
-	var refs []string
-	for _, descriptor := range descriptors {
-		if _, dup := seen[descriptor.Digest]; dup || !mirrorDigestPattern.MatchString(descriptor.Digest) {
-			continue
-		}
-		seen[descriptor.Digest] = struct{}{}
-		refs = append(refs, descriptor.Digest)
-	}
-	if len(refs) > maxImageManifestRefs {
-		return nil
-	}
-	return refs
+	return oci.ManifestRefs(body)
 }
