@@ -3,7 +3,7 @@
 {{define "content"}}
 <div class="mb-8">
     <h1 class="text-3xl font-bold mb-2">Upstreams</h1>
-    <p class="text-gray-600 dark:text-gray-400">Where each ecosystem's requests go, as configured. Credentials are never shown; Auth names the type of the <code>upstream.auth</code> entry that applies.</p>
+    <p class="text-gray-600 dark:text-gray-400">The upstreams each ecosystem's requests go to, as configured, with the path clients reach them at. Upstream URLs aren't shown.</p>
 </div>
 
 <div class="space-y-6">
@@ -13,14 +13,8 @@
         <div class="divide-y divide-gray-200 dark:divide-gray-800">
             {{range .Upstreams}}
             <div class="px-6 py-3 flex flex-col sm:flex-row sm:items-center justify-between gap-2">
-                <div class="min-w-0">
-                    <div class="text-sm font-mono break-all">{{.URL}}</div>
-                    <div class="text-sm text-gray-500 dark:text-gray-400 font-mono break-all">{{.Path}}</div>
-                </div>
-                <div class="flex flex-wrap items-center gap-4 text-sm text-gray-500 dark:text-gray-400 shrink-0">
-                    <span class="font-mono">{{.Setting}}{{if .Name}} · {{.Name}}{{end}}</span>
-                    {{if .Auth}}<span title="An upstream.auth entry applies">auth: {{.Auth}}</span>{{end}}
-                </div>
+                <div class="min-w-0 text-sm font-mono break-all">{{.Path}}</div>
+                <div class="text-sm text-gray-500 dark:text-gray-400 font-mono shrink-0">{{.Setting}}{{if .Name}} · {{.Name}}{{end}}</div>
             </div>
             {{end}}
         </div>

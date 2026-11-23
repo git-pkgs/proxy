@@ -27,26 +27,26 @@ func TestUpstreamsPage(t *testing.T) {
 		t.Fatalf("status %d\n%s", status, body)
 	}
 	for _, want := range []string{
-		"https://deb.example.org/debian",
 		cfg.BaseURL + "/debian/",
-		"https://security.example.org/debian-security",
 		cfg.BaseURL + "/debian/security/",
-		"https://charts.example.org",
 		cfg.BaseURL + "/helm/charts/",
-		"https://registry.npmjs.org",
 		cfg.BaseURL + "/npm/",
-		// upstream.apk is empty, so the page lists the mirror the proxy uses.
-		"https://dl-cdn.alpinelinux.org/alpine",
+		// upstream.apk is empty, so the page lists the repository the proxy
+		// serves by default.
 		cfg.BaseURL + "/apk/alpine/",
 		// So is the checksum database with upstream.go_sumdbs empty.
 		cfg.BaseURL + "/go/sumdb/sum.golang.org/",
+		cfg.BaseURL + "/v2/homebrew/core/",
+		"upstream.debian_repositories · security",
 	} {
 		if !strings.Contains(body, want) {
 			t.Errorf("page doesn't show %q", want)
 		}
 	}
-	if strings.Contains(body, "chart-token-secret") {
-		t.Error("page shows the upstream token")
+	for _, hidden := range []string{"deb.example.org", "security.example.org", "charts.example.org", "registry.npmjs.org", "dl-cdn.alpinelinux.org", "chart-token-secret", "bearer"} {
+		if strings.Contains(body, hidden) {
+			t.Errorf("page shows %q", hidden)
+		}
 	}
 }
 
@@ -69,13 +69,16 @@ func TestUpstreamEcosystems(t *testing.T) {
 		}
 	}
 	for key, want := range map[string]UpstreamRow{
-		"upstream.npm ":                      {Setting: "upstream.npm", Path: "http://proxy.test/npm/", URL: "https://npm.example.org/registry", Auth: "basic"},
-		"upstream.generic files":             {Setting: "upstream.generic", Name: "files", Path: "http://proxy.test/generic/files/", URL: "https://files.example.org/base", Auth: "header"},
-		"upstream.git github":                {Setting: "upstream.git", Name: "github", Path: "http://proxy.test/git/github/", URL: "https://github.com"},
-		"upstream.go_sumdbs sum.example.org": {Setting: "upstream.go_sumdbs", Name: "sum.example.org", Path: "http://proxy.test/go/sumdb/sum.example.org/", URL: "https://sum.example.org"},
-		"upstream.arch archlinux":            {Setting: "upstream.arch", Name: "archlinux", Path: "http://proxy.test/arch/archlinux/", URL: "https://geo.mirror.pkgbuild.com"},
-		"upstream.freebsd freebsd":           {Setting: "upstream.freebsd", Name: "freebsd", Path: "http://proxy.test/freebsd/freebsd/", URL: "https://pkg.freebsd.org"},
-		"upstream.cargo_download ":           {Setting: "upstream.cargo_download", Path: "http://proxy.test/cargo/", URL: "https://static.crates.io/crates"},
+		"upstream.npm ":                            {Setting: "upstream.npm", Path: "http://proxy.test/npm/"},
+		"upstream.generic files":                   {Setting: "upstream.generic", Name: "files", Path: "http://proxy.test/generic/files/"},
+		"upstream.git github":                      {Setting: "upstream.git", Name: "github", Path: "http://proxy.test/git/github/"},
+		"upstream.go_sumdbs sum.example.org":       {Setting: "upstream.go_sumdbs", Name: "sum.example.org", Path: "http://proxy.test/go/sumdb/sum.example.org/"},
+		"upstream.arch archlinux":                  {Setting: "upstream.arch", Name: "archlinux", Path: "http://proxy.test/arch/archlinux/"},
+		"upstream.freebsd freebsd":                 {Setting: "upstream.freebsd", Name: "freebsd", Path: "http://proxy.test/freebsd/freebsd/"},
+		"upstream.cargo_download ":                 {Setting: "upstream.cargo_download", Path: "http://proxy.test/cargo/"},
+		"upstream.homebrew_api ":                   {Setting: "upstream.homebrew_api", Path: "http://proxy.test/homebrew/"},
+		"upstream.homebrew_artifact ":              {Setting: "upstream.homebrew_artifact", Path: "http://proxy.test/v2/homebrew/core/"},
+		"upstream.terraform registry.opentofu.org": {Setting: "upstream.terraform", Name: "registry.opentofu.org", Path: "http://proxy.test/terraform/providers/registry.opentofu.org/"},
 	} {
 		if got := rows[key]; got != want {
 			t.Errorf("%s = %+v, want %+v", key, got, want)
@@ -86,9 +89,6 @@ func TestUpstreamEcosystems(t *testing.T) {
 	}
 	if _, ok := rows["upstream.helm "]; ok {
 		t.Error("lists an empty upstream.helm")
-	}
-	if got := rows["upstream.terraform registry.opentofu.org"].URL; got != "https://registry.opentofu.org" {
-		t.Errorf("default Terraform registry = %q", got)
 	}
 	for _, e := range ecosystems {
 		if len(e.Upstreams) == 0 {
@@ -136,17 +136,31 @@ func TestUpstreamsPageShowsNoSecrets(t *testing.T) {
 			t.Errorf("page shows %q", secret)
 		}
 	}
-	for _, want := range []string{"https://npm.example.org", "basic", "header", "bearer"} {
-		if !strings.Contains(body, want) {
-			t.Errorf("page doesn't show %q", want)
+	// The hosts and which of them have credentials attached aren't shown
+	// either: /ui has no auth of its own. ("header" is in the layout.)
+	for _, hidden := range []string{"npm.example.org", "files.example.org", "pypi.org", "basic", "bearer", "auth:"} {
+		if strings.Contains(body, hidden) {
+			t.Errorf("page shows %q", hidden)
 		}
+	}
+	if !strings.Contains(body, "http://proxy.test/generic/files/") {
+		t.Error("page doesn't show the generic upstream's path")
 	}
 }
 
-func TestDisplayURLHidesWhatItCannotParse(t *testing.T) {
-	for _, raw := range []string{"https://user:pw@[::1", "not a url with secret", ""} {
-		if got := displayURL(raw); strings.Contains(got, "secret") || strings.Contains(got, "pw") {
-			t.Errorf("displayURL(%q) = %q", raw, got)
+func TestUpstreamEcosystemsTerraformHostnames(t *testing.T) {
+	u := config.Default().Upstream
+	u.Terraform = map[string]string{"Registry.Example.ORG": "https://registry.example.org/"}
+	var paths []string
+	for _, e := range upstreamEcosystems("http://proxy.test", &u) {
+		if e.Name != "Terraform" {
+			continue
 		}
+		for _, row := range e.Upstreams {
+			paths = append(paths, row.Path)
+		}
+	}
+	if want := "http://proxy.test/terraform/providers/registry.example.org/"; len(paths) != 1 || paths[0] != want {
+		t.Errorf("terraform paths %q, want [%q]", paths, want)
 	}
 }
