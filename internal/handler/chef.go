@@ -1,39 +1,30 @@
 package handler
 
 import (
-	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"net/http"
 	"net/url"
-	"path"
 	"regexp"
 	"strings"
+
+	"github.com/git-pkgs/proxy/internal/metadata/chef"
 )
 
 const (
 	chefEcosystem = "chef"
-	chefMountPath = "/chef"
-	chefAPIPath   = "/api/v1"
+	chefAPIPath   = chef.APIPath
 	// chefUpstreamKeyLength is how much of the upstream URL's digest scopes
 	// metadata cache keys and archive filenames: enough to keep two upstreams
 	// apart.
 	chefUpstreamKeyLength = 16
 )
 
-var (
-	// chefCookbookName matches Supermarket cookbook names: letters, digits,
-	// hyphens, underscores and dots, not starting with a dot.
-	chefCookbookName = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]*$`)
-	// chefVersion matches Chef cookbook versions, which have two or three
-	// numeric parts.
-	chefVersion = regexp.MustCompile(`^[0-9]+\.[0-9]+(\.[0-9]+)?$`)
-
-	errChefDocument = errors.New("unexpected Chef Supermarket document")
-)
+// chefCookbookName matches Supermarket cookbook names: letters, digits,
+// hyphens, underscores and dots, not starting with a dot.
+var chefCookbookName = regexp.MustCompile(`^[A-Za-z0-9_-][A-Za-z0-9_.-]*$`)
 
 // ChefHandler serves a read-only Chef Supermarket at /chef. Berkshelf and
 // Policyfiles resolve dependencies against /universe and then download each
@@ -167,127 +158,25 @@ func (h *ChefHandler) serveDocument(w http.ResponseWriter, r *http.Request, docu
 }
 
 // rewriteUniverse points every version's location_path and download_url at
-// the proxy. The universe maps cookbook names to versions to their location
-// and dependencies; dependencies and any other field are copied as they are.
+// the proxy; see chef.RewriteUniverse.
 func (h *ChefHandler) rewriteUniverse(body []byte) ([]byte, error) {
-	var universe map[string]map[string]map[string]json.RawMessage
-	if err := json.Unmarshal(body, &universe); err != nil {
-		return nil, fmt.Errorf("%w: universe: %w", errChefDocument, err)
-	}
-
-	locationPath, err := jsonString(h.apiURL())
-	if err != nil {
-		return nil, err
-	}
-	for name, versions := range universe {
-		for version, entry := range versions {
-			if entry == nil {
-				continue
-			}
-			downloadURL, err := jsonString(h.downloadURL(name, version))
-			if err != nil {
-				return nil, err
-			}
-			entry["location_path"] = locationPath
-			entry["download_url"] = downloadURL
-		}
-	}
-	return encodeChefJSON(universe)
+	return chef.RewriteUniverse(body, h.rewriteOptions())
 }
 
-// rewriteCookbook points a cookbook's version URLs at the proxy.
+// rewriteCookbook points a cookbook's version URLs at the proxy; see
+// chef.RewriteCookbook.
 func (h *ChefHandler) rewriteCookbook(name string, body []byte) ([]byte, error) {
-	var cookbook map[string]json.RawMessage
-	if err := json.Unmarshal(body, &cookbook); err != nil {
-		return nil, fmt.Errorf("%w: cookbook %s: %w", errChefDocument, name, err)
-	}
-
-	if raw, ok := cookbook["latest_version"]; ok {
-		rewritten, err := h.rewriteVersionURL(name, raw)
-		if err != nil {
-			return nil, err
-		}
-		cookbook["latest_version"] = rewritten
-	}
-	if raw, ok := cookbook["versions"]; ok {
-		var versions []json.RawMessage
-		if err := json.Unmarshal(raw, &versions); err != nil {
-			return nil, fmt.Errorf("%w: cookbook %s versions: %w", errChefDocument, name, err)
-		}
-		for i, versionURL := range versions {
-			rewritten, err := h.rewriteVersionURL(name, versionURL)
-			if err != nil {
-				return nil, err
-			}
-			versions[i] = rewritten
-		}
-		encoded, err := encodeChefJSON(versions)
-		if err != nil {
-			return nil, err
-		}
-		cookbook["versions"] = encoded
-	}
-	return encodeChefJSON(cookbook)
+	return chef.RewriteCookbook(name, body, h.rewriteOptions())
 }
 
 // rewriteVersion points a cookbook version's cookbook and file URLs at the
-// proxy.
+// proxy; see chef.RewriteVersion.
 func (h *ChefHandler) rewriteVersion(name, version string, body []byte) ([]byte, error) {
-	var document map[string]json.RawMessage
-	if err := json.Unmarshal(body, &document); err != nil {
-		return nil, fmt.Errorf("%w: cookbook %s version %s: %w", errChefDocument, name, version, err)
-	}
-
-	if _, ok := document["cookbook"]; ok {
-		cookbookURL, err := jsonString(h.cookbookURL(name))
-		if err != nil {
-			return nil, err
-		}
-		document["cookbook"] = cookbookURL
-	}
-	if _, ok := document["file"]; ok {
-		fileURL, err := jsonString(h.downloadURL(name, version))
-		if err != nil {
-			return nil, err
-		}
-		document["file"] = fileURL
-	}
-	return encodeChefJSON(document)
+	return chef.RewriteVersion(name, version, body, h.rewriteOptions())
 }
 
-// rewriteVersionURL rewrites an upstream cookbook version URL, a JSON string
-// ending in /versions/{version}, to the proxy. Anything else, such as null,
-// is returned unchanged.
-func (h *ChefHandler) rewriteVersionURL(name string, raw json.RawMessage) (json.RawMessage, error) {
-	var versionURL string
-	if err := json.Unmarshal(raw, &versionURL); err != nil {
-		return raw, nil //nolint:nilerr // not a string, so not a URL to rewrite
-	}
-	parsed, err := url.Parse(versionURL)
-	if err != nil {
-		return raw, nil //nolint:nilerr // not a URL, so nothing to rewrite
-	}
-	version, ok := normalizeChefVersion(path.Base(parsed.Path))
-	if !ok {
-		return raw, nil
-	}
-	return jsonString(h.versionURL(name, version))
-}
-
-func (h *ChefHandler) apiURL() string {
-	return h.proxyURL + chefMountPath + chefAPIPath
-}
-
-func (h *ChefHandler) cookbookURL(name string) string {
-	return h.apiURL() + "/cookbooks/" + url.PathEscape(name)
-}
-
-func (h *ChefHandler) versionURL(name, version string) string {
-	return h.cookbookURL(name) + "/versions/" + url.PathEscape(version)
-}
-
-func (h *ChefHandler) downloadURL(name, version string) string {
-	return h.versionURL(name, version) + "/download"
+func (h *ChefHandler) rewriteOptions() chef.Options {
+	return chef.Options{ProxyURL: h.proxyURL}
 }
 
 func (h *ChefHandler) upstreamCookbookURL(name string) string {
@@ -327,29 +216,14 @@ func chefVersionFromRequest(r *http.Request) (name, version string, ok bool) {
 	return name, version, ok
 }
 
-// normalizeChefVersion accepts a version in either form Supermarket serves
-// (1.2.3, or 1_2_3 as Berkshelf writes it in URLs) and returns the dotted
-// form.
+// normalizeChefVersion returns a cookbook version in its dotted form; see
+// chef.NormalizeVersion.
 func normalizeChefVersion(version string) (string, bool) {
-	version = strings.ReplaceAll(version, "_", ".")
-	if !chefVersion.MatchString(version) {
-		return "", false
-	}
-	return version, true
+	return chef.NormalizeVersion(version)
 }
 
-func jsonString(s string) (json.RawMessage, error) {
-	return encodeChefJSON(s)
-}
-
-// encodeChefJSON encodes v without escaping HTML characters, so dependency
-// constraints such as ">= 1.0" keep their upstream spelling.
+// encodeChefJSON encodes v without escaping HTML characters; see
+// chef.EncodeJSON.
 func encodeChefJSON(v any) (json.RawMessage, error) {
-	var buf bytes.Buffer
-	enc := json.NewEncoder(&buf)
-	enc.SetEscapeHTML(false)
-	if err := enc.Encode(v); err != nil {
-		return nil, err
-	}
-	return bytes.TrimSuffix(buf.Bytes(), []byte("\n")), nil
+	return chef.EncodeJSON(v)
 }
