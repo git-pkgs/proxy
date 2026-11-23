@@ -10,10 +10,17 @@ import (
 
 func TestCooldownSupportedCoversHandlers(t *testing.T) {
 	calls := regexp.MustCompile(`(?:IsAllowed|Evaluate)\("([a-z]+)"|withheld\(h\.proxy, "([a-z]+)"|IsAllowed\((helmMetadataEcosystem)`)
+	// Metadata rewrites moved out of the handlers (#501) check cooldown in
+	// internal/metadata.
 	files, err := filepath.Glob("*.go")
 	if err != nil {
 		t.Fatal(err)
 	}
+	extracted, err := filepath.Glob("../metadata/*/*.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	files = append(files, extracted...)
 	found := map[string]bool{}
 	for _, f := range files {
 		if strings.HasSuffix(f, "_test.go") {

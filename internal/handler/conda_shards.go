@@ -1,45 +1,34 @@
 package handler
 
 import (
-	"bytes"
-	"crypto/sha256"
 	"encoding/hex"
-	"errors"
 	"fmt"
 	"net/http"
-	"net/url"
 	"path"
 	"strconv"
 	"strings"
 	"sync"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/metadata/conda"
 	"github.com/klauspost/compress/zstd"
-	"github.com/vmihailenco/msgpack/v5"
 )
 
-// Sharded repodata (CEP 16) maps each package name to the sha256 of its
-// shard. With cooldown the proxy filters shards, which changes their bytes,
-// but clients cache shards by hash and never fetch the same hash again. So
-// the rewritten index XORs every hash with a mask that changes each hour:
-// filtered shards get hashes of their own, and clients fetch them again once
-// versions have left cooldown.
+// Sharded repodata (CEP 16): with cooldown the index is rewritten to point
+// at filtered shards under hashes masked per hour (see conda.ShardMask).
 const (
 	condaShardIndexFile   = "repodata_shards.msgpack.zst"
-	condaShardSuffix      = ".msgpack.zst"
-	condaCooldownShardDir = "cooldown-shards"
-	condaShardsSubdir     = "shards/"
+	condaShardSuffix      = conda.ShardSuffix
+	condaCooldownShardDir = conda.CooldownShardDir
+	condaShardsSubdir     = conda.ShardsSubdir
 	condaShardBucket      = time.Hour
-	condaShardIndexFormat = 1
-	condaShardHashLen     = sha256.Size
+	condaShardHashLen     = conda.ShardHashLen
 	// maxCondaShardSize bounds a decompressed index or shard. conda-forge's
 	// largest index is a few MB.
 	maxCondaShardSize = 256 << 20
 )
 
 var (
-	errCondaShardLayout = errors.New("unsupported sharded repodata layout")
-
 	condaZstd = sync.OnceValues(func() (*zstd.Decoder, error) {
 		return zstd.NewReader(nil, zstd.WithDecoderMaxMemory(maxCondaShardSize), zstd.WithDecoderConcurrency(0))
 	})
@@ -68,7 +57,7 @@ func (h *CondaHandler) handleShardIndex(w http.ResponseWriter, r *http.Request) 
 	if !h.cooldownEnabled() {
 		index, err := decodeCondaShardIndex(body)
 		if err == nil {
-			_, err = index.shardsLayout(upstreamURL)
+			_, err = index.ShardsLayout(upstreamURL)
 		}
 		if err != nil {
 			h.proxy.Logger.Info("serving no sharded repodata", "url", upstreamURL, "error", err)
@@ -141,76 +130,13 @@ func (h *CondaHandler) handleCooldownShard(w http.ResponseWriter, r *http.Reques
 }
 
 func isCondaShardFile(name string) bool {
-	hash, ok := strings.CutSuffix(name, condaShardSuffix)
-	if !ok || len(hash) != 2*condaShardHashLen {
-		return false
-	}
-	_, err := hex.DecodeString(hash)
-	return err == nil && strings.ToLower(hash) == hash
+	return conda.IsShardFile(name)
 }
 
-// condaShardMask is XORed with shard hashes in a rewritten index. It keeps
-// filtered shards apart from upstream ones in client caches, which are keyed
-// by hash alone.
+// condaShardMask is XORed with shard hashes in a rewritten index (see
+// conda.ShardMask).
 func condaShardMask(channel, arch, bucket string) [condaShardHashLen]byte {
-	return sha256.Sum256([]byte("git-pkgs proxy conda cooldown shard\x00" + channel + "\x00" + arch + "\x00" + bucket))
-}
-
-// msgpackEntry is one member of a msgpack map, kept in its upstream order
-// with its value undecoded.
-type msgpackEntry struct {
-	key   string
-	value msgpack.RawMessage
-}
-
-func decodeMsgpackMap(b []byte) ([]msgpackEntry, error) {
-	dec := msgpack.NewDecoder(bytes.NewReader(b))
-	n, err := dec.DecodeMapLen()
-	if err != nil {
-		return nil, err
-	}
-	if n < 0 {
-		return nil, errors.New("expected a msgpack map")
-	}
-	entries := make([]msgpackEntry, 0, n)
-	for range n {
-		key, err := dec.DecodeString()
-		if err != nil {
-			return nil, err
-		}
-		value, err := dec.DecodeRaw()
-		if err != nil {
-			return nil, err
-		}
-		entries = append(entries, msgpackEntry{key: key, value: value})
-	}
-	return entries, nil
-}
-
-func encodeMsgpackMap(entries []msgpackEntry) ([]byte, error) {
-	var buf bytes.Buffer
-	enc := msgpack.NewEncoder(&buf)
-	if err := enc.EncodeMapLen(len(entries)); err != nil {
-		return nil, err
-	}
-	for _, e := range entries {
-		if err := enc.EncodeString(e.key); err != nil {
-			return nil, err
-		}
-		if err := enc.Encode(e.value); err != nil {
-			return nil, err
-		}
-	}
-	return buf.Bytes(), nil
-}
-
-func lookupMsgpackEntry(entries []msgpackEntry, key string) (int, bool) {
-	for i, e := range entries {
-		if e.key == key {
-			return i, true
-		}
-	}
-	return -1, false
+	return conda.ShardMask(channel, arch, bucket)
 }
 
 func decompressCondaShard(body []byte) ([]byte, error) {
@@ -229,230 +155,40 @@ func compressCondaShard(body []byte) ([]byte, error) {
 	return enc.EncodeAll(body, nil), nil
 }
 
-// condaShardIndex is a decoded repodata_shards.msgpack.zst.
-type condaShardIndex struct {
-	top  []msgpackEntry
-	info []msgpackEntry
-}
-
-func decodeCondaShardIndex(body []byte) (*condaShardIndex, error) {
+// decodeCondaShardIndex decodes a repodata_shards.msgpack.zst.
+func decodeCondaShardIndex(body []byte) (*conda.ShardIndex, error) {
 	raw, err := decompressCondaShard(body)
 	if err != nil {
 		return nil, err
 	}
-	top, err := decodeMsgpackMap(raw)
-	if err != nil {
-		return nil, err
-	}
-	i, ok := lookupMsgpackEntry(top, "version")
-	if !ok {
-		return nil, errors.New("sharded index has no version")
-	}
-	var version int
-	if err := msgpack.Unmarshal(top[i].value, &version); err != nil || version != condaShardIndexFormat {
-		return nil, fmt.Errorf("unsupported sharded index version %v", top[i].value)
-	}
-	i, ok = lookupMsgpackEntry(top, "info")
-	if !ok {
-		return nil, errors.New("sharded index has no info")
-	}
-	info, err := decodeMsgpackMap(top[i].value)
-	if err != nil {
-		return nil, err
-	}
-	return &condaShardIndex{top: top, info: info}, nil
-}
-
-func (idx *condaShardIndex) infoString(key string) (string, error) {
-	i, ok := lookupMsgpackEntry(idx.info, key)
-	if !ok {
-		return "", nil
-	}
-	var s string
-	err := msgpack.Unmarshal(idx.info[i].value, &s)
-	return s, err
-}
-
-// shardsLayout checks that packages and shards sit where the proxy routes
-// them, below the subdir of indexURL, and returns the shards directory
-// relative to the subdir: "" or "shards/". Clients resolve base_url and
-// shards_base_url against the proxy's URL, so only relative paths stay on
-// the proxy: a scheme or host leads clients around it, a leading / outside
-// its mount.
-func (idx *condaShardIndex) shardsLayout(indexURL string) (string, error) {
-	base, err := url.Parse(indexURL)
-	if err != nil {
-		return "", err
-	}
-	subdir := base.ResolveReference(&url.URL{Path: "./"}).String()
-	resolve := func(ref string) (string, error) {
-		if ref == "" {
-			return subdir, nil
-		}
-		u, err := url.Parse(ref)
-		if err != nil {
-			return "", err
-		}
-		if u.Scheme != "" || u.Host != "" || strings.HasPrefix(u.Path, "/") {
-			return "", errCondaShardLayout
-		}
-		return base.ResolveReference(u).String(), nil
-	}
-
-	baseURL, err := idx.infoString("base_url")
-	if err != nil {
-		return "", err
-	}
-	if resolved, err := resolve(baseURL); err != nil || resolved != subdir {
-		return "", fmt.Errorf("%w: base_url %q", errCondaShardLayout, baseURL)
-	}
-
-	shardsBaseURL, err := idx.infoString("shards_base_url")
-	if err != nil {
-		return "", err
-	}
-	resolved, err := resolve(shardsBaseURL)
-	rel, ok := strings.CutPrefix(resolved, subdir)
-	if err != nil || !ok || (rel != "" && rel != condaShardsSubdir) {
-		return "", fmt.Errorf("%w: shards_base_url %q", errCondaShardLayout, shardsBaseURL)
-	}
-	return rel, nil
+	return conda.DecodeShardIndex(raw)
 }
 
 // rewriteCondaShardIndex masks every shard hash and points shards_base_url
-// at the cooldown shard route for bucket.
+// at the cooldown shard route for bucket (see conda.RewriteShardIndex).
 func rewriteCondaShardIndex(body []byte, indexURL string, mask [condaShardHashLen]byte, bucket string) ([]byte, error) {
-	idx, err := decodeCondaShardIndex(body)
+	raw, err := decompressCondaShard(body)
 	if err != nil {
 		return nil, err
 	}
-	layout, err := idx.shardsLayout(indexURL)
+	rewritten, err := conda.RewriteShardIndex(raw, indexURL, mask, bucket)
 	if err != nil {
 		return nil, err
 	}
-
-	shardsBase, err := msgpack.Marshal("./" + condaCooldownShardDir + "/" + bucket + "/" + layout)
-	if err != nil {
-		return nil, err
-	}
-	if i, ok := lookupMsgpackEntry(idx.info, "shards_base_url"); ok {
-		idx.info[i].value = shardsBase
-	} else {
-		idx.info = append(idx.info, msgpackEntry{key: "shards_base_url", value: shardsBase})
-	}
-	info, err := encodeMsgpackMap(idx.info)
-	if err != nil {
-		return nil, err
-	}
-	i, _ := lookupMsgpackEntry(idx.top, "info")
-	idx.top[i].value = info
-
-	i, ok := lookupMsgpackEntry(idx.top, "shards")
-	if !ok {
-		return nil, errors.New("sharded index has no shards")
-	}
-	shards, err := decodeMsgpackMap(idx.top[i].value)
-	if err != nil {
-		return nil, err
-	}
-	for j := range shards {
-		var hash []byte
-		if err := msgpack.Unmarshal(shards[j].value, &hash); err != nil || len(hash) != condaShardHashLen {
-			return nil, fmt.Errorf("shard hash for %q is not a sha256", shards[j].key)
-		}
-		for k := range hash {
-			hash[k] ^= mask[k]
-		}
-		if shards[j].value, err = msgpack.Marshal(hash); err != nil {
-			return nil, err
-		}
-	}
-	if idx.top[i].value, err = encodeMsgpackMap(shards); err != nil {
-		return nil, err
-	}
-
-	raw, err := encodeMsgpackMap(idx.top)
-	if err != nil {
-		return nil, err
-	}
-	return compressCondaShard(raw)
-}
-
-// condaShardRecord holds the fields cooldown needs from a shard record.
-// Timestamps are an integer or a float, in seconds or milliseconds as
-// condaTime reads them.
-type condaShardRecord struct {
-	Name      string `msgpack:"name"`
-	Version   string `msgpack:"version"`
-	Timestamp any    `msgpack:"timestamp"`
+	return compressCondaShard(rewritten)
 }
 
 // filterCondaShard leaves out records in packages and packages.conda that
-// are still inside their cooldown. Kept records keep their upstream bytes.
+// are still inside their cooldown (see conda.FilterShard). Kept records
+// keep their upstream bytes.
 func (h *CondaHandler) filterCondaShard(body []byte) ([]byte, error) {
 	raw, err := decompressCondaShard(body)
 	if err != nil {
 		return nil, err
 	}
-	top, err := decodeMsgpackMap(raw)
+	filtered, err := conda.FilterShard(raw, h.cooldownOptions(time.Now()))
 	if err != nil {
 		return nil, err
 	}
-	for i := range top {
-		if top[i].key != "packages" && top[i].key != "packages.conda" {
-			continue
-		}
-		records, err := decodeMsgpackMap(top[i].value)
-		if err != nil {
-			return nil, err
-		}
-		kept := records[:0]
-		for _, rec := range records {
-			var fields condaShardRecord
-			if err := msgpack.Unmarshal(rec.value, &fields); err != nil {
-				return nil, fmt.Errorf("record %q: %w", rec.key, err)
-			}
-			if h.recordInCooldown(rec.key, fields.Name, fields.Version, msgpackNumber(fields.Timestamp)) {
-				continue
-			}
-			kept = append(kept, rec)
-		}
-		if top[i].value, err = encodeMsgpackMap(kept); err != nil {
-			return nil, err
-		}
-	}
-	out, err := encodeMsgpackMap(top)
-	if err != nil {
-		return nil, err
-	}
-	return compressCondaShard(out)
-}
-
-// msgpackNumber returns a decoded msgpack integer or float as float64, and 0
-// for anything else.
-func msgpackNumber(v any) float64 {
-	switch n := v.(type) {
-	case int8:
-		return float64(n)
-	case int16:
-		return float64(n)
-	case int32:
-		return float64(n)
-	case int64:
-		return float64(n)
-	case uint8:
-		return float64(n)
-	case uint16:
-		return float64(n)
-	case uint32:
-		return float64(n)
-	case uint64:
-		return float64(n)
-	case float32:
-		return float64(n)
-	case float64:
-		return n
-	default:
-		return 0
-	}
+	return compressCondaShard(filtered)
 }
