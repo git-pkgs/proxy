@@ -59,10 +59,6 @@ func (s *redirectServers) get(t *testing.T, authForURL AuthFunc, rawURL string) 
 	return s.got[0]
 }
 
-// TestTransportKeepsCredentialsOutOfARedirectIntoTheirScope checks a
-// redirect hop only gets upstream.auth credentials that the request it
-// started from was given too, so a redirect can't reach past the routes
-// the client's request was checked against.
 func TestTransportKeepsCredentialsOutOfARedirectIntoTheirScope(t *testing.T) {
 	s := newRedirectServers(t)
 	scopes := func(scopes map[string]string) AuthFunc {
@@ -112,9 +108,6 @@ func TestTransportKeepsCredentialsOutOfARedirectIntoTheirScope(t *testing.T) {
 	}
 }
 
-// TestTransportRedirectWithoutCredentialsStillGetsAToken checks a redirect
-// hop that upstream.auth has nothing for is treated as before: it may still
-// fetch an anonymous registry token.
 func TestTransportRedirectWithoutCredentialsStillGetsAToken(t *testing.T) {
 	var registry *httptest.Server
 	registry = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

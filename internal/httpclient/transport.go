@@ -124,12 +124,9 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	return t.base.RoundTrip(retry)
 }
 
-// redirectKeepsCredentials reports whether a request may get authentication
-// added. A redirect hop upstream.auth has credentials for only may when it
-// gives the request the redirects started from the same ones: that
-// request's route was checked against generic_paths and git repos, and a
-// redirect from an upstream must not reach past them with another scope's
-// credentials.
+// redirectKeepsCredentials reports whether a redirect hop has the same
+// configured credentials as the request the redirects started from, the
+// only one whose route was checked against generic_paths and git repos.
 func (t *Transport) redirectKeepsCredentials(req *http.Request) bool {
 	if t.authForURL == nil {
 		return true
