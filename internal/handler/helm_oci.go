@@ -4,12 +4,13 @@ import (
 	"net/url"
 	"slices"
 	"strings"
+
+	"github.com/git-pkgs/proxy/internal/metadata/helm"
 )
 
-type helmOCIRegistry struct {
-	host   string
-	prefix string
-}
+// helmOCIRegistry is a registry whose chart references the index rewrite
+// points at the /v2 routes.
+type helmOCIRegistry = helm.OCIRegistry
 
 // NewHelmHandlerWithOCIRegistries also rewrites OCI references for configured
 // registries through the existing /v2 routes. Unmatched references stay intact.
@@ -36,29 +37,9 @@ func (h *HelmHandler) addOCIRegistry(rawURL, prefix string) {
 		strings.Trim(u.Path, "/") != "" || u.RawQuery != "" || u.Fragment != "" || u.User != nil {
 		return
 	}
-	h.ociRegistries = append(h.ociRegistries, helmOCIRegistry{host: u.Host, prefix: prefix})
+	h.ociRegistries = append(h.ociRegistries, helmOCIRegistry{Host: u.Host, Prefix: prefix})
 }
 
 func (h *HelmHandler) ociChartProxyURL(reference string) string {
-	u, err := url.Parse(reference)
-	if err != nil {
-		return reference
-	}
-	proxy, err := url.Parse(h.proxyURL)
-	// OCI clients place /v2 before the repository path, so a path-prefixed
-	// public HTTP base URL cannot be represented by simply prepending its path.
-	if err != nil || proxy.Host == "" || strings.Trim(proxy.Path, "/") != "" {
-		return reference
-	}
-	for _, registry := range h.ociRegistries {
-		if !strings.EqualFold(u.Host, registry.host) {
-			continue
-		}
-		if registry.prefix == "" && strings.HasPrefix(u.Path, "/upstream/") {
-			// This prefix is reserved by the named-registry router.
-			return reference
-		}
-		return "oci://" + proxy.Host + registry.prefix + u.EscapedPath()
-	}
-	return reference
+	return helm.OCIProxyReference(h.proxyURL, h.ociRegistries, reference)
 }

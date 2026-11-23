@@ -27,18 +27,18 @@ func (h *HelmHandler) MirrorChart(ctx context.Context, repository, chart, versio
 		return nil, err
 	}
 
-	release, ok := charts.byRelease[helmRelease{chart, version}]
+	release, ok := charts.ByRelease[helmRelease{Chart: chart, Version: version}]
 	switch {
 	case !ok:
 		return nil, fmt.Errorf("%w: %s %s is not in the %s index", ErrUpstreamNotFound, chart, version, repository)
-	case release.first.oci:
+	case release.First.OCI:
 		return nil, fmt.Errorf("%s %s is published as %s, which helm pulls through the container registry routes; mirror it as an image: %s",
-			chart, version, release.first.url, ociChartPURL(release.first.url, version))
-	case h.chartOnCooldown(chart, release.created):
+			chart, version, release.First.URL, ociChartPURL(release.First.URL, version))
+	case h.chartOnCooldown(chart, release.Created):
 		return nil, fmt.Errorf("%s %s is in cooldown, so the index doesn't list it", chart, version)
 	}
-	return h.proxy.GetOrFetchArtifactFromURLWithDigest(ctx, helmMetadataEcosystem, repository, release.digest,
-		release.first.filename, release.first.url, "sha256:"+release.digest)
+	return h.proxy.GetOrFetchArtifactFromURLWithDigest(ctx, helmMetadataEcosystem, repository, release.Digest,
+		release.First.Filename, release.First.URL, "sha256:"+release.Digest)
 }
 
 func (h *HelmHandler) unknownRepositoryError(repository string) error {
