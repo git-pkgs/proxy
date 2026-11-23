@@ -139,7 +139,8 @@ func (h *RPMHandler) handlePackageDownload(w http.ResponseWriter, r *http.Reques
 // primary.xml.gz, etc.). repomd.xml changes with every repository update and
 // follows the metadata TTL. The files it points at are usually named after
 // their own checksum and so never change; those are kept for good. Plainly
-// named ones follow the cached repomd.xml (see proxyListedIndex).
+// named ones follow the cached repomd.xml (see proxyListedIndex), and
+// repomd.xml.asc follows repomd.xml (see proxyReleaseSignature).
 func (h *RPMHandler) handleMetadata(w http.ResponseWriter, r *http.Request, path string) {
 	upstreamURL := fmt.Sprintf("%s/%s", h.upstreamURL, path)
 	if rpmContentAddressed(path) {
@@ -147,13 +148,18 @@ func (h *RPMHandler) handleMetadata(w http.ResponseWriter, r *http.Request, path
 		return
 	}
 	i := strings.LastIndex(path, "/repodata/")
+	repomdPath := path[:i] + "/repodata/repomd.xml"
+	if path == repomdPath+".asc" {
+		h.proxy.proxyReleaseSignature(w, r, upstreamURL, "rpm", h.metadataCacheKey(path), h.metadataCacheKey(repomdPath))
+		return
+	}
 	if strings.HasPrefix(path[i:], "/repodata/repomd.xml") {
 		h.proxy.ProxyCached(w, r, upstreamURL, "rpm", h.metadataCacheKey(path), "*/*")
 		return
 	}
 	// Plainly named files (createrepo --simple-md-filenames) follow the
 	// cached repomd.xml that lists them.
-	repomd := h.proxy.readCachedRelease(r.Context(), "rpm", h.metadataCacheKey(path[:i]+"/repodata/repomd.xml"))
+	repomd := h.proxy.readCachedRelease(r.Context(), "rpm", h.metadataCacheKey(repomdPath))
 	var want string
 	if repomd != nil {
 		want = repomdSHA256(repomd.body, path[i+1:])

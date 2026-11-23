@@ -101,6 +101,7 @@ func TestHandleOutdated_EmptyBody(t *testing.T) {
 	h := NewAPIHandler(svc, nil)
 
 	req := httptest.NewRequest("POST", "/api/outdated", bytes.NewReader([]byte("{}")))
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.HandleOutdated(w, req)
 
@@ -120,6 +121,7 @@ func TestHandleOutdated_OversizedBody(t *testing.T) {
 		body[i] = 'x'
 	}
 	req := httptest.NewRequest("POST", "/api/outdated", bytes.NewReader(body))
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.HandleOutdated(w, req)
 
@@ -134,6 +136,7 @@ func TestHandleOutdated_InvalidJSON(t *testing.T) {
 	h := NewAPIHandler(svc, nil)
 
 	req := httptest.NewRequest("POST", "/api/outdated", bytes.NewReader([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.HandleOutdated(w, req)
 
@@ -148,6 +151,7 @@ func TestHandleBulkLookup_EmptyBody(t *testing.T) {
 	h := NewAPIHandler(svc, nil)
 
 	req := httptest.NewRequest("POST", "/api/bulk", bytes.NewReader([]byte("{}")))
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.HandleBulkLookup(w, req)
 
@@ -162,6 +166,7 @@ func TestHandleBulkLookup_InvalidJSON(t *testing.T) {
 	h := NewAPIHandler(svc, nil)
 
 	req := httptest.NewRequest("POST", "/api/bulk", bytes.NewReader([]byte("not json")))
+	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()
 	h.HandleBulkLookup(w, req)
 

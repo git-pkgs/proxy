@@ -688,7 +688,16 @@ func TestRewrittenMetadataLastModifiedWithClockSkew(t *testing.T) {
 // and a cooldown of an hour keeps it.
 func cooldownUpstream(t *testing.T) *validatorUpstream {
 	t.Helper()
-	recent := time.Now().Add(-2 * time.Hour).UTC().Format(time.RFC3339)
+	u, _ := cooldownUpstreamPublished(t)
+	return u
+}
+
+// cooldownUpstreamPublished is cooldownUpstream, also returning when the
+// newest version was published.
+func cooldownUpstreamPublished(t *testing.T) (*validatorUpstream, time.Time) {
+	t.Helper()
+	published := time.Now().Add(-2 * time.Hour).UTC().Truncate(time.Second)
+	recent := published.Format(time.RFC3339)
 	u := newValidatorUpstream(t)
 	u.set(
 		`{"name":"left-pad","dist-tags":{"latest":"1.4.0"},"versions":{`+
@@ -699,7 +708,7 @@ func cooldownUpstream(t *testing.T) *validatorUpstream {
 			`{"version":"1.0.0","time":"2016-01-01T00:00:00Z","dist":{"type":"zip","url":"https://example.com/pkg-1.0.0.zip"}},`+
 			`{"version":"1.1.0","time":"`+recent+`","dist":{"type":"zip","url":"https://example.com/pkg-1.1.0.zip"}}]}}`,
 	)
-	return u
+	return u, published
 }
 
 // TestRewrittenMetadataETagWithCooldownFollowsKeptVersions checks that with

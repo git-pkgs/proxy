@@ -4,6 +4,7 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"strings"
 	"time"
@@ -16,7 +17,14 @@ import (
 )
 
 const (
-	maxBodySize            = 1 << 20 // 1 MB
+	maxBodySize = 1 << 20 // 1 MB
+	// maxOutdatedPackages is how many packages one outdated request may name.
+	// They are looked up one after another, so even at 3s each a full request
+	// finishes inside the default 5m write_timeout.
+	maxOutdatedPackages = 100
+	// maxBulkPURLs is how many PURLs one bulk request may name. They are
+	// looked up in batches, so a full request fits the default write_timeout.
+	maxBulkPURLs           = 1000
 	licenseCategoryUnknown = "unknown"
 	defaultSortBy          = "hits"
 )
@@ -383,6 +391,25 @@ func (h *APIHandler) HandleVulnsPath(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, resp)
 }
 
+// readJSONRequest decodes the JSON body of a request into req, or answers the
+// request and returns false. A browser can only send a JSON content type
+// cross-origin after a CORS preflight, which the proxy never answers, so
+// requiring it stops other sites from sending requests through a visitor's
+// browser.
+func readJSONRequest(w http.ResponseWriter, r *http.Request, req any) bool {
+	if !isJSONRequest(r) {
+		writeError(w, http.StatusUnsupportedMediaType, ErrCodeUnsupportedMediaType,
+			"Content-Type must be application/json")
+		return false
+	}
+	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
+	if err := json.NewDecoder(r.Body).Decode(req); err != nil {
+		badRequest(w, "invalid request body")
+		return false
+	}
+	return true
+}
+
 // HandleOutdated handles POST /api/outdated
 // @Summary Check outdated packages
 // @Tags api
@@ -391,18 +418,21 @@ func (h *APIHandler) HandleVulnsPath(w http.ResponseWriter, r *http.Request) {
 // @Param request body OutdatedRequest true "Packages to check"
 // @Success 200 {object} OutdatedResponse
 // @Failure 400 {object} ErrorResponse
+// @Failure 415 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
 // @Router /api/outdated [post]
 func (h *APIHandler) HandleOutdated(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req OutdatedRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		badRequest(w, "invalid request body")
+	if !readJSONRequest(w, r, &req) {
 		return
 	}
 
 	if len(req.Packages) == 0 {
 		badRequest(w, "packages list is required")
+		return
+	}
+	if len(req.Packages) > maxOutdatedPackages {
+		badRequest(w, fmt.Sprintf("at most %d packages per request", maxOutdatedPackages))
 		return
 	}
 
@@ -437,18 +467,21 @@ func (h *APIHandler) HandleOutdated(w http.ResponseWriter, r *http.Request) {
 // @Param request body BulkRequest true "PURLs"
 // @Success 200 {object} BulkResponse
 // @Failure 400 {object} ErrorResponse
+// @Failure 415 {object} ErrorResponse
 // @Failure 500 {object} ErrorResponse
 // @Router /api/bulk [post]
 func (h *APIHandler) HandleBulkLookup(w http.ResponseWriter, r *http.Request) {
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req BulkRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		badRequest(w, "invalid request body")
+	if !readJSONRequest(w, r, &req) {
 		return
 	}
 
 	if len(req.PURLs) == 0 {
 		badRequest(w, "purls list is required")
+		return
+	}
+	if len(req.PURLs) > maxBulkPURLs {
+		badRequest(w, fmt.Sprintf("at most %d purls per request", maxBulkPURLs))
 		return
 	}
 
