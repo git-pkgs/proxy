@@ -10,6 +10,7 @@ import (
 
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/handler"
+	"github.com/git-pkgs/proxy/internal/metadata/gem"
 	"github.com/git-pkgs/proxy/internal/metadata/pypi"
 	"github.com/git-pkgs/registries"
 )
@@ -51,12 +52,12 @@ var fileEcosystems = map[string]fileEcosystem{
 			return map[string]string{"platform": gemArtifactPlatform(file)}
 		},
 		cacheKey: func(_ PackageVersion, file registries.Artifact) (string, string, string, bool) {
-			name, version := handler.GemFilenameIdentity(file.Filename)
+			name, version := gem.FilenameIdentity(file.Filename)
 			return name, version, file.Filename, name != ""
 		},
 		variants: func(file registries.Artifact) []string { return []string{gemArtifactPlatform(file)} },
 		cachedVariants: func(cacheFilename string) []string {
-			_, version := handler.GemFilenameIdentity(cacheFilename)
+			_, version := gem.FilenameIdentity(cacheFilename)
 			_, platform := gemVersionPlatform(version)
 			return []string{platform}
 		},

@@ -1,14 +1,12 @@
 package handler
 
 import (
-	"bytes"
-	"encoding/json"
 	"fmt"
 	"net/http"
-	"regexp"
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/metadata/gem"
 	"github.com/git-pkgs/proxy/internal/retention"
 )
 
@@ -87,60 +85,9 @@ func (h *GemHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 }
 
 // GemFilenameIdentity returns the name and version a gem file is cached
-// under, read from its filename. A platform build's version keeps its
-// platform.
-// e.g., "rails-7.1.0.gem" -> ("rails", "7.1.0")
-// e.g., "aws-sdk-s3-1.142.0.gem" -> ("aws-sdk-s3", "1.142.0")
-// e.g., "sorbet-static-0.5.11002-universal-darwin-22.gem" -> ("sorbet-static", "0.5.11002-universal-darwin-22")
-// e.g., "devise-2fa-1.0.0.gem" -> ("devise-2fa", "1.0.0")
-//
-// A gem file is named {name}-{version}[-{platform}]. RubyGems writes a
-// version as dot-separated alphanumeric segments starting with a digit,
-// turning any "-" into ".pre.", and a platform starts with a letter (its
-// CPU, or java), though it can end in a number (universal-java-17), so
-// splitting at the last "-<digit>" would cut the platform. The version
-// starts at the first "-<digit>" that leaves such a version and platform,
-// so a name with a "-<digit>" segment of its own, such as devise-2fa, is
-// kept whole. A filename no split fits is split at the first "-<digit>".
-//
-// Trying every "-<digit>" costs time quadratic in the filename's length, so
-// a filename longer than maxGemFilenameLength is refused.
+// under, read from its filename (see gem.FilenameIdentity).
 func GemFilenameIdentity(filename string) (name, version string) {
-	if len(filename) > maxGemFilenameLength {
-		return "", ""
-	}
-	base := strings.TrimSuffix(filename, ".gem")
-	first := -1
-	for i := 0; i+1 < len(base); i++ {
-		if base[i] != '-' || base[i+1] < '0' || base[i+1] > '9' {
-			continue
-		}
-		if first < 0 {
-			first = i
-		}
-		if gemVersionAndPlatform(base[i+1:]) {
-			return base[:i], base[i+1:]
-		}
-	}
-	if first < 0 {
-		return "", ""
-	}
-	return base[:first], base[first+1:]
-}
-
-// maxGemFilenameLength bounds the gem filenames GemFilenameIdentity accepts.
-// Real gem filenames are a small fraction of this.
-const maxGemFilenameLength = 512
-
-var (
-	gemVersionPattern  = regexp.MustCompile(`^[0-9]+(\.[0-9A-Za-z]+)*$`)
-	gemPlatformPattern = regexp.MustCompile(`^[A-Za-z][0-9A-Za-z_]*(-[0-9A-Za-z_]+)*$`)
-)
-
-// gemVersionAndPlatform reports whether s reads as {version}[-{platform}].
-func gemVersionAndPlatform(s string) bool {
-	version, platform, hasPlatform := strings.Cut(s, "-")
-	return gemVersionPattern.MatchString(version) && (!hasPlatform || gemPlatformPattern.MatchString(platform))
+	return gem.FilenameIdentity(filename)
 }
 
 // handleCompactIndex serves the compact index for a gem, filtering versions
@@ -227,83 +174,24 @@ func (h *GemHandler) indexVersions(doc metadataResult) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	var versions []string
-	for rest := body; len(rest) > 0; {
-		line, tail, _ := bytes.Cut(rest, []byte("\n"))
-		rest = tail
-		if version := gemIndexLineVersion(line); gemIndexListsVersion(version) {
-			versions = append(versions, string(version))
-		}
-	}
-	return versions, nil
-}
-
-// gemIndexLineVersion returns the version a compact index line starts with.
-func gemIndexLineVersion(line []byte) []byte {
-	if spaceIdx := bytes.IndexByte(line, ' '); spaceIdx > 0 {
-		return line[:spaceIdx]
-	}
-	return line
-}
-
-// gemIndexListsVersion reports whether a compact index line's first field
-// is a version, rather than the "---" that starts the file or an empty line.
-func gemIndexListsVersion(field []byte) bool {
-	return len(field) > 0 && string(field) != "---"
+	return gem.IndexVersions(body), nil
 }
 
 // filterIndex returns the compact index without the lines of versions
 // withheld reports, and the versions it kept.
 func (h *GemHandler) filterIndex(body []byte, name string, withheld func(string) bool) ([]byte, []string) {
-	var kept []string
-	var out bytes.Buffer
-	out.Grow(len(body))
-	for rest := body; len(rest) > 0; {
-		line, tail, _ := bytes.Cut(rest, []byte("\n"))
-		rest = tail
-
-		version := gemIndexLineVersion(line)
-		if gemIndexListsVersion(version) {
-			if withheld(string(version)) {
-				h.proxy.Logger.Info("cooldown: filtering gem version",
-					"gem", name, "version", string(version))
-				continue
-			}
-			kept = append(kept, string(version))
-		}
-		out.Write(line)
-		out.WriteByte('\n')
-	}
-	return out.Bytes(), kept
+	return gem.FilterIndex(body, withheld, func(version string) {
+		h.proxy.Logger.Info("cooldown: filtering gem version", "gem", name, "version", version)
+	})
 }
 
-// gemVersion represents a version entry from the RubyGems versions API.
-type gemVersion struct {
-	Number    string `json:"number"`
-	Platform  string `json:"platform"`
-	CreatedAt string `json:"created_at"`
-}
+// gemVersion is a version entry from the RubyGems versions API.
+type gemVersion = gem.Version
 
 // parseGemVersions reads the publish times from a versions API response,
 // keyed by version as the compact index writes it.
 func parseGemVersions(body []byte) (publishTimes, error) {
-	var versions []gemVersion
-	if err := json.Unmarshal(body, &versions); err != nil {
-		return nil, err
-	}
-	times := make(publishTimes, len(versions))
-	for _, v := range versions {
-		versionStr := v.Number
-		if v.Platform != "" && v.Platform != "ruby" {
-			versionStr = v.Number + "-" + v.Platform
-		}
-		createdAt, err := time.Parse(time.RFC3339, v.CreatedAt)
-		if err != nil {
-			createdAt = time.Time{}
-		}
-		times[versionStr] = createdAt
-	}
-	return times, nil
+	return gem.PublishTimes(body)
 }
 
 func (h *GemHandler) publishTime(r *http.Request, name, version string) (time.Time, bool, bool, error) {
