@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/git-pkgs/cooldown"
 	"google.golang.org/protobuf/encoding/protowire"
 )
 
@@ -230,6 +231,155 @@ func TestFilterSignedDropsReleasesAndSignature(t *testing.T) {
 	}
 	if got, want := gunzip(t, out), signed(pkg("1.0.0"), nil); !bytes.Equal(got, want) {
 		t.Errorf("FilterSigned = %x, want %x", got, want)
+	}
+}
+
+// windowPolicy holds a version back until window has passed since it was
+// published, as judged at the evaluation time it is given.
+type windowPolicy struct {
+	disabled  bool
+	window    time.Duration
+	evaluated []time.Time
+	purls     []string
+}
+
+func (p *windowPolicy) Enabled() bool { return !p.disabled }
+
+func (p *windowPolicy) Evaluate(ecosystem, packagePURL string, publishedAt, evaluatedAt time.Time) cooldown.Decision {
+	p.evaluated = append(p.evaluated, evaluatedAt)
+	p.purls = append(p.purls, ecosystem+" "+packagePURL)
+	availableAt := publishedAt.Add(p.window)
+	return cooldown.Decision{Allowed: !evaluatedAt.Before(availableAt), AvailableAt: availableAt}
+}
+
+var now = time.Date(2026, 11, 20, 12, 0, 0, 0, time.UTC)
+
+// published dates 1.0.0 and 3.0.0 a month ago and 2.0.0 an hour ago.
+func published() map[string]time.Time {
+	old := now.AddDate(0, -1, 0)
+	return map[string]time.Time{"1.0.0": old, "2.0.0": now.Add(-time.Hour), "3.0.0": old}
+}
+
+type withheldVersion struct {
+	name, version string
+	publishedAt   time.Time
+}
+
+func TestFilterPackage(t *testing.T) {
+	policy := &windowPolicy{window: 72 * time.Hour}
+	var reported []withheldVersion
+	out, kept, err := FilterPackage("phoenix", signed(pkg("1.0.0", "2.0.0", "3.0.0"), []byte("sig")), Options{
+		Cooldown:    policy,
+		EvaluatedAt: now,
+		Published:   published(),
+		OnWithheld: func(name, version string, publishedAt time.Time) {
+			reported = append(reported, withheldVersion{name, version, publishedAt})
+		},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := gunzip(t, out), signed(pkg("1.0.0", "3.0.0"), nil); !bytes.Equal(got, want) {
+		t.Errorf("FilterPackage = %x, want %x: without 2.0.0 and the signature", got, want)
+	}
+	if want := []string{"1.0.0", "3.0.0"}; !slices.Equal(kept, want) {
+		t.Errorf("kept = %q, want %q", kept, want)
+	}
+	if want := []withheldVersion{{"phoenix", "2.0.0", now.Add(-time.Hour)}}; !slices.Equal(reported, want) {
+		t.Errorf("OnWithheld got %v, want %v", reported, want)
+	}
+	if len(policy.purls) != 3 || slices.ContainsFunc(policy.purls, func(p string) bool { return p != "hex pkg:hex/phoenix" }) {
+		t.Errorf("policy asked about %q, want hex pkg:hex/phoenix for each of the 3 releases", policy.purls)
+	}
+	if slices.ContainsFunc(policy.evaluated, func(at time.Time) bool { return !at.Equal(now) }) {
+		t.Errorf("policy evaluated at %v, want only %v", policy.evaluated, now)
+	}
+}
+
+// With nothing held back there is no output: upstream's bytes are the ones
+// to serve, as their signature still holds.
+func TestFilterPackageWithholdsNothing(t *testing.T) {
+	tests := map[string]Options{
+		"no policy":       {Published: published(), WithholdUnknown: true},
+		"policy disabled": {Cooldown: &windowPolicy{disabled: true, window: 72 * time.Hour}, EvaluatedAt: now, WithholdUnknown: true},
+		"all old enough":  {Cooldown: &windowPolicy{window: 30 * time.Minute}, EvaluatedAt: now, Published: published()},
+	}
+	for name, o := range tests {
+		t.Run(name, func(t *testing.T) {
+			o.OnWithheld = func(_, version string, _ time.Time) { t.Errorf("withheld %s", version) }
+			out, kept, err := FilterPackage("phoenix", signed(pkg("1.0.0", "2.0.0", "3.0.0"), []byte("sig")), o)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if out != nil {
+				t.Errorf("FilterPackage = %x, want no output", out)
+			}
+			if want := []string{"1.0.0", "2.0.0", "3.0.0"}; !slices.Equal(kept, want) {
+				t.Errorf("kept = %q, want %q", kept, want)
+			}
+		})
+	}
+}
+
+// A release the times don't have is kept, unless the caller says its times
+// are too old to trust: then it is held back, with no publish time to
+// report.
+func TestFilterPackageReleaseWithoutTime(t *testing.T) {
+	times := published()
+	delete(times, "3.0.0")
+	in := signed(pkg("1.0.0", "2.0.0", "3.0.0"), []byte("sig"))
+	o := Options{Cooldown: &windowPolicy{window: 30 * time.Minute}, EvaluatedAt: now, Published: times}
+
+	if out, kept, err := FilterPackage("phoenix", in, o); err != nil || out != nil || len(kept) != 3 {
+		t.Errorf("FilterPackage = %x, %q, %v; want all 3 releases kept", out, kept, err)
+	}
+
+	var reported []withheldVersion
+	o.WithholdUnknown = true
+	o.OnWithheld = func(name, version string, publishedAt time.Time) {
+		reported = append(reported, withheldVersion{name, version, publishedAt})
+	}
+	out, kept, err := FilterPackage("phoenix", in, o)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := gunzip(t, out), signed(pkg("1.0.0", "2.0.0"), nil); !bytes.Equal(got, want) {
+		t.Errorf("FilterPackage = %x, want %x: without 3.0.0", got, want)
+	}
+	if want := []string{"1.0.0", "2.0.0"}; !slices.Equal(kept, want) {
+		t.Errorf("kept = %q, want %q", kept, want)
+	}
+	if want := []withheldVersion{{"phoenix", "3.0.0", time.Time{}}}; !slices.Equal(reported, want) {
+		t.Errorf("OnWithheld got %v, want %v", reported, want)
+	}
+}
+
+// A release whose time didn't parse is kept, whatever WithholdUnknown says.
+func TestFilterPackageKeepsReleaseWithZeroTime(t *testing.T) {
+	times := published()
+	times["2.0.0"] = time.Time{}
+	policy := &windowPolicy{window: 72 * time.Hour}
+	out, kept, err := FilterPackage("phoenix", signed(pkg("1.0.0", "2.0.0", "3.0.0"), nil), Options{
+		Cooldown: policy, EvaluatedAt: now, Published: times, WithholdUnknown: true,
+	})
+	if err != nil || out != nil || len(kept) != 3 {
+		t.Errorf("FilterPackage = %x, %q, %v; want all 3 releases kept", out, kept, err)
+	}
+	if len(policy.evaluated) != 2 {
+		t.Errorf("policy evaluated %d releases, want 2: not the one without a time", len(policy.evaluated))
+	}
+}
+
+func TestFilterPackageRejectsMalformedInput(t *testing.T) {
+	o := Options{Cooldown: &windowPolicy{window: 72 * time.Hour}, EvaluatedAt: now, Published: published()}
+	if _, _, err := FilterPackage("phoenix", []byte{0x80}, o); err == nil {
+		t.Error("FilterPackage accepted a malformed Signed message")
+	}
+	var fixed32 []byte
+	fixed32 = protowire.AppendTag(fixed32, 5, protowire.Fixed32Type)
+	fixed32 = protowire.AppendFixed32(fixed32, 1)
+	if _, _, err := FilterPackage("phoenix", signed(fixed32, nil), o); err == nil {
+		t.Error("FilterPackage accepted a malformed payload")
 	}
 }
 

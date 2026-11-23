@@ -20,7 +20,12 @@ func TestPortableImports(t *testing.T) {
 		t.Fatalf("go list: %v", err)
 	}
 	allowed := []string{
+		"github.com/git-pkgs/cooldown",
 		"github.com/git-pkgs/proxy/internal/metadata/hex",
+		"github.com/git-pkgs/proxy/internal/packageurl",
+		"github.com/git-pkgs/purl",
+		"github.com/git-pkgs/vers",
+		"github.com/package-url/packageurl-go",
 		"google.golang.org/protobuf/encoding/protowire",
 		"google.golang.org/protobuf/internal/detrand",
 		"google.golang.org/protobuf/internal/errors",

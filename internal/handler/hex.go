@@ -132,26 +132,7 @@ func (h *HexHandler) handlePackages(w http.ResponseWriter, r *http.Request) {
 			if err != nil {
 				return nil, nil, err
 			}
-			versions, err := h.packageVersions(docs.doc)
-			if err != nil {
-				return nil, nil, err
-			}
-			filtered := make(map[string]bool)
-			var kept []string
-			for _, version := range versions {
-				if docs.withheld(h.proxy, "hex", name, version) {
-					filtered[version] = true
-					h.proxy.Logger.Info("cooldown: filtering hex version", "package", name, "version", version)
-					continue
-				}
-				kept = append(kept, version)
-			}
-			if len(filtered) == 0 {
-				// Nothing in cooldown: upstream's bytes, signature included.
-				return body, kept, nil
-			}
-			out, err := h.filterSignedPackage(body, filtered)
-			return out, kept, err
+			return h.filterPackage(name, body, docs)
 		})
 	if err != nil {
 		h.proxy.Logger.Error("failed to filter hex package", "name", name, "error", err)
@@ -253,6 +234,38 @@ func (h *HexHandler) decompressSigned(gzippedData []byte) ([]byte, error) {
 // message.
 func packageReleaseVersions(payload []byte) ([]string, error) {
 	return hex.ReleaseVersions(payload)
+}
+
+// filterPackage returns a gzipped Signed package without the releases
+// cooldown holds back, by the publish times in docs, and the versions it
+// kept; see hex.FilterPackage. With none held back it returns upstream's
+// bytes, signature included.
+func (h *HexHandler) filterPackage(name string, gzippedData []byte, docs timedDocuments) ([]byte, []string, error) {
+	signed, err := h.decompressSigned(gzippedData)
+	if err != nil {
+		return nil, nil, err
+	}
+	out, kept, err := hex.FilterPackage(name, signed, hex.Options{
+		Cooldown:        h.proxy.cooldown(),
+		EvaluatedAt:     h.proxy.clock(),
+		Published:       docs.published,
+		WithholdUnknown: docs.withholdUnknown,
+		OnWithheld:      h.cooldownFiltered,
+	})
+	if err != nil {
+		return nil, nil, err
+	}
+	if out == nil {
+		return gzippedData, kept, nil
+	}
+	return out, kept, nil
+}
+
+// cooldownFiltered logs a release a package was served without and records
+// it for the package page.
+func (h *HexHandler) cooldownFiltered(name, version string, publishedAt time.Time) {
+	h.proxy.Logger.Info("cooldown: filtering hex version", "package", name, "version", version)
+	h.proxy.recordWithheld("hex", name, version, publishedAt)
 }
 
 // filterSignedPackage decompresses gzipped data, with the metadata limit

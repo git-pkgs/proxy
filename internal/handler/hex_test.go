@@ -394,3 +394,41 @@ func TestHexCooldownMetadataSizeLimit(t *testing.T) {
 		})
 	}
 }
+
+// A package's rewrite goes by the publish times it is given: a release
+// still in cooldown is left out and recorded for the package page, and one
+// the times don't have is left out when they may be out of date.
+func TestHexFilterPackageRecordsWithheldVersions(t *testing.T) {
+	proxy, db, old, recent := withheldTestProxy(t)
+	h := &HexHandler{proxy: proxy, proxyURL: "http://proxy.local"}
+	gzipped := buildHexSigned(buildHexPackage("testpkg", []string{testVersion100, "2.0.0", "3.0.0"}))
+	docs := timedDocuments{
+		published:       publishTimes{testVersion100: old, "2.0.0": recent},
+		withholdUnknown: true,
+	}
+
+	out, kept, err := h.filterPackage("testpkg", gzipped, docs)
+	if err != nil {
+		t.Fatalf("filterPackage: %v", err)
+	}
+	if len(kept) != 1 || kept[0] != testVersion100 {
+		t.Errorf("kept = %v, want only %s", kept, testVersion100)
+	}
+	if bytes.Equal(out, gzipped) {
+		t.Error("filterPackage returned upstream's package, want it filtered")
+	}
+	assertWithheldRecorded(t, db, "hex", "testpkg", "2.0.0", recent)
+	assertNotRecorded(t, db, "hex", "testpkg", testVersion100)
+	assertNotRecorded(t, db, "hex", "testpkg", "3.0.0")
+
+	docs.withholdUnknown = false
+	if _, kept, err := h.filterPackage("testpkg", gzipped, docs); err != nil || len(kept) != 2 {
+		t.Errorf("filterPackage = %v, %v; want 3.0.0 kept when the times are current", kept, err)
+	}
+
+	// Cooldown is judged at the proxy's clock, which dates the rewrite.
+	proxy.now = func() time.Time { return recent.AddDate(0, 1, 0) }
+	if out, kept, err := h.filterPackage("testpkg", gzipped, docs); err != nil || len(kept) != 3 || !bytes.Equal(out, gzipped) {
+		t.Errorf("filterPackage = %v, %v; want upstream's package once 2.0.0 has left cooldown", kept, err)
+	}
+}
