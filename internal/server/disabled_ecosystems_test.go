@@ -191,3 +191,16 @@ func TestChangeFeedsSkipDisabledEcosystems(t *testing.T) {
 		t.Errorf("changeFeedsOn = %t, %t with composer disabled; want npm only", npm, composer)
 	}
 }
+
+// Every mounted ecosystem can be turned off: a route added without a key
+// disabled_ecosystems accepts fails here.
+func TestEcosystemRoutesCanBeTurnedOff(t *testing.T) {
+	if len(ecosystemMounts) == 0 {
+		t.Fatal("no ecosystem routes")
+	}
+	for _, mount := range ecosystemMounts {
+		if !slices.Contains(config.DisableableEcosystems, mount.key) {
+			t.Errorf("route %s has key %q, which disabled_ecosystems doesn't accept", mount.prefix, mount.key)
+		}
+	}
+}

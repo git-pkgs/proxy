@@ -400,3 +400,108 @@ func (r *recordingImages) MirrorImage(context.Context, handler.ImageRef, []handl
 	r.calls.Add(1)
 	return handler.ImageResult{}, errors.New("not mirrored")
 }
+
+// An unversioned PURL of a turned-off ecosystem isn't listed from its
+// upstream: it yields one item that fails, and a lister error can't abort
+// the job for the enabled ecosystems.
+func TestMirrorRunDoesNotListDisabledEcosystems(t *testing.T) {
+	disabled := func(ecosystem string) bool { return ecosystem == "npm" }
+	bom := map[string]any{
+		"bomFormat":   "CycloneDX",
+		"specVersion": "1.4",
+		"components": []map[string]any{
+			{"type": "library", "name": "lodash", "purl": "pkg:npm/lodash"},
+			{"type": "library", "name": "serde", "version": "1.0.0", "purl": "pkg:cargo/serde@1.0.0"},
+		},
+	}
+	sources := map[string]func(VersionLister) Source{
+		"purls": func(versions VersionLister) Source {
+			return &PURLSource{PURLs: []string{"pkg:npm/lodash", "pkg:cargo/serde@1.0.0"}, Versions: versions, Disabled: disabled}
+		},
+		"sbom": func(versions VersionLister) Source {
+			return &SBOMSource{Data: marshalJSON(t, bom), Versions: versions, Disabled: disabled}
+		},
+	}
+	for name, source := range sources {
+		t.Run(name, func(t *testing.T) {
+			m := setupTestMirror(t, 1)
+			fetcher := &recordingFetcher{}
+			m.proxy.Fetcher = fetcher
+			m.Disabled = disabled
+			versions := &failingVersions{}
+
+			progress, err := m.Run(context.Background(), source(versions))
+			if err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if n := versions.calls.Load(); n != 0 {
+				t.Errorf("versions listed %d times, want none", n)
+			}
+			var refused int
+			for _, e := range progress.Errors {
+				if e.Ecosystem == "npm" && strings.Contains(e.Error, "turned off") {
+					refused++
+				}
+			}
+			if refused != 1 {
+				t.Errorf("npm refusals = %d, want 1: %+v", refused, progress.Errors)
+			}
+			fetchedSerde := false
+			for _, u := range fetcher.fetched() {
+				fetchedSerde = fetchedSerde || strings.Contains(u, "serde")
+			}
+			if !fetchedSerde {
+				t.Errorf("enabled cargo item wasn't fetched: %v", fetcher.fetched())
+			}
+		})
+	}
+}
+
+type failingVersions struct{ calls atomic.Int32 }
+
+func (f *failingVersions) ListVersions(context.Context, string, string) ([]string, error) {
+	f.calls.Add(1)
+	return nil, errors.New("upstream unreachable")
+}
+
+// Mirror API jobs and schedules hand the mirror's Disabled to their
+// sources, so their unversioned PURLs of a turned-off ecosystem aren't
+// listed either.
+func TestJobsAndSchedulesDoNotListDisabledEcosystems(t *testing.T) {
+	newMirror := func(t *testing.T) (*Mirror, *failingVersions) {
+		m := setupTestMirror(t, 1)
+		m.proxy.Fetcher = &recordingFetcher{}
+		m.Disabled = func(ecosystem string) bool { return ecosystem == "npm" }
+		versions := &failingVersions{}
+		m.Versions = versions
+		return m, versions
+	}
+	bom := marshalJSON(t, map[string]any{
+		"bomFormat":   "CycloneDX",
+		"specVersion": "1.4",
+		"components":  []map[string]any{{"type": "library", "name": "lodash", "purl": "pkg:npm/lodash"}},
+	})
+	for name, req := range map[string]JobRequest{"purls": {PURLs: []string{"pkg:npm/lodash"}}, "sbom": {SBOM: bom}} {
+		t.Run("job "+name, func(t *testing.T) {
+			m, versions := newMirror(t)
+			source, err := NewJobStore(context.Background(), m).sourceFromRequest(req)
+			if err != nil {
+				t.Fatalf("sourceFromRequest: %v", err)
+			}
+			if _, err := m.Run(context.Background(), source); err != nil {
+				t.Fatalf("Run: %v", err)
+			}
+			if n := versions.calls.Load(); n != 0 {
+				t.Errorf("versions listed %d times, want none", n)
+			}
+		})
+	}
+	t.Run("schedule", func(t *testing.T) {
+		m, versions := newMirror(t)
+		schedule := Schedule{PURLs: []string{"pkg:npm/lodash"}, Interval: time.Hour}
+		NewScheduler(m, []Schedule{schedule}, m.logger).run(context.Background(), 0, schedule)
+		if n := versions.calls.Load(); n != 0 {
+			t.Errorf("versions listed %d times, want none", n)
+		}
+	})
+}

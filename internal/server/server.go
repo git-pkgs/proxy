@@ -561,33 +561,33 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 	r.With(sandboxUpstreamContent, rejectDotSegments).
 		Mount("/generic", http.StripPrefix("/generic", genericHandler.Routes()))
 	r = r.With(sandboxUpstreamContent, rejectQueryInPath, rejectDotSegments)
-	s.mountEcosystems(r, []ecosystemRoute{
-		{"npm", "/npm", npmHandler.Routes()},
-		{"cargo", "/cargo", cargoHandler.Routes()},
-		{"gem", "/gem", gemHandler.Routes()},
-		{"golang", "/go", goHandler.Routes()},
-		{"hex", "/hex", hexHandler.Routes()},
-		{"pub", "/pub", pubHandler.Routes()},
-		{"pypi", "/pypi", pypiHandler.Routes()},
-		{"maven", "/maven", mavenHandler.Routes()},
-		{"gradle", "/gradle", gradleHandler.Routes()},
-		{"nuget", "/nuget", nugetHandler.Routes()},
-		{"composer", "/composer", composerHandler.Routes()},
-		{"conan", "/conan", conanHandler.Routes()},
-		{"chef", "/chef", chefHandler.Routes()},
-		{"conda", "/conda", condaHandler.Routes()},
-		{"cran", "/cran", cranHandler.Routes()},
-		{"julia", "/julia", juliaHandler.Routes()},
-		{"swift", "/swift", swiftHandler.Routes()},
-		{"homebrew", "/homebrew", homebrewHandler.Routes()},
-		{"oci", "/v2", containerHandler.Routes()},
-		{"helm", "/helm", helmHandler.Routes()},
-		{"alpine", "/apk", apkHandler.Routes()},
-		{"arch", "/arch", archHandler.Routes()},
-		{"freebsd", "/freebsd", freebsdHandler.Routes()},
-		{"terraform", "/terraform", terraformHandler.Routes()},
-		{"deb", "/debian", debianHandler.Routes()},
-		{"rpm", "/rpm", rpmHandler.Routes()},
+	s.mountEcosystems(r, map[string]http.Handler{
+		"npm":       npmHandler.Routes(),
+		"cargo":     cargoHandler.Routes(),
+		"gem":       gemHandler.Routes(),
+		"golang":    goHandler.Routes(),
+		"hex":       hexHandler.Routes(),
+		"pub":       pubHandler.Routes(),
+		"pypi":      pypiHandler.Routes(),
+		"maven":     mavenHandler.Routes(),
+		"gradle":    gradleHandler.Routes(),
+		"nuget":     nugetHandler.Routes(),
+		"composer":  composerHandler.Routes(),
+		"conan":     conanHandler.Routes(),
+		"chef":      chefHandler.Routes(),
+		"conda":     condaHandler.Routes(),
+		"cran":      cranHandler.Routes(),
+		"julia":     juliaHandler.Routes(),
+		"swift":     swiftHandler.Routes(),
+		"homebrew":  homebrewHandler.Routes(),
+		"oci":       containerHandler.Routes(),
+		"helm":      helmHandler.Routes(),
+		"alpine":    apkHandler.Routes(),
+		"arch":      archHandler.Routes(),
+		"freebsd":   freebsdHandler.Routes(),
+		"terraform": terraformHandler.Routes(),
+		"deb":       debianHandler.Routes(),
+		"rpm":       rpmHandler.Routes(),
 	})
 	if s.git == nil {
 		return nil
@@ -598,22 +598,60 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 	return gitHandler
 }
 
-// ecosystemRoute is an ecosystem's handler, mounted at prefix.
-type ecosystemRoute struct {
-	key     string
-	prefix  string
-	handler http.Handler
+// ecosystemMount is where an ecosystem's handler is mounted, by the key
+// disabled_ecosystems turns it off with.
+type ecosystemMount struct {
+	key    string
+	prefix string
 }
 
-// mountEcosystems mounts each route, or for an ecosystem disabled_ecosystems
-// turns off, a handler that answers 404 without reaching its upstream.
-func (s *Server) mountEcosystems(r chi.Router, routes []ecosystemRoute) {
-	for _, route := range routes {
-		if s.cfg.EcosystemDisabled(route.key) {
-			r.Mount(route.prefix, ecosystemTurnedOff(route.key))
+// ecosystemMounts are the ecosystem routes, in mount order.
+var ecosystemMounts = []ecosystemMount{
+	{"npm", "/npm"},
+	{"cargo", "/cargo"},
+	{"gem", "/gem"},
+	{"golang", "/go"},
+	{"hex", "/hex"},
+	{"pub", "/pub"},
+	{"pypi", "/pypi"},
+	{"maven", "/maven"},
+	{"gradle", "/gradle"},
+	{"nuget", "/nuget"},
+	{"composer", "/composer"},
+	{"conan", "/conan"},
+	{"chef", "/chef"},
+	{"conda", "/conda"},
+	{"cran", "/cran"},
+	{"julia", "/julia"},
+	{"swift", "/swift"},
+	{"homebrew", "/homebrew"},
+	{"oci", "/v2"},
+	{"helm", "/helm"},
+	{"alpine", "/apk"},
+	{"arch", "/arch"},
+	{"freebsd", "/freebsd"},
+	{"terraform", "/terraform"},
+	{"deb", "/debian"},
+	{"rpm", "/rpm"},
+}
+
+// mountEcosystems mounts each of ecosystemMounts with its handler from
+// handlers, or for an ecosystem disabled_ecosystems turns off, a handler
+// that answers 404 without reaching its upstream.
+func (s *Server) mountEcosystems(r chi.Router, handlers map[string]http.Handler) {
+	if len(handlers) != len(ecosystemMounts) {
+		panic(fmt.Sprintf("%d ecosystem handlers for %d routes", len(handlers), len(ecosystemMounts)))
+	}
+	for _, mount := range ecosystemMounts {
+		h, ok := handlers[mount.key]
+		if !ok {
+			panic("no handler for ecosystem route " + mount.key)
+		}
+		if s.cfg.EcosystemDisabled(mount.key) {
+			r.Mount(mount.prefix, ecosystemTurnedOff(mount.key))
 			continue
 		}
-		r.Mount(route.prefix, http.StripPrefix(route.prefix, route.handler))
+		r.Mount(mount.prefix, http.StripPrefix(mount.prefix, h))
 	}
 }
 

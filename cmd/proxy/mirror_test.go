@@ -227,3 +227,17 @@ func TestCommandMirrorRefusesDisabledEcosystems(t *testing.T) {
 		t.Errorf("Disabled doesn't follow disabled_ecosystems")
 	}
 }
+
+func TestCommandSourcesFollowTheMirror(t *testing.T) {
+	m := &mirror.Mirror{Disabled: func(ecosystem string) bool { return ecosystem == "pypi" }}
+	purls := &mirror.PURLSource{}
+	sbom := &mirror.SBOMSource{}
+	for _, source := range []mirror.Source{purls, sbom} {
+		useMirrorListing(source, m)
+	}
+	for name, disabled := range map[string]func(string) bool{"purls": purls.Disabled, "sbom": sbom.Disabled} {
+		if disabled == nil || !disabled("pypi") || disabled("npm") {
+			t.Errorf("%s source Disabled doesn't follow the mirror's", name)
+		}
+	}
+}
