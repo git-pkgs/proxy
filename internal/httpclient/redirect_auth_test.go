@@ -108,6 +108,59 @@ func TestTransportKeepsCredentialsOutOfARedirectIntoTheirScope(t *testing.T) {
 	}
 }
 
+func TestTransportKeepsCredentialedTokenOffARedirectFromAnotherUpstream(t *testing.T) {
+	var registry *httptest.Server
+	registry = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case r.URL.Path == "/token":
+			if r.Header.Get("Authorization") != "Basic secret" {
+				w.WriteHeader(http.StatusUnauthorized)
+				return
+			}
+			_, _ = io.WriteString(w, `{"token":"credentialed"}`)
+		case r.Header.Get("Authorization") != "Bearer credentialed":
+			w.Header().Set("WWW-Authenticate", `Bearer realm="`+registry.URL+`/token"`)
+			w.WriteHeader(http.StatusUnauthorized)
+		case strings.HasSuffix(r.URL.Path, "/manifests/moved"):
+			http.Redirect(w, r, registry.URL+"/v2/org/private/manifests/latest", http.StatusFound)
+		}
+	}))
+	defer registry.Close()
+	other := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		http.Redirect(w, r, registry.URL+"/v2/org/private/manifests/latest", http.StatusFound)
+	}))
+	defer other.Close()
+	authForURL := func(rawURL string) (string, string) {
+		if strings.HasPrefix(rawURL, registry.URL+"/token") {
+			return "Authorization", "Basic secret"
+		}
+		return "", ""
+	}
+	client := &http.Client{Transport: NewTransport(http.DefaultTransport, authForURL)}
+	status := func(rawURL string) int {
+		t.Helper()
+		resp, err := client.Get(rawURL)
+		if err != nil {
+			t.Fatal(err)
+		}
+		_ = resp.Body.Close()
+		return resp.StatusCode
+	}
+
+	if got := status(other.URL + "/start"); got != http.StatusUnauthorized {
+		t.Errorf("redirect from another upstream: status = %d, want 401", got)
+	}
+	if got := status(registry.URL + "/v2/org/private/manifests/latest"); got != http.StatusOK {
+		t.Fatalf("direct request: status = %d, want 200", got)
+	}
+	if got := status(other.URL + "/start"); got != http.StatusUnauthorized {
+		t.Errorf("redirect from another upstream with the token cached: status = %d, want 401", got)
+	}
+	if got := status(registry.URL + "/v2/org/private/manifests/moved"); got != http.StatusOK {
+		t.Errorf("redirect within the registry: status = %d, want 200", got)
+	}
+}
+
 func TestTransportRedirectWithoutCredentialsStillGetsAToken(t *testing.T) {
 	var registry *httptest.Server
 	registry = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
