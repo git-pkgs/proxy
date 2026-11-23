@@ -131,3 +131,35 @@ func repomdSHA256(repomd []byte, href string) string {
 	}
 	return ""
 }
+
+// proxyReleaseSignature serves the detached signature of the release file
+// cached under releaseKey (Release.gpg, repomd.xml.asc). Each has its own
+// cache entry, so a cached signature fetched before the release file was
+// fetched again, after its TTL or because an index showed upstream had
+// moved on, signs an older release file. It is fetched again rather than
+// served with one it doesn't match.
+func (p *Proxy) proxyReleaseSignature(w http.ResponseWriter, r *http.Request, upstreamURL, ecosystem, cacheKey, releaseKey string) {
+	if !p.signaturePredatesRelease(ecosystem, cacheKey, releaseKey) {
+		p.ProxyCached(w, r, upstreamURL, ecosystem, cacheKey, "*/*")
+		return
+	}
+	p.recordMetadataCacheMiss(ecosystem)
+	res := p.refreshMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, "*/*", "identity", nil)
+	if res.err != nil {
+		p.writeMetadataFetchError(w, res.err)
+		return
+	}
+	writeMetadataResult(w, r, res)
+}
+
+// signaturePredatesRelease reports whether the signature cached under
+// cacheKey was fetched before the release file cached under releaseKey.
+func (p *Proxy) signaturePredatesRelease(ecosystem, cacheKey, releaseKey string) bool {
+	if !p.CacheMetadata || p.DB == nil {
+		return false
+	}
+	signature, _ := p.DB.GetMetadataCache(ecosystem, cacheKey)
+	release, _ := p.DB.GetMetadataCache(ecosystem, releaseKey)
+	return signature != nil && release != nil && signature.FetchedAt.Valid &&
+		release.FetchedAt.Time.After(signature.FetchedAt.Time)
+}

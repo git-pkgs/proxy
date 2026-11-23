@@ -191,7 +191,8 @@ func (h *DebianHandler) handlePackageDownload(
 // handleMetadata serves repository metadata files through the metadata cache,
 // so they keep resolving while the upstream archive is unreachable.
 // Index files the cached InRelease or Release lists follow that listing (see
-// proxyListedIndex).
+// proxyListedIndex), and Release.gpg follows Release (see
+// proxyReleaseSignature).
 func (h *DebianHandler) handleMetadata(
 	w http.ResponseWriter,
 	r *http.Request,
@@ -200,8 +201,12 @@ func (h *DebianHandler) handleMetadata(
 	cacheKey := h.metadataCacheKeyFor(repository, upstreamURL, path)
 	fileURL := fmt.Sprintf("%s/%s", upstreamURL, path)
 	switch pathpkg.Base(path) {
-	case "InRelease", "Release", "Release.gpg":
+	case "InRelease", "Release":
 		h.proxy.ProxyCached(w, r, fileURL, "debian", cacheKey, "*/*")
+		return
+	case "Release.gpg":
+		releaseKey := h.metadataCacheKeyFor(repository, upstreamURL, strings.TrimSuffix(path, ".gpg"))
+		h.proxy.proxyReleaseSignature(w, r, fileURL, "debian", cacheKey, releaseKey)
 		return
 	}
 	release, want := h.releaseListing(r, repository, upstreamURL, path)

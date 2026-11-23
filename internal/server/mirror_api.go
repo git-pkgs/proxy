@@ -1,7 +1,6 @@
 package server
 
 import (
-	"encoding/json"
 	"mime"
 	"net/http"
 
@@ -21,18 +20,8 @@ func NewMirrorAPIHandler(jobs *mirror.JobStore) *MirrorAPIHandler {
 
 // HandleCreate starts a new mirror job.
 func (h *MirrorAPIHandler) HandleCreate(w http.ResponseWriter, r *http.Request) {
-	// A browser can only send a JSON content type cross-origin after a CORS
-	// preflight, which the proxy never answers, so requiring it stops other
-	// sites from starting mirror jobs through a visitor's browser.
-	if !isJSONRequest(r) {
-		writeError(w, http.StatusUnsupportedMediaType, ErrCodeUnsupportedMediaType,
-			"Content-Type must be application/json")
-		return
-	}
-	r.Body = http.MaxBytesReader(w, r.Body, maxBodySize)
 	var req mirror.JobRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		badRequest(w, "invalid request body")
+	if !readJSONRequest(w, r, &req) {
 		return
 	}
 
