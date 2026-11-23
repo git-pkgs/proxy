@@ -21,6 +21,7 @@ import (
 const (
 	helmMetadataEcosystem = "helm"
 	helmIndexFilename     = "index.yaml"
+	helmIndexAccept       = "application/x-yaml, text/yaml;q=0.9, */*;q=0.1"
 	sha256HexLength       = 64
 )
 
@@ -123,7 +124,7 @@ func (h *HelmHandler) handleChart(w http.ResponseWriter, r *http.Request) {
 	var charts *helmChartLookup
 	if h.proxy.cooldownEnabled() {
 		var err error
-		charts, err = h.downloadChartLookup(r, repository, upstreamURL)
+		charts, err = h.downloadChartLookup(r, repository, upstreamURL, digest, filename)
 		if err != nil {
 			cached, cacheErr := h.proxy.GetCachedArtifact(r.Context(), helmMetadataEcosystem, repository, digest, filename)
 			if cacheErr == nil && cached != nil {
@@ -211,7 +212,7 @@ func (h *HelmHandler) fetchIndex(ctx context.Context, repository, upstreamURL st
 		helmMetadataEcosystem,
 		h.indexCacheKey(repository, upstreamURL),
 		upstreamURL+"/"+helmIndexFilename,
-		"application/x-yaml, text/yaml;q=0.9, */*;q=0.1",
+		helmIndexAccept,
 		nil,
 	)
 }
@@ -402,16 +403,37 @@ func (h *HelmHandler) buildChartLookup(upstreamURL string, body []byte) (*helmCh
 	return lookup, nil
 }
 
-func (h *HelmHandler) downloadChartLookup(r *http.Request, repository, upstreamURL string) (*helmChartLookup, error) {
-	key := "helm\x00" + h.indexCacheKey(repository, upstreamURL)
-	return publishIndex(h.proxy, key, func() metadataResult {
+// downloadChartLookup returns the charts the index lists, for a download
+// checked against cooldown. An index that doesn't list the download can
+// predate the chart, and is fetched again (listingPublishIndex).
+func (h *HelmHandler) downloadChartLookup(r *http.Request, repository, upstreamURL, digest, filename string) (*helmChartLookup, error) {
+	cacheKey := h.indexCacheKey(repository, upstreamURL)
+	return listingPublishIndex(h.proxy, "helm\x00"+cacheKey, func() metadataResult {
 		return h.fetchIndex(r.Context(), repository, upstreamURL)
+	}, func() metadataResult {
+		return h.proxy.refetchLacking(r.Context(), helmMetadataEcosystem, cacheKey,
+			upstreamURL+"/"+helmIndexFilename, helmIndexAccept, "", nil)
 	}, func(res metadataResult) (*helmChartLookup, error) {
 		if res.err != nil {
 			return nil, res.err
 		}
 		return h.chartLookup(repository, upstreamURL, res)
+	}, func(charts *helmChartLookup) bool {
+		return charts.lists(digest, filename)
 	})
+}
+
+// lists reports whether the index lists an HTTP download of filename with
+// the digest.
+func (c *helmChartLookup) lists(digest, filename string) bool {
+	for _, chart := range c.byDigest[digest] {
+		for _, download := range chart.downloads {
+			if download.filename == filename {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 func (h *HelmHandler) withholdChart(w http.ResponseWriter, charts *helmChartLookup, digest, filename string) bool {

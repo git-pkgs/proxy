@@ -203,6 +203,47 @@ func storePublishIndex(p *Proxy, key string, res metadataResult, index any, refe
 	c.entries[key] = entry
 }
 
+// listingPublishIndex is publishIndex for a download that lists checks.
+// An index built from a copy cached within metadata_ttl, or served stale,
+// can predate the download; when lists reports it missing, the document is
+// fetched again (refetch) and the index built from what upstream lists now.
+// Downloads that find it missing from the same index share one refetch, and
+// for a minute after it later ones use the refetched index.
+func listingPublishIndex[V any](p *Proxy, key string, load, refetch func() metadataResult, build func(metadataResult) (V, error), lists func(V) bool) (V, error) { //nolint:ireturn // V is what build returns.
+	// loaded is what the index was built from, unless an index built
+	// earlier was reused.
+	var loaded *metadataResult
+	index, err := publishIndex(p, key, func() metadataResult {
+		res := load()
+		loaded = &res
+		return res
+	}, build)
+	if err != nil || lists(index) || loaded != nil && !loaded.fromCache && !loaded.stale {
+		return index, err
+	}
+	// A concurrent refetch may have replaced the index read above.
+	if recent, ok := recentRefetch(p, key); ok {
+		return recent.(V), nil
+	}
+	refetched, err, _ := p.sharedProxy().publishIndexes.group.Do(key+"\x00refetch", func() (any, error) {
+		res := refetch()
+		if index, ok := keptPublishIndex(p, key, res); ok {
+			return index, nil
+		}
+		index, err := build(res)
+		if err != nil {
+			return nil, err
+		}
+		storePublishIndex(p, key, res, index, true)
+		return index, nil
+	})
+	if err != nil {
+		var zero V
+		return zero, err
+	}
+	return refetched.(V), nil
+}
+
 // readListed reads a version's entry from a metadata document fetched
 // through the metadata cache. read reports whether the document lists the
 // version at all. A copy cached within metadata_ttl, or served stale, can
