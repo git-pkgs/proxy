@@ -64,6 +64,24 @@ func gunzip(t *testing.T, data []byte) []byte {
 	return out
 }
 
+// fixedFields is a fixed32 and a fixed64 field, numbered as no Hex field
+// is: valid protobuf that a parser has to step over.
+func fixedFields() []byte {
+	var f []byte
+	f = protowire.AppendTag(f, 14, protowire.Fixed32Type)
+	f = protowire.AppendFixed32(f, 1)
+	f = protowire.AppendTag(f, 15, protowire.Fixed64Type)
+	return protowire.AppendFixed64(f, 2)
+}
+
+// truncatedFixed32 is a fixed32 field cut off after two of its four bytes.
+// Those two bytes read as a complete varint field on their own, so a parser
+// that doesn't consume the field fails to notice.
+func truncatedFixed32() []byte {
+	f := protowire.AppendTag(nil, 14, protowire.Fixed32Type)
+	return protowire.AppendVarint(protowire.AppendTag(f, 1, protowire.VarintType), 1)
+}
+
 func TestReleaseVersions(t *testing.T) {
 	got, err := ReleaseVersions(pkg("1.0.0", "2.0.0-rc.1", "2.0.0"))
 	if err != nil {
@@ -89,6 +107,17 @@ func TestFilterReleasesKeepsOtherFields(t *testing.T) {
 	}
 }
 
+func TestFilterReleasesKeepsFixedWidthFields(t *testing.T) {
+	in := append(pkg("1.0.0", "2.0.0"), fixedFields()...)
+	got, err := FilterReleases(in, map[string]bool{"2.0.0": true}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if want := append(pkg("1.0.0"), fixedFields()...); !bytes.Equal(got, want) {
+		t.Errorf("FilterReleases left %x, want %x: without 2.0.0, the fixed fields kept", got, want)
+	}
+}
+
 func TestFilterReleasesWithNothingWithheld(t *testing.T) {
 	in := pkg("1.0.0", "2.0.0")
 	got, err := FilterReleases(in, nil, nil)
@@ -101,9 +130,6 @@ func TestFilterReleasesWithNothingWithheld(t *testing.T) {
 }
 
 func TestFilterReleasesRejectsMalformedInput(t *testing.T) {
-	var fixed32 []byte
-	fixed32 = protowire.AppendTag(fixed32, 5, protowire.Fixed32Type)
-	fixed32 = protowire.AppendFixed32(fixed32, 1)
 	var truncatedBytes []byte
 	truncatedBytes = protowire.AppendTag(truncatedBytes, 1, protowire.BytesType)
 	truncatedBytes = append(truncatedBytes, 10, 'x')
@@ -112,10 +138,10 @@ func TestFilterReleasesRejectsMalformedInput(t *testing.T) {
 	truncatedVarint = append(truncatedVarint, 0x80)
 
 	for name, in := range map[string][]byte{
-		"bad tag":          {0x80},
-		"fixed32 field":    fixed32,
-		"truncated bytes":  truncatedBytes,
-		"truncated varint": truncatedVarint,
+		"bad tag":           {0x80},
+		"truncated fixed32": truncatedFixed32(),
+		"truncated bytes":   truncatedBytes,
+		"truncated varint":  truncatedVarint,
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := FilterReleases(in, nil, nil); err == nil {
@@ -136,10 +162,7 @@ func TestReleaseVersion(t *testing.T) {
 	otherBytesFirst = protowire.AppendBytes(otherBytesFirst, []byte("sum"))
 	otherBytesFirst = append(otherBytesFirst, release("4.5.6")...)
 
-	var fixed64 []byte
-	fixed64 = protowire.AppendTag(fixed64, 3, protowire.Fixed64Type)
-	fixed64 = protowire.AppendFixed64(fixed64, 1)
-	fixed64 = append(fixed64, release("7.8.9")...)
+	fixedFirst := append(fixedFields(), release("7.8.9")...)
 
 	var truncatedVarint []byte
 	truncatedVarint = protowire.AppendTag(truncatedVarint, 3, protowire.VarintType)
@@ -156,7 +179,8 @@ func TestReleaseVersion(t *testing.T) {
 		"version":             {release("1.0.0"), "1.0.0"},
 		"after a varint":      {varintFirst, "1.2.3"},
 		"after another field": {otherBytesFirst, "4.5.6"},
-		"unknown wire type":   {fixed64, ""},
+		"after fixed fields":  {fixedFirst, "7.8.9"},
+		"truncated fixed32":   {truncatedFixed32(), ""},
 		"bad tag":             {[]byte{0x80}, ""},
 		"truncated bytes":     {[]byte{0x0a, 5, 'x'}, ""},
 		"truncated varint":    {truncatedVarint, ""},
@@ -175,6 +199,7 @@ func TestBytesField(t *testing.T) {
 	var msg []byte
 	msg = protowire.AppendTag(msg, 3, protowire.VarintType)
 	msg = protowire.AppendVarint(msg, 9)
+	msg = append(msg, fixedFields()...)
 	msg = protowire.AppendTag(msg, 1, protowire.BytesType)
 	msg = protowire.AppendBytes(msg, []byte("one"))
 	msg = protowire.AppendTag(msg, 2, protowire.BytesType)
@@ -190,17 +215,14 @@ func TestBytesField(t *testing.T) {
 		t.Error("BytesField found a field the message doesn't have")
 	}
 
-	var fixed32 []byte
-	fixed32 = protowire.AppendTag(fixed32, 4, protowire.Fixed32Type)
-	fixed32 = protowire.AppendFixed32(fixed32, 1)
 	var truncatedVarint []byte
 	truncatedVarint = protowire.AppendTag(truncatedVarint, 3, protowire.VarintType)
 	truncatedVarint = append(truncatedVarint, 0x80)
 	for name, in := range map[string][]byte{
-		"bad tag":          {0x80},
-		"truncated bytes":  {0x0a, 5, 'x'},
-		"truncated varint": truncatedVarint,
-		"fixed32 field":    fixed32,
+		"bad tag":           {0x80},
+		"truncated bytes":   {0x0a, 5, 'x'},
+		"truncated varint":  truncatedVarint,
+		"truncated fixed32": truncatedFixed32(),
 	} {
 		t.Run(name, func(t *testing.T) {
 			if _, err := BytesField(in, 1); err == nil {
@@ -375,10 +397,7 @@ func TestFilterPackageRejectsMalformedInput(t *testing.T) {
 	if _, _, err := FilterPackage("phoenix", []byte{0x80}, o); err == nil {
 		t.Error("FilterPackage accepted a malformed Signed message")
 	}
-	var fixed32 []byte
-	fixed32 = protowire.AppendTag(fixed32, 5, protowire.Fixed32Type)
-	fixed32 = protowire.AppendFixed32(fixed32, 1)
-	if _, _, err := FilterPackage("phoenix", signed(fixed32, nil), o); err == nil {
+	if _, _, err := FilterPackage("phoenix", signed(truncatedFixed32(), nil), o); err == nil {
 		t.Error("FilterPackage accepted a malformed payload")
 	}
 }
@@ -387,10 +406,7 @@ func TestFilterSignedRejectsMalformedInput(t *testing.T) {
 	if _, err := FilterSigned([]byte{0x80}, nil); err == nil {
 		t.Error("FilterSigned accepted a malformed Signed message")
 	}
-	var fixed32 []byte
-	fixed32 = protowire.AppendTag(fixed32, 5, protowire.Fixed32Type)
-	fixed32 = protowire.AppendFixed32(fixed32, 1)
-	if _, err := FilterSigned(signed(fixed32, nil), nil); err == nil {
+	if _, err := FilterSigned(signed(truncatedFixed32(), nil), nil); err == nil {
 		t.Error("FilterSigned accepted a malformed payload")
 	}
 }

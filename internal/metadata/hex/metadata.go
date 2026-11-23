@@ -199,15 +199,13 @@ func FilterReleases(payload []byte, withheld map[string]bool, seen func(string))
 					continue
 				}
 			}
-		case protowire.VarintType:
-			_, vn := protowire.ConsumeVarint(data)
+		default:
+			vn := protowire.ConsumeFieldValue(num, wtype, data)
 			if vn < 0 {
-				return nil, errors.New("invalid protobuf varint")
+				return nil, fmt.Errorf("invalid protobuf field %d: %w", num, protowire.ParseError(vn))
 			}
 			fieldBytes = data[:vn]
 			data = data[vn:]
-		default:
-			return nil, fmt.Errorf("unexpected wire type %d", wtype)
 		}
 
 		result = append(result, tagBytes...)
@@ -238,14 +236,12 @@ func ReleaseVersion(release []byte) string {
 				return string(v)
 			}
 			data = data[vn:]
-		case protowire.VarintType:
-			_, vn := protowire.ConsumeVarint(data)
+		default:
+			vn := protowire.ConsumeFieldValue(num, wtype, data)
 			if vn < 0 {
 				return ""
 			}
 			data = data[vn:]
-		default:
-			return ""
 		}
 	}
 	return ""
@@ -271,14 +267,12 @@ func BytesField(data []byte, field protowire.Number) ([]byte, error) {
 				return v, nil
 			}
 			data = data[vn:]
-		case protowire.VarintType:
-			_, vn := protowire.ConsumeVarint(data)
+		default:
+			vn := protowire.ConsumeFieldValue(num, wtype, data)
 			if vn < 0 {
-				return nil, errors.New("invalid protobuf varint")
+				return nil, fmt.Errorf("invalid protobuf field %d: %w", num, protowire.ParseError(vn))
 			}
 			data = data[vn:]
-		default:
-			return nil, fmt.Errorf("unexpected wire type %d", wtype)
 		}
 	}
 	return nil, fmt.Errorf("field %d not found", field)
