@@ -99,12 +99,19 @@ func (c *capturedResponse) write(p *Proxy, w http.ResponseWriter, r *http.Reques
 
 // coalescedManifest runs the upstream part of a manifest request once for
 // concurrent callers with the same key. Like coalesceMetadata, it runs on a
-// context detached from the first caller, and each waiter still leaves when
-// its own context ends. The result is a whole manifest with its headers,
-// which a metadataResult does not carry, hence the separate group.
+// context detached from the first caller when one of the
+// maxDetachedMetadataFetches slots is free, and ends with that caller
+// otherwise; each waiter still leaves when its own context ends. The result
+// is a whole manifest with its headers, which a metadataResult does not
+// carry, hence the separate group.
 func (h *ContainerHandler) coalescedManifest(ctx context.Context, req manifestRequest) manifestOutcome {
 	results := h.manifestFlight.DoChan(req.coalesceKey(), func() (any, error) {
-		return h.fetchManifest(context.WithoutCancel(ctx), req), nil
+		fetchCtx := ctx
+		if h.proxy.acquireMetadataDetachSlot() {
+			defer h.proxy.releaseMetadataDetachSlot()
+			fetchCtx = context.WithoutCancel(ctx)
+		}
+		return h.fetchManifest(fetchCtx, req), nil
 	})
 	select {
 	case <-ctx.Done():
