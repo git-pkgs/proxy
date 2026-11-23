@@ -81,6 +81,9 @@ func NewTransport(base http.RoundTripper, authForURL AuthFunc) *Transport {
 
 // RoundTrip implements http.RoundTripper.
 func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
+	if !t.redirectKeepsCredentials(req) {
+		return t.base.RoundTrip(req)
+	}
 	hasExplicitAuthorization := req.Header.Get("Authorization") != ""
 	outbound := cloneRequest(req)
 	t.applyAuthentication(outbound, hasExplicitAuthorization)
@@ -101,7 +104,7 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	// Ask only for pull access to the repository being fetched, whatever
 	// scope the challenge names: the proxy only reads.
 	challenge.scopes = []string{pullScope(repository)}
-	if !ok || !canReplay(req) || !t.trustedWithToken(req.URL, challenge) {
+	if !ok || !canReplay(req) || !t.requestTrustedWithToken(req, challenge) {
 		return resp, nil
 	}
 
@@ -119,6 +122,42 @@ func (t *Transport) RoundTrip(req *http.Request) (*http.Response, error) {
 	t.applyConfiguredAuthentication(retry)
 	retry.Header.Set("Authorization", "Bearer "+token)
 	return t.base.RoundTrip(retry)
+}
+
+// redirectKeepsCredentials reports whether a redirect hop has the same
+// configured credentials as the request the redirects started from, the
+// only one whose route was checked against generic_paths and git repos.
+func (t *Transport) redirectKeepsCredentials(req *http.Request) bool {
+	if t.authForURL == nil {
+		return true
+	}
+	name, value := t.authForURL(req.URL.String())
+	if name == "" || value == "" {
+		return true
+	}
+	originName, originValue := t.authForURL(redirectOrigin(req).URL.String())
+	return sameHeader(name, value, originName, originValue)
+}
+
+// redirectOrigin returns the request a chain of redirects started from, or
+// req itself when it is not a redirect hop.
+func redirectOrigin(req *http.Request) *http.Request {
+	for req.Response != nil && req.Response.Request != nil {
+		req = req.Response.Request
+	}
+	return req
+}
+
+// requestTrustedWithToken reports whether req may be sent a token from
+// challenge's realm. A redirect hop only may when the request the redirects
+// started from is trusted with it too, so an upstream cannot redirect to a
+// registry and have the response fetched with a credentialed token.
+func (t *Transport) requestTrustedWithToken(req *http.Request, challenge bearerChallenge) bool {
+	if !t.trustedWithToken(req.URL, challenge) {
+		return false
+	}
+	origin := redirectOrigin(req)
+	return origin == req || t.trustedWithToken(origin.URL, challenge)
 }
 
 // trustedWithToken reports whether a token from challenge's realm may be
@@ -179,7 +218,7 @@ func (t *Transport) applyAuthentication(req *http.Request, hasExplicitAuthorizat
 	if hasExplicitAuthorization {
 		return
 	}
-	if token := t.cachedTokenForRequest(req.URL); token != "" {
+	if token := t.cachedTokenForRequest(req); token != "" {
 		req.Header.Set("Authorization", "Bearer "+token)
 	}
 }
@@ -390,16 +429,16 @@ func (t configuredTransport) sameCredentials(u *url.URL) bool {
 	return sameHeader(name, value, realmName, realmValue)
 }
 
-func (t *Transport) cachedTokenForRequest(requestURL *url.URL) string {
-	repository := registryRepository(requestURL)
+func (t *Transport) cachedTokenForRequest(req *http.Request) string {
+	repository := registryRepository(req.URL)
 	if repository == "" {
 		return ""
 	}
 
 	t.mu.Lock()
-	challenge, ok := t.challenges[registryOrigin(requestURL)]
+	challenge, ok := t.challenges[registryOrigin(req.URL)]
 	t.mu.Unlock()
-	if !ok {
+	if !ok || !t.requestTrustedWithToken(req, challenge) {
 		return ""
 	}
 	challenge.scopes = []string{pullScope(repository)}
