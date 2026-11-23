@@ -22,9 +22,8 @@ const (
 	// They are looked up one after another, so even at 3s each a full request
 	// finishes inside the default 5m write_timeout.
 	maxOutdatedPackages = 100
-	// maxBulkPURLs is how many PURLs one bulk request may name. They go to
-	// ecosyste.ms in one request, or to their registries 15 at a time, which
-	// leaves each of the 67 rounds over 4s.
+	// maxBulkPURLs is how many PURLs one bulk request may name. They are
+	// looked up in batches, so a full request fits the default write_timeout.
 	maxBulkPURLs           = 1000
 	licenseCategoryUnknown = "unknown"
 	defaultSortBy          = "hits"
