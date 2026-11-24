@@ -1,12 +1,12 @@
 package handler
 
 import (
-	"encoding/json"
 	"errors"
 	"fmt"
 	"net/http"
 	"strings"
 
+	"github.com/git-pkgs/proxy/internal/metadata/nuget"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
 )
@@ -122,56 +122,16 @@ func (h *NuGetHandler) handleServiceIndex(w http.ResponseWriter, r *http.Request
 	_, _ = w.Write(rewritten)
 }
 
-// rewriteServiceIndex rewrites service URLs in the index to point at this proxy.
+// rewriteServiceIndex rewrites service URLs in the index to point at this
+// proxy (see nuget.RewriteServiceIndex).
 func (h *NuGetHandler) rewriteServiceIndex(body []byte) ([]byte, error) {
-	var index map[string]any
-	if err := json.Unmarshal(body, &index); err != nil {
-		return nil, err
-	}
-
-	resources, ok := index["resources"].([]any)
-	if !ok {
-		return body, nil
-	}
-
-	for _, res := range resources {
-		rmap, ok := res.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		id, _ := rmap["@id"].(string)
-		rtype, _ := rmap["@type"].(string)
-
-		// Rewrite URLs for services we proxy. The service type determines the
-		// local route because an upstream index may advertise a different host.
-		if id != "" {
-			rmap["@id"] = h.rewriteNuGetURL(id, rtype)
-		}
-	}
-
-	return json.Marshal(index)
+	return nuget.RewriteServiceIndex(body, h.proxyURL)
 }
 
-// rewriteNuGetURL rewrites a NuGet service URL based on its advertised type.
-// Service types the proxy does not handle are returned unchanged.
+// rewriteNuGetURL rewrites a NuGet service URL based on its advertised type
+// (see nuget.ServiceURL).
 func (h *NuGetHandler) rewriteNuGetURL(origURL, serviceType string) string {
-	switch serviceType {
-	case "PackageBaseAddress/3.0.0":
-		return h.proxyURL + "/nuget/v3-flatcontainer/"
-	case "RegistrationsBaseUrl", "RegistrationsBaseUrl/3.0.0-beta", "RegistrationsBaseUrl/3.0.0-rc":
-		return h.proxyURL + "/nuget/v3/registration5-semver1/"
-	case "RegistrationsBaseUrl/3.4.0":
-		return h.proxyURL + "/nuget/v3/registration5-gz-semver1/"
-	case "RegistrationsBaseUrl/3.6.0", "RegistrationsBaseUrl/Versioned":
-		return h.proxyURL + "/nuget/v3/registration5-gz-semver2/"
-	case "SearchQueryService", "SearchQueryService/3.0.0-rc", "SearchQueryService/3.5.0":
-		return h.proxyURL + "/nuget/query"
-	case "SearchAutocompleteService", "SearchAutocompleteService/3.5.0":
-		return h.proxyURL + "/nuget/autocomplete"
-	default:
-		return origURL
-	}
+	return nuget.ServiceURL(h.proxyURL, origURL, serviceType)
 }
 
 // handleDownload serves a package file, fetching and caching from upstream if needed.
