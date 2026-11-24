@@ -53,7 +53,10 @@ func TestUpstreamsPage(t *testing.T) {
 func TestUpstreamEcosystems(t *testing.T) {
 	u := config.Default().Upstream
 	u.NPM = "https://user:url-password@npm.example.org/registry?token=query-secret#frag"
-	u.Generic = map[string]string{"files": "https://files.example.org/base"}
+	u.Generic = map[string]string{
+		"files":    "https://files.example.org/base",
+		"my files": "https://morefiles.example.org/base",
+	}
 	u.Git = map[string]config.GitUpstream{"github": {URL: "https://github.com"}}
 	u.GoSumDBs = map[string]string{"sum.example.org": "https://sum.example.org"}
 	u.Auth = map[string]config.AuthConfig{
@@ -71,6 +74,7 @@ func TestUpstreamEcosystems(t *testing.T) {
 	for key, want := range map[string]UpstreamRow{
 		"upstream.npm ":                            {Setting: "upstream.npm", Path: "http://proxy.test/npm/"},
 		"upstream.generic files":                   {Setting: "upstream.generic", Name: "files", Path: "http://proxy.test/generic/files/"},
+		"upstream.generic my files":                {Setting: "upstream.generic", Name: "my files", Path: "http://proxy.test/generic/my%20files/"},
 		"upstream.git github":                      {Setting: "upstream.git", Name: "github", Path: "http://proxy.test/git/github/"},
 		"upstream.go_sumdbs sum.example.org":       {Setting: "upstream.go_sumdbs", Name: "sum.example.org", Path: "http://proxy.test/go/sumdb/sum.example.org/"},
 		"upstream.arch archlinux":                  {Setting: "upstream.arch", Name: "archlinux", Path: "http://proxy.test/arch/archlinux/"},

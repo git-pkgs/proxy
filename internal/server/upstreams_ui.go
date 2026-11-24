@@ -2,6 +2,7 @@ package server
 
 import (
 	"net/http"
+	"net/url"
 	"sort"
 	"strings"
 
@@ -136,7 +137,9 @@ func (s upstreamSetting) rows(base string) []UpstreamRow {
 		return UpstreamRow{
 			Setting: s.key,
 			Name:    name,
-			Path:    base + strings.ReplaceAll(s.path, "{name}", name),
+			// Names are configured unescaped; clients send reserved
+			// characters in them path-escaped.
+			Path: base + strings.ReplaceAll(s.path, "{name}", url.PathEscape(name)),
 		}
 	}
 	if s.named == nil {
