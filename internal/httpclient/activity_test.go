@@ -3,6 +3,7 @@ package httpclient
 import (
 	"context"
 	"errors"
+	"io"
 	"net/http"
 	"testing"
 	"time"
@@ -13,6 +14,7 @@ type stubTripper struct {
 	err    error
 	delay  time.Duration
 	clock  *fakeClock
+	body   io.ReadCloser
 }
 
 func (s stubTripper) RoundTrip(*http.Request) (*http.Response, error) {
@@ -22,7 +24,48 @@ func (s stubTripper) RoundTrip(*http.Request) (*http.Response, error) {
 	if s.err != nil {
 		return nil, s.err
 	}
-	return &http.Response{StatusCode: s.status, Body: http.NoBody}, nil
+	body := s.body
+	if body == nil {
+		body = http.NoBody
+	}
+	return &http.Response{StatusCode: s.status, Body: body}, nil
+}
+
+// failingBody returns data and then err.
+type failingBody struct {
+	data []byte
+	err  error
+}
+
+func (b *failingBody) Read(p []byte) (int, error) {
+	if len(b.data) > 0 {
+		n := copy(p, b.data)
+		b.data = b.data[n:]
+		return n, nil
+	}
+	return 0, b.err
+}
+
+func (b *failingBody) Close() error { return nil }
+
+type timeoutError struct{}
+
+func (timeoutError) Error() string   { return "read: i/o timeout" }
+func (timeoutError) Timeout() bool   { return true }
+func (timeoutError) Temporary() bool { return true }
+
+// rawRoundTrip returns the response without reading or closing its body.
+func rawRoundTrip(t *testing.T, a *UpstreamActivity, base stubTripper, rawURL string) *http.Response {
+	t.Helper()
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp, err := a.Transport(base).RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return resp
 }
 
 type fakeClock struct{ t time.Time }
@@ -168,5 +211,59 @@ func TestUpstreamActivityReusesBuckets(t *testing.T) {
 	got, _ := a.Host("example.org")
 	if got.Requests != 1 || got.Failures != 0 {
 		t.Errorf("requests = %d, failures = %d; want the old minute's failure gone", got.Requests, got.Failures)
+	}
+}
+
+// A body is recorded when it ends, so one that fails after the headers
+// counts as the failure it is, and once.
+func TestUpstreamActivityRecordsBodyFailures(t *testing.T) {
+	for _, tc := range []struct {
+		name     string
+		err      error
+		failures int
+		kind     string
+		counted  bool
+	}{
+		{"read to the end", io.EOF, 0, "", true},
+		{"timed out", timeoutError{}, 1, "timeout", true},
+		{"connection lost", io.ErrUnexpectedEOF, 1, "connection failed", true},
+		{"client went away", context.Canceled, 0, "", false},
+	} {
+		a, _ := newTestActivity("example.org")
+		resp := rawRoundTrip(t, a, stubTripper{status: 200, body: &failingBody{data: []byte("partial"), err: tc.err}}, "https://example.org/x")
+		if got, _ := a.Host("example.org"); got.Requests != 0 {
+			t.Errorf("%s: recorded before the body ended: %+v", tc.name, got)
+		}
+		_, _ = io.ReadAll(resp.Body)
+		_ = resp.Body.Close()
+		got, _ := a.Host("example.org")
+		wantRequests := 0
+		if tc.counted {
+			wantRequests = 1
+		}
+		if got.Requests != wantRequests || got.Failures != tc.failures || got.LastFailureKind != tc.kind {
+			t.Errorf("%s: %+v, want %d request, %d failures, kind %q", tc.name, got, wantRequests, tc.failures, tc.kind)
+		}
+	}
+}
+
+// A body the caller closes before its end was being delivered, so it
+// counts as answered.
+func TestUpstreamActivityBodyClosedEarly(t *testing.T) {
+	a, _ := newTestActivity("example.org")
+	resp := rawRoundTrip(t, a, stubTripper{status: 200, body: &failingBody{data: []byte("more"), err: timeoutError{}}}, "https://example.org/x")
+	_ = resp.Body.Close()
+	_ = resp.Body.Close()
+	if got, _ := a.Host("example.org"); got.Requests != 1 || got.Failures != 0 {
+		t.Errorf("%+v, want one answered request", got)
+	}
+}
+
+// A failing status is known from the headers.
+func TestUpstreamActivityRecordsFailingStatusAtOnce(t *testing.T) {
+	a, _ := newTestActivity("example.org")
+	rawRoundTrip(t, a, stubTripper{status: 503, body: &failingBody{data: []byte("busy"), err: io.EOF}}, "https://example.org/x")
+	if got, _ := a.Host("example.org"); got.Requests != 1 || got.Failures != 1 {
+		t.Errorf("%+v, want the 503 recorded without reading its body", got)
 	}
 }

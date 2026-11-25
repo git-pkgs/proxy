@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"strings"
@@ -82,11 +83,49 @@ type activityTransport struct {
 	base     http.RoundTripper
 }
 
+// RoundTrip records the exchange once it is over: at once when it failed or
+// has no body, and otherwise when the body is read to its end, fails, or is
+// closed. Response time is to the headers either way.
 func (t activityTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	host := hostKey(req.URL)
 	start := t.activity.now()
 	resp, err := t.base.RoundTrip(req)
-	t.activity.record(hostKey(req.URL), t.activity.now().Sub(start), failureKind(resp, err))
+	took := t.activity.now().Sub(start)
+	kind := failureKind(resp, err)
+	if kind != "" || resp.Body == nil || resp.Body == http.NoBody || !t.activity.tracks(host) {
+		t.activity.record(host, took, kind)
+		return resp, err
+	}
+	resp.Body = &activityBody{ReadCloser: resp.Body, done: func(kind string) { t.activity.record(host, took, kind) }}
 	return resp, err
+}
+
+// activityBody records its response when it ends. A body closed before its
+// end was being delivered, so it counts as answered.
+type activityBody struct {
+	io.ReadCloser
+	once sync.Once
+	done func(kind string)
+}
+
+func (b *activityBody) Read(p []byte) (int, error) {
+	n, err := b.ReadCloser.Read(p)
+	switch {
+	case errors.Is(err, io.EOF):
+		b.finish("")
+	case err != nil:
+		b.finish(failureKind(nil, err))
+	}
+	return n, err
+}
+
+func (b *activityBody) Close() error {
+	b.finish("")
+	return b.ReadCloser.Close()
+}
+
+func (b *activityBody) finish(kind string) {
+	b.once.Do(func() { b.done(kind) })
 }
 
 // failureKind returns how an exchange failed, "" when the upstream answered,
@@ -118,13 +157,14 @@ func (a *UpstreamActivity) record(host string, took time.Duration, kind string) 
 	if kind == "-" {
 		return
 	}
-	now := a.now()
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	h, ok := a.hosts[host]
 	if !ok {
 		return
 	}
+	// Read under the lock, so later outcomes never get earlier times.
+	now := a.now()
 	b := h.bucket(now)
 	b.requests++
 	b.total += took
@@ -151,6 +191,14 @@ func (h *hostActivity) bucket(now time.Time) *activityBucket {
 // minuteOf numbers the minute t falls in.
 func minuteOf(t time.Time) int64 {
 	return t.Unix() / int64(time.Minute/time.Second)
+}
+
+// tracks reports whether host is one of the configured upstreams.
+func (a *UpstreamActivity) tracks(host string) bool {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	_, ok := a.hosts[host]
+	return ok
 }
 
 // Host returns a host's activity, and false for a host that isn't tracked.
