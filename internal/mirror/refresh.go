@@ -55,7 +55,8 @@ func (m *Mirror) releaseLister() ReleaseLister { //nolint:ireturn // any lister 
 // Refresh mirrors, for each of the most used packages, the newest release
 // of each major line it has a version cached on, as clients would be served
 // it: releases within cooldown or on the denylist are left out. Packages it
-// can't list are counted as failed.
+// can't list, and those of an ecosystem disabled_ecosystems turns off, are
+// counted as failed.
 func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
 	ctx = handler.MirrorFetch(ctx)
 	cutoff := time.Now().Add(-r.Since)
@@ -88,6 +89,10 @@ func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
 	}
 	for _, group := range byEcosystem(packages) {
 		if ix, ok := osIndexes[group[0].Ecosystem]; ok {
+			if err := m.turnedOff(ix.ecosystem); err != nil {
+				m.recordFailure(tracker, PackageVersion{Ecosystem: ix.ecosystem}, err)
+				continue
+			}
 			items, errs := m.indexRefreshItems(ctx, ix, group, cutoff)
 			for _, err := range errs {
 				m.recordFailure(tracker, PackageVersion{Ecosystem: ix.ecosystem}, err)
@@ -139,6 +144,9 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 	ecosystem, name, _ := mirrorTarget(p)
 	if !refreshable(ecosystem) {
 		return nil, nil
+	}
+	if err := m.turnedOff(ecosystem); err != nil {
+		return nil, err
 	}
 	eco, files := fileEcosystems[ecosystem]
 	var variants map[string]bool

@@ -263,8 +263,8 @@ func (m *Mirror) mirrorRecovered(ctx context.Context, item PackageVersion, track
 }
 
 func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *progressTracker) {
-	if m.Disabled != nil && m.Disabled(pv.Ecosystem) {
-		m.recordFailure(tracker, pv, fmt.Errorf("%s is turned off on this proxy", pv.Ecosystem))
+	if err := m.turnedOff(pv.Ecosystem); err != nil {
+		m.recordFailure(tracker, pv, err)
 		return
 	}
 	if isImageEcosystem(pv.Ecosystem) && m.Images != nil {
@@ -340,6 +340,14 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 }
 
 // recordFailure counts and logs a package that could not be mirrored.
+// turnedOff returns an error when disabled_ecosystems turns off ecosystem.
+func (m *Mirror) turnedOff(ecosystem string) error {
+	if m.Disabled != nil && m.Disabled(ecosystem) {
+		return fmt.Errorf("%s is turned off on this proxy", ecosystem)
+	}
+	return nil
+}
+
 func (m *Mirror) recordFailure(tracker *progressTracker, pv PackageVersion, err error) {
 	tracker.failed.Add(1)
 	tracker.addError(pv.Ecosystem, pv.Name, pv.Version, err.Error())

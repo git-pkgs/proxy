@@ -400,7 +400,7 @@ Every built-in package route is served by default. `disabled_ecosystems` (`PROXY
 disabled_ecosystems: [pypi, cargo, oci]
 ```
 
-A turned-off ecosystem's routes answer every request with 404, including routes under a [cooldown profile](#cooldown-profiles), and never reach its upstream. It is left off the install page, `proxy mirror`, mirror API jobs and `mirror.schedules` fail its packages with an error saying it is turned off, and its change feed isn't followed. What is already cached for it stays, and is still shown in the dashboard and evicted as before.
+A turned-off ecosystem's routes answer every request with 404, including routes under a [cooldown profile](#cooldown-profiles), and never reach its upstream. It is left off the install page, `proxy mirror`, mirror API jobs, `mirror.schedules` and `mirror.refresh` fail its packages with an error saying it is turned off, without asking its upstream for versions or indexes, and its change feed isn't followed. What is already cached for it stays, and is still shown in the dashboard and evicted as before.
 
 The keys are `alpine`, `arch`, `cargo`, `chef`, `composer`, `conan`, `conda`, `cran`, `deb`, `freebsd`, `gem`, `golang`, `gradle` (the build cache), `helm`, `hex`, `homebrew`, `julia`, `maven`, `npm`, `nuget`, `oci`, `pub`, `pypi`, `rpm`, `swift` and `terraform`, case-insensitive; `apk`, `debian`, `docker`, `go`, `brew`, `packagist` and `rubygems` are accepted for the same ecosystems. Any other name stops the proxy at startup. `oci` is everything under `/v2/`, so it also stops Homebrew bottle downloads and Helm charts pulled over OCI. `git` and `generic` serve only what `upstream.git` and `upstream.generic` configure, so they are turned off by leaving those out.
 
