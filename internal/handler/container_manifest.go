@@ -208,20 +208,30 @@ func (h *ContainerHandler) loadContainerManifestForAccept(ctx context.Context, r
 	// Only a missing or stale compatible body can benefit from a saved HEAD
 	// resolution. An incompatible shared representation must not suppress it.
 	cacheKey := h.containerManifestSharedCacheKey(registryURL, name, reference, cacheAccept)
+	keys := append([]string{cacheKey}, h.containerManifestLegacyCacheKeys(registryURL, name, reference, accept, cacheAccept, cacheKey)...)
+	for _, key := range keys {
+		cached = h.loadResolvedContainerManifest(ctx, registryURL, name, accept, cacheAccept, key, cached)
+	}
+	return cached, fromFallback
+}
+
+// Resolutions obey the same sharing boundary as manifest bodies: a converted
+// single-platform response is visible only to the Accept variant that got it.
+func (h *ContainerHandler) loadResolvedContainerManifest(ctx context.Context, registryURL, name, accept, cacheAccept, cacheKey string, cached *cachedContainerManifest) *cachedContainerManifest {
 	entry, err := h.proxy.DB.GetMetadataCache(containerManifestTagEcosystem, cacheKey)
 	if err != nil || entry == nil || !entry.ContentDigest.Valid ||
 		!manifestDigestReferencePattern.MatchString(entry.ContentDigest.String) ||
 		(cached != nil && !entry.FetchedAt.Time.After(cached.fetchedAt)) {
-		return cached, fromFallback
+		return cached
 	}
 	digest := entry.ContentDigest.String
 	stored, err := h.loadContainerManifest(ctx, h.containerManifestSharedCacheKey(registryURL, name, digest, cacheAccept))
 	if err == nil && stored != nil && stored.contentDigest == digest && containerManifestCacheCompatible(accept, stored) {
 		stored.fetchedAt = entry.FetchedAt.Time
 		h.proxy.recordMetadataRead(entry)
-		return stored, fromFallback
+		return stored
 	}
-	return cached, fromFallback
+	return cached
 }
 
 func (h *ContainerHandler) loadContainerManifestCandidate(ctx context.Context, registryURL, name, reference, accept, cacheAccept string) (*cachedContainerManifest, bool) {

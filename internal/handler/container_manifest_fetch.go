@@ -260,6 +260,9 @@ func (h *ContainerHandler) headManifest(ctx context.Context, req manifestRequest
 				return outcome
 			}
 			key := h.containerManifestSharedCacheKey(req.registryURL, req.name, req.reference, req.cacheAccept)
+			if !containerManifestSharable(req.reference, req.cacheAccept, &cachedContainerManifest{contentType: resp.Header.Get(headerContentType)}) {
+				key = h.containerManifestCacheKey(req.registryURL, req.name, req.reference, req.cacheAccept)
+			}
 			if err := h.storeContainerTagResolution(key, digest); err != nil {
 				h.proxy.Logger.Warn("failed to cache tag resolution", "error", err)
 			}
