@@ -485,6 +485,19 @@ func TestRefreshable(t *testing.T) {
 	}
 }
 
+func TestRefreshes(t *testing.T) {
+	for ecosystem, want := range map[string]bool{
+		"npm": true, "golang": true, "helm": true,
+		// Through their repository indexes.
+		"deb": true, "alpine": true, "rpm": true,
+		"julia": false, "oci": false, "generic": false, "git": false,
+	} {
+		if got := Refreshes(ecosystem); got != want {
+			t.Errorf("Refreshes(%s) = %v, want %v", ecosystem, got, want)
+		}
+	}
+}
+
 // refreshFetches caches files of an old version of name the way a client
 // would, lists newFiles for newVersion and returns what a refresh fetched.
 func refreshFetches(t *testing.T, ecosystem, name, oldVersion string, cached []string, newVersion string, newFiles []registries.Artifact) []string {
