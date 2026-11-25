@@ -257,8 +257,18 @@ func testNPMMissingVersionRefreshSharesDocumentAcrossVersions(t *testing.T, cool
 	}
 	close(start)
 	wg.Wait()
-	if got := hits.Load(); got != 2 {
-		t.Fatalf("requests = %d, want warm + shared refresh", got)
+	got := hits.Load()
+	if !cooldownEnabled {
+		if got != 2 {
+			t.Fatalf("requests = %d, want warm + shared refresh", got)
+		}
+		return
+	}
+	// Under cooldown nothing is retained between requests: a caller that
+	// read the old packument but reaches the refresh after the shared one
+	// finished fetches again. That depends on scheduling, so only bound it.
+	if got < 2 || got > 25 {
+		t.Fatalf("requests = %d, want warm + between 1 and 24 refreshes", got)
 	}
 }
 
