@@ -380,6 +380,7 @@ func (s *Server) serve(listener net.Listener) error {
 		ui.Get("/", s.handleRoot)
 		ui.Get("/analytics", s.handleAnalytics)
 		ui.Get("/install", s.handleInstall)
+		ui.Get("/upstreams", s.handleUpstreams)
 		ui.Get("/search", s.handleSearch)
 		ui.Get("/packages", s.handlePackagesList)
 		ui.Get("/package/{ecosystem}/*", s.handlePackagePath)

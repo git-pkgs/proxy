@@ -1,8 +1,6 @@
 package handler
 
 import (
-	"bufio"
-	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -11,16 +9,13 @@ import (
 	"strings"
 	"time"
 
+	"github.com/git-pkgs/proxy/internal/metadata/cargo"
 	"github.com/git-pkgs/proxy/internal/retention"
 )
 
 const (
 	cargoUpstream     = "https://index.crates.io"
 	cargoDownloadBase = "https://static.crates.io/crates"
-
-	cargoIndexLen1 = 1
-	cargoIndexLen2 = 2
-	cargoIndexLen3 = 3
 )
 
 // Crates are stored under pkg:cargo/{name}, with the name cargo puts in the
@@ -92,7 +87,7 @@ type CargoConfig struct {
 // handleConfig returns the registry configuration.
 func (h *CargoHandler) handleConfig(w http.ResponseWriter, r *http.Request) {
 	config := CargoConfig{
-		DL: h.proxyURL + "/cargo/crates/{crate}/{version}/download",
+		DL: cargo.DownloadTemplate(h.proxyURL),
 	}
 
 	w.Header().Set(headerContentType, "application/json")
@@ -135,61 +130,40 @@ func (h *CargoHandler) handleIndex(w http.ResponseWriter, r *http.Request) {
 	h.applyCooldownFiltering(w, body)
 }
 
-type crateIndexEntry struct {
-	Name        string `json:"name"`
-	Version     string `json:"vers"`
-	PublishTime string `json:"pubtime,omitempty"`
-}
-
+// applyCooldownFiltering writes the index body with the versions the
+// denylist names and those cooldown holds back left out (cargo.Filter).
 func (h *CargoHandler) applyCooldownFiltering(downstreamResponse http.ResponseWriter, body []byte) {
-	cooldownEnabled := h.proxy.Cooldown != nil && h.proxy.Cooldown.Enabled()
-	if !cooldownEnabled && h.proxy.Denylist == nil {
-		_, _ = downstreamResponse.Write(body)
-		return
-	}
-
-	scanner := bufio.NewScanner(strings.NewReader(string(body)))
-	// The response is already size-bounded by FetchOrCacheMetadata. Crate
-	// entries with many dependencies can exceed Scanner's default token limit.
-	scanner.Buffer(nil, len(body)+1)
-
-	for scanner.Scan() {
-		line := scanner.Text()
-
-		var crate crateIndexEntry
-		err := json.Unmarshal([]byte(line), &crate)
-
-		if err != nil {
-			h.proxy.Logger.Error("failed to parse json entry in index", "error", err)
-			continue
-		}
-
-		if h.proxy.versionDenied("cargo", crate.Name, crate.Version) {
-			continue
-		}
-		publishedAt, err := time.Parse(time.RFC3339, crate.PublishTime)
-
-		if !cooldownEnabled || crate.PublishTime == "" || err != nil {
-			_, _ = downstreamResponse.Write([]byte(line + "\n"))
-			continue
-		}
-
-		cratePURL := canonicalPackagePURL("cargo", crate.Name)
-
-		if !h.proxy.cooldown().IsAllowed("cargo", cratePURL, publishedAt) {
-			h.proxy.Logger.Info("cooldown: filtering cargo version",
-				"crate", crate.Name, "version", crate.Version,
-				"published", crate.PublishTime)
-			h.proxy.recordWithheld("cargo", crate.Name, crate.Version, publishedAt)
-			continue
-		}
-
-		_, _ = downstreamResponse.Write([]byte(line + "\n"))
-	}
-
-	if err := scanner.Err(); err != nil {
+	out, err := cargo.Filter(body, h.filterOptions())
+	_, _ = downstreamResponse.Write(out)
+	if err != nil {
 		h.proxy.Logger.Error("error reading index response", "error", err)
 	}
+}
+
+// filterOptions are the policy the index filter applies. The callbacks log
+// and record what it holds back.
+func (h *CargoHandler) filterOptions() cargo.Options {
+	o := cargo.Options{
+		EvaluatedAt: time.Now(),
+		OnWithheld: func(name, version string, publishedAt time.Time) {
+			h.proxy.Logger.Info("cooldown: filtering cargo version",
+				"crate", name, "version", version,
+				"published", publishedAt.Format(time.RFC3339))
+			h.proxy.recordWithheld("cargo", name, version, publishedAt)
+		},
+		OnInvalidEntry: func(err error) {
+			h.proxy.Logger.Error("failed to parse json entry in index", "error", err)
+		},
+	}
+	if policy := h.proxy.cooldown(); policy != nil {
+		o.Cooldown = policy
+	}
+	if h.proxy.Denylist != nil {
+		o.Denied = func(name, version string) bool {
+			return h.proxy.versionDenied("cargo", name, version)
+		}
+	}
+	return o
 }
 
 // publishTime reads a crate version's pubtime from the sparse index, sharing
@@ -200,39 +174,15 @@ func (h *CargoHandler) publishTime(r *http.Request, name, version string) (time.
 	upstreamURL := fmt.Sprintf("%s/%s", h.indexURL, h.buildIndexPath(name))
 	listed, err := readListed(r.Context(), h.proxy, "cargo", name, upstreamURL, "text/plain", "",
 		func(res metadataResult) (listedTime, bool, error) {
-			for line := range bytes.SplitSeq(res.body, []byte("\n")) {
-				if len(bytes.TrimSpace(line)) == 0 {
-					continue
-				}
-				var entry crateIndexEntry
-				if err := json.Unmarshal(line, &entry); err != nil {
-					return listedTime{}, false, err
-				}
-				if entry.Version != version {
-					continue
-				}
-				published, err := time.Parse(time.RFC3339, entry.PublishTime)
-				return listedTime{published, err == nil}, true, nil
-			}
-			return listedTime{}, false, nil
+			published, ok, listed, err := cargo.PublishTime(res.body, version)
+			return listedTime{published, ok}, listed, err
 		})
 	return listed.published, listed.ok, err
 }
 
 // buildIndexPath builds the sparse index path for a crate name.
 func (h *CargoHandler) buildIndexPath(name string) string {
-	name = strings.ToLower(name)
-
-	switch len(name) {
-	case cargoIndexLen1:
-		return fmt.Sprintf("1/%s", name)
-	case cargoIndexLen2:
-		return fmt.Sprintf("2/%s", name)
-	case cargoIndexLen3:
-		return fmt.Sprintf("3/%c/%s", name[0], name)
-	default:
-		return fmt.Sprintf("%s/%s/%s", name[0:2], name[2:4], name)
-	}
+	return cargo.IndexPath(name)
 }
 
 // handleDownload serves a crate file, fetching and caching from upstream if needed.

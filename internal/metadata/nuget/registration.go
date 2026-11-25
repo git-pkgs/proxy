@@ -1,4 +1,4 @@
-package handler
+package nuget
 
 import (
 	"bytes"
@@ -10,49 +10,49 @@ import (
 	"strings"
 )
 
-// nugetFlushSize is how much of a document that isn't filtered is collected
+// FlushSize is how much of a document that isn't filtered is collected
 // before it is written out.
-const nugetFlushSize = 32 << 10
+const FlushSize = 32 << 10
 
 // The members of a registration document that are read or rewritten.
 const (
-	nugetMemberOther = iota
-	nugetMemberID
-	nugetMemberLink
-	nugetMemberItems
-	nugetMemberCount
-	nugetMemberLower
-	nugetMemberUpper
-	nugetMemberCatalogEntry
-	nugetMemberVersion
-	nugetMemberPublished
+	memberOther = iota
+	memberID
+	memberLink
+	memberItems
+	memberCount
+	memberLower
+	memberUpper
+	memberCatalogEntry
+	memberVersion
+	memberPublished
 )
 
-func nugetMemberKind(name []byte) int {
+func memberKind(name []byte) int {
 	switch string(name) {
 	case "@id":
-		return nugetMemberID
+		return memberID
 	case "parent", "registration", "packageContent":
-		return nugetMemberLink
+		return memberLink
 	case "items":
-		return nugetMemberItems
+		return memberItems
 	case "count":
-		return nugetMemberCount
+		return memberCount
 	case "lower":
-		return nugetMemberLower
+		return memberLower
 	case "upper":
-		return nugetMemberUpper
+		return memberUpper
 	case "catalogEntry":
-		return nugetMemberCatalogEntry
+		return memberCatalogEntry
 	case "version":
-		return nugetMemberVersion
+		return memberVersion
 	case "published":
-		return nugetMemberPublished
+		return memberPublished
 	}
-	return nugetMemberOther
+	return memberOther
 }
 
-// nugetRegistrationWriter copies a registration index, page or leaf with its
+// registrationWriter copies a registration index, page or leaf with its
 // links pointing at the proxy. With filter set it leaves out the leaves in
 // cooldown and the pages that end up empty, and corrects the counts and
 // bounds of the rest, as it goes: the document is never held as a tree.
@@ -60,8 +60,8 @@ func nugetMemberKind(name []byte) int {
 // A document is made of nodes. A node with an items array is the index or a
 // page, and the objects in that array are its nodes in turn; any other node
 // is a leaf. Everything else is copied with its upstream bytes.
-type nugetRegistrationWriter struct {
-	h      *NuGetHandler
+type registrationWriter struct {
+	o      Options
 	id     string
 	filter bool
 	// pages holds the pages an index links to, by link. It is nil unless the
@@ -81,18 +81,18 @@ type nugetRegistrationWriter struct {
 	proxyPrefix    []byte
 }
 
-// nugetLinkProbe is a path that nugetProxyLink rewrites.
-const nugetLinkProbe = "/v3-flatcontainer/"
+// linkProbe is a path that ProxyLink rewrites.
+const linkProbe = "/v3-flatcontainer/"
 
 // setLinkPrefixes prepares rewriting plain links without parsing them. Nearly
 // every link of a registration is one, and parsing each as a URL allocates
 // more than the rest of the copy does.
-func (rw *nugetRegistrationWriter) setLinkPrefixes() {
-	upstream := rw.h.upstreamURL
+func (rw *registrationWriter) setLinkPrefixes() {
+	upstream := rw.o.UpstreamURL
 	if strings.ContainsAny(upstream, "?#") {
 		return
 	}
-	proxied, ok := strings.CutSuffix(rw.h.nugetProxyLink(upstream+nugetLinkProbe), nugetLinkProbe)
+	proxied, ok := strings.CutSuffix(rw.o.ProxyLink(upstream+linkProbe), linkProbe)
 	if !ok {
 		return
 	}
@@ -104,23 +104,23 @@ func (rw *nugetRegistrationWriter) setLinkPrefixes() {
 	rw.proxyPrefix = quoted[:len(quoted)-1]
 }
 
-// nugetArtifactPrefixBytes is nugetArtifactPrefixes for matching in a document.
-var nugetArtifactPrefixBytes = func() [][]byte {
-	prefixes := make([][]byte, len(nugetArtifactPrefixes))
-	for i, prefix := range nugetArtifactPrefixes {
+// artifactPrefixBytes is ArtifactPrefixes for matching in a document.
+var artifactPrefixBytes = func() [][]byte {
+	prefixes := make([][]byte, len(ArtifactPrefixes))
+	for i, prefix := range ArtifactPrefixes {
 		prefixes[i] = []byte(prefix)
 	}
 	return prefixes
 }()
 
-// nugetLinkIsForeign reports whether a link can't be to a NuGet resource, so
-// that nugetProxyLink leaves it alone: its path names none, however the link
+// linkIsForeign reports whether a link can't be to a NuGet resource, so
+// that ProxyLink leaves it alone: its path names none, however the link
 // parses. An escaped link is not judged here.
-func nugetLinkIsForeign(link []byte) bool {
+func linkIsForeign(link []byte) bool {
 	if bytes.IndexByte(link, '%') >= 0 {
 		return false
 	}
-	for _, prefix := range nugetArtifactPrefixBytes {
+	for _, prefix := range artifactPrefixBytes {
 		if bytes.Contains(link, prefix) {
 			return false
 		}
@@ -128,15 +128,15 @@ func nugetLinkIsForeign(link []byte) bool {
 	return true
 }
 
-// plainLinkPath returns the path of a link that nugetProxyLink rewrites to
+// plainLinkPath returns the path of a link that ProxyLink rewrites to
 // the same path below the proxy: one on the upstream, to a NuGet resource,
 // with nothing in it that a URL or JSON would encode.
-func (rw *nugetRegistrationWriter) plainLinkPath(link []byte) ([]byte, bool) {
+func (rw *registrationWriter) plainLinkPath(link []byte) ([]byte, bool) {
 	if rw.proxyPrefix == nil {
 		return nil, false
 	}
 	path, ok := bytes.CutPrefix(link, rw.upstreamPrefix)
-	if !ok || !slices.ContainsFunc(nugetArtifactPrefixBytes, func(prefix []byte) bool { return bytes.HasPrefix(path, prefix) }) {
+	if !ok || !slices.ContainsFunc(artifactPrefixBytes, func(prefix []byte) bool { return bytes.HasPrefix(path, prefix) }) {
 		return nil, false
 	}
 	for _, c := range path {
@@ -149,9 +149,9 @@ func (rw *nugetRegistrationWriter) plainLinkPath(link []byte) ([]byte, bool) {
 }
 
 // writeLink writes a link, given as a JSON string, pointing at the proxy.
-func (rw *nugetRegistrationWriter) writeLink(raw []byte) {
+func (rw *registrationWriter) writeLink(raw []byte) {
 	link := rw.unquote(raw)
-	if nugetLinkIsForeign(link) {
+	if linkIsForeign(link) {
 		rw.buf.Write(raw)
 		return
 	}
@@ -162,26 +162,26 @@ func (rw *nugetRegistrationWriter) writeLink(raw []byte) {
 		return
 	}
 	original := string(link)
-	if proxied := rw.h.nugetProxyLink(original); proxied != original {
+	if proxied := rw.o.ProxyLink(original); proxied != original {
 		rw.text, _ = jsontext.AppendQuote(rw.text[:0], proxied)
 		raw = rw.text
 	}
 	rw.buf.Write(raw)
 }
 
-// nugetRelease is what an object says about the release it describes.
-type nugetRelease struct {
+// releaseInfo is what an object says about the release it describes.
+type releaseInfo struct {
 	link      string
 	version   []byte // as JSON, nil when there is none
 	published string
 }
 
-// nugetNode is the state of the node being copied.
-type nugetNode struct {
+// nodeState is the state of the node being copied.
+type nodeState struct {
 	depth     int
 	wrote     bool // a member has been written
-	own       nugetRelease
-	entry     nugetRelease
+	own       releaseInfo
+	entry     releaseInfo
 	hasEntry  bool
 	container bool
 	kept      int
@@ -192,19 +192,25 @@ type nugetNode struct {
 	count, lower, upper []byte
 }
 
-func newNuGetDecoder(document []byte) *jsontext.Decoder {
+func newDecoder(document []byte) *jsontext.Decoder {
 	// A bytes.Buffer is parsed in place. Duplicate names and invalid UTF-8
 	// are accepted as encoding/json accepts them.
 	return jsontext.NewDecoder(bytes.NewBuffer(document), jsontext.AllowDuplicateNames(true), jsontext.AllowInvalidUTF8(true))
 }
 
-// writeNuGetRegistration writes the registration document to w. The document
-// and pages must have been decoded before, so that it only fails once the
-// response has started if writing does.
-func (h *NuGetHandler) writeNuGetRegistration(w io.Writer, document []byte, id string, filter bool, pages map[string][]byte) error {
-	rw := &nugetRegistrationWriter{h: h, id: id, filter: filter, pages: pages, out: w}
+// WriteRegistration copies the registration index, page or leaf document to
+// w with its links pointing at the proxy (Options.ProxyLink). With filter
+// set it leaves out the leaves cooldown holds back, by
+// Options.PublishedAllowed, and the pages that end up empty, and corrects
+// the counts and bounds of the rest. pages holds the pages an index links
+// to, by link, for an index whose linked pages are to be inlined, and is
+// nil otherwise. The document and pages must have been read with
+// DecodeTimes before, so that it only fails once w has been written to if
+// writing does.
+func WriteRegistration(w io.Writer, document []byte, id string, filter bool, pages map[string][]byte, o Options) error {
+	rw := &registrationWriter{o: o, id: id, filter: filter, pages: pages, out: w}
 	rw.setLinkPrefixes()
-	dec := newNuGetDecoder(document)
+	dec := newDecoder(document)
 	var err error
 	if filter {
 		_, _, err = rw.node(dec, 0)
@@ -217,19 +223,19 @@ func (h *NuGetHandler) writeNuGetRegistration(w io.Writer, document []byte, id s
 	return rw.flush()
 }
 
-func (rw *nugetRegistrationWriter) flush() error {
+func (rw *registrationWriter) flush() error {
 	_, err := rw.out.Write(rw.buf.Bytes())
 	rw.buf.Reset()
 	return err
 }
 
 // unquote returns the text of a JSON string. It is valid until the next call.
-func (rw *nugetRegistrationWriter) unquote(raw []byte) []byte {
-	return nugetUnquote(&rw.text, raw)
+func (rw *registrationWriter) unquote(raw []byte) []byte {
+	return unquote(&rw.text, raw)
 }
 
-// nugetUnquote returns the text of a JSON string, in raw or in scratch.
-func nugetUnquote(scratch *[]byte, raw []byte) []byte {
+// unquote returns the text of a JSON string, in raw or in scratch.
+func unquote(scratch *[]byte, raw []byte) []byte {
 	if bytes.IndexByte(raw, '\\') < 0 {
 		return raw[1 : len(raw)-1]
 	}
@@ -240,17 +246,17 @@ func nugetUnquote(scratch *[]byte, raw []byte) []byte {
 }
 
 // readName reads the name of the next member and keeps it for writeName.
-func (rw *nugetRegistrationWriter) readName(dec *jsontext.Decoder) (int, error) {
+func (rw *registrationWriter) readName(dec *jsontext.Decoder) (int, error) {
 	raw, err := dec.ReadValue()
 	if err != nil {
-		return nugetMemberOther, err
+		return memberOther, err
 	}
 	rw.name = append(rw.name[:0], raw...)
-	return nugetMemberKind(rw.unquote(raw)), nil
+	return memberKind(rw.unquote(raw)), nil
 }
 
 // writeName writes the name read last, or name when it is not empty.
-func (rw *nugetRegistrationWriter) writeName(wrote *bool, name string) {
+func (rw *registrationWriter) writeName(wrote *bool, name string) {
 	if *wrote {
 		rw.buf.WriteByte(',')
 	}
@@ -264,7 +270,7 @@ func (rw *nugetRegistrationWriter) writeName(wrote *bool, name string) {
 }
 
 // value copies the value dec is at, rewriting the links in it.
-func (rw *nugetRegistrationWriter) value(dec *jsontext.Decoder) error {
+func (rw *registrationWriter) value(dec *jsontext.Decoder) error {
 	switch dec.PeekKind() {
 	case '{':
 		return rw.object(dec, nil)
@@ -279,7 +285,7 @@ func (rw *nugetRegistrationWriter) value(dec *jsontext.Decoder) error {
 	return nil
 }
 
-func (rw *nugetRegistrationWriter) array(dec *jsontext.Decoder) error {
+func (rw *registrationWriter) array(dec *jsontext.Decoder) error {
 	if _, err := dec.ReadToken(); err != nil {
 		return err
 	}
@@ -299,7 +305,7 @@ func (rw *nugetRegistrationWriter) array(dec *jsontext.Decoder) error {
 
 // object copies the object dec is at, rewriting the links in it. release,
 // when not nil, receives what the object says about its release.
-func (rw *nugetRegistrationWriter) object(dec *jsontext.Decoder, release *nugetRelease) error {
+func (rw *registrationWriter) object(dec *jsontext.Decoder, release *releaseInfo) error {
 	if _, err := dec.ReadToken(); err != nil {
 		return err
 	}
@@ -316,7 +322,7 @@ func (rw *nugetRegistrationWriter) object(dec *jsontext.Decoder, release *nugetR
 		}
 		// Nothing written so far can be cut off again unless nodes are
 		// filtered, so only then does the output wait for the node to end.
-		if !rw.filter && rw.buf.Len() >= nugetFlushSize {
+		if !rw.filter && rw.buf.Len() >= FlushSize {
 			if err := rw.flush(); err != nil {
 				return err
 			}
@@ -328,8 +334,8 @@ func (rw *nugetRegistrationWriter) object(dec *jsontext.Decoder, release *nugetR
 }
 
 // member copies the value of a member of the given kind.
-func (rw *nugetRegistrationWriter) member(dec *jsontext.Decoder, kind int, release *nugetRelease) error {
-	if kind == nugetMemberOther || dec.PeekKind() != '"' {
+func (rw *registrationWriter) member(dec *jsontext.Decoder, kind int, release *releaseInfo) error {
+	if kind == memberOther || dec.PeekKind() != '"' {
 		return rw.value(dec)
 	}
 	raw, err := dec.ReadValue()
@@ -337,17 +343,17 @@ func (rw *nugetRegistrationWriter) member(dec *jsontext.Decoder, kind int, relea
 		return err
 	}
 	switch kind {
-	case nugetMemberID, nugetMemberLink:
-		if kind == nugetMemberID && release != nil && rw.pages != nil {
+	case memberID, memberLink:
+		if kind == memberID && release != nil && rw.pages != nil {
 			release.link = string(rw.unquote(raw))
 		}
 		rw.writeLink(raw)
 		return nil
-	case nugetMemberVersion:
+	case memberVersion:
 		if release != nil {
 			release.version = append(release.version[:0], raw...)
 		}
-	case nugetMemberPublished:
+	case memberPublished:
 		if release != nil {
 			release.published = string(rw.unquote(raw))
 		}
@@ -358,7 +364,7 @@ func (rw *nugetRegistrationWriter) member(dec *jsontext.Decoder, kind int, relea
 
 // node copies the index, page or leaf dec is at. It reports whether the node
 // is to be kept, and the version of its release as JSON.
-func (rw *nugetRegistrationWriter) node(dec *jsontext.Decoder, depth int) (bool, []byte, error) {
+func (rw *registrationWriter) node(dec *jsontext.Decoder, depth int) (bool, []byte, error) {
 	if dec.PeekKind() != '{' {
 		return false, nil, rw.value(dec)
 	}
@@ -366,7 +372,7 @@ func (rw *nugetRegistrationWriter) node(dec *jsontext.Decoder, depth int) (bool,
 		return false, nil, err
 	}
 	rw.buf.WriteByte('{')
-	n := &nugetNode{depth: depth}
+	n := &nodeState{depth: depth}
 	for dec.PeekKind() != '}' {
 		kind, err := rw.readName(dec)
 		if err != nil {
@@ -393,19 +399,19 @@ func (rw *nugetRegistrationWriter) node(dec *jsontext.Decoder, depth int) (bool,
 	if len(release.version) >= 2 && release.version[0] == '"' {
 		version = string(rw.unquote(release.version))
 	}
-	return rw.h.nugetPublishedAllowed(rw.id, version, release.published), release.version, nil
+	return rw.o.PublishedAllowed(rw.id, version, release.published), release.version, nil
 }
 
 // linksPage reports whether a node at depth is a page of an index whose
 // linked pages are inlined.
-func (rw *nugetRegistrationWriter) linksPage(depth int) bool {
+func (rw *registrationWriter) linksPage(depth int) bool {
 	return rw.pages != nil && depth == 1
 }
 
-func (rw *nugetRegistrationWriter) nodeMember(dec *jsontext.Decoder, kind int, n *nugetNode) error {
+func (rw *registrationWriter) nodeMember(dec *jsontext.Decoder, kind int, n *nodeState) error {
 	var held *[]byte
 	switch kind {
-	case nugetMemberItems:
+	case memberItems:
 		if dec.PeekKind() == '[' {
 			rw.writeName(&n.wrote, "")
 			return rw.items(dec, n)
@@ -414,19 +420,19 @@ func (rw *nugetRegistrationWriter) nodeMember(dec *jsontext.Decoder, kind int, n
 			// The leaves of the linked page take its place.
 			return dec.SkipValue()
 		}
-	case nugetMemberCatalogEntry:
+	case memberCatalogEntry:
 		// A standalone leaf has a link here and its release in the leaf.
 		if dec.PeekKind() == '{' {
 			rw.writeName(&n.wrote, "")
 			n.hasEntry = true
-			n.entry = nugetRelease{}
+			n.entry = releaseInfo{}
 			return rw.object(dec, &n.entry)
 		}
-	case nugetMemberCount:
+	case memberCount:
 		held = &n.count
-	case nugetMemberLower:
+	case memberLower:
 		held = &n.lower
-	case nugetMemberUpper:
+	case memberUpper:
 		held = &n.upper
 	}
 	if held != nil {
@@ -443,7 +449,7 @@ func (rw *nugetRegistrationWriter) nodeMember(dec *jsontext.Decoder, kind int, n
 
 // items copies the array dec is at, the children of n, without those that
 // are not kept.
-func (rw *nugetRegistrationWriter) items(dec *jsontext.Decoder, n *nugetNode) error {
+func (rw *registrationWriter) items(dec *jsontext.Decoder, n *nodeState) error {
 	if _, err := dec.ReadToken(); err != nil {
 		return err
 	}
@@ -490,7 +496,7 @@ func (rw *nugetRegistrationWriter) items(dec *jsontext.Decoder, n *nugetNode) er
 }
 
 // endNode writes what is left of a node once its members have been read.
-func (rw *nugetRegistrationWriter) endNode(n *nugetNode) error {
+func (rw *registrationWriter) endNode(n *nodeState) error {
 	if rw.linksPage(n.depth) && !n.container {
 		if err := rw.linkedItems(n); err != nil {
 			return err
@@ -500,7 +506,7 @@ func (rw *nugetRegistrationWriter) endNode(n *nugetNode) error {
 		n.count = append(n.count[:0], strconv.Itoa(n.kept)...)
 		// Page bounds describe the retained leaves, not versions hidden by cooldown.
 		if n.lower != nil && n.kept > 0 {
-			n.lower, n.upper = nugetVersionJSON(n.first), nugetVersionJSON(n.last)
+			n.lower, n.upper = versionJSON(n.first), versionJSON(n.last)
 		}
 	}
 	for _, held := range []struct {
@@ -516,7 +522,7 @@ func (rw *nugetRegistrationWriter) endNode(n *nugetNode) error {
 			continue
 		}
 		// Links are rewritten at any depth, so in here too.
-		if err := rw.value(newNuGetDecoder(held.value)); err != nil {
+		if err := rw.value(newDecoder(held.value)); err != nil {
 			return err
 		}
 	}
@@ -524,9 +530,9 @@ func (rw *nugetRegistrationWriter) endNode(n *nugetNode) error {
 	return nil
 }
 
-// nugetVersionJSON returns the version of a leaf as JSON. A leaf without one
+// versionJSON returns the version of a leaf as JSON. A leaf without one
 // leaves an empty version behind, which is not always nil.
-func nugetVersionJSON(version []byte) []byte {
+func versionJSON(version []byte) []byte {
 	if len(version) == 0 {
 		return []byte("null")
 	}
@@ -535,12 +541,12 @@ func nugetVersionJSON(version []byte) []byte {
 
 // linkedItems writes the leaves of the page that n, a page of the index
 // without leaves of its own, links to.
-func (rw *nugetRegistrationWriter) linkedItems(n *nugetNode) error {
+func (rw *registrationWriter) linkedItems(n *nodeState) error {
 	page, ok := rw.pages[n.own.link]
 	if !ok {
 		return fmt.Errorf("registration page %q was not loaded", n.own.link)
 	}
-	dec := newNuGetDecoder(page)
+	dec := newDecoder(page)
 	if _, err := dec.ReadToken(); err != nil {
 		return err
 	}
@@ -549,7 +555,7 @@ func (rw *nugetRegistrationWriter) linkedItems(n *nugetNode) error {
 		if err != nil {
 			return err
 		}
-		if kind != nugetMemberItems || dec.PeekKind() != '[' {
+		if kind != memberItems || dec.PeekKind() != '[' {
 			err = dec.SkipValue()
 		} else {
 			rw.writeName(&n.wrote, "")

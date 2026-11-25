@@ -406,3 +406,13 @@ func TestTerraformProviderResolvesDiscoveryOncePerRequest(t *testing.T) {
 		t.Errorf("discovery requests after an archive = %d, want 2", got)
 	}
 }
+
+func TestTerraformRegistries(t *testing.T) {
+	got := TerraformRegistries(map[string]string{"Registry.Example.ORG": "https://registry.example.org/"})
+	if len(got) != 1 || got["registry.example.org"] != "https://registry.example.org" {
+		t.Errorf("TerraformRegistries = %v", got)
+	}
+	if got := TerraformRegistries(nil); len(got) != len(DefaultTerraformRegistries) || got["registry.opentofu.org"] != "https://registry.opentofu.org" {
+		t.Errorf("TerraformRegistries(nil) = %v", got)
+	}
+}

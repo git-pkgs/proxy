@@ -67,14 +67,21 @@ type TerraformHandler struct {
 // registry hostnames to base URLs. With none, DefaultTerraformRegistries are
 // mirrored.
 func NewTerraformHandler(proxy *Proxy, registries map[string]string) *TerraformHandler {
-	if len(registries) == 0 {
-		registries = DefaultTerraformRegistries
+	return &TerraformHandler{proxy: proxy, registries: TerraformRegistries(registries)}
+}
+
+// TerraformRegistries is upstream.terraform as the mirror uses it:
+// lowercased hostnames mapped to base URLs without a trailing slash, or
+// DefaultTerraformRegistries when none are configured.
+func TerraformRegistries(configured map[string]string) map[string]string {
+	if len(configured) == 0 {
+		configured = DefaultTerraformRegistries
 	}
-	h := &TerraformHandler{proxy: proxy, registries: make(map[string]string, len(registries))}
-	for hostname, baseURL := range registries {
-		h.registries[strings.ToLower(hostname)] = strings.TrimSuffix(baseURL, "/")
+	registries := make(map[string]string, len(configured))
+	for hostname, baseURL := range configured {
+		registries[strings.ToLower(hostname)] = strings.TrimSuffix(baseURL, "/")
 	}
-	return h
+	return registries
 }
 
 // WithGit has module downloads from a Git repository that git serves

@@ -10,8 +10,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/Masterminds/semver/v3"
 	"github.com/git-pkgs/proxy/internal/database"
+	"github.com/git-pkgs/proxy/internal/metadata/pub"
 	"github.com/git-pkgs/proxy/internal/retention"
 )
 
@@ -217,125 +217,21 @@ func (h *PubHandler) handlePackageMetadata(w http.ResponseWriter, r *http.Reques
 	_, _ = w.Write(rewritten)
 }
 
-// rewriteMetadata rewrites archive_url fields to point at this proxy.
-// If cooldown is enabled, versions published too recently are filtered out.
+// rewriteMetadata rewrites archive_url fields to point at this proxy and,
+// with cooldown enabled, leaves out versions published too recently; see
+// pub.Rewrite.
 func (h *PubHandler) rewriteMetadata(name string, body []byte) ([]byte, error) {
-	var metadata map[string]any
-	if err := json.Unmarshal(body, &metadata); err != nil {
-		return nil, err
-	}
-
-	versions, ok := metadata["versions"].([]any)
-	if !ok {
-		return body, nil
-	}
-
-	packagePURL := canonicalPackagePURL("pub", name)
-	filtered := h.filterAndRewriteVersions(name, packagePURL, versions)
-	metadata["versions"] = filtered
-
-	h.updateLatestVersion(metadata, filtered)
-
-	return json.Marshal(metadata)
+	return pub.Rewrite(name, body, pub.Options{
+		ProxyURL:         h.proxyURL,
+		Cooldown:         h.proxy.cooldown(),
+		EvaluatedAt:      time.Now(),
+		OnCooldownFilter: h.cooldownFiltered,
+	})
 }
 
-// filterAndRewriteVersions applies cooldown filtering and rewrites archive URLs
-// for a package's version list.
-func (h *PubHandler) filterAndRewriteVersions(name, packagePURL string, versions []any) []any {
-	filtered := versions[:0]
-	for _, vdata := range versions {
-		vmap, ok := vdata.(map[string]any)
-		if !ok {
-			continue
-		}
-
-		version, _ := vmap["version"].(string)
-		if version == "" {
-			continue
-		}
-
-		if h.shouldFilterVersion(packagePURL, name, version, vmap) {
-			continue
-		}
-
-		newURL := fmt.Sprintf("%s/pub/packages/%s/versions/%s.tar.gz", h.proxyURL, name, version)
-		vmap["archive_url"] = newURL
-		filtered = append(filtered, vdata)
-
-		h.proxy.Logger.Debug("rewrote archive URL",
-			"package", name, "version", version, "new", newURL)
-	}
-
-	return filtered
-}
-
-// shouldFilterVersion returns true if the version should be excluded due to cooldown.
-func (h *PubHandler) shouldFilterVersion(packagePURL, name, version string, vmap map[string]any) bool {
-	if h.proxy.Cooldown == nil || !h.proxy.Cooldown.Enabled() {
-		return false
-	}
-
-	publishedStr, ok := vmap["published"].(string)
-	if !ok {
-		return false
-	}
-
-	publishedAt, err := time.Parse(time.RFC3339, publishedStr)
-	if err != nil {
-		return false
-	}
-
-	if !h.proxy.cooldown().IsAllowed("pub", packagePURL, publishedAt) {
-		h.proxy.Logger.Info("cooldown: filtering pub version",
-			"package", name, "version", version)
-		h.proxy.recordWithheld("pub", name, version, publishedAt)
-		return true
-	}
-
-	return false
-}
-
-// updateLatestVersion points latest at the kept entry for its version, so
-// its archive_url is the proxy's too. When cooldown removed that version,
-// latest becomes the newest stable version left, or the newest version left
-// if all are prereleases, and is dropped when none is left.
-func (h *PubHandler) updateLatestVersion(metadata map[string]any, filtered []any) {
-	latest, ok := metadata["latest"].(map[string]any)
-	if !ok {
-		return
-	}
-	latestVer, _ := latest["version"].(string)
-
-	var newest, newestStable *semver.Version
-	var newestEntry, newestStableEntry any
-	for _, vdata := range filtered {
-		vmap, ok := vdata.(map[string]any)
-		if !ok {
-			continue
-		}
-		version, _ := vmap["version"].(string)
-		if version == latestVer {
-			latest["archive_url"] = vmap["archive_url"]
-			return
-		}
-		parsed, err := semver.NewVersion(version)
-		if err != nil {
-			continue
-		}
-		if newest == nil || parsed.GreaterThan(newest) {
-			newest, newestEntry = parsed, vdata
-		}
-		if parsed.Prerelease() == "" && (newestStable == nil || parsed.GreaterThan(newestStable)) {
-			newestStable, newestStableEntry = parsed, vdata
-		}
-	}
-
-	switch {
-	case newestStableEntry != nil:
-		metadata["latest"] = newestStableEntry
-	case newestEntry != nil:
-		metadata["latest"] = newestEntry
-	default:
-		delete(metadata, "latest")
-	}
+// cooldownFiltered logs a version a metadata rewrite held back and records
+// it for the package page.
+func (h *PubHandler) cooldownFiltered(name, version string, publishedAt time.Time) {
+	h.proxy.Logger.Info("cooldown: filtering pub version", "package", name, "version", version)
+	h.proxy.recordWithheld("pub", name, version, publishedAt)
 }
