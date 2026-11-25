@@ -920,19 +920,21 @@ type npmVersionData struct {
 // otherwise from the packument read into memory.
 //
 // A packument cached within its TTL can predate the version. Refresh it before
-// choosing the tarball's URL, integrity or cooldown, with a per-package limit.
+// choosing the tarball's URL, integrity or cooldown. Under cooldown a missing
+// entry would let the version through with no publish time, so each
+// non-concurrent missing-version request checks upstream again.
 func (h *NPMHandler) versionData(ctx context.Context, packageName, packumentURL, cacheKey, version string) (npmVersionData, error) {
 	data, fromCache, err := h.readVersionData(ctx, packumentURL, cacheKey, version)
 	if err == nil && data.entry == nil && fromCache {
 		h.proxy.Logger.Info("cached npm metadata lacks version, fetching it again",
 			"package", packageName, "version", version)
-		res := h.refreshMissingPackument(ctx, packumentURL, cacheKey)
+		res := h.refreshMissingPackument(ctx, packumentURL, cacheKey, !h.proxy.cooldownApplies("npm", packageName))
 		if res.err != nil && !h.proxy.cooldownApplies("npm", packageName) {
-			// Without cooldown, main permits the usual tarball fallback from
-			// a readable cached packument even when upstream is unavailable.
+			// Without cooldown a readable cached packument still allows
+			// the usual tarball URL when upstream is down.
 			return data, nil
 		}
-		data, err = h.readRefreshedNPMVersion(ctx, res, version)
+		data, err = h.readRefreshedNPMVersion(ctx, res, packumentURL, cacheKey, version)
 	}
 	return data, err
 }
