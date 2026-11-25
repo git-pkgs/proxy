@@ -41,7 +41,7 @@
 {{end}}{{end}}
 
 <!-- Two Column Layout -->
-<div class="grid md:grid-cols-2 gap-8 mb-8 items-start">
+<div class="grid grid-cols-1 md:grid-cols-2 gap-8 mb-8 items-start">
     <!-- Popular Packages -->
     <div class="bg-white dark:bg-gray-900 rounded-xl shadow-sm border border-gray-200 dark:border-gray-800">
         <div class="px-6 py-4 border-b border-gray-200 dark:border-gray-800">
@@ -50,11 +50,11 @@
         <div class="divide-y divide-gray-200 dark:divide-gray-800">
             {{if .PopularPackages}}
             {{range .PopularPackages}}
-            <div class="px-6 py-4 flex items-center justify-between">
+            <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-4">
                 <div class="min-w-0 flex-1">
-                    <div class="flex items-center gap-2">
+                    <div class="flex items-center gap-2 min-w-0">
                         {{template "ecosystem_badge" .Ecosystem}}
-                        <a href="/ui/package/{{.Ecosystem}}/{{.Name}}" class="font-medium truncate hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
+                        <a href="/ui/package/{{.Ecosystem}}/{{.Name}}" class="font-medium truncate min-w-0 hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
                     </div>
                     <div class="flex items-center gap-2 mt-1">
                         {{if .License}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-100 text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-700 dark:bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-900 dark:text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-300">{{.License}}</span>{{end}}
@@ -84,12 +84,12 @@
         <div class="divide-y divide-gray-200 dark:divide-gray-800">
             {{if .RecentPackages}}
             {{range .RecentPackages}}
-            <div class="px-6 py-4 flex items-center justify-between gap-4">
+            <div class="px-6 py-4 flex flex-col sm:flex-row sm:items-center justify-between gap-1 sm:gap-4">
                 <div class="min-w-0 flex-1">
                     <div class="flex items-center gap-2 min-w-0 overflow-hidden">
                         {{template "ecosystem_badge" .Ecosystem}}
                         <a href="/ui/package/{{.Ecosystem}}/{{.Name}}" class="font-medium truncate min-w-0 hover:text-blue-600 dark:hover:text-blue-400">{{.Name}}</a>
-                        <span class="shrink-0 text-gray-500 dark:text-gray-400 whitespace-nowrap">@{{.Version}}</span>
+                        <span class="min-w-0 truncate shrink-[3] text-gray-500 dark:text-gray-400 whitespace-nowrap">@{{.Version}}</span>
                     </div>
                     <div class="flex items-center gap-2 mt-1">
                         {{if .License}}<span class="inline-flex items-center px-2 py-0.5 rounded text-xs font-medium bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-100 text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-700 dark:bg-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-900 dark:text-{{if eq .LicenseCategory "permissive"}}green{{else if eq .LicenseCategory "copyleft"}}pink{{else}}gray{{end}}-300">{{.License}}</span>{{end}}

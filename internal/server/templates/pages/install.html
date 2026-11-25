@@ -21,14 +21,14 @@
     <div class="divide-y divide-gray-200 dark:divide-gray-800">
         {{range .Registries}}
         <details class="group">
-            <summary class="px-6 py-4 cursor-pointer flex items-center justify-between hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
+            <summary class="px-6 py-4 cursor-pointer flex flex-wrap items-center justify-between gap-x-3 gap-y-2 hover:bg-gray-50 dark:hover:bg-gray-800/50 transition-colors">
                 <div class="flex items-center gap-3">
                     {{template "ecosystem_badge" .ID}}
                     <span class="font-medium">{{.Name}}</span>
-                    <span class="text-sm text-gray-500 dark:text-gray-400">{{.Language}}</span>
+                    <span class="hidden sm:inline text-sm text-gray-500 dark:text-gray-400">{{.Language}}</span>
                 </div>
-                <div class="flex items-center gap-3">
-                    <code class="text-sm text-gray-600 dark:text-gray-400 font-mono">{{.Endpoint}}</code>
+                <div class="flex items-center gap-3 ml-auto">
+                    <code class="text-sm text-gray-600 dark:text-gray-400 font-mono whitespace-nowrap">{{.Endpoint}}</code>
                     <svg class="w-5 h-5 text-gray-400 transition-transform group-open:rotate-180" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                         <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M19 9l-7 7-7-7"/>
                     </svg>
