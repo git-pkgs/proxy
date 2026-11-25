@@ -139,8 +139,10 @@ func (db *DB) EvictMetadataCache(ecosystem, name, storagePath string, lastAccess
 	if n, err := res.RowsAffected(); err != nil || n == 0 {
 		return false, err
 	}
-	if _, err := tx.Exec(db.Rebind(queuePendingDeleteQuery), storagePath, time.Now().UTC()); err != nil {
-		return false, err
+	if storagePath != "" {
+		if _, err := tx.Exec(db.Rebind(queuePendingDeleteQuery), storagePath, time.Now().UTC()); err != nil {
+			return false, err
+		}
 	}
 	return true, tx.Commit()
 }

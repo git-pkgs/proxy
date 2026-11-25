@@ -1,14 +1,20 @@
 package handler
 
 import (
+	"context"
+	"database/sql/driver"
+	"fmt"
 	"io"
 	"net/http"
 	"net/http/httptest"
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"modernc.org/sqlite"
 )
 
 const revalidateRepo = "/v2/library/app/manifests/"
@@ -535,5 +541,146 @@ func TestContainerHandler_HeadResolutionTimeoutServesStoredTag(t *testing.T) {
 		if got := pullManifest(t, h, method, "latest"); got.Header().Get("Docker-Content-Digest") != digest {
 			t.Fatalf("lost digest on timeout: %v", got.Header())
 		}
+	}
+}
+
+func TestContainerHandler_HeadThenDigestWithinTTL(t *testing.T) {
+	registry := newCountingRegistry(t)
+	body := manifestDoc("fresh-head")
+	digest := registry.add(body)
+	registry.pointLatest(digest)
+	h := newRevalidateTestHandler(t, registry)
+	pullManifest(t, h, http.MethodHead, "latest")
+	pullManifest(t, h, http.MethodGet, digest)
+	gets, heads := registry.counts()
+	got := pullManifest(t, h, http.MethodGet, "latest")
+	if got.Body.String() != body || got.Header().Get("Warning") != "" {
+		t.Fatalf("fresh resolved tag = %s, headers %v", got.Body.String(), got.Header())
+	}
+	if g, h := registry.counts(); g != gets || h != heads {
+		t.Fatalf("upstream requests changed from %d/%d to %d/%d", gets, heads, g, h)
+	}
+}
+
+// Observe SELECTs of the resolution row, not storage opens: resolutions have
+// no body. A view calls the counter only when that row's digest is selected.
+func observeResolutionReads(t *testing.T, h *ContainerHandler, fn string) {
+	t.Helper()
+	if _, err := h.proxy.DB.Exec(`ALTER TABLE metadata_cache RENAME TO observed_metadata_cache`); err != nil {
+		t.Fatal(err)
+	}
+	_, err := h.proxy.DB.Exec(`CREATE VIEW metadata_cache AS SELECT
+		id, ecosystem, name, storage_path, etag, link, content_type, content_encoding,
+		CASE WHEN ecosystem = 'oci-manifest-tag' THEN ` + fn + `(content_digest) ELSE content_digest END AS content_digest,
+		upstream_url, size, last_modified, fetched_at, last_accessed_at, created_at, updated_at
+		FROM observed_metadata_cache`)
+	if err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestContainerHandler_FreshTagSkipsResolutionRead(t *testing.T) {
+	var reads atomic.Int32
+	fn := fmt.Sprintf("resolution_reads_%d", time.Now().UnixNano())
+	// Functions are installed when connections open, so register before
+	// creating this test's database.
+	if err := sqlite.RegisterScalarFunction(fn, 1, func(_ *sqlite.FunctionContext, args []driver.Value) (driver.Value, error) {
+		reads.Add(1)
+		return args[0], nil
+	}); err != nil {
+		t.Fatal(err)
+	}
+	registry := newCountingRegistry(t)
+	digest := registry.add(manifestDoc("fresh"))
+	registry.pointLatest(digest)
+	h := newRevalidateTestHandler(t, registry)
+	// Retain an actual resolution row, then cache a fresh tag body.
+	pullManifest(t, h, http.MethodHead, "latest")
+	pullManifest(t, h, http.MethodGet, "latest")
+	observeResolutionReads(t, h, fn)
+	pullManifest(t, h, http.MethodGet, "latest")
+	if got := reads.Load(); got != 0 {
+		t.Fatalf("fresh tag read the resolution row %d times", got)
+	}
+	// Prove the observer sees a direct resolution read.
+	key := h.containerManifestSharedCacheKey(h.registryURL, "library/app", "latest", normalizeContainerManifestAccept(dockerManifestAccept))
+	if _, err := h.proxy.DB.GetMetadataCache(containerManifestTagEcosystem, key); err != nil {
+		t.Fatal(err)
+	}
+	if reads.Load() != 1 {
+		t.Fatal("resolution read observer was not exercised")
+	}
+}
+
+func TestContainerHandler_HeadResolutionHasNoStoredBody(t *testing.T) {
+	registry := newCountingRegistry(t)
+	digest := registry.add(manifestDoc("head-only"))
+	registry.pointLatest(digest)
+	h := newRevalidateTestHandler(t, registry)
+	pullManifest(t, h, http.MethodHead, "latest")
+	key := h.containerManifestSharedCacheKey(h.registryURL, "library/app", "latest", normalizeContainerManifestAccept(dockerManifestAccept))
+	entry, err := h.proxy.DB.GetMetadataCache(containerManifestTagEcosystem, key)
+	if err != nil || entry == nil {
+		t.Fatalf("resolution row = %v, %v", entry, err)
+	}
+	if entry.ContentDigest.String != digest || entry.StoragePath != "" || entry.Size.Int64 != 0 {
+		t.Fatalf("resolution should be bodiless: %+v", entry)
+	}
+	if exists, err := h.proxy.Storage.Exists(context.Background(), metadataStoragePath(containerManifestTagEcosystem, key)); err != nil || exists {
+		t.Fatalf("resolution storage object exists = %t, %v", exists, err)
+	}
+}
+
+func TestContainerHandler_HeadWithCachedDigestSkipsResolutionWrite(t *testing.T) {
+	registry := newCountingRegistry(t)
+	digest := registry.add(manifestDoc("cached-digest"))
+	registry.pointLatest(digest)
+	h := newRevalidateTestHandler(t, registry)
+	pullManifest(t, h, http.MethodGet, digest)
+	pullManifest(t, h, http.MethodHead, "latest")
+	key := h.containerManifestSharedCacheKey(h.registryURL, "library/app", "latest", normalizeContainerManifestAccept(dockerManifestAccept))
+	entry, err := h.proxy.DB.GetMetadataCache(containerManifestTagEcosystem, key)
+	if err != nil || entry != nil {
+		t.Fatalf("redundant resolution row = %v, %v", entry, err)
+	}
+}
+
+func TestContainerHandler_ResolutionComparesCompatibleCandidate(t *testing.T) {
+	for _, newerCompatible := range []bool{false, true} {
+		t.Run(fmt.Sprintf("newer-compatible=%t", newerCompatible), func(t *testing.T) {
+			registry := newCountingRegistry(t)
+			h := newRevalidateTestHandler(t, registry)
+			h.proxy.MetadataTTL = time.Hour
+			accept := dockerManifestListMediaType
+			cacheAccept := normalizeContainerManifestAccept(accept)
+			key := h.containerManifestSharedCacheKey(h.registryURL, "library/app", "latest", cacheAccept)
+			old := &cachedContainerManifest{body: []byte("old-list"), contentType: accept, contentDigest: sha256Digest([]byte("old-list")), fetchedAt: time.Now().Add(-4 * time.Hour)}
+			if newerCompatible {
+				old.fetchedAt = time.Now().Add(-2 * time.Hour)
+			}
+			h.storeContainerManifestLegacyEntries(t.Context(), h.registryURL, "library/app", "latest", accept, cacheAccept, old)
+			incompatible := &cachedContainerManifest{body: []byte("oci-index"), contentType: ociImageIndexMediaType, contentDigest: sha256Digest([]byte("oci-index")), fetchedAt: time.Now().Add(-time.Hour)}
+			if err := h.storeContainerManifest(t.Context(), key, incompatible); err != nil {
+				t.Fatal(err)
+			}
+			resolved := &cachedContainerManifest{body: []byte("resolved-list"), contentType: accept, contentDigest: sha256Digest([]byte("resolved-list")), fetchedAt: time.Now().Add(-3 * time.Hour)}
+			digestKey := h.containerManifestSharedCacheKey(h.registryURL, "library/app", resolved.contentDigest, cacheAccept)
+			if err := h.storeContainerManifest(t.Context(), digestKey, resolved); err != nil {
+				t.Fatal(err)
+			}
+			// Seed both formats so the regression also runs against the old
+			// body-backed implementation, before the bodiless-row fix.
+			if _, err := h.storeContainerMetadata(t.Context(), containerManifestTagEcosystem, key, []byte(resolved.contentDigest), "", "", "text/plain", resolved.contentDigest, time.Time{}, resolved.fetchedAt); err != nil {
+				t.Fatal(err)
+			}
+			got, _ := h.loadContainerManifestForAccept(t.Context(), h.registryURL, "library/app", "latest", accept, cacheAccept)
+			want := resolved
+			if newerCompatible {
+				want = old
+			}
+			if got == nil || string(got.body) != string(want.body) {
+				t.Fatalf("cached compatible candidate = %+v, want %s", got, want.body)
+			}
+		})
 	}
 }

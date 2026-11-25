@@ -200,24 +200,36 @@ func (h *ContainerHandler) containerManifestLegacyCacheKeys(registryURL, name, r
 // whether it came from a per-Accept fallback key while the shared key holds a
 // representation the client does not accept.
 func (h *ContainerHandler) loadContainerManifestForAccept(ctx context.Context, registryURL, name, reference, accept, cacheAccept string) (*cachedContainerManifest, bool) {
+	cached, fromFallback := h.loadContainerManifestCandidate(ctx, registryURL, name, reference, accept, cacheAccept)
+	if manifestDigestReferencePattern.MatchString(reference) || h.proxy.DB == nil ||
+		(cached != nil && h.containerManifestFresh(cached)) {
+		return cached, fromFallback
+	}
+	// Only a missing or stale compatible body can benefit from a saved HEAD
+	// resolution. An incompatible shared representation must not suppress it.
+	cacheKey := h.containerManifestSharedCacheKey(registryURL, name, reference, cacheAccept)
+	entry, err := h.proxy.DB.GetMetadataCache(containerManifestTagEcosystem, cacheKey)
+	if err != nil || entry == nil || !entry.ContentDigest.Valid ||
+		!manifestDigestReferencePattern.MatchString(entry.ContentDigest.String) ||
+		(cached != nil && !entry.FetchedAt.Time.After(cached.fetchedAt)) {
+		return cached, fromFallback
+	}
+	digest := entry.ContentDigest.String
+	stored, err := h.loadContainerManifest(ctx, h.containerManifestSharedCacheKey(registryURL, name, digest, cacheAccept))
+	if err == nil && stored != nil && stored.contentDigest == digest && containerManifestCacheCompatible(accept, stored) {
+		stored.fetchedAt = entry.FetchedAt.Time
+		h.proxy.recordMetadataRead(entry)
+		return stored, fromFallback
+	}
+	return cached, fromFallback
+}
+
+func (h *ContainerHandler) loadContainerManifestCandidate(ctx context.Context, registryURL, name, reference, accept, cacheAccept string) (*cachedContainerManifest, bool) {
 	cacheKey := h.containerManifestSharedCacheKey(registryURL, name, reference, cacheAccept)
 	cached, err := h.loadContainerManifest(ctx, cacheKey)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to read cached container manifest", "error", err)
 		return nil, false
-	}
-	// A client may resolve a tag with HEAD before fetching its body by
-	// digest. Join that persisted resolution to the now-cached body.
-	if !manifestDigestReferencePattern.MatchString(reference) {
-		entry, digest, err := h.loadContainerMetadata(ctx, containerManifestTagEcosystem, cacheKey)
-		if err == nil && entry != nil && manifestDigestReferencePattern.Match(digest) &&
-			(cached == nil || entry.FetchedAt.Time.After(cached.fetchedAt)) {
-			stored, err := h.loadContainerManifest(ctx, h.containerManifestSharedCacheKey(registryURL, name, string(digest), cacheAccept))
-			if err == nil && stored != nil && stored.contentDigest == string(digest) && containerManifestCacheCompatible(accept, stored) {
-				stored.fetchedAt = entry.FetchedAt.Time
-				cached = stored
-			}
-		}
 	}
 	if cached != nil && containerManifestCacheCompatible(accept, cached) {
 		return cached, false

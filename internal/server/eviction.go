@@ -135,6 +135,12 @@ func evictBatch(ctx context.Context, db *database.DB, store storage.Storage, log
 		if !recordCleared {
 			continue
 		}
+		if path == "" {
+			// Bodiless metadata, such as a HEAD tag resolution, has no
+			// storage object to delete.
+			cleared++
+			continue
+		}
 
 		// Metadata goes now too: readers hold the whole document in memory,
 		// and a row refetched meanwhile refetches again on a missing blob.

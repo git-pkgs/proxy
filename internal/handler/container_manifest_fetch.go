@@ -256,13 +256,12 @@ func (h *ContainerHandler) headManifest(ctx context.Context, req manifestRequest
 			return manifestOutcome{digestInvalid: true}
 		}
 		if !req.immutable() {
-			key := h.containerManifestSharedCacheKey(req.registryURL, req.name, req.reference, req.cacheAccept)
-			if _, err := h.storeContainerMetadata(ctx, containerManifestTagEcosystem, key, []byte(digest),
-				"", "", "text/plain", "", time.Time{}, time.Now()); err != nil {
-				h.proxy.Logger.Warn("failed to cache tag resolution", "error", err)
-			}
 			if outcome, ok := h.tagFromCachedDigest(ctx, req, cached, fromFallback, resp, digest); ok {
 				return outcome
+			}
+			key := h.containerManifestSharedCacheKey(req.registryURL, req.name, req.reference, req.cacheAccept)
+			if err := h.storeContainerTagResolution(key, digest); err != nil {
+				h.proxy.Logger.Warn("failed to cache tag resolution", "error", err)
 			}
 		}
 		size := int64(-1)
