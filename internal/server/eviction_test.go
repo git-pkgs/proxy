@@ -48,6 +48,34 @@ func setupEvictionTest(t *testing.T) (*database.DB, *storage.Blob) {
 	return db, blob
 }
 
+func TestEvictLRU_BodilessMetadataSkipsStorageDelete(t *testing.T) {
+	db, store := setupEvictionTest(t)
+	if err := db.UpsertMetadataCache(&database.MetadataCacheEntry{
+		Ecosystem: "oci-manifest-tag", Name: "latest", StoragePath: "",
+		ContentDigest: sql.NullString{String: "sha256:abcd", Valid: true},
+		Size:          sql.NullInt64{Valid: true},
+	}); err != nil {
+		t.Fatal(err)
+	}
+	entries, err := db.GetLeastRecentlyUsedCacheEntries(10)
+	if err != nil || len(entries) != 1 {
+		t.Fatalf("eviction candidates = %v, %v", entries, err)
+	}
+	observer := &undeletableStorage{Storage: store}
+	logger := slog.New(slog.NewTextHandler(io.Discard, nil))
+	cleared, freed := evictBatch(t.Context(), db, observer, logger, entries, 1, 2)
+	if cleared != 1 || freed != 0 || observer.deletes.Load() != 0 {
+		t.Fatalf("cleared=%d freed=%d storage deletes=%d", cleared, freed, observer.deletes.Load())
+	}
+	if row, err := db.GetMetadataCache("oci-manifest-tag", "latest"); err != nil || row != nil {
+		t.Fatalf("evicted row = %v, %v", row, err)
+	}
+	var pending int
+	if err := db.Get(&pending, `SELECT COUNT(*) FROM pending_deletes`); err != nil || pending != 0 {
+		t.Fatalf("empty pending deletes = %d, %v", pending, err)
+	}
+}
+
 func seedArtifact(t *testing.T, ctx context.Context, db *database.DB, store storage.Storage, name string, dataSize int, accessedAt time.Time) {
 	t.Helper()
 

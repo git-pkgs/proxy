@@ -10,6 +10,21 @@ import (
 	"github.com/git-pkgs/proxy/internal/database"
 )
 
+// storeContainerTagResolution records a HEAD's digest without a storage
+// object. The empty storage_path distinguishes this bodiless metadata row.
+func (h *ContainerHandler) storeContainerTagResolution(cacheKey, digest string) error {
+	if h.proxy.DB == nil {
+		return nil
+	}
+	return h.proxy.DB.UpsertMetadataCache(&database.MetadataCacheEntry{
+		Ecosystem:     containerManifestTagEcosystem,
+		Name:          cacheKey,
+		ContentDigest: sql.NullString{String: digest, Valid: true},
+		Size:          sql.NullInt64{Valid: true},
+		FetchedAt:     sql.NullTime{Time: time.Now(), Valid: true},
+	})
+}
+
 func (h *ContainerHandler) storeContainerMetadata(ctx context.Context, ecosystem, cacheKey string, body []byte, etag, link, contentType, contentDigest string, lastModified, fetchedAt time.Time) (int64, error) {
 	if h.proxy.DB == nil || h.proxy.Storage == nil {
 		return int64(len(body)), nil
