@@ -1617,9 +1617,16 @@ Response:
 {
   "cached_artifacts": 142,
   "total_size_bytes": 523456789,
-  "total_size": "499.2 MB"
+  "total_size": "499.2 MB",
+  "git_cache": {
+    "repositories": 3,
+    "size_bytes": 104857600,
+    "size": "100.0 MB"
+  }
 }
 ```
+
+`total_size_bytes` counts artifacts only. With `upstream.git` set, `git_cache` reports the cached Git repositories, which are kept and limited apart (see `git.max_size`); Git LFS objects are artifacts and count under `total_size_bytes`.
 
 ## How It Works
 
@@ -1648,7 +1655,7 @@ Response:
 
 The proxy serves a web UI under `/ui`. No separate frontend build is needed -- templates and assets are embedded in the binary. `GET /` redirects to `/ui/`. The UI is mounted under its own prefix so a reverse proxy can apply different access rules to it than to the package endpoints (for example, requiring auth for `PathPrefix(/ui)` while leaving `/npm`, `/pypi` etc. open to build machines).
 
-- **Dashboard** (`/ui/`) -- cache stats, popular packages, recently cached artifacts, and vulnerability overview.
+- **Dashboard** (`/ui/`) -- cache stats, popular packages, recently cached artifacts, and vulnerability overview. With `upstream.git` set, a Git Cache tile shows the size and count of cached repositories, which Total Size leaves out.
 - **Analytics** (`/ui/analytics`) -- accumulated download size as a ring broken down by ecosystem with the total in the middle, the cache size, artifact, package and version counts, a per-ecosystem table, the vulnerability overview, and a Runtime card mirroring every counter `/metrics` exposes. See [Analytics](#analytics).
 - **Install guide** (`/ui/install`) -- per-ecosystem configuration instructions, so you don't have to look them up here.
 - **Upstreams** (`/ui/upstreams`) -- the upstreams each ecosystem's requests go to, as configured: the config key, the entry name for a map, and the proxy path clients use. Upstream URLs and whether credentials apply aren't shown, since `/ui` has no auth of its own.

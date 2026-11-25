@@ -1134,6 +1134,20 @@ const docTemplate = `{
                 }
             }
         },
+        "server.GitCacheStats": {
+            "type": "object",
+            "properties": {
+                "repositories": {
+                    "type": "integer"
+                },
+                "size": {
+                    "type": "string"
+                },
+                "size_bytes": {
+                    "type": "integer"
+                }
+            }
+        },
         "server.GitDeleteResponse": {
             "type": "object",
             "properties": {
@@ -1547,6 +1561,14 @@ const docTemplate = `{
                     "items": {
                         "$ref": "#/definitions/server.EcosystemStatsEntry"
                     }
+                },
+                "git_cache": {
+                    "description": "GitCache is the git cache, which the figures above leave out. It is\nomitted without upstream.git.",
+                    "allOf": [
+                        {
+                            "$ref": "#/definitions/server.GitCacheStats"
+                        }
+                    ]
                 },
                 "stats_unavailable": {
                     "description": "StatsUnavailable distinguishes a proxy that has served nothing from one\nwhose aggregation failed with no snapshot to fall back on. Without it\nboth report zeros and an empty array.",

@@ -3,6 +3,7 @@ package server
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"io"
 	"log/slog"
 	"net/http"
@@ -287,5 +288,58 @@ func TestGitRepositoryRowsMarkOfflineUpstreams(t *testing.T) {
 	}
 	if got := strings.Count(w.Body.String(), ">offline<"); got != 1 {
 		t.Errorf("page marks %d repositories offline, want 1:\n%s", got, w.Body)
+	}
+}
+
+// The git cache is kept apart from the artifact figures, so the dashboard
+// and /stats show it on its own rather than leaving it out.
+func TestDashboardAndStatsShowGitCache(t *testing.T) {
+	root := t.TempDir()
+	newGitTestRepo(t, root, "team/repo")
+	newGitTestRepo(t, root, "team/other")
+	upstream := httptest.NewServer(gitBackend(t, root))
+	defer upstream.Close()
+	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
+		cfg.Upstream.Git = map[string]config.GitUpstream{"up": {URL: upstream.URL}}
+	})
+	gitStats := func() GitCacheStats {
+		t.Helper()
+		status, body := request(t, http.MethodGet, cfg.BaseURL+"/stats", "", nil)
+		if status != http.StatusOK {
+			t.Fatalf("stats status %d", status)
+		}
+		var stats StatsResponse
+		if err := json.Unmarshal([]byte(body), &stats); err != nil {
+			t.Fatal(err)
+		}
+		if stats.GitCache == nil {
+			t.Fatalf("stats lack git_cache: %s", body)
+		}
+		return *stats.GitCache
+	}
+
+	gitCommand(t, "", "clone", "--quiet", cfg.BaseURL+"/git/up/team/repo.git", filepath.Join(t.TempDir(), "clone"))
+	one := gitStats()
+	if one.Repositories != 1 || one.SizeBytes <= 0 || one.Size == "" {
+		t.Errorf("git_cache = %+v, want one repository with its size", one)
+	}
+	_, body := request(t, http.MethodGet, cfg.BaseURL+"/ui/", "", nil)
+	if !strings.Contains(body, "Git Cache") || !strings.Contains(body, "1 repository") || !strings.Contains(body, `href="/ui/git"`) {
+		t.Errorf("dashboard doesn't show the git cache:\n%s", body)
+	}
+
+	gitCommand(t, "", "clone", "--quiet", cfg.BaseURL+"/git/up/team/other.git", filepath.Join(t.TempDir(), "other"))
+	if two := gitStats(); two.Repositories != 2 || two.SizeBytes <= one.SizeBytes {
+		t.Errorf("git_cache = %+v after a second clone, want two repositories and more than %d bytes", two, one.SizeBytes)
+	}
+}
+
+func TestDashboardAndStatsWithoutGit(t *testing.T) {
+	cfg, _ := startGitTestServer(t, func(*config.Config) {})
+	if status, body := request(t, http.MethodGet, cfg.BaseURL+"/ui/", "", nil); status != http.StatusOK || strings.Contains(body, "Git Cache") {
+		t.Errorf("dashboard without upstream.git: status %d, shows a git cache: %v", status, strings.Contains(body, "Git Cache"))
+	}
+	if status, body := request(t, http.MethodGet, cfg.BaseURL+"/stats", "", nil); status != http.StatusOK || strings.Contains(body, "git_cache") {
+		t.Errorf("stats without upstream.git: status %d, body %s", status, body)
 	}
 }

@@ -2,7 +2,7 @@
 
 {{define "content"}}
 <!-- Stats Grid -->
-<div class="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+<div class="grid grid-cols-2 {{if .GitCache}}md:grid-cols-5{{else}}md:grid-cols-4{{end}} gap-4 mb-8">
     <div class="bg-white dark:bg-gray-900 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-800">
         <div class="text-sm text-gray-500 dark:text-gray-400">Cached Artifacts</div>
         <div class="text-3xl font-bold mt-1">{{.Stats.CachedArtifacts}}</div>
@@ -19,6 +19,13 @@
         <div class="text-sm text-gray-500 dark:text-gray-400">Versions</div>
         <div class="text-3xl font-bold mt-1">{{.Stats.TotalVersions}}</div>
     </div>
+    {{with .GitCache}}
+    <a href="/ui/git" class="block bg-white dark:bg-gray-900 rounded-xl p-6 shadow-sm border border-gray-200 dark:border-gray-800 hover:border-blue-400 dark:hover:border-blue-600 transition-colors">
+        <div class="text-sm text-gray-500 dark:text-gray-400">Git Cache</div>
+        <div class="text-3xl font-bold mt-1">{{.Size}}</div>
+        <div class="text-sm text-gray-500 dark:text-gray-400 mt-1">{{.RepositoriesHuman}}, not in Total Size</div>
+    </a>
+    {{end}}
 </div>
 
 {{if .EnrichmentStats.HasVulns}}
