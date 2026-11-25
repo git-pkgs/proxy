@@ -89,15 +89,7 @@ func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
 	}
 	for _, group := range byEcosystem(packages) {
 		if ix, ok := osIndexes[group[0].Ecosystem]; ok {
-			if err := m.turnedOff(ix.ecosystem); err != nil {
-				m.recordFailure(tracker, PackageVersion{Ecosystem: ix.ecosystem}, err)
-				continue
-			}
-			items, errs := m.indexRefreshItems(ctx, ix, group, cutoff)
-			for _, err := range errs {
-				m.recordFailure(tracker, PackageVersion{Ecosystem: ix.ecosystem}, err)
-			}
-			if !run(items) {
+			if !run(m.indexRefreshGroup(ctx, ix, group, cutoff, tracker)) {
 				break
 			}
 			continue
@@ -120,6 +112,21 @@ func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
 	tracker.phase.Store("complete")
 	p := tracker.snapshot()
 	return &p, nil
+}
+
+// indexRefreshGroup returns the versions to mirror for the used packages of
+// an OS ecosystem and records the indexes it couldn't read. A turned-off
+// ecosystem fails without its indexes being read.
+func (m *Mirror) indexRefreshGroup(ctx context.Context, ix osIndex, group []database.UsedPackage, cutoff time.Time, tracker *progressTracker) []PackageVersion {
+	if err := m.turnedOff(ix.ecosystem); err != nil {
+		m.recordFailure(tracker, PackageVersion{Ecosystem: ix.ecosystem}, err)
+		return nil
+	}
+	items, errs := m.indexRefreshItems(ctx, ix, group, cutoff)
+	for _, err := range errs {
+		m.recordFailure(tracker, PackageVersion{Ecosystem: ix.ecosystem}, err)
+	}
+	return items
 }
 
 // byEcosystem splits packages, ordered by ecosystem, into one group per
