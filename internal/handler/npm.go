@@ -928,13 +928,14 @@ func (h *NPMHandler) versionData(ctx context.Context, packageName, packumentURL,
 	if err == nil && data.entry == nil && fromCache {
 		h.proxy.Logger.Info("cached npm metadata lacks version, fetching it again",
 			"package", packageName, "version", version)
-		res := h.refreshMissingPackument(ctx, packumentURL, cacheKey, !h.proxy.cooldownApplies("npm", packageName))
-		if res.err != nil && !h.proxy.cooldownApplies("npm", packageName) {
+		retain := !h.proxy.cooldownApplies("npm", packageName)
+		res := h.refreshMissingPackument(ctx, packumentURL, cacheKey, retain)
+		if res.err != nil && retain {
 			// Without cooldown a readable cached packument still allows
 			// the usual tarball URL when upstream is down.
 			return data, nil
 		}
-		data, err = h.readRefreshedNPMVersion(ctx, res, packumentURL, cacheKey, version)
+		data, err = h.readRefreshedNPMVersion(ctx, res, packumentURL, cacheKey, version, retain)
 	}
 	return data, err
 }

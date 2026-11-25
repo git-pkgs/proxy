@@ -383,7 +383,7 @@ func TestNPMRefreshReadsReplacedDocument(t *testing.T) {
 		t.Fatal(err)
 	}
 	for range 3 {
-		data, err := h.readRefreshedNPMVersion(t.Context(), res, u.URL+"/big", "big", "1.0.50")
+		data, err := h.readRefreshedNPMVersion(t.Context(), res, u.URL+"/big", "big", "1.0.50", true)
 		if err != nil || data.entry == nil {
 			t.Fatalf("waiter did not reread changed document: %s, %v", data.entry, err)
 		}

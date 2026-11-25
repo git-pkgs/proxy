@@ -65,6 +65,9 @@ func (h *NPMHandler) limitedPackumentRefresh(cacheKey string) (metadataResult, b
 // Retain only the outcome, not a document or a row pointing to bytes that may
 // be replaced. Later successful waiters read the current cached packument.
 func (h *NPMHandler) retainPackumentRefresh(cacheKey string, err error) {
+	if errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded) {
+		return
+	}
 	h.refreshMu.Lock()
 	defer h.refreshMu.Unlock()
 	if h.refreshAfter == nil {
@@ -86,13 +89,36 @@ func (h *NPMHandler) retainPackumentRefresh(cacheKey string, err error) {
 
 // readRefreshedNPMVersion reads each waiter's own version from the shared
 // refresh, not the version the caller that started it requested.
-func (h *NPMHandler) readRefreshedNPMVersion(ctx context.Context, res metadataResult, packumentURL, cacheKey, version string) (npmVersionData, error) {
+func (h *NPMHandler) readRefreshedNPMVersion(ctx context.Context, res metadataResult, packumentURL, cacheKey, version string, retain bool) (npmVersionData, error) {
 	if res.err != nil {
 		return npmVersionData{}, res.err
 	}
 	if res.entry == nil && res.body == nil {
+		return h.recoverRefreshedNPMVersion(ctx, packumentURL, cacheKey, version, retain)
+	}
+	data, err := h.readNPMVersionResult(ctx, res, version)
+	if errors.Is(err, errStoredMetadataChanged) || errors.Is(err, storage.ErrNotFound) {
+		return h.recoverRefreshedNPMVersion(ctx, packumentURL, cacheKey, version, retain)
+	}
+	return data, err
+}
+
+func (h *NPMHandler) recoverRefreshedNPMVersion(ctx context.Context, packumentURL, cacheKey, version string, retain bool) (npmVersionData, error) {
+	if retain {
+		// Stay inside the non-cooldown limiter window: use the current cache
+		// row instead of forcing another missing-version refresh.
 		data, _, err := h.readVersionData(ctx, packumentURL, cacheKey, version)
 		return data, err
+	}
+	// Under cooldown a replacement may be older and lack the publish time.
+	// Fetch again, as for every other non-concurrent missing-version check.
+	res := h.refreshMissingPackument(ctx, packumentURL, cacheKey, false)
+	return h.readNPMVersionResult(ctx, res, version)
+}
+
+func (h *NPMHandler) readNPMVersionResult(ctx context.Context, res metadataResult, version string) (npmVersionData, error) {
+	if res.err != nil {
+		return npmVersionData{}, res.err
 	}
 	var found npm.VersionEntry
 	read := func(in io.Reader) (err error) {
@@ -104,12 +130,6 @@ func (h *NPMHandler) readRefreshedNPMVersion(ctx context.Context, res metadataRe
 		err = readStored(func() (io.ReadCloser, error) { return h.proxy.openStoredMetadata(ctx, res.entry) }, read)
 	} else {
 		err = read(bytes.NewReader(res.body))
-	}
-	if errors.Is(err, errStoredMetadataChanged) || errors.Is(err, storage.ErrNotFound) {
-		// Another fetch replaced the shared document after this flight
-		// completed. Reread the current row, without a forced refresh.
-		data, _, readErr := h.readVersionData(ctx, packumentURL, cacheKey, version)
-		return data, readErr
 	}
 	return npmVersionData{entry: found.Entry, published: found.Published}, err
 }
