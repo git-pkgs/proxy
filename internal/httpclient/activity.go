@@ -140,7 +140,7 @@ func (a *UpstreamActivity) record(host string, took time.Duration, kind string) 
 // bucket returns the bucket for now's minute, emptied if it last held an
 // older minute.
 func (h *hostActivity) bucket(now time.Time) *activityBucket {
-	minute := now.Unix() / 60
+	minute := minuteOf(now)
 	b := &h.buckets[minute%int64(activityBuckets)]
 	if b.minute != minute {
 		*b = activityBucket{minute: minute}
@@ -148,12 +148,17 @@ func (h *hostActivity) bucket(now time.Time) *activityBucket {
 	return b
 }
 
+// minuteOf numbers the minute t falls in.
+func minuteOf(t time.Time) int64 {
+	return t.Unix() / int64(time.Minute/time.Second)
+}
+
 // Host returns a host's activity, and false for a host that isn't tracked.
 func (a *UpstreamActivity) Host(host string) (HostActivity, bool) {
 	if a == nil {
 		return HostActivity{}, false
 	}
-	oldest := a.now().Unix()/60 - int64(activityBuckets) + 1
+	oldest := minuteOf(a.now()) - int64(activityBuckets) + 1
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	h, ok := a.hosts[strings.ToLower(host)]

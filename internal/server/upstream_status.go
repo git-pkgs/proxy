@@ -20,6 +20,9 @@ const (
 // which it is shown as slow.
 const slowUpstream = 5 * time.Second
 
+// latencyPrecision rounds response times of a second or more.
+const latencyPrecision = 100 * time.Millisecond
+
 // UpstreamStatus is how an upstream's recent requests went. It carries no
 // host or error text: /ui has no auth of its own.
 type UpstreamStatus struct {
@@ -91,10 +94,17 @@ func formatLatency(d time.Duration) string {
 	if d < time.Second {
 		return d.Round(time.Millisecond).String()
 	}
-	return d.Round(100 * time.Millisecond).String()
+	return d.Round(latencyPrecision).String()
 }
 
-var statusSeverity = map[string]int{statusIdle: 0, statusOK: 1, statusWarn: 2, statusError: 3}
+// statusSeverity ranks the levels from least to most severe.
+var statusSeverity = func() map[string]int {
+	m := map[string]int{}
+	for i, level := range []string{statusIdle, statusOK, statusWarn, statusError} {
+		m[level] = i
+	}
+	return m
+}()
 
 // worstStatus returns the most severe status of rows, so an ecosystem shows
 // a problem with any of its upstreams.
