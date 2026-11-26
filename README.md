@@ -61,7 +61,7 @@ The proxy never uploads artifact bytes to a scanner. Each scanner is notified wi
 | Conda | Python/R | Yes | ✓ |
 | CRAN | R | | ✓ |
 | Julia | Julia | | ✓ |
-| Swift | Swift | | ✓ |
+| Swift | Swift | Yes§ | ✓ |
 | Container | Docker/OCI | | ✓ |
 | Homebrew | macOS/Linux | | ✓ |
 | Debian | Debian/Ubuntu | | ✓ |
@@ -83,6 +83,8 @@ Cooldown requires publish timestamps in metadata. Registries without a "Yes" in 
 † Go cooldown uses the time in each version's `.info`, which is the commit time of the tagged revision, not when the tag was pushed.
 
 ‡ Maven cooldown uses the `Last-Modified` header of each version's `.pom`. On Maven Central that is the deploy time; a Nexus or Artifactory upstream may report when it cached the file instead. SNAPSHOT versions are not held back.
+
+§ Swift cooldown uses the optional `publishedAt` of each release, which the default upstream doesn't send, so there it has no effect.
 
 ## Install
 

@@ -20,6 +20,8 @@ func TestPortableImports(t *testing.T) {
 		t.Fatalf("go list: %v", err)
 	}
 	allowed := []string{
+		"github.com/Masterminds/semver/v3",
+		"github.com/git-pkgs/cooldown",
 		"github.com/git-pkgs/proxy/internal/metadata/swift",
 	}
 	forbiddenStd := []string{"database/sql", "log/slog", "net", "net/http"}

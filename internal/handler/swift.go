@@ -155,13 +155,23 @@ func (h *SwiftHandler) handlePackageReleases(w http.ResponseWriter, r *http.Requ
 		return
 	}
 
-	rewritten, err := h.rewriteReleaseURLs(scope, name, doc.body)
+	body, link := doc.body, doc.link
+	if h.swiftCooldownApplies(scope, name) {
+		filtered, removed, err := h.filterReleases(r.Context(), scope, name, body)
+		if err != nil {
+			h.proxy.writeCooldownLookupError(w, "swift", scope+"/"+name, err)
+			return
+		}
+		body, link = filtered, swift.WithoutLatestVersion(link, removed)
+	}
+
+	rewritten, err := h.rewriteReleaseURLs(scope, name, body)
 	if err != nil {
 		h.proxy.Logger.Warn("failed to rewrite Swift release URLs", "error", err)
-		rewritten = doc.body
+		rewritten = body
 	}
-	if doc.link != "" {
-		w.Header().Set("Link", h.rewriteLinkHeader(doc.link, upstreamURL))
+	if link != "" {
+		w.Header().Set("Link", h.rewriteLinkHeader(link, upstreamURL))
 	}
 	writeSwiftMetadata(w, r, rewritten, doc.contentType)
 }
@@ -181,6 +191,9 @@ func (h *SwiftHandler) handleRelease(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scope, name = canonicalSwiftPackage(scope, name)
+	if h.checkCooldown(w, r, scope, name, version) {
+		return
+	}
 
 	upstreamURL := h.buildUpstreamURL(scope, name, version, "", r.URL.RawQuery)
 	accept := requestAccept(r, swiftAcceptJSON)
@@ -203,6 +216,9 @@ func (h *SwiftHandler) handleManifest(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	scope, name = canonicalSwiftPackage(scope, name)
+	if h.checkCooldown(w, r, scope, name, version) {
+		return
+	}
 
 	upstreamURL := h.buildUpstreamURL(scope, name, version, "Package.swift", r.URL.RawQuery)
 	accept := requestAccept(r, swiftAcceptManifest)
@@ -256,6 +272,9 @@ func (h *SwiftHandler) handleSourceArchive(w http.ResponseWriter, r *http.Reques
 		return
 	}
 	filename, packagePURL, versionPURL := key.filename, key.packagePURL, key.versionPURL
+	if h.checkCooldown(w, r, scope, name, version) {
+		return
+	}
 	upstreamURL := h.buildUpstreamURL(scope, name, version+".zip", "", r.URL.RawQuery)
 	archiveInfo, infoErr := h.fetchArchiveInfo(r.Context(), scope, name, version)
 	if infoErr != nil {

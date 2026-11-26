@@ -35,8 +35,8 @@ func TestCooldownViewForPackage(t *testing.T) {
 	v := testCooldownView(t, config.CooldownConfig{
 		Default:         "3d",
 		Ecosystems:      map[string]string{"npm": "7d", "composer": "48h"},
-		Packages:        map[string]string{"pkg:composer/phpunit/phpunit": "0"},
-		PackagePatterns: map[string]string{"pkg:npm/@corp/*": "0", "pkg:composer/acme/*": "12h"},
+		Packages:        map[string]string{"pkg:composer/phpunit/phpunit": "0", "pkg:swift/Apple/swift-nio": "1d"},
+		PackagePatterns: map[string]string{"pkg:npm/@corp/*": "0", "pkg:composer/acme/*": "12h", "pkg:swift/vapor/*": "0"},
 	})
 	tests := []struct {
 		ecosystem, name string
@@ -48,6 +48,9 @@ func TestCooldownViewForPackage(t *testing.T) {
 		{"composer", "phpunit/phpunit", PackageCooldown{"off", "package override"}},
 		{"composer", "acme/tool", PackageCooldown{"12h", "package pattern"}},
 		{"npm", "@corp/ui", PackageCooldown{"off", "package pattern"}},
+		{"swift", "apple/swift-nio", PackageCooldown{"1d", "package override"}},
+		{"swift", "vapor/vapor", PackageCooldown{"off", "package pattern"}},
+		{"swift", "apple/swift-log", PackageCooldown{"3d", "default"}},
 	}
 	for _, tt := range tests {
 		got := v.forPackage(tt.ecosystem, tt.name)
