@@ -11,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/metadata/chef"
 )
 
@@ -40,6 +41,10 @@ type ChefHandler struct {
 	// upstream.chef at another Supermarket does not serve the previous one's
 	// documents or archives.
 	upstreamKey string
+	// timeQualifier is added to the versions-table PURLs publish times are
+	// stored under, naming any upstream but the public Supermarket; see
+	// timeKey.
+	timeQualifier string
 }
 
 // NewChefHandler creates a Chef Supermarket handler for the Supermarket at
@@ -47,12 +52,16 @@ type ChefHandler struct {
 func NewChefHandler(proxy *Proxy, proxyURL, upstreamURL string) *ChefHandler {
 	upstreamURL = strings.TrimSuffix(upstreamURL, "/")
 	digest := sha256.Sum256([]byte(upstreamURL))
-	return &ChefHandler{
+	h := &ChefHandler{
 		proxy:       proxy,
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 		upstreamURL: upstreamURL,
 		upstreamKey: hex.EncodeToString(digest[:])[:chefUpstreamKeyLength],
 	}
+	if upstreamURL != config.DefaultChefUpstream {
+		h.timeQualifier = "?repository_url=" + url.QueryEscape(upstreamURL)
+	}
+	return h
 }
 
 // Routes returns the HTTP handler for Chef Supermarket requests.

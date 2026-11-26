@@ -42,11 +42,11 @@ func TestPublishedAt(t *testing.T) {
 }
 
 func withheldIn(doc []byte, o CooldownOptions) (map[string]bool, error) {
-	updated, versions, err := Cookbook(doc)
+	info, err := Cookbook(doc)
 	if err != nil {
 		return nil, err
 	}
-	return Withheld(testPackagePURL, updated, versions, o)
+	return Withheld(testPackagePURL, info.UpdatedAt, info.Versions, o)
 }
 
 // cookbookDoc is a cookbook document listing versions, newest first as
@@ -143,10 +143,10 @@ func TestWithheldErrors(t *testing.T) {
 	}); !errors.Is(err, boom) {
 		t.Errorf("err = %v, want %v", err, boom)
 	}
-	if _, _, err := Cookbook([]byte(`nope`)); !errors.Is(err, ErrDocument) {
+	if _, err := Cookbook([]byte(`nope`)); !errors.Is(err, ErrDocument) {
 		t.Errorf("invalid JSON: err = %v, want ErrDocument", err)
 	}
-	if _, _, err := Cookbook([]byte(`{"updated_at":"soon"}`)); !errors.Is(err, ErrDocument) {
+	if _, err := Cookbook([]byte(`{"updated_at":"soon"}`)); !errors.Is(err, ErrDocument) {
 		t.Errorf("invalid updated_at: err = %v, want ErrDocument", err)
 	}
 }
@@ -202,6 +202,20 @@ func TestWithheldWithoutUpdatedAtChecksVersions(t *testing.T) {
 	})
 	if err != nil || len(withheld) != 1 || !withheld["1.1"] {
 		t.Errorf("withheld = %v, %v; want 1.1", withheld, err)
+	}
+}
+
+func TestCookbookDeprecated(t *testing.T) {
+	for body, want := range map[string]bool{
+		`{"name":"legacy","deprecated":true,"versions":[]}`: true,
+		`{"name":"nginx","deprecated":false,"versions":[]}`: false,
+		`{"name":"nginx","deprecated":null,"versions":[]}`:  false,
+		`{"name":"nginx","versions":[]}`:                    false,
+	} {
+		info, err := Cookbook([]byte(body))
+		if err != nil || info.Deprecated != want {
+			t.Errorf("Cookbook(%s) deprecated = %v, %v; want %v", body, info.Deprecated, err, want)
+		}
 	}
 }
 

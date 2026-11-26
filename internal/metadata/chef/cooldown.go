@@ -61,27 +61,40 @@ func parseTime(value string) (time.Time, error) {
 	return t, nil
 }
 
-// Cookbook reads a cookbook document's updated_at, the zero time when it
-// has none, and the versions it lists.
-func Cookbook(body []byte) (time.Time, []string, error) {
+// CookbookInfo is what a cookbook document says about the cookbook's
+// versions.
+type CookbookInfo struct {
+	// UpdatedAt is the cookbook's updated_at, the zero time when it has
+	// none.
+	UpdatedAt time.Time
+	// Deprecated is set for a deprecated cookbook, which Supermarket lists
+	// after all others when ordering by update.
+	Deprecated bool
+	// Versions are the versions the document lists.
+	Versions []string
+}
+
+// Cookbook reads a cookbook document.
+func Cookbook(body []byte) (CookbookInfo, error) {
 	var document struct {
-		UpdatedAt string            `json:"updated_at"`
-		Versions  []json.RawMessage `json:"versions"`
+		UpdatedAt  string            `json:"updated_at"`
+		Deprecated bool              `json:"deprecated"`
+		Versions   []json.RawMessage `json:"versions"`
 	}
 	if err := json.Unmarshal(body, &document); err != nil {
-		return time.Time{}, nil, fmt.Errorf("%w: cookbook: %w", ErrDocument, err)
+		return CookbookInfo{}, fmt.Errorf("%w: cookbook: %w", ErrDocument, err)
 	}
 	updated, err := parseTime(document.UpdatedAt)
 	if err != nil {
-		return time.Time{}, nil, err
+		return CookbookInfo{}, err
 	}
-	versions := make([]string, 0, len(document.Versions))
+	info := CookbookInfo{UpdatedAt: updated, Deprecated: document.Deprecated, Versions: make([]string, 0, len(document.Versions))}
 	for _, raw := range document.Versions {
 		if v, ok := versionOfURL(raw); ok {
-			versions = append(versions, v)
+			info.Versions = append(info.Versions, v)
 		}
 	}
-	return updated, versions, nil
+	return info, nil
 }
 
 // UniverseVersions returns the versions /universe lists for each of names

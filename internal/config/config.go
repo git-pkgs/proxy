@@ -90,6 +90,9 @@ import (
 // DefaultSwiftUpstream is the Swift Package Registry used when none is configured.
 const DefaultSwiftUpstream = "https://tuist.dev/api/registry/swift"
 
+// DefaultChefUpstream is the Chef Supermarket used when none is configured.
+const DefaultChefUpstream = "https://supermarket.chef.io"
+
 // Config holds all configuration for the proxy server.
 type Config struct {
 	// Listen is the address to listen on (e.g., ":8080", "127.0.0.1:8080").
@@ -1472,7 +1475,7 @@ func Default() *Config {
 			Composer:           "https://packagist.org",
 			ComposerRepository: "https://repo.packagist.org",
 			Conan:              "https://center.conan.io",
-			Chef:               "https://supermarket.chef.io",
+			Chef:               DefaultChefUpstream,
 			Conda:              "https://conda.anaconda.org",
 			CRAN:               "https://cloud.r-project.org",
 			Julia:              "https://pkg.julialang.org",

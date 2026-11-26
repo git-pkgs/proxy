@@ -55,7 +55,7 @@ func (h *ChefHandler) cooldownOptions(ctx context.Context, name string) chef.Coo
 		},
 		OnWithheld: func(version string, published time.Time) {
 			h.proxy.Logger.Info("cooldown: filtering chef cookbook version", "cookbook", name, "version", version)
-			h.proxy.recordWithheld(chefEcosystem, name, version, published)
+			h.recordWithheld(name, version, published)
 		},
 	}
 }
@@ -66,7 +66,7 @@ func (h *ChefHandler) cooldownOptions(ctx context.Context, name string) chef.Coo
 // and is let through. A failed fetch is an error, so a flaky upstream can't
 // let a version through.
 func (h *ChefHandler) publishTime(ctx context.Context, name, version string) (time.Time, error) {
-	versionPURL, packagePURL := canonicalVersionPURL(chefEcosystem, name, version), canonicalPackagePURL(chefEcosystem, name)
+	versionPURL, packagePURL := h.timeKey(name, version)
 	if h.proxy.DB != nil && versionPURL != "" {
 		if ver, err := h.proxy.DB.GetVersionByPURL(versionPURL); err == nil && ver != nil && ver.PublishedAt.Valid {
 			return ver.PublishedAt.Time, nil
@@ -93,6 +93,28 @@ func (h *ChefHandler) publishTime(ctx context.Context, name, version string) (ti
 	return published, nil
 }
 
+// timeKey returns the versions-table PURLs a version's time is stored
+// under. Another upstream's keys carry it as repository_url, like a Maven
+// named repository's: the same cookbook version there can have been
+// published at another time than on the public Supermarket, and pointing
+// upstream.chef elsewhere must not reuse the times stored for it.
+func (h *ChefHandler) timeKey(name, version string) (versionPURL, packagePURL string) {
+	versionPURL, packagePURL = canonicalVersionPURL(chefEcosystem, name, version), canonicalPackagePURL(chefEcosystem, name)
+	if versionPURL == "" || h.timeQualifier == "" {
+		return versionPURL, packagePURL
+	}
+	return versionPURL + h.timeQualifier, packagePURL + h.timeQualifier
+}
+
+// recordWithheld records a version cooldown held back for the package page;
+// see Proxy.recordWithheld. The page shows the public Supermarket's times,
+// which another upstream's would be mistaken for, so only those are kept.
+func (h *ChefHandler) recordWithheld(name, version string, published time.Time) {
+	if h.timeQualifier == "" {
+		h.proxy.recordWithheld(chefEcosystem, name, version, published)
+	}
+}
+
 // inCooldown reports whether a cookbook version is in cooldown.
 func (h *ChefHandler) inCooldown(ctx context.Context, name, version string) (bool, error) {
 	if !h.cooldownApplies(name) {
@@ -105,7 +127,7 @@ func (h *ChefHandler) inCooldown(ctx context.Context, name, version string) (boo
 	if h.proxy.cooldown().IsAllowed("chef", canonicalPackagePURL(chefEcosystem, name), published) {
 		return false, nil
 	}
-	h.proxy.recordWithheld(chefEcosystem, name, version, published)
+	h.recordWithheld(name, version, published)
 	return true, nil
 }
 
@@ -151,11 +173,11 @@ func (h *ChefHandler) cookbookWithheld(ctx context.Context, name string, body []
 	if !h.cooldownApplies(name) {
 		return nil, nil
 	}
-	updated, versions, err := chef.Cookbook(body)
+	info, err := chef.Cookbook(body)
 	if err != nil {
 		return nil, err
 	}
-	return chef.Withheld(canonicalPackagePURL(chefEcosystem, name), updated, versions, h.cooldownOptions(ctx, name))
+	return chef.Withheld(canonicalPackagePURL(chefEcosystem, name), info.UpdatedAt, info.Versions, h.cooldownOptions(ctx, name))
 }
 
 // universeWithheld returns, for each cookbook with versions in cooldown,
@@ -207,61 +229,114 @@ type recentCookbook struct {
 	updated time.Time
 }
 
-// recentCookbooks reads the recently updated listing from the newest down
-// to the first cookbook updated before cutoff, and fails when that takes
-// more than maxChefRecentPages pages.
+// recentCookbooks returns the cookbooks updated since cutoff. Supermarket's
+// recently updated listing has the cookbooks that aren't deprecated first,
+// newest first, and then the deprecated ones, newest first. Both sections
+// are read from the newest down to the first cookbook updated before
+// cutoff; the start of the deprecated section is found by a binary search.
+// Reading more than maxChefRecentPages pages fails.
 func (h *ChefHandler) recentCookbooks(ctx context.Context, cutoff time.Time) ([]recentCookbook, error) {
 	var recent []recentCookbook
-	// The listing can shift between pages as cookbooks are updated, so a
-	// cookbook can come up twice.
-	seen := map[string]bool{}
-	for page := range maxChefRecentPages {
-		start := page * chefRecentPageSize
-		listURL := fmt.Sprintf("%s%s/cookbooks?order=recently_updated&start=%d&items=%d", h.upstreamURL, chefAPIPath, start, chefRecentPageSize)
-		body, err := h.freshDocument(ctx, fmt.Sprintf("recently_updated/%d", start), listURL)
-		if err != nil {
-			return nil, fmt.Errorf("reading recently updated cookbooks: %w", err)
-		}
-		names, total, err := chef.RecentCookbooks(body)
+	start, deprecated := 0, false
+	for range maxChefRecentPages {
+		names, total, err := h.recentPage(ctx, start, chefRecentPageSize)
 		if err != nil {
 			return nil, err
 		}
-		for _, name := range names {
-			if seen[name] || !chefCookbookName.MatchString(name) || containsPathTraversal(name) {
-				continue
-			}
-			seen[name] = true
-			updated, found, err := h.cookbookUpdated(ctx, name)
+		next := start + len(names)
+		for i, name := range names {
+			info, found, err := h.cookbookInfo(ctx, name)
 			if err != nil {
 				return nil, err
 			}
 			if !found {
 				continue
 			}
-			if !updated.IsZero() && updated.Before(cutoff) {
+			deprecated = deprecated || info.Deprecated
+			if info.UpdatedAt.IsZero() || !info.UpdatedAt.Before(cutoff) {
+				recent = append(recent, recentCookbook{name, info.UpdatedAt})
+				continue
+			}
+			if deprecated {
 				return recent, nil
 			}
-			recent = append(recent, recentCookbook{name, updated})
+			// The rest of the section is older still; skip to the
+			// deprecated cookbooks.
+			if next, err = h.firstDeprecated(ctx, start+i+1, total); err != nil {
+				return nil, err
+			}
+			deprecated = true
+			break
 		}
-		if len(names) == 0 || start+len(names) >= total {
+		if len(names) == 0 || next >= total {
 			return recent, nil
 		}
+		start = next
 	}
 	return nil, errChefTooManyRecent
 }
 
-// cookbookUpdated reads a cookbook's updated_at from the upstream. found is
+// recentPage reads names from the recently updated listing, from start on,
+// and the listing's length.
+func (h *ChefHandler) recentPage(ctx context.Context, start, items int) ([]string, int, error) {
+	listURL := fmt.Sprintf("%s%s/cookbooks?order=recently_updated&start=%d&items=%d", h.upstreamURL, chefAPIPath, start, items)
+	body, err := h.freshDocument(ctx, fmt.Sprintf("recently_updated/%d/%d", start, items), listURL)
+	if err != nil {
+		return nil, 0, fmt.Errorf("reading recently updated cookbooks: %w", err)
+	}
+	names, total, err := chef.RecentCookbooks(body)
+	if err != nil {
+		return nil, 0, err
+	}
+	valid := names[:0]
+	for _, name := range names {
+		if chefCookbookName.MatchString(name) && !containsPathTraversal(name) {
+			valid = append(valid, name)
+		}
+	}
+	return valid, total, nil
+}
+
+// firstDeprecated returns the position of the first deprecated cookbook in
+// the recently updated listing between lo and hi, or hi when there is none.
+func (h *ChefHandler) firstDeprecated(ctx context.Context, lo, hi int) (int, error) {
+	for lo < hi {
+		mid := int(uint(lo+hi) >> 1)
+		names, _, err := h.recentPage(ctx, mid, 1)
+		if err != nil {
+			return 0, err
+		}
+		// A position past the end, as when the listing shrank, counts as
+		// the end of the section.
+		deprecated := len(names) == 0
+		if !deprecated {
+			info, found, err := h.cookbookInfo(ctx, names[0])
+			if err != nil {
+				return 0, err
+			}
+			deprecated = found && info.Deprecated
+		}
+		if deprecated {
+			hi = mid
+		} else {
+			lo = mid + 1
+		}
+	}
+	return lo, nil
+}
+
+// cookbookInfo reads a cookbook's document from the upstream. found is
 // false for a cookbook the upstream doesn't have.
-func (h *ChefHandler) cookbookUpdated(ctx context.Context, name string) (updated time.Time, found bool, err error) {
+func (h *ChefHandler) cookbookInfo(ctx context.Context, name string) (info chef.CookbookInfo, found bool, err error) {
 	body, err := h.freshDocument(ctx, "cookbooks/"+name, h.upstreamCookbookURL(name))
 	if errors.Is(err, ErrUpstreamNotFound) {
-		return time.Time{}, false, nil
+		return chef.CookbookInfo{}, false, nil
 	}
 	if err != nil {
-		return time.Time{}, false, fmt.Errorf("reading cookbook %s: %w", name, err)
+		return chef.CookbookInfo{}, false, fmt.Errorf("reading cookbook %s: %w", name, err)
 	}
-	updated, _, err = chef.Cookbook(body)
-	return updated, true, err
+	info, err = chef.Cookbook(body)
+	return info, true, err
 }
 
 // freshDocument fetches a document from the upstream, storing it in the

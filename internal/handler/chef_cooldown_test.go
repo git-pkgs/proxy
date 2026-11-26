@@ -18,19 +18,30 @@ import (
 )
 
 // chefCooldownSupermarket serves nginx, updated an hour ago, with an old
-// 1.0.0 and a recent 1.1.0; apt, updated ten days ago; and old, updated
-// longer ago, which a universe filter stops before.
+// 1.0.0 and a recent 1.1.0; apt, updated ten days ago; old, updated longer
+// ago, which a universe filter stops before; and legacy, a deprecated
+// cookbook updated an hour ago with an old 3.0.0 and a recent 3.1.0, which
+// Supermarket lists after every cookbook that isn't deprecated.
 type chefCooldownSupermarket struct {
-	server *httptest.Server
-	now    time.Time
-	mu     sync.Mutex
-	hits   map[string]int
-	fail   map[string]bool
+	server    *httptest.Server
+	now       time.Time
+	mu        sync.Mutex
+	hits      map[string]int
+	fail      map[string]bool
+	cookbooks map[string]chefFakeCookbook
 	// limited are paths answered with 429.
 	limited map[string]bool
-	// recent is the recently updated listing, newest first.
+	// recent is the recently updated listing; nil lists cookbooks as
+	// Supermarket orders them.
 	recent []string
 	total  int
+}
+
+type chefFakeCookbook struct {
+	updated    time.Duration
+	deprecated bool
+	// versions are the cookbook's versions and their ages.
+	versions map[string]time.Duration
 }
 
 func (s *chefCooldownSupermarket) count(path string) int {
@@ -45,26 +56,47 @@ func (s *chefCooldownSupermarket) setFail(path string) {
 	s.fail[path] = true
 }
 
-var chefCooldownVersions = map[string]map[string]time.Duration{
-	"nginx": {"1.0.0": 30 * 24 * time.Hour, "1.1.0": time.Hour},
-	"apt":   {"2.0.0": 10 * 24 * time.Hour},
-	"old":   {"0.1.0": 400 * 24 * time.Hour},
-}
-
-var chefCooldownUpdated = map[string]time.Duration{
-	"nginx": time.Hour, "apt": 10 * 24 * time.Hour, "old": 400 * 24 * time.Hour,
-}
-
 func newChefCooldownSupermarket(t *testing.T) *chefCooldownSupermarket {
 	t.Helper()
+	day := 24 * time.Hour
 	s := &chefCooldownSupermarket{
 		now: time.Now().UTC().Truncate(time.Second), hits: map[string]int{}, fail: map[string]bool{}, limited: map[string]bool{},
-		recent: []string{"nginx", "apt", "old"},
+		cookbooks: map[string]chefFakeCookbook{
+			"nginx":  {updated: time.Hour, versions: map[string]time.Duration{"1.0.0": 30 * day, "1.1.0": time.Hour}},
+			"apt":    {updated: 10 * day, versions: map[string]time.Duration{"2.0.0": 10 * day}},
+			"old":    {updated: 400 * day, versions: map[string]time.Duration{"0.1.0": 400 * day}},
+			"legacy": {updated: time.Hour, deprecated: true, versions: map[string]time.Duration{"3.0.0": 30 * day, "3.1.0": time.Hour}},
+		},
 	}
-	s.total = len(s.recent)
 	s.server = httptest.NewServer(http.HandlerFunc(s.serve))
 	t.Cleanup(s.server.Close)
 	return s
+}
+
+// listing returns the recently updated listing: cookbooks that aren't
+// deprecated, newest first, then deprecated ones, newest first.
+func (s *chefCooldownSupermarket) listing() ([]string, int) {
+	if s.recent != nil {
+		return s.recent, s.total
+	}
+	names := make([]string, 0, len(s.cookbooks))
+	for name := range s.cookbooks {
+		names = append(names, name)
+	}
+	slices.SortFunc(names, func(a, b string) int {
+		ca, cb := s.cookbooks[a], s.cookbooks[b]
+		if ca.deprecated != cb.deprecated {
+			if ca.deprecated {
+				return 1
+			}
+			return -1
+		}
+		if ca.updated != cb.updated {
+			return int(ca.updated - cb.updated)
+		}
+		return strings.Compare(a, b)
+	})
+	return names, len(names)
 }
 
 func (s *chefCooldownSupermarket) serve(w http.ResponseWriter, r *http.Request) {
@@ -85,9 +117,9 @@ func (s *chefCooldownSupermarket) serve(w http.ResponseWriter, r *http.Request) 
 	api := s.server.URL + "/api/v1"
 	if r.URL.Path == "/universe" {
 		universe := map[string]map[string]any{}
-		for name, versions := range chefCooldownVersions {
+		for name, c := range s.cookbooks {
 			universe[name] = map[string]any{}
-			for v := range versions {
+			for v := range c.versions {
 				universe[name][v] = map[string]any{
 					"location_type": "opscode", "location_path": api,
 					"download_url": api + "/cookbooks/" + name + "/versions/" + v + "/download", "dependencies": map[string]any{},
@@ -102,13 +134,15 @@ func (s *chefCooldownSupermarket) serve(w http.ResponseWriter, r *http.Request) 
 			http.NotFound(w, r)
 			return
 		}
-		var start int
+		var start, items int
 		_, _ = fmt.Sscan(r.URL.Query().Get("start"), &start)
-		items := []map[string]string{}
-		for i := start; i < len(s.recent) && i < start+chefRecentPageSize; i++ {
-			items = append(items, map[string]string{"cookbook_name": s.recent[i]})
+		_, _ = fmt.Sscan(r.URL.Query().Get("items"), &items)
+		recent, total := s.listing()
+		page := []map[string]string{}
+		for i := start; i < len(recent) && i < start+min(items, chefRecentPageSize); i++ {
+			page = append(page, map[string]string{"cookbook_name": recent[i]})
 		}
-		_ = json.NewEncoder(w).Encode(map[string]any{"start": start, "total": s.total, "items": items})
+		_ = json.NewEncoder(w).Encode(map[string]any{"start": start, "total": total, "items": page})
 		return
 	}
 	rest, ok := strings.CutPrefix(r.URL.Path, "/api/v1/cookbooks/")
@@ -117,14 +151,14 @@ func (s *chefCooldownSupermarket) serve(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	name, rest, _ := strings.Cut(rest, "/versions/")
-	versions, ok := chefCooldownVersions[name]
+	c, ok := s.cookbooks[name]
 	if !ok {
 		http.NotFound(w, r)
 		return
 	}
 	if rest == "" {
 		var listed []string
-		for v := range versions {
+		for v := range c.versions {
 			listed = append(listed, v)
 		}
 		slices.Sort(listed)
@@ -134,12 +168,12 @@ func (s *chefCooldownSupermarket) serve(w http.ResponseWriter, r *http.Request) 
 			urls[i] = api + "/cookbooks/" + name + "/versions/" + v
 		}
 		_ = json.NewEncoder(w).Encode(map[string]any{
-			"name": name, "latest_version": urls[0], "versions": urls,
-			"updated_at": s.now.Add(-chefCooldownUpdated[name]).Format(time.RFC3339),
+			"name": name, "latest_version": urls[0], "versions": urls, "deprecated": c.deprecated,
+			"updated_at": s.now.Add(-c.updated).Format(time.RFC3339),
 		})
 		return
 	}
-	age, ok := versions[rest]
+	age, ok := c.versions[rest]
 	if !ok {
 		http.NotFound(w, r)
 		return
@@ -158,7 +192,11 @@ func chefCooldownHandler(t *testing.T, s *chefCooldownSupermarket) (http.Handler
 	fetcher.artifact = &fetch.Artifact{
 		Body: io.NopCloser(strings.NewReader(chefTestTarball)), Size: int64(len(chefTestTarball)), ContentType: "application/gzip",
 	}
-	return NewChefHandler(proxy, chefTestProxyURL, s.server.URL).Routes(), proxy, fetcher
+	h := NewChefHandler(proxy, chefTestProxyURL, s.server.URL)
+	// Stand in for the public Supermarket, whose times are stored without
+	// a repository_url.
+	h.timeQualifier = ""
+	return h.Routes(), proxy, fetcher
 }
 
 func chefGet(t *testing.T, h http.Handler, path string) *httptest.ResponseRecorder {
@@ -201,8 +239,8 @@ func TestChefCooldownFiltersUniverse(t *testing.T) {
 	if got := listed["old"]; !slices.Equal(got, []string{"0.1.0"}) {
 		t.Errorf("old = %v, want [0.1.0]", got)
 	}
-	if got := s.count("/api/v1/cookbooks/old"); got != 0 {
-		t.Errorf("old's cookbook read %d times: the walk stops at apt, updated before the cooldown", got)
+	if got := listed["legacy"]; !slices.Equal(got, []string{"3.0.0"}) {
+		t.Errorf("legacy = %v, want [3.0.0]: deprecated cookbooks are listed after the others, and checked too", got)
 	}
 	if got := s.count("/api/v1/cookbooks/apt/versions/2.0.0"); got != 0 {
 		t.Errorf("apt 2.0.0 read %d times: apt was updated before the cooldown", got)
@@ -269,8 +307,8 @@ func TestChefCooldownFollowsListingPages(t *testing.T) {
 	if got := s.count("/api/v1/cookbooks/apt"); got != 1 {
 		t.Errorf("apt read %d times, want once, on the second page", got)
 	}
-	if got := s.count("/api/v1/cookbooks/old"); got != 0 {
-		t.Errorf("old read %d times, want none", got)
+	if got := s.count("/api/v1/cookbooks/old/versions/0.1.0"); got != 0 {
+		t.Errorf("old 0.1.0 read %d times, want none", got)
 	}
 }
 
@@ -437,5 +475,115 @@ func TestChefCooldownRateLimitedUniverseIsHeld(t *testing.T) {
 	w := chefGet(t, h, "/universe")
 	if w.Code != http.StatusServiceUnavailable || w.Header().Get("Retry-After") == "" {
 		t.Errorf("status = %d, Retry-After %q; want 503 with Retry-After", w.Code, w.Header().Get("Retry-After"))
+	}
+}
+
+func TestChefCooldownFindsDeprecatedCookbooksPastOldOnes(t *testing.T) {
+	s := newChefCooldownSupermarket(t)
+	h, _, _ := chefCooldownHandler(t, s)
+	for i := range 3 * chefRecentPageSize {
+		s.cookbooks[fmt.Sprintf("old%03d", i)] = chefFakeCookbook{
+			updated: time.Duration(500+i) * 24 * time.Hour, versions: map[string]time.Duration{"1.0.0": 900 * 24 * time.Hour},
+		}
+	}
+
+	listed := chefUniverseVersions(t, chefGet(t, h, "/universe"))
+	if got := listed["legacy"]; !slices.Equal(got, []string{"3.0.0"}) {
+		t.Errorf("legacy = %v, want [3.0.0]", got)
+	}
+	if got := listed["nginx"]; !slices.Equal(got, []string{"1.0.0"}) {
+		t.Errorf("nginx = %v, want [1.0.0]", got)
+	}
+	read := 0
+	for name := range s.cookbooks {
+		if strings.HasPrefix(name, "old") {
+			read += s.count("/api/v1/cookbooks/" + name)
+		}
+	}
+	if read > 12 {
+		t.Errorf("read %d old cookbooks to find the deprecated ones, want a binary search", read)
+	}
+}
+
+func TestChefCooldownStopsInTheDeprecatedSection(t *testing.T) {
+	s := newChefCooldownSupermarket(t)
+	h, _, _ := chefCooldownHandler(t, s)
+	s.cookbooks["retired"] = chefFakeCookbook{updated: 300 * 24 * time.Hour, deprecated: true, versions: map[string]time.Duration{"1.0.0": 300 * 24 * time.Hour}}
+	s.cookbooks["gone"] = chefFakeCookbook{updated: 600 * 24 * time.Hour, deprecated: true, versions: map[string]time.Duration{"1.0.0": 600 * 24 * time.Hour}}
+
+	chefUniverseVersions(t, chefGet(t, h, "/universe"))
+	if got := s.count("/api/v1/cookbooks/gone"); got != 0 {
+		t.Errorf("gone read %d times: the walk stops at retired, the first old deprecated cookbook", got)
+	}
+}
+
+func TestChefCooldownKeepsTimesPerUpstream(t *testing.T) {
+	s := newChefCooldownSupermarket(t)
+	_, proxy, _ := chefCooldownHandler(t, s)
+	h := NewChefHandler(proxy, chefTestProxyURL, s.server.URL).Routes()
+	// A time stored for the default Supermarket's nginx 1.1.0 says nothing
+	// about the one on this upstream.
+	if err := proxy.DB.SetVersionPublishedAt("pkg:chef/nginx@1.1.0", "pkg:chef/nginx", s.now.Add(-300*24*time.Hour)); err != nil {
+		t.Fatal(err)
+	}
+	if w := chefGet(t, h, "/api/v1/cookbooks/nginx/versions/1.1.0"); w.Code != http.StatusForbidden {
+		t.Errorf("status = %d, want 403", w.Code)
+	}
+	if got := s.count("/api/v1/cookbooks/nginx/versions/1.1.0"); got != 1 {
+		t.Errorf("1.1.0 read %d times, want once", got)
+	}
+	if w := chefGet(t, h, "/api/v1/cookbooks/nginx/versions/1.1.0"); w.Code != http.StatusForbidden {
+		t.Errorf("second status = %d, want 403", w.Code)
+	}
+	if got := s.count("/api/v1/cookbooks/nginx/versions/1.1.0"); got != 1 {
+		t.Errorf("1.1.0 read %d times, want once: its time is stored for this upstream", got)
+	}
+	// Nor does the package page get this upstream's times.
+	ver, err := proxy.DB.GetVersionByPURL("pkg:chef/nginx@1.1.0")
+	if err != nil || ver == nil || !ver.PublishedAt.Time.Equal(s.now.Add(-300*24*time.Hour)) {
+		t.Errorf("default upstream's row = %+v, %v; want it unchanged", ver, err)
+	}
+	if pkg, err := proxy.DB.GetPackageByEcosystemName("chef", "nginx"); err != nil || pkg != nil {
+		t.Errorf("package row = %+v, %v; want none recorded for another upstream", pkg, err)
+	}
+}
+
+func TestChefTimeKey(t *testing.T) {
+	proxy, _, _, _ := setupTestProxy(t)
+	for upstream, want := range map[string]string{
+		"https://supermarket.chef.io":         "pkg:chef/nginx@1.0.0",
+		"https://supermarket.chef.io/":        "pkg:chef/nginx@1.0.0",
+		"https://supermarket.example.com/sub": "pkg:chef/nginx@1.0.0?repository_url=https%3A%2F%2Fsupermarket.example.com%2Fsub",
+	} {
+		versionPURL, packagePURL := NewChefHandler(proxy, chefTestProxyURL, upstream).timeKey("nginx", "1.0.0")
+		if versionPURL != want || !strings.HasPrefix(versionPURL, "pkg:chef/nginx@") || !strings.HasPrefix(packagePURL, "pkg:chef/nginx") {
+			t.Errorf("%s: timeKey = %q, %q; want %q", upstream, versionPURL, packagePURL, want)
+		}
+	}
+}
+
+func TestChefCooldownStopsInADeprecatedSectionReachedByWalking(t *testing.T) {
+	s := newChefCooldownSupermarket(t)
+	h, _, _ := chefCooldownHandler(t, s)
+	delete(s.cookbooks, "apt")
+	delete(s.cookbooks, "old")
+	s.cookbooks["retired"] = chefFakeCookbook{updated: 300 * 24 * time.Hour, deprecated: true, versions: map[string]time.Duration{"1.0.0": 300 * 24 * time.Hour}}
+	s.cookbooks["gone"] = chefFakeCookbook{updated: 600 * 24 * time.Hour, deprecated: true, versions: map[string]time.Duration{"1.0.0": 600 * 24 * time.Hour}}
+
+	if got := chefUniverseVersions(t, chefGet(t, h, "/universe"))["legacy"]; !slices.Equal(got, []string{"3.0.0"}) {
+		t.Errorf("legacy = %v, want [3.0.0]", got)
+	}
+	if got := s.count("/api/v1/cookbooks/gone"); got != 0 {
+		t.Errorf("gone read %d times: the walk stops at retired", got)
+	}
+}
+
+func TestChefCooldownListingShorterThanItsTotal(t *testing.T) {
+	s := newChefCooldownSupermarket(t)
+	h, _, _ := chefCooldownHandler(t, s)
+	s.recent, s.total = []string{"nginx", "apt", "old"}, 60
+
+	if got := chefUniverseVersions(t, chefGet(t, h, "/universe"))["nginx"]; !slices.Equal(got, []string{"1.0.0"}) {
+		t.Errorf("nginx = %v, want [1.0.0]", got)
 	}
 }
