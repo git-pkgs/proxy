@@ -201,6 +201,9 @@ func TestWithoutLatestVersion(t *testing.T) {
 		},
 		{`<https://r.example/apple/example/1.2.0>; rel="canonical"`, `<https://r.example/apple/example/1.2.0>; rel="canonical"`},
 		{`<https://r.example/apple/example/1.2.0>; rel=latest-version`, ``},
+		{`<https://r.example/apple/example/1.2.0.json>; rel="latest-version"`, ``},
+		{`<https://r.example/apple/example/1.2.0?x=1>; rel="latest-version"`, ``},
+		{`<https://r.example/apple/example/1.1.0.json>; rel="latest-version"`, `<https://r.example/apple/example/1.1.0.json>; rel="latest-version"`},
 		{``, ``},
 	} {
 		if got := WithoutLatestVersion(tc.in, removed); got != tc.want {

@@ -3,6 +3,8 @@ package swift
 import (
 	"encoding/json"
 	"fmt"
+	"net/url"
+	"path"
 	"slices"
 	"strings"
 	"time"
@@ -141,14 +143,23 @@ func WithoutLatestVersion(value string, removed map[string]bool) string {
 	var kept []string
 	for _, link := range strings.Split(value, ",") {
 		target, params, _ := strings.Cut(strings.TrimSpace(link), ";")
-		target = strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(target), "<"), ">")
-		version := target[strings.LastIndexByte(target, '/')+1:]
-		if hasRel(params, "latest-version") && removed[version] {
+		if hasRel(params, "latest-version") && removed[linkedVersion(target)] {
 			continue
 		}
 		kept = append(kept, strings.TrimSpace(link))
 	}
 	return strings.Join(kept, ", ")
+}
+
+// linkedVersion returns the release a Link target, <URL>, points at: the
+// last path segment of the URL, without the .json the release document can
+// also be requested with.
+func linkedVersion(target string) string {
+	parsed, err := url.Parse(strings.TrimSuffix(strings.TrimPrefix(strings.TrimSpace(target), "<"), ">"))
+	if err != nil {
+		return ""
+	}
+	return strings.TrimSuffix(path.Base(parsed.Path), ".json")
 }
 
 func hasRel(params, rel string) bool {
