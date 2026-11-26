@@ -11,8 +11,8 @@
 {{if and .UIBaseURL .BaseURL (ne .UIBaseURL .BaseURL)}}
 <div class="mb-8 p-4 bg-amber-50 dark:bg-amber-950 border border-amber-200 dark:border-amber-900 rounded-xl text-sm">
     <p class="text-amber-900 dark:text-amber-100">
-        This UI is hosted at <code class="font-mono">{{.UIBaseURL}}</code>, but package managers should be configured to use
-        <code class="font-mono">{{.BaseURL}}</code> for the URLs shown below.
+        This UI is hosted at <code class="font-mono break-all">{{.UIBaseURL}}</code>, but package managers should be configured to use
+        <code class="font-mono break-all">{{.BaseURL}}</code> for the URLs shown below.
     </p>
 </div>
 {{end}}
