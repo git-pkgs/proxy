@@ -14,6 +14,9 @@ type DashboardData struct {
 	Stats           DashboardStats
 	EnrichmentStats EnrichmentStatsView
 	Cooldown        CooldownSummary
+	// GitCache is nil without upstream.git. Its repositories are not
+	// artifacts, so the other figures leave them out.
+	GitCache        *GitCacheStats
 	RecentPackages  []PackageInfo
 	PopularPackages []PackageInfo
 }

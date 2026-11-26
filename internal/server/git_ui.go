@@ -150,12 +150,32 @@ func plural(n int, one, many string) string {
 	return fmt.Sprintf("%d %s", n, many)
 }
 
-// updateGitCacheStats publishes the git cache gauges.
-func (s *Server) updateGitCacheStats() {
+// gitCacheTotals returns how many repositories the git cache holds and their
+// size. The sizes are kept in memory, so this reads no directories.
+func (s *Server) gitCacheTotals() (repositories int, size int64) {
 	repos := s.git.Repositories()
-	var size int64
 	for _, r := range repos {
 		size += r.Size
 	}
-	metrics.UpdateGitCacheStats(len(repos), size)
+	return len(repos), size
+}
+
+// updateGitCacheStats publishes the git cache gauges.
+func (s *Server) updateGitCacheStats() {
+	metrics.UpdateGitCacheStats(s.gitCacheTotals())
+}
+
+// gitCacheStats is the git cache for the dashboard and /stats, or nil
+// without upstream.git.
+func (s *Server) gitCacheStats() *GitCacheStats {
+	if s.git == nil {
+		return nil
+	}
+	repositories, size := s.gitCacheTotals()
+	return &GitCacheStats{
+		Repositories:      repositories,
+		RepositoriesHuman: plural(repositories, "repository", "repositories"),
+		SizeBytes:         size,
+		Size:              formatSize(size),
+	}
 }

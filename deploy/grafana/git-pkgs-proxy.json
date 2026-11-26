@@ -62,7 +62,7 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 5,
+        "w": 4,
         "x": 0,
         "y": 1
       },
@@ -105,7 +105,7 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
-      "description": "Bytes the cached artifacts currently occupy in storage \u2014 what the cache costs to keep. Not an average, and not the same as accumulated download size, which is what the cache has served.",
+      "description": "Bytes the cached artifacts currently occupy in storage \u2014 what the cache costs to keep. Not an average, and not the same as accumulated download size, which is what the cache has served. Cached Git repositories are not included; see Git cache size.",
       "fieldConfig": {
         "defaults": {
           "color": {
@@ -128,8 +128,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 5,
-        "x": 5,
+        "w": 4,
+        "x": 4,
         "y": 1
       },
       "id": 3,
@@ -171,6 +171,72 @@
         "type": "prometheus",
         "uid": "${datasource}"
       },
+      "description": "Bytes the cached Git repositories occupy on disk, kept apart from the artifact cache and limited by git.max_size. 0 when git is not enabled.",
+      "fieldConfig": {
+        "defaults": {
+          "color": {
+            "mode": "fixed",
+            "fixedColor": "text"
+          },
+          "mappings": [],
+          "thresholds": {
+            "mode": "absolute",
+            "steps": [
+              {
+                "color": "text",
+                "value": null
+              }
+            ]
+          },
+          "unit": "bytes"
+        },
+        "overrides": []
+      },
+      "gridPos": {
+        "h": 5,
+        "w": 4,
+        "x": 8,
+        "y": 1
+      },
+      "id": 36,
+      "options": {
+        "colorMode": "none",
+        "graphMode": "none",
+        "justifyMode": "auto",
+        "orientation": "auto",
+        "reduceOptions": {
+          "calcs": [
+            "lastNotNull"
+          ],
+          "fields": "",
+          "values": false
+        },
+        "showPercentChange": false,
+        "textMode": "auto",
+        "wideLayout": true
+      },
+      "pluginVersion": "11.0.0",
+      "targets": [
+        {
+          "datasource": {
+            "type": "prometheus",
+            "uid": "${datasource}"
+          },
+          "editorMode": "code",
+          "expr": "sum(proxy_git_cache_size_bytes{job=~\"$job\"})",
+          "range": true,
+          "instant": false,
+          "refId": "A"
+        }
+      ],
+      "title": "Git cache size",
+      "type": "stat"
+    },
+    {
+      "datasource": {
+        "type": "prometheus",
+        "uid": "${datasource}"
+      },
       "description": "Accumulated download size divided by the bytes currently cached: how many times over the cache has served what it stores. This is the number that makes the two size figures beside it comparable, and it is the clearest single measure of what the cache is worth.",
       "fieldConfig": {
         "defaults": {
@@ -195,8 +261,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 5,
-        "x": 10,
+        "w": 4,
+        "x": 12,
         "y": 1
       },
       "id": 4,
@@ -261,8 +327,8 @@
       },
       "gridPos": {
         "h": 5,
-        "w": 5,
-        "x": 15,
+        "w": 4,
+        "x": 16,
         "y": 1
       },
       "id": 5,

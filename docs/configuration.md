@@ -1108,7 +1108,8 @@ credentials. `/git` lets the same people clone them, but where `/ui` and
 `/git` sit behind different access rules, the page shows more than `/git`
 does. The `proxy_git_cache_size_bytes` and
 `proxy_git_cached_repositories` gauges report the git cache's size and
-repository count, apart from the artifact gauges, and clones and fetches
+repository count, apart from the artifact gauges, as do the dashboard's Git
+Cache tile and `git_cache` in `GET /stats`, and clones and fetches
 count as cache hits or misses under `ecosystem="git"`.
 
 Git LFS objects are cached in the artifact cache, so they use the configured

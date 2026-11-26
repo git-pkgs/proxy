@@ -932,6 +932,7 @@ func (s *Server) handleRoot(w http.ResponseWriter, r *http.Request) {
 		},
 		EnrichmentStats: enrichmentStatsView(enrichStats),
 		Cooldown:        s.cooldown.summary(),
+		GitCache:        s.gitCacheStats(),
 	}
 
 	for _, p := range popular {
@@ -1478,6 +1479,18 @@ type StatsResponse struct {
 	// whose aggregation failed with no snapshot to fall back on. Without it
 	// both report zeros and an empty array.
 	StatsUnavailable bool `json:"stats_unavailable,omitempty"`
+	// GitCache is the git cache, which the figures above leave out. It is
+	// omitted without upstream.git.
+	GitCache *GitCacheStats `json:"git_cache,omitempty"`
+}
+
+// GitCacheStats is the size of the git cache. Git LFS objects are artifacts
+// and count under total_size_bytes instead.
+type GitCacheStats struct {
+	Repositories      int    `json:"repositories"`
+	RepositoriesHuman string `json:"-"`
+	SizeBytes         int64  `json:"size_bytes"`
+	Size              string `json:"size"`
 }
 
 // EcosystemStatsEntry is one ecosystem's slice of the cache statistics.
@@ -1531,6 +1544,7 @@ func (s *Server) handleStats(w http.ResponseWriter, r *http.Request) {
 		TotalSizeHuman:   formatSize(size),
 		Ecosystems:       make([]EcosystemStatsEntry, 0, len(ecosystems)),
 		StatsUnavailable: statsErr != nil && len(ecosystems) == 0,
+		GitCache:         s.gitCacheStats(),
 	}
 
 	for _, e := range ecosystems {
