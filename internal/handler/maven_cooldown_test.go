@@ -19,6 +19,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/proxy/internal/metadata/maven"
 	registryclient "github.com/git-pkgs/registries/client"
 	"github.com/git-pkgs/registries/fetch"
 )
@@ -120,7 +121,7 @@ func (u *mavenCooldownUpstream) metadata() string {
 	for _, v := range u.versions {
 		b.WriteString("      <version>" + v + "</version>\n")
 	}
-	b.WriteString("    </versions>\n    <lastUpdated>" + u.lastUpdated.UTC().Format(mavenLastUpdatedLayout) + "</lastUpdated>\n  </versioning>\n</metadata>\n")
+	b.WriteString("    </versions>\n    <lastUpdated>" + u.lastUpdated.UTC().Format(maven.LastUpdatedLayout) + "</lastUpdated>\n  </versioning>\n</metadata>\n")
 	return b.String()
 }
 
@@ -157,13 +158,13 @@ func newMavenCooldownHandler(t *testing.T, u *mavenCooldownUpstream) (http.Handl
 
 func mavenMetadataVersions(t *testing.T, body string) []string {
 	t.Helper()
-	doc, err := parseMavenMetadata([]byte(body))
+	doc, err := maven.ParseMetadata([]byte(body))
 	if err != nil {
 		t.Fatalf("served metadata does not parse: %v\n%s", err, body)
 	}
 	var versions []string
-	for _, v := range doc.versions {
-		versions = append(versions, v.value)
+	for _, v := range doc.Versions {
+		versions = append(versions, v.Value)
 	}
 	return versions
 }
@@ -513,18 +514,5 @@ func TestMavenCooldownNamedRepositoryStoresItsOwnTimes(t *testing.T) {
 	_ = getMaven(h, mavenTestDir+"maven-metadata.xml")
 	if n := u.totalPOMRequests(); n != 6 {
 		t.Errorf("pom requests after default metadata = %d, want 6", n)
-	}
-}
-
-func TestMavenMetadataWithoutCompact(t *testing.T) {
-	in := `<metadata><versioning><latest>2</latest><release>2</release><versions><version>1</version><version>2</version></versions></versioning></metadata>`
-	doc, err := parseMavenMetadata([]byte(in))
-	if err != nil {
-		t.Fatal(err)
-	}
-	got := string(doc.without([]byte(in), map[string]bool{"2": true}))
-	want := `<metadata><versioning><latest>1</latest><release>1</release><versions><version>1</version></versions></versioning></metadata>`
-	if got != want {
-		t.Errorf("got  %s\nwant %s", got, want)
 	}
 }

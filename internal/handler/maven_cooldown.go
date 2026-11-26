@@ -8,17 +8,16 @@ import (
 	"crypto/sha256"
 	"crypto/sha512"
 	"encoding/hex"
-	"encoding/xml"
-	"errors"
 	"fmt"
 	"hash"
 	"io"
 	"net/http"
 	"net/url"
 	"path"
-	"slices"
 	"strings"
 	"time"
+
+	"github.com/git-pkgs/proxy/internal/metadata/maven"
 )
 
 // Maven cooldown measures a version by the Last-Modified header of its .pom.
@@ -42,10 +41,8 @@ const errMavenCooldown = "version is in cooldown"
 const mavenTimeUserAgent = "git-pkgs-proxy/1.0"
 
 const (
-	mavenMetadataFile = "maven-metadata.xml"
-	mavenSnapshot     = "-SNAPSHOT"
-	// mavenLastUpdatedLayout is the UTC timestamp format of <lastUpdated>.
-	mavenLastUpdatedLayout = "20060102150405"
+	mavenMetadataFile = maven.MetadataFile
+	mavenSnapshot     = maven.Snapshot
 )
 
 // mavenChecksums are the checksum files served beside maven-metadata.xml.
@@ -62,23 +59,19 @@ func (h *MavenHandler) cooldownEnabled() bool {
 }
 
 func mavenPackagePURL(group, artifact string) string {
-	return canonicalPackagePURL("maven", group+":"+artifact)
+	return maven.PackagePURL(group, artifact)
 }
 
 // mavenCoordinates returns the group and artifact of an artifact directory
-// such as com/google/guava/guava.
+// such as com/google/guava/guava; see maven.Coordinates.
 func mavenCoordinates(artifactDir string) (group, artifact string, ok bool) {
-	i := strings.LastIndex(artifactDir, "/")
-	if i <= 0 || i == len(artifactDir)-1 {
-		return "", "", false
-	}
-	return strings.ReplaceAll(artifactDir[:i], "/", "."), artifactDir[i+1:], true
+	return maven.Coordinates(artifactDir)
 }
 
 // usableMavenVersion reports whether version can be put in a URL path as
-// one segment. Versions come from upstream metadata.
+// one segment; see maven.UsableVersion.
 func usableMavenVersion(version string) bool {
-	return version != "" && version != "." && version != ".." && !strings.ContainsAny(version, "/\\?#%")
+	return maven.UsableVersion(version)
 }
 
 // mavenTimeKey returns the versions-table PURLs a version's time is stored
@@ -292,190 +285,24 @@ func (h *MavenHandler) serveCooldownMetadata(w http.ResponseWriter, r *http.Requ
 
 // filterMetadata removes versions in cooldown from an artifact's
 // maven-metadata.xml and points <latest> and <release> at the newest
-// versions left. Metadata without a version list, such as a group's plugin
-// list or a SNAPSHOT's build list, is returned unchanged. The document is
-// edited in place rather than encoded again, so everything else in it stays
-// as upstream sent it.
+// versions left; see maven.Filter. Times come from the versions table or
+// the .pom's Last-Modified (publishTime), looked up only as far as
+// maven.Filter asks.
 func (h *MavenHandler) filterMetadata(ctx context.Context, source mavenSource, artifactDir string, body []byte) ([]byte, error) {
-	doc, err := parseMavenMetadata(body)
-	if err != nil {
-		return nil, err
-	}
-	group, artifact, ok := mavenCoordinates(artifactDir)
-	if !ok || len(doc.versions) == 0 {
-		return body, nil
-	}
-	packagePURL := mavenPackagePURL(group, artifact)
-	// No version can be newer than the metadata listing it.
-	if lastUpdated, err := time.Parse(mavenLastUpdatedLayout, doc.lastUpdated); err == nil &&
-		h.proxy.cooldown().IsAllowed("maven", packagePURL, lastUpdated) {
-		return body, nil
-	}
-
-	removed := map[string]bool{}
-	for i := len(doc.versions) - 1; i >= 0; i-- {
-		v := doc.versions[i].value
-		if strings.HasSuffix(v, mavenSnapshot) {
-			continue
-		}
-		published, err := h.publishTime(ctx, source, artifactDir, v)
-		if err != nil {
-			return nil, fmt.Errorf("reading time of %s: %w", v, err)
-		}
-		if published.IsZero() {
-			continue
-		}
-		if h.proxy.cooldown().IsAllowed("maven", packagePURL, published) {
-			break
-		}
-		h.proxy.Logger.Info("cooldown: filtering maven version", "group", group, "artifact", artifact, "version", v)
-		removed[v] = true
-		// A named repository's times are its own, under PURLs that name it,
-		// and the package page shows the default repository's.
-		if source.name == "" {
-			h.proxy.recordWithheld("maven", group+":"+artifact, v, published)
-		}
-	}
-	if len(removed) == 0 {
-		return body, nil
-	}
-	return doc.without(body, removed), nil
-}
-
-// mavenElement is an element of maven-metadata.xml: its text and where it
-// starts and ends in the document.
-type mavenElement struct {
-	value      string
-	start, end int
-}
-
-type mavenMetadata struct {
-	versions        []mavenElement
-	latest, release *mavenElement
-	lastUpdated     string
-}
-
-// parseMavenMetadata reads the version list, <latest>, <release> and
-// <lastUpdated> of a maven-metadata.xml, with their offsets.
-func parseMavenMetadata(body []byte) (*mavenMetadata, error) {
-	dec := xml.NewDecoder(bytes.NewReader(body))
-	// Versions are ASCII, so any declared charset can be read as bytes.
-	dec.CharsetReader = func(_ string, in io.Reader) (io.Reader, error) { return in, nil }
-
-	doc := &mavenMetadata{}
-	var stack []string
-	var current *mavenElement
-	for {
-		offset := int(dec.InputOffset())
-		tok, err := dec.Token()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			return nil, fmt.Errorf("parsing maven metadata: %w", err)
-		}
-		switch t := tok.(type) {
-		case xml.StartElement:
-			stack = append(stack, t.Name.Local)
-			switch strings.Join(stack, "/") {
-			case "metadata/versioning/versions/version",
-				"metadata/versioning/latest",
-				"metadata/versioning/release",
-				"metadata/versioning/lastUpdated":
-				current = &mavenElement{start: offset}
+	group, artifact, _ := mavenCoordinates(artifactDir)
+	return maven.Filter(artifactDir, body, maven.Options{
+		Cooldown:    h.proxy.cooldown(),
+		EvaluatedAt: time.Now(),
+		PublishTime: func(version string) (time.Time, error) {
+			return h.publishTime(ctx, source, artifactDir, version)
+		},
+		OnWithheld: func(version string, published time.Time) {
+			h.proxy.Logger.Info("cooldown: filtering maven version", "group", group, "artifact", artifact, "version", version)
+			// A named repository's times are its own, under PURLs that name
+			// it, and the package page shows the default repository's.
+			if source.name == "" {
+				h.proxy.recordWithheld("maven", group+":"+artifact, version, published)
 			}
-		case xml.CharData:
-			if current != nil {
-				current.value += string(t)
-			}
-		case xml.EndElement:
-			if current != nil {
-				current.value = strings.TrimSpace(current.value)
-				current.end = int(dec.InputOffset())
-				switch t.Name.Local {
-				case "version":
-					doc.versions = append(doc.versions, *current)
-				case "latest":
-					doc.latest = current
-				case "release":
-					doc.release = current
-				case "lastUpdated":
-					doc.lastUpdated = current.value
-				}
-				current = nil
-			}
-			if len(stack) > 0 {
-				stack = stack[:len(stack)-1]
-			}
-		}
-	}
-	return doc, nil
-}
-
-// without returns body with the removed versions taken out of the version
-// list, and <latest> and <release> set to the last versions left in list
-// order, which is how the repository chose them. Either is dropped when no
-// version is left for it.
-func (doc *mavenMetadata) without(body []byte, removed map[string]bool) []byte {
-	type edit struct {
-		start, end int
-		text       string
-	}
-	var edits []edit
-	drop := func(e mavenElement) {
-		edits = append(edits, edit{start: lineStart(body, e.start), end: e.end})
-	}
-	var latest, release string
-	for _, v := range doc.versions {
-		if removed[v.value] {
-			drop(v)
-			continue
-		}
-		latest = v.value
-		if !strings.HasSuffix(v.value, mavenSnapshot) {
-			release = v.value
-		}
-	}
-	for _, field := range []struct {
-		el   *mavenElement
-		name string
-		next string
-	}{{doc.latest, "latest", latest}, {doc.release, "release", release}} {
-		if field.el == nil || !removed[field.el.value] {
-			continue
-		}
-		if field.next == "" {
-			drop(*field.el)
-			continue
-		}
-		edits = append(edits, edit{field.el.start, field.el.end, "<" + field.name + ">" + field.next + "</" + field.name + ">"})
-	}
-
-	// Edits don't overlap; apply them in document order.
-	slices.SortFunc(edits, func(a, b edit) int { return a.start - b.start })
-	out := make([]byte, 0, len(body))
-	pos := 0
-	for _, e := range edits {
-		out = append(out, body[pos:e.start]...)
-		out = append(out, e.text...)
-		pos = e.end
-	}
-	return append(out, body[pos:]...)
-}
-
-// lineStart moves an element's start back over the indentation and line
-// break before it, so removing the element removes its line.
-func lineStart(body []byte, start int) int {
-	i := start
-	for i > 0 && (body[i-1] == ' ' || body[i-1] == '\t') {
-		i--
-	}
-	if i > 0 && body[i-1] == '\n' {
-		i--
-		if i > 0 && body[i-1] == '\r' {
-			i--
-		}
-		return i
-	}
-	return start
+		},
+	})
 }
