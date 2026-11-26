@@ -320,7 +320,7 @@ func (h *TerraformHandler) handleArchive(w http.ResponseWriter, r *http.Request)
 		}
 		cached, err = h.proxy.getOrFetchArtifactFromURLWithCachePURLs(
 			r.Context(), terraformEcosystem, name, version, filename, pkgPURL, versionPURL,
-			download.DownloadURL, nil, download.Shasum, "")
+			download.DownloadURL, nil, download.Shasum)
 		if err != nil {
 			h.proxy.serveArtifactError(w, err, "failed to fetch provider")
 			return

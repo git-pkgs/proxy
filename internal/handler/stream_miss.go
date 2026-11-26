@@ -98,7 +98,12 @@ func (p *Proxy) runSharedFetchStreaming(ctx context.Context, key string, f *infl
 	}
 	done := make(chan outcome, 1)
 	go func() {
-		res, err := p.runSharedFetch(context.WithValue(ctx, missHandoffKey{}, h), key, f, recheck, commit)
+		fetchCtx := context.WithValue(ctx, missHandoffKey{}, h)
+		var res *CacheResult
+		a, err := p.runSharedFetch(fetchCtx, key, f, recheck, commit)
+		if err == nil {
+			res, err = p.deliverAcquired(fetchCtx, a)
+		}
 		h.mu.Lock()
 		defer h.mu.Unlock()
 		if h.taken || h.abandoned {

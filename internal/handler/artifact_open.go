@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"time"
 
 	"github.com/git-pkgs/artifacts"
@@ -27,6 +28,20 @@ type ApprovedArtifact struct {
 
 	ecosystem string
 	checks    integrityChecks
+	// release gives up the hold on an object fetched without a record,
+	// which is deleted once every holder lets go. Open passes it on to the
+	// reader it returns.
+	release func()
+}
+
+// Release gives up an artifact Acquire returned that won't be opened. Only
+// an artifact fetched but not recorded holds anything: its object is
+// deleted once nobody holds it. Releasing one that was opened, or that holds
+// nothing, does nothing.
+func (a *ApprovedArtifact) Release() {
+	if a.release != nil {
+		a.release()
+	}
 }
 
 // findStored returns the artifact cached under pkgPURL, versionPURL and
@@ -124,6 +139,9 @@ func (p *Proxy) Open(ctx context.Context, a *ApprovedArtifact) (*CacheResult, er
 // Callers sharing a fetch cannot share a handle: it has one read position,
 // so they would consume each other's bytes and the first Close would break
 // the rest.
+//
+// An artifact holding an unrecorded object releases its hold when the reader
+// closes, or right away if the object can't be opened.
 func (p *Proxy) openFetched(ctx context.Context, a *ApprovedArtifact) (*CacheResult, error) {
 	readStart := time.Now()
 	reader, err := p.Storage.Open(ctx, a.StoragePath)
@@ -131,7 +149,18 @@ func (p *Proxy) openFetched(ctx context.Context, a *ApprovedArtifact) (*CacheRes
 	if err != nil {
 		metrics.RecordStorageError("read", metrics.FailureDetail{
 			PURL: a.Artifact.PURL, Filename: a.Artifact.Filename, Path: a.StoragePath, Err: err})
+		a.Release()
 		return nil, fmt.Errorf("opening cached artifact: %w", err)
 	}
-	return &CacheResult{Reader: reader, Artifact: a.Artifact}, nil
+	res := &CacheResult{Reader: reader, Artifact: a.Artifact}
+	if a.release == nil {
+		return res, nil
+	}
+	r := releaseOnClose{ReadCloser: reader, release: a.release}
+	if s, ok := reader.(io.Seeker); ok {
+		res.Reader = &seekableReleaseOnClose{releaseOnClose: r, Seeker: s}
+	} else {
+		res.Reader = &r
+	}
+	return res, nil
 }
