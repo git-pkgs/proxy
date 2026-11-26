@@ -32,7 +32,7 @@ require (
 	github.com/swaggo/swag v1.16.6
 	github.com/ulikunitz/xz v0.5.17
 	github.com/vmihailenco/msgpack/v5 v5.4.1
-	gocloud.dev v0.48.0
+	gocloud.dev v0.49.0
 	golang.org/x/mod v0.43.0
 	golang.org/x/net v0.63.0
 	golang.org/x/sync v0.25.0
