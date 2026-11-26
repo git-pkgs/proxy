@@ -28,6 +28,10 @@ base_url: "http://localhost:8080"
 # restrict /api/cache, /api/git and /ui at the ingress first.
 # cache_delete: false
 
+# Ecosystems to turn off: their routes answer 404, mirroring refuses their
+# packages, and they are left off the install page. Cached data stays.
+# disabled_ecosystems: [pypi, cargo]
+
 # Largest upstream artifact to fetch (e.g. "2GB"). Larger ones are refused
 # and not cached. Default: unlimited.
 # artifact_max_size: ""

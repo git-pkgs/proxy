@@ -55,7 +55,8 @@ func (m *Mirror) releaseLister() ReleaseLister { //nolint:ireturn // any lister 
 // Refresh mirrors, for each of the most used packages, the newest release
 // of each major line it has a version cached on, as clients would be served
 // it: releases within cooldown or on the denylist are left out. Packages it
-// can't list are counted as failed.
+// can't list, and those of an ecosystem disabled_ecosystems turns off, are
+// counted as failed.
 func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
 	ctx = handler.MirrorFetch(ctx)
 	cutoff := time.Now().Add(-r.Since)
@@ -88,11 +89,7 @@ func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
 	}
 	for _, group := range byEcosystem(packages) {
 		if ix, ok := osIndexes[group[0].Ecosystem]; ok {
-			items, errs := m.indexRefreshItems(ctx, ix, group, cutoff)
-			for _, err := range errs {
-				m.recordFailure(tracker, PackageVersion{Ecosystem: ix.ecosystem}, err)
-			}
-			if !run(items) {
+			if !run(m.indexRefreshGroup(ctx, ix, group, cutoff, tracker)) {
 				break
 			}
 			continue
@@ -117,6 +114,23 @@ func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
 	return &p, nil
 }
 
+// indexRefreshGroup returns the versions to mirror for the used packages of
+// an OS ecosystem and records the indexes it couldn't read. A turned-off
+// ecosystem fails without its indexes being read.
+func (m *Mirror) indexRefreshGroup(ctx context.Context, ix osIndex, group []database.UsedPackage, cutoff time.Time, tracker *progressTracker) []PackageVersion {
+	if err := m.turnedOff(ix.ecosystem); err != nil {
+		for _, pkg := range group {
+			m.recordFailure(tracker, PackageVersion{Ecosystem: pkg.Ecosystem, Name: pkg.Name}, err)
+		}
+		return nil
+	}
+	items, errs := m.indexRefreshItems(ctx, ix, group, cutoff)
+	for _, err := range errs {
+		m.recordFailure(tracker, PackageVersion{Ecosystem: ix.ecosystem}, err)
+	}
+	return items
+}
+
 // byEcosystem splits packages, ordered by ecosystem, into one group per
 // ecosystem.
 func byEcosystem(packages []database.UsedPackage) [][]database.UsedPackage {
@@ -137,6 +151,9 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 		return nil, err
 	}
 	ecosystem, name, _ := mirrorTarget(p)
+	if err := m.turnedOff(ecosystem); err != nil {
+		return nil, err
+	}
 	if !refreshable(ecosystem) {
 		return nil, nil
 	}

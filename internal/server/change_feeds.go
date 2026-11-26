@@ -24,10 +24,11 @@ const changeFeedMaxBackoff = 15 * time.Minute
 func (s *Server) startChangeFeeds(ctx context.Context, httpClient *http.Client, metadataTTL time.Duration) {
 	c := changes.WithClient(client.NewClient(client.WithHTTPClient(httpClient)))
 	var feeds []changes.Feed
-	if s.cfg.Upstream.NPMChangeFeed {
+	npm, composer := s.changeFeedsOn()
+	if npm {
 		feeds = append(feeds, changes.NewNPM(c))
 	}
-	if s.cfg.Upstream.ComposerChangeFeed {
+	if composer {
 		feeds = append(feeds, changes.NewPackagist(c, changes.WithURL(changes.PackagistFeedURL(s.cfg.Upstream.Composer))))
 	}
 	if len(feeds) == 0 {
@@ -41,6 +42,14 @@ func (s *Server) startChangeFeeds(ctx context.Context, httpClient *http.Client, 
 	for _, feed := range feeds {
 		s.background.Go(func() { followChangeFeed(ctx, s.db, s.logger, feed, changeFeedInterval) })
 	}
+}
+
+// changeFeedsOn reports which change feeds to follow: those the
+// configuration turns on, unless disabled_ecosystems turns their ecosystem
+// off.
+func (s *Server) changeFeedsOn() (npm, composer bool) {
+	return s.cfg.Upstream.NPMChangeFeed && !s.cfg.EcosystemDisabled("npm"),
+		s.cfg.Upstream.ComposerChangeFeed && !s.cfg.EcosystemDisabled("composer")
 }
 
 // followChangeFeed reads feed every interval until ctx ends and expires the

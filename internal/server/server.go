@@ -564,32 +564,34 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 	r.With(sandboxUpstreamContent, rejectDotSegments).
 		Mount("/generic", http.StripPrefix("/generic", genericHandler.Routes()))
 	r = r.With(sandboxUpstreamContent, rejectQueryInPath, rejectDotSegments)
-	r.Mount("/npm", http.StripPrefix("/npm", npmHandler.Routes()))
-	r.Mount("/cargo", http.StripPrefix("/cargo", cargoHandler.Routes()))
-	r.Mount("/gem", http.StripPrefix("/gem", gemHandler.Routes()))
-	r.Mount("/go", http.StripPrefix("/go", goHandler.Routes()))
-	r.Mount("/hex", http.StripPrefix("/hex", hexHandler.Routes()))
-	r.Mount("/pub", http.StripPrefix("/pub", pubHandler.Routes()))
-	r.Mount("/pypi", http.StripPrefix("/pypi", pypiHandler.Routes()))
-	r.Mount("/maven", http.StripPrefix("/maven", mavenHandler.Routes()))
-	r.Mount("/gradle", http.StripPrefix("/gradle", gradleHandler.Routes()))
-	r.Mount("/nuget", http.StripPrefix("/nuget", nugetHandler.Routes()))
-	r.Mount("/composer", http.StripPrefix("/composer", composerHandler.Routes()))
-	r.Mount("/conan", http.StripPrefix("/conan", conanHandler.Routes()))
-	r.Mount("/chef", http.StripPrefix("/chef", chefHandler.Routes()))
-	r.Mount("/conda", http.StripPrefix("/conda", condaHandler.Routes()))
-	r.Mount("/cran", http.StripPrefix("/cran", cranHandler.Routes()))
-	r.Mount("/julia", http.StripPrefix("/julia", juliaHandler.Routes()))
-	r.Mount("/swift", http.StripPrefix("/swift", swiftHandler.Routes()))
-	r.Mount("/homebrew", http.StripPrefix("/homebrew", homebrewHandler.Routes()))
-	r.Mount("/v2", http.StripPrefix("/v2", containerHandler.Routes()))
-	r.Mount("/helm", http.StripPrefix("/helm", helmHandler.Routes()))
-	r.Mount("/apk", http.StripPrefix("/apk", apkHandler.Routes()))
-	r.Mount("/arch", http.StripPrefix("/arch", archHandler.Routes()))
-	r.Mount("/freebsd", http.StripPrefix("/freebsd", freebsdHandler.Routes()))
-	r.Mount("/terraform", http.StripPrefix("/terraform", terraformHandler.Routes()))
-	r.Mount("/debian", http.StripPrefix("/debian", debianHandler.Routes()))
-	r.Mount("/rpm", http.StripPrefix("/rpm", rpmHandler.Routes()))
+	s.mountEcosystems(r, map[string]http.Handler{
+		"npm":       npmHandler.Routes(),
+		"cargo":     cargoHandler.Routes(),
+		"gem":       gemHandler.Routes(),
+		"golang":    goHandler.Routes(),
+		"hex":       hexHandler.Routes(),
+		"pub":       pubHandler.Routes(),
+		"pypi":      pypiHandler.Routes(),
+		"maven":     mavenHandler.Routes(),
+		"gradle":    gradleHandler.Routes(),
+		"nuget":     nugetHandler.Routes(),
+		"composer":  composerHandler.Routes(),
+		"conan":     conanHandler.Routes(),
+		"chef":      chefHandler.Routes(),
+		"conda":     condaHandler.Routes(),
+		"cran":      cranHandler.Routes(),
+		"julia":     juliaHandler.Routes(),
+		"swift":     swiftHandler.Routes(),
+		"homebrew":  homebrewHandler.Routes(),
+		"oci":       containerHandler.Routes(),
+		"helm":      helmHandler.Routes(),
+		"alpine":    apkHandler.Routes(),
+		"arch":      archHandler.Routes(),
+		"freebsd":   freebsdHandler.Routes(),
+		"terraform": terraformHandler.Routes(),
+		"deb":       debianHandler.Routes(),
+		"rpm":       rpmHandler.Routes(),
+	})
 	if s.git == nil {
 		return nil
 	}
@@ -597,6 +599,71 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 	r.Mount("/git", http.StripPrefix("/git", gitHandler.Routes()))
 	terraformHandler.WithGit(gitHandler)
 	return gitHandler
+}
+
+// ecosystemMount is where an ecosystem's handler is mounted, by the key
+// disabled_ecosystems turns it off with.
+type ecosystemMount struct {
+	key    string
+	prefix string
+}
+
+// ecosystemMounts are the ecosystem routes, in mount order.
+var ecosystemMounts = []ecosystemMount{
+	{"npm", "/npm"},
+	{"cargo", "/cargo"},
+	{"gem", "/gem"},
+	{"golang", "/go"},
+	{"hex", "/hex"},
+	{"pub", "/pub"},
+	{"pypi", "/pypi"},
+	{"maven", "/maven"},
+	{"gradle", "/gradle"},
+	{"nuget", "/nuget"},
+	{"composer", "/composer"},
+	{"conan", "/conan"},
+	{"chef", "/chef"},
+	{"conda", "/conda"},
+	{"cran", "/cran"},
+	{"julia", "/julia"},
+	{"swift", "/swift"},
+	{"homebrew", "/homebrew"},
+	{"oci", "/v2"},
+	{"helm", "/helm"},
+	{"alpine", "/apk"},
+	{"arch", "/arch"},
+	{"freebsd", "/freebsd"},
+	{"terraform", "/terraform"},
+	{"deb", "/debian"},
+	{"rpm", "/rpm"},
+}
+
+// mountEcosystems mounts each of ecosystemMounts with its handler from
+// handlers, or for an ecosystem disabled_ecosystems turns off, a handler
+// that answers 404 without reaching its upstream.
+func (s *Server) mountEcosystems(r chi.Router, handlers map[string]http.Handler) {
+	if len(handlers) != len(ecosystemMounts) {
+		panic(fmt.Sprintf("%d ecosystem handlers for %d routes", len(handlers), len(ecosystemMounts)))
+	}
+	for _, mount := range ecosystemMounts {
+		h, ok := handlers[mount.key]
+		if !ok {
+			panic("no handler for ecosystem route " + mount.key)
+		}
+		if s.cfg.EcosystemDisabled(mount.key) {
+			r.Mount(mount.prefix, ecosystemTurnedOff(mount.key))
+			continue
+		}
+		r.Mount(mount.prefix, http.StripPrefix(mount.prefix, h))
+	}
+}
+
+// ecosystemTurnedOff answers every request with 404, so clients treat the
+// ecosystem as absent rather than failing.
+func ecosystemTurnedOff(key string) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		http.Error(w, key+" is turned off on this proxy", http.StatusNotFound)
+	})
 }
 
 // configureScanning builds the scanner group from cfg and wires it into
@@ -1013,7 +1080,7 @@ func (s *Server) handleInstall(w http.ResponseWriter, r *http.Request) {
 	}{
 		Layout:     s.layoutFor(r),
 		BaseURL:    s.cfg.BaseURL,
-		Registries: getRegistryConfigs(s.cfg.BaseURL),
+		Registries: installRegistries(s.cfg),
 	}
 
 	if err := s.templates.Render(w, "install", data); err != nil {

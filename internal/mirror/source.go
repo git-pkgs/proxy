@@ -61,6 +61,10 @@ type PURLSource struct {
 	Latest bool
 	// Platforms limit which platforms of container images are mirrored.
 	Platforms []string
+	// Disabled reports whether disabled_ecosystems turns off an ecosystem.
+	// Its unversioned PURLs aren't listed from the upstream: each yields
+	// one item, which Mirror refuses.
+	Disabled func(ecosystem string) bool
 }
 
 func (s *PURLSource) Enumerate(ctx context.Context, fn func(PackageVersion) error) error {
@@ -105,6 +109,12 @@ func (s *PURLSource) enumeratePURL(ctx context.Context, versions VersionLister, 
 			pv.Platforms = s.Platforms
 		}
 		return fn(pv)
+	}
+
+	// A turned-off ecosystem's upstream isn't asked for versions; the one
+	// unversioned item fails in Mirror.
+	if s.Disabled != nil && s.Disabled(ecosystem) {
+		return fn(PackageVersion{Ecosystem: ecosystem, Name: name, Namespace: namespace, Qualifiers: qualifiers})
 	}
 
 	// Unversioned: enumerate all versions, or the newest
@@ -181,6 +191,10 @@ type SBOMSource struct {
 	Latest bool
 	// Platforms limit which platforms of container images are mirrored.
 	Platforms []string
+	// Disabled reports whether disabled_ecosystems turns off an ecosystem.
+	// Its unversioned PURLs aren't listed from the upstream: each yields
+	// one item, which Mirror refuses.
+	Disabled func(ecosystem string) bool
 }
 
 func (s *SBOMSource) Enumerate(ctx context.Context, fn func(PackageVersion) error) error {
@@ -192,7 +206,7 @@ func (s *SBOMSource) Enumerate(ctx context.Context, fn func(PackageVersion) erro
 		return fmt.Errorf("parsing SBOM: %w", err)
 	}
 
-	inner := &PURLSource{PURLs: purls, Versions: s.Versions, Latest: s.Latest, Platforms: s.Platforms}
+	inner := &PURLSource{PURLs: purls, Versions: s.Versions, Latest: s.Latest, Platforms: s.Platforms, Disabled: s.Disabled}
 	return inner.Enumerate(ctx, fn)
 }
 

@@ -568,12 +568,7 @@ func runMirror() {
 	}
 
 	m := newCommandMirror(cfg, proxy, images, db, store, logger, *concurrency)
-	switch s := source.(type) {
-	case *mirror.PURLSource:
-		s.Versions = m.Versions
-	case *mirror.SBOMSource:
-		s.Versions = m.Versions
-	}
+	useMirrorListing(source, m)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	go func() {
@@ -631,10 +626,23 @@ func newCommandMirror(cfg *config.Config, proxy *handler.Proxy, images *handler.
 	m.Bottles = handler.NewHomebrewHandler(proxy, cfg.Upstream.HomebrewAPI)
 	m.Charts = handler.NewHelmHandler(proxy, cfg.BaseURL, cfg.Upstream.Helm)
 	server.UseMirrorUpstreams(m, cfg.Upstream, proxy.HTTPClient)
+	m.Disabled = cfg.EcosystemDisabled
 	if cfg.Scanning.Enabled {
 		refuseUnscannedMirroring(m)
 	}
 	return m
+}
+
+// useMirrorListing has source list versions with m's lister and leave
+// out the ecosystems m turns off, which are known only once the config is
+// loaded.
+func useMirrorListing(source mirror.Source, m *mirror.Mirror) {
+	switch s := source.(type) {
+	case *mirror.PURLSource:
+		s.Versions, s.Disabled = m.Versions, m.Disabled
+	case *mirror.SBOMSource:
+		s.Versions, s.Disabled = m.Versions, m.Disabled
+	}
 }
 
 // useCommandGit opens the git cache for the pkg:git items of proxy mirror,

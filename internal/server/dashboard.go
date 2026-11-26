@@ -2,9 +2,11 @@ package server
 
 import (
 	"html/template"
+	"slices"
 	"sort"
 	"strings"
 
+	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
 )
 
@@ -271,6 +273,14 @@ func buildEcosystemFilters(counts map[string]int64) []EcosystemFilter {
 	}
 
 	return filters
+}
+
+// installRegistries is getRegistryConfigs without the ecosystems
+// disabled_ecosystems turns off.
+func installRegistries(cfg *config.Config) []RegistryConfig {
+	return slices.DeleteFunc(getRegistryConfigs(cfg.BaseURL), func(r RegistryConfig) bool {
+		return cfg.EcosystemDisabled(r.ID)
+	})
 }
 
 func getRegistryConfigs(baseURL string) []RegistryConfig {
