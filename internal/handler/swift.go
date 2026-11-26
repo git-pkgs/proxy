@@ -3,7 +3,6 @@ package handler
 import (
 	"context"
 	"crypto/sha256"
-	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
 	"errors"
@@ -14,6 +13,7 @@ import (
 	"strings"
 
 	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/metadata/swift"
 	"github.com/git-pkgs/proxy/internal/packageurl"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
@@ -24,8 +24,6 @@ const (
 	swiftAcceptManifest = "application/vnd.swift.registry.v1+swift"
 	swiftAcceptArchive  = "application/vnd.swift.registry.v1+zip"
 	swiftContentVersion = "1"
-	swiftMaxScopeLength = 39
-	swiftMaxNameLength  = 100
 )
 
 // Source archives are stored under the registry identity,
@@ -417,18 +415,6 @@ func (h *SwiftHandler) fetchMetadataWithHeaders(
 	return body, contentType, resp.Header.Clone(), nil
 }
 
-type swiftReleaseMetadata struct {
-	Resources []struct {
-		Name     string `json:"name"`
-		Type     string `json:"type"`
-		Checksum string `json:"checksum"`
-		Signing  *struct {
-			Signature string `json:"signatureBase64Encoded"`
-			Format    string `json:"signatureFormat"`
-		} `json:"signing"`
-	} `json:"resources"`
-}
-
 type swiftArchiveInfo struct {
 	checksum        string
 	signature       string
@@ -444,38 +430,15 @@ func (h *SwiftHandler) fetchArchiveInfo(ctx context.Context, scope, name, versio
 		return swiftArchiveInfo{}, err
 	}
 
-	var metadata swiftReleaseMetadata
-	if err := json.Unmarshal(body, &metadata); err != nil {
-		return swiftArchiveInfo{}, fmt.Errorf("parsing release metadata: %w", err)
+	archive, err := swift.SourceArchive(body)
+	if err != nil {
+		return swiftArchiveInfo{}, err
 	}
-	for _, resource := range metadata.Resources {
-		if resource.Name != "source-archive" || resource.Type != "application/zip" {
-			continue
-		}
-		checksum, err := normalizeSwiftChecksum(resource.Checksum)
-		if err != nil {
-			return swiftArchiveInfo{}, err
-		}
-		info := swiftArchiveInfo{checksum: checksum}
-		if resource.Signing != nil {
-			if resource.Signing.Signature == "" || resource.Signing.Format == "" {
-				return swiftArchiveInfo{}, errors.New("source archive signing metadata is incomplete")
-			}
-			info.signature = resource.Signing.Signature
-			info.signatureFormat = resource.Signing.Format
-		}
-		return info, nil
-	}
-
-	return swiftArchiveInfo{}, errors.New("source archive is missing from release metadata")
-}
-
-func normalizeSwiftChecksum(checksum string) (string, error) {
-	digest, err := hex.DecodeString(checksum)
-	if err != nil || len(digest) != sha256.Size {
-		return "", errors.New("source archive checksum is not a SHA-256 digest")
-	}
-	return hex.EncodeToString(digest), nil
+	return swiftArchiveInfo{
+		checksum:        archive.Checksum,
+		signature:       archive.Signature,
+		signatureFormat: archive.SignatureFormat,
+	}, nil
 }
 
 func setSwiftArchiveHeaders(header http.Header, name, version, contentHash string, info swiftArchiveInfo) {
@@ -497,96 +460,23 @@ func setSwiftArchiveHeaders(header http.Header, name, version, contentHash strin
 }
 
 func swiftDigestHeader(checksum string) string {
-	digest, err := hex.DecodeString(checksum)
-	if err != nil || len(digest) != sha256.Size {
-		return ""
-	}
-	return "sha-256=" + base64.StdEncoding.EncodeToString(digest)
+	return swift.DigestHeader(checksum)
 }
 
+// rewriteLinkHeader points the upstream URLs in a Link header at the proxy
+// (see swift.RewriteLinkHeader).
 func (h *SwiftHandler) rewriteLinkHeader(value, upstreamRequestURL string) string {
-	var result strings.Builder
-	for len(value) > 0 {
-		start := strings.IndexByte(value, '<')
-		if start < 0 {
-			result.WriteString(value)
-			break
-		}
-		endOffset := strings.IndexByte(value[start+1:], '>')
-		if endOffset < 0 {
-			result.WriteString(value)
-			break
-		}
-		end := start + 1 + endOffset
-		result.WriteString(value[:start+1])
-		result.WriteString(h.rewriteRegistryURL(value[start+1:end], upstreamRequestURL))
-		result.WriteByte('>')
-		value = value[end+1:]
-	}
-	return result.String()
+	return swift.RewriteLinkHeader(value, upstreamRequestURL, h.rewriteOptions())
 }
 
-func (h *SwiftHandler) rewriteRegistryURL(rawURL, upstreamRequestURL string) string {
-	base, err := url.Parse(h.upstreamURL)
-	if err != nil {
-		return rawURL
-	}
-	requestURL, err := url.Parse(upstreamRequestURL)
-	if err != nil {
-		return rawURL
-	}
-	reference, err := url.Parse(rawURL)
-	if err != nil {
-		return rawURL
-	}
-	absolute := requestURL.ResolveReference(reference)
-	if !strings.EqualFold(absolute.Scheme, base.Scheme) || !strings.EqualFold(absolute.Host, base.Host) {
-		return rawURL
-	}
-
-	basePath := strings.TrimSuffix(base.EscapedPath(), "/")
-	absolutePath := absolute.EscapedPath()
-	if absolutePath != basePath && !strings.HasPrefix(absolutePath, basePath+"/") {
-		return rawURL
-	}
-	suffix := strings.TrimPrefix(absolutePath, basePath)
-	rewritten := h.proxyURL + "/swift" + suffix
-	if absolute.RawQuery != "" {
-		rewritten += "?" + absolute.RawQuery
-	}
-	if absolute.Fragment != "" {
-		rewritten += "#" + absolute.Fragment
-	}
-	return rewritten
-}
-
+// rewriteReleaseURLs points a release list's release URLs at the proxy (see
+// swift.RewriteReleaseURLs).
 func (h *SwiftHandler) rewriteReleaseURLs(scope, name string, body []byte) ([]byte, error) {
-	var metadata map[string]any
-	if err := json.Unmarshal(body, &metadata); err != nil {
-		return nil, err
-	}
-	releases, ok := metadata["releases"].(map[string]any)
-	if !ok {
-		return body, nil
-	}
+	return swift.RewriteReleaseURLs(scope, name, body, h.rewriteOptions())
+}
 
-	for version, value := range releases {
-		release, ok := value.(map[string]any)
-		if !ok {
-			continue
-		}
-		if _, hasURL := release["url"]; !hasURL {
-			continue
-		}
-		release["url"] = fmt.Sprintf(
-			"%s/swift/%s/%s/%s",
-			h.proxyURL,
-			url.PathEscape(scope),
-			url.PathEscape(name),
-			url.PathEscape(version),
-		)
-	}
-	return json.Marshal(metadata)
+func (h *SwiftHandler) rewriteOptions() swift.Options {
+	return swift.Options{ProxyURL: h.proxyURL, UpstreamURL: h.upstreamURL}
 }
 
 func (h *SwiftHandler) buildUpstreamURL(scope, name, version, resource, rawQuery string) string {
@@ -702,42 +592,17 @@ func writeSwiftProblem(w http.ResponseWriter, status int, detail string) {
 }
 
 func validSwiftPackageReference(scope, name, version string) bool {
-	return validSwiftScope(scope) && validSwiftPackageName(name) && version != "" && version != "." && version != ".." && !strings.ContainsAny(version, "/\\")
+	return swift.ValidPackageReference(scope, name, version)
 }
 
 func canonicalSwiftPackage(scope, name string) (string, string) {
-	return strings.ToLower(scope), strings.ToLower(name)
+	return swift.CanonicalPackage(scope, name)
 }
 
 func validSwiftScope(scope string) bool {
-	return validSwiftIdentifier(scope, swiftMaxScopeLength, "-")
+	return swift.ValidScope(scope)
 }
 
 func validSwiftPackageName(name string) bool {
-	return validSwiftIdentifier(name, swiftMaxNameLength, "-_")
-}
-
-func validSwiftIdentifier(value string, maxLength int, separators string) bool {
-	if value == "" || len(value) > maxLength {
-		return false
-	}
-	previousSeparator := false
-	for i := 0; i < len(value); i++ {
-		character := value[i]
-		separator := strings.ContainsRune(separators, rune(character))
-		if separator {
-			if i == 0 || i == len(value)-1 || previousSeparator {
-				return false
-			}
-			previousSeparator = true
-			continue
-		}
-		if (character < 'a' || character > 'z') &&
-			(character < 'A' || character > 'Z') &&
-			(character < '0' || character > '9') {
-			return false
-		}
-		previousSeparator = false
-	}
-	return true
+	return swift.ValidPackageName(name)
 }
