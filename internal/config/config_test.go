@@ -2224,6 +2224,27 @@ func TestCooldownShortest(t *testing.T) {
 	}
 }
 
+func TestCooldownLongest(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		cfg  *CooldownConfig
+		want time.Duration
+	}{
+		{"nil", nil, 0},
+		{"none", &CooldownConfig{Default: "0"}, 0},
+		{"default", &CooldownConfig{Default: "3d"}, 72 * time.Hour},
+		{"ecosystem", &CooldownConfig{Default: "3d", Ecosystems: map[string]string{"npm": "5d", "deb": "0"}}, 120 * time.Hour},
+		{"package", &CooldownConfig{Default: "3d", Packages: map[string]string{"pkg:npm/lodash": "14d"}}, 14 * 24 * time.Hour},
+		{"pattern", &CooldownConfig{Default: "0", PackagePatterns: map[string]string{"pkg:npm/@acme/*": "90m"}}, 90 * time.Minute},
+		{"default longest", &CooldownConfig{Default: "14d", Ecosystems: map[string]string{"npm": "1d"}}, 14 * 24 * time.Hour},
+		{"invalid ignored", &CooldownConfig{Default: "3d", Ecosystems: map[string]string{"npm": "soon"}}, 72 * time.Hour},
+	} {
+		if got := tc.cfg.Longest(); got != tc.want {
+			t.Errorf("%s: Longest() = %v, want %v", tc.name, got, tc.want)
+		}
+	}
+}
+
 func TestLoadBoolsFromEnvParseStrictly(t *testing.T) {
 	t.Run("no turns off a setting from the config file", func(t *testing.T) {
 		t.Setenv("PROXY_TRUST_FORWARDED_FOR", "no")

@@ -297,13 +297,33 @@ func (c *CooldownConfig) NormalizedPackages() map[string]string {
 // ecosystem, package or package pattern, or 0 when none is. Unparsable
 // durations are left out; Validate reports them.
 func (c *CooldownConfig) Shortest() time.Duration {
-	if c == nil {
-		return 0
-	}
 	var shortest time.Duration
-	consider := func(s string) {
-		if d, err := cooldown.ParseDuration(s); err == nil && d > 0 && (shortest == 0 || d < shortest) {
+	c.eachDuration(func(d time.Duration) {
+		if shortest == 0 || d < shortest {
 			shortest = d
+		}
+	})
+	return shortest
+}
+
+// Longest returns the longest cooldown configured anywhere, by default,
+// ecosystem, package or package pattern, or 0 when none is. No version
+// published longer ago than that can be in cooldown. Unparsable durations
+// are left out; Validate reports them.
+func (c *CooldownConfig) Longest() time.Duration {
+	var longest time.Duration
+	c.eachDuration(func(d time.Duration) { longest = max(longest, d) })
+	return longest
+}
+
+// eachDuration calls fn with every positive duration configured.
+func (c *CooldownConfig) eachDuration(fn func(time.Duration)) {
+	if c == nil {
+		return
+	}
+	consider := func(s string) {
+		if d, err := cooldown.ParseDuration(s); err == nil && d > 0 {
+			fn(d)
 		}
 	}
 	consider(c.Default)
@@ -312,7 +332,6 @@ func (c *CooldownConfig) Shortest() time.Duration {
 			consider(v)
 		}
 	}
-	return shortest
 }
 
 // ScanningConfig configures pre-cache artifact scanning (e.g. trivy,

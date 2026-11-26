@@ -227,10 +227,14 @@ type Proxy struct {
 	// ShortestCooldown is the shortest cooldown configured anywhere. It
 	// bounds how long a rewrite filtered by cooldown is cached.
 	ShortestCooldown time.Duration
-	Denylist         *denylist.Policy
-	CacheMetadata    bool
-	MetadataTTL      time.Duration
-	MetadataMaxSize  int64
+	// LongestCooldown is the longest cooldown configured anywhere. No
+	// version published longer ago can be in cooldown, which bounds how far
+	// back the Chef universe filter looks for recent releases.
+	LongestCooldown time.Duration
+	Denylist        *denylist.Policy
+	CacheMetadata   bool
+	MetadataTTL     time.Duration
+	MetadataMaxSize int64
 	// MetadataStreamMaxSize caps a metadata document streamed from upstream
 	// into storage, which metadata_max_size doesn't cover. Default 1 GB.
 	MetadataStreamMaxSize int64
@@ -317,7 +321,7 @@ type Proxy struct {
 // cooldownEcosystems are the ecosystems whose handlers apply cooldown. Others
 // have no publish time to check, so a configured cooldown has no effect there.
 var cooldownEcosystems = map[string]bool{
-	"cargo": true, "composer": true, "conda": true, "gem": true,
+	"cargo": true, "chef": true, "composer": true, "conda": true, "gem": true,
 	"golang": true, "helm": true, "hex": true, "maven": true,
 	"npm": true, "nuget": true, "pub": true, "pypi": true,
 }

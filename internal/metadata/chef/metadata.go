@@ -1,6 +1,7 @@
 // Package chef rewrites Chef Supermarket documents so every download
-// location points at the proxy. It depends on nothing but the standard
-// library, so it builds for targets such as WASI.
+// location points at the proxy, and leaves out versions in cooldown. It
+// depends on nothing but the standard library and the cooldown policy, so
+// it builds for targets such as WASI.
 package chef
 
 import (
@@ -33,6 +34,13 @@ var versionPattern = regexp.MustCompile(`^[0-9]+\.[0-9]+(\.[0-9]+)?$`)
 type Options struct {
 	// ProxyURL is the proxy's public URL, without a trailing slash.
 	ProxyURL string
+	// Withheld, when set, reports the cookbook versions to leave out, such
+	// as those in cooldown.
+	Withheld func(name, version string) bool
+}
+
+func (o Options) withheld(name, version string) bool {
+	return o.Withheld != nil && o.Withheld(name, version)
 }
 
 // RewriteUniverse points every version's location_path and download_url at
@@ -50,6 +58,10 @@ func RewriteUniverse(body []byte, opts Options) ([]byte, error) {
 	}
 	for name, versions := range universe {
 		for version, entry := range versions {
+			if opts.withheld(name, version) {
+				delete(versions, version)
+				continue
+			}
 			if entry == nil {
 				continue
 			}
@@ -83,18 +95,32 @@ func RewriteCookbook(name string, body []byte, opts Options) ([]byte, error) {
 		if err := json.Unmarshal(raw, &versions); err != nil {
 			return nil, fmt.Errorf("%w: cookbook %s versions: %w", ErrDocument, name, err)
 		}
-		for i, versionURL := range versions {
+		kept := versions[:0]
+		removed := false
+		for _, versionURL := range versions {
+			if v, ok := versionOfURL(versionURL); ok && opts.withheld(name, v) {
+				removed = true
+				continue
+			}
 			rewritten, err := RewriteVersionURL(name, versionURL, opts)
 			if err != nil {
 				return nil, err
 			}
-			versions[i] = rewritten
+			kept = append(kept, rewritten)
 		}
-		encoded, err := EncodeJSON(versions)
+		encoded, err := EncodeJSON(kept)
 		if err != nil {
 			return nil, err
 		}
 		cookbook["versions"] = encoded
+		// latest_version names the newest version, listed first; with
+		// versions left out it names the newest one left.
+		if removed {
+			cookbook["latest_version"] = json.RawMessage("null")
+			if len(kept) > 0 {
+				cookbook["latest_version"] = kept[0]
+			}
+		}
 	}
 	return EncodeJSON(cookbook)
 }
