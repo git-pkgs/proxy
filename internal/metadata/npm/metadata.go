@@ -10,10 +10,10 @@ import (
 	"net/url"
 	"reflect"
 	"slices"
-	"sort"
 	"strings"
 	"time"
 
+	"github.com/Masterminds/semver/v3"
 	"github.com/git-pkgs/cooldown"
 	"github.com/git-pkgs/proxy/internal/jsonscan"
 	"github.com/git-pkgs/proxy/internal/packageurl"
@@ -435,13 +435,15 @@ func (h *transformer) applyCooldownFiltering(metadata map[string]any, versions m
 		}
 	}
 
-	h.updateDistTags(metadata, versions, timeMap, withheld)
+	h.updateDistTags(metadata, versions, withheld)
 }
 
-// updateDistTags moves dist-tags.latest to the newest remaining version if
-// the current latest was removed by cooldown filtering, and, as the denylist
-// does, drops other tags that name a withheld version.
-func (h *transformer) updateDistTags(metadata, versions, timeMap map[string]any, withheld map[string]bool) {
+// updateDistTags drops the tags other than latest that name a withheld
+// version, as the denylist does, and moves latest when cooldown withholds the
+// version it names, the way npm and pnpm move it when their own release-age
+// cutoff holds it back (see latestReplacement). latest is removed when no
+// version can take its place.
+func (h *transformer) updateDistTags(metadata, versions map[string]any, withheld map[string]bool) {
 	distTags, ok := metadata["dist-tags"].(map[string]any)
 	if !ok {
 		return
@@ -463,11 +465,64 @@ func (h *transformer) updateDistTags(metadata, versions, timeMap map[string]any,
 		return
 	}
 
-	if newLatest := h.findNewestVersion(versions, timeMap); newLatest != "" {
+	if newLatest := latestReplacement(latest, versions); newLatest != "" {
 		distTags["latest"] = newLatest
 	} else if withheld[latest] {
 		delete(distTags, "latest")
 	}
+}
+
+// How well a remaining version stands in for a withheld latest, worst first.
+const (
+	// The latest's stability, on a lower major.
+	latestLowerMajor = iota + 1
+	// A prerelease of a stable latest's major.
+	latestPrereleaseOfMajor
+	// The latest's stability and major.
+	latestSameLane
+)
+
+// latestReplacement returns the version latest moves to when the version it
+// names is withheld: the highest remaining version no newer than it, preferring
+// one of its major and stability, then a prerelease of its major, then one of
+// its stability on a lower major. So a stable latest never moves to a
+// prerelease while a stable version of its major remains, nor to a backport
+// published after it. This is the rule pnpm's minimumReleaseAge applies, and
+// npm's min-release-age, which picks the highest version before its cutoff,
+// lands on the same version whenever latest is the highest release. It decides
+// on version strings alone, as the streamed rewrite has no manifests.
+func latestReplacement(latest string, versions map[string]any) string {
+	target, err := semver.StrictNewVersion(latest)
+	if err != nil {
+		return ""
+	}
+	targetPrerelease := target.Prerelease() != ""
+
+	var best *semver.Version
+	bestTier, result := 0, ""
+	for version := range versions {
+		candidate, err := semver.StrictNewVersion(version)
+		if err != nil || candidate.GreaterThan(target) {
+			continue
+		}
+		tier := 0
+		candidatePrerelease := candidate.Prerelease() != ""
+		switch {
+		case candidatePrerelease == targetPrerelease && candidate.Major() == target.Major():
+			tier = latestSameLane
+		case candidatePrerelease && !targetPrerelease && candidate.Major() == target.Major():
+			tier = latestPrereleaseOfMajor
+		case candidatePrerelease == targetPrerelease:
+			tier = latestLowerMajor
+		default:
+			continue
+		}
+		if tier > bestTier ||
+			(tier == bestTier && (candidate.GreaterThan(best) || (candidate.Equal(best) && version > result))) {
+			best, bestTier, result = candidate, tier, version
+		}
+	}
+	return result
 }
 
 // TarballURL returns the proxy URL that serves the tarball upstream
@@ -504,38 +559,6 @@ func EscapeTarballPackage(packageName string) string {
 // slash encoded, "@", and the version.
 func AttestationsURL(proxyURL, packageName, version string) string {
 	return fmt.Sprintf("%s/npm/-/npm/v1/attestations/%s@%s", proxyURL, url.PathEscape(packageName), url.PathEscape(version))
-}
-
-// findNewestVersion returns the version string with the most recent timestamp
-// from the remaining versions, using the time map.
-func (h *transformer) findNewestVersion(versions map[string]any, timeMap map[string]any) string {
-	if timeMap == nil {
-		return ""
-	}
-
-	type versionTime struct {
-		version string
-		t       time.Time
-	}
-
-	var vts []versionTime
-	for v := range versions {
-		if ts, ok := timeMap[v].(string); ok {
-			if t, err := time.Parse(time.RFC3339, ts); err == nil {
-				vts = append(vts, versionTime{v, t})
-			}
-		}
-	}
-
-	if len(vts) == 0 {
-		return ""
-	}
-
-	sort.Slice(vts, func(i, j int) bool {
-		return vts[i].t.After(vts[j].t)
-	})
-
-	return vts[0].version
 }
 
 // VersionFromFilename extracts a version from an npm tarball filename.

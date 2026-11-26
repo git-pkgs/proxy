@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"github.com/git-pkgs/cooldown"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -228,5 +229,116 @@ func TestNPMRewriteCooldownDropsTags(t *testing.T) {
 				t.Errorf("dist-tags = %v, want %v", doc.DistTags, want)
 			}
 		})
+	}
+}
+
+// TestNPMRewriteCooldownRetargetsLatest checks where latest goes when cooldown
+// withholds the version it names: to the highest remaining version no newer
+// than it, of its major and stability, as npm and pnpm pick when their own
+// release-age cutoff holds latest back, in both the in-memory and the
+// streamed rewrite.
+func TestNPMRewriteCooldownRetargetsLatest(t *testing.T) {
+	now := time.Date(2026, 10, 18, 12, 0, 0, 0, time.UTC)
+	ts := func(age time.Duration) string { return now.Add(-age).UTC().Format(time.RFC3339) }
+	options := Options{ProxyURL: "http://proxy", EvaluatedAt: now, Cooldown: &cooldown.Config{Default: "3d"}}
+	const day = 24 * time.Hour
+
+	cases := []struct {
+		name   string
+		latest string
+		// Each version with its age; under three days it is withheld.
+		versions map[string]time.Duration
+		want     string
+	}{
+		{
+			name:   "a prerelease published before the stable latest stays a prerelease",
+			latest: "8.4.0",
+			versions: map[string]time.Duration{
+				"8.3.8": 20 * day, "8.4.0-beta.1": 10 * day, "8.4.0-beta.2": day, "8.4.0": 4 * time.Hour,
+			},
+			want: "8.3.8",
+		},
+		{
+			name:   "a backport to an older major published after the stable latest",
+			latest: "4.18.0",
+			versions: map[string]time.Duration{
+				"4.17.21": 30 * day, "3.10.2": 5 * day, "4.18.0": day,
+			},
+			want: "4.17.21",
+		},
+		{
+			name:   "a higher major that latest did not name",
+			latest: "4.18.0",
+			versions: map[string]time.Duration{
+				"4.17.21": 30 * day, "5.0.0": 10 * day, "4.18.0": day,
+			},
+			want: "4.17.21",
+		},
+		{
+			name:   "a prerelease of the major ranks above a lower major",
+			latest: "1.0.0",
+			versions: map[string]time.Duration{
+				"0.0.1": 90 * day, "1.0.0-beta.4": 10 * day, "1.0.0": day,
+			},
+			want: "1.0.0-beta.4",
+		},
+		{
+			name:   "a lower major when nothing of the major is left",
+			latest: "2.0.0",
+			versions: map[string]time.Duration{
+				"1.5.0": 90 * day, "2.0.0": day,
+			},
+			want: "1.5.0",
+		},
+		{
+			name:   "a prerelease latest moves to an earlier prerelease of its major",
+			latest: "2.0.0-rc.2",
+			versions: map[string]time.Duration{
+				"1.9.0": 90 * day, "2.0.0-rc.1": 10 * day, "2.0.0-rc.2": day,
+			},
+			want: "2.0.0-rc.1",
+		},
+		{
+			name:   "nothing left at or below latest",
+			latest: "1.0.0",
+			versions: map[string]time.Duration{
+				"1.0.0": day,
+			},
+			want: "",
+		},
+	}
+
+	for _, c := range cases {
+		var versions, times []string
+		for version, age := range c.versions {
+			versions = append(versions, `"`+version+`":{}`)
+			times = append(times, `"`+version+`":"`+ts(age)+`"`)
+		}
+		slices.Sort(versions)
+		slices.Sort(times)
+		input := `{"name":"demo","dist-tags":{"latest":"` + c.latest + `"},` +
+			`"versions":{` + strings.Join(versions, ",") + `},` +
+			`"time":{` + strings.Join(times, ",") + `}}`
+		rewrite := map[string]func() ([]byte, []string, error){
+			"memory": func() ([]byte, []string, error) { return Rewrite("demo", []byte(input), options) },
+			"stream": func() ([]byte, []string, error) { return rewriteStream("demo", []byte(input), options) },
+		}
+		for name, run := range rewrite {
+			t.Run(c.name+"/"+name, func(t *testing.T) {
+				out, _, err := run()
+				if err != nil {
+					t.Fatal(err)
+				}
+				var doc struct {
+					DistTags map[string]string `json:"dist-tags"`
+				}
+				if err := json.Unmarshal(out, &doc); err != nil {
+					t.Fatalf("output is not JSON: %v\n%s", err, out)
+				}
+				if got := doc.DistTags["latest"]; got != c.want {
+					t.Errorf("latest = %q, want %q", got, c.want)
+				}
+			})
+		}
 	}
 }
