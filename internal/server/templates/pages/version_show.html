@@ -7,9 +7,9 @@
         <span class="mx-2">/</span>
         <a href="/ui/package/{{.Package.Ecosystem}}/{{.Package.Name}}" class="hover:text-gray-900 dark:hover:text-gray-100">{{.Package.Name}}</a>
     </nav>
-    <div class="flex items-center gap-3 mb-2">
+    <div class="flex flex-wrap items-center gap-3 mb-2 min-w-0">
         {{template "ecosystem_badge" .Package.Ecosystem}}
-        <h1 class="text-3xl font-bold font-mono">{{.Version.DisplayPURL}}</h1>
+        <h1 class="text-3xl font-bold font-mono break-all min-w-0">{{.Version.DisplayPURL}}</h1>
         {{if .IsOutdated}}
         <span class="inline-flex items-center px-2 py-1 rounded text-sm font-medium bg-amber-100 text-amber-700 dark:bg-amber-900 dark:text-amber-300">outdated</span>
         {{end}}
