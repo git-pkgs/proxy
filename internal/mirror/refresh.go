@@ -119,7 +119,9 @@ func (m *Mirror) Refresh(ctx context.Context, r Refresh) (*Progress, error) {
 // ecosystem fails without its indexes being read.
 func (m *Mirror) indexRefreshGroup(ctx context.Context, ix osIndex, group []database.UsedPackage, cutoff time.Time, tracker *progressTracker) []PackageVersion {
 	if err := m.turnedOff(ix.ecosystem); err != nil {
-		m.recordFailure(tracker, PackageVersion{Ecosystem: ix.ecosystem}, err)
+		for _, pkg := range group {
+			m.recordFailure(tracker, PackageVersion{Ecosystem: pkg.Ecosystem, Name: pkg.Name}, err)
+		}
 		return nil
 	}
 	items, errs := m.indexRefreshItems(ctx, ix, group, cutoff)
@@ -149,11 +151,11 @@ func (m *Mirror) refreshItems(ctx context.Context, pkg database.UsedPackage) ([]
 		return nil, err
 	}
 	ecosystem, name, _ := mirrorTarget(p)
-	if !refreshable(ecosystem) {
-		return nil, nil
-	}
 	if err := m.turnedOff(ecosystem); err != nil {
 		return nil, err
+	}
+	if !refreshable(ecosystem) {
+		return nil, nil
 	}
 	eco, files := fileEcosystems[ecosystem]
 	var variants map[string]bool

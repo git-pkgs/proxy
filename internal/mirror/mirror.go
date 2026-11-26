@@ -339,7 +339,6 @@ func (m *Mirror) mirrorOne(ctx context.Context, pv PackageVersion, tracker *prog
 	m.recordResult(tracker, pv, result)
 }
 
-// recordFailure counts and logs a package that could not be mirrored.
 // turnedOff returns an error when disabled_ecosystems turns off ecosystem.
 func (m *Mirror) turnedOff(ecosystem string) error {
 	if m.Disabled != nil && m.Disabled(ecosystem) {
@@ -348,6 +347,7 @@ func (m *Mirror) turnedOff(ecosystem string) error {
 	return nil
 }
 
+// recordFailure counts and logs a package that could not be mirrored.
 func (m *Mirror) recordFailure(tracker *progressTracker, pv PackageVersion, err error) {
 	tracker.failed.Add(1)
 	tracker.addError(pv.Ecosystem, pv.Name, pv.Version, err.Error())
