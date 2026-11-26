@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync"
 
+	"github.com/git-pkgs/proxy/internal/metadata/oci"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
 	"github.com/git-pkgs/registries/fetch"
@@ -28,7 +29,7 @@ const (
 
 	// namespaceQueryParam is the query parameter containerd appends to mirror
 	// requests to name the registry the image reference points at.
-	namespaceQueryParam = "ns"
+	namespaceQueryParam = oci.NamespaceQueryParam
 	// defaultNamespaceRoute marks namespace hosts served by the default registry.
 	defaultNamespaceRoute = ""
 	// maxReportedNamespaceRefusals bounds the upstream/ns pairs remembered

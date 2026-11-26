@@ -7,10 +7,11 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
-	"regexp"
 	"strconv"
 	"strings"
 	"time"
+
+	"github.com/git-pkgs/proxy/internal/metadata/oci"
 )
 
 const (
@@ -21,8 +22,6 @@ const (
 	// two must not share rows: an older binary would serve a raw Link as is.
 	containerTagsCacheFormat = "raw-link"
 )
-
-var containerLinkTargetPattern = regexp.MustCompile(`<([^>]*)>`)
 
 type cachedContainerTags struct {
 	body        []byte
@@ -207,44 +206,13 @@ func copyContainerTagsHeaders(destination, source http.Header) {
 	}
 }
 
+// rewriteContainerTagsLink points a tag list or referrers Link header back
+// at the proxy; see oci.RewriteLink.
 func (h *ContainerHandler) rewriteContainerTagsLink(link, registryURL, requestPath, namespace string) string {
-	if link == "" {
-		return ""
-	}
-	upstreamURL, err := url.Parse(registryURL)
-	if err != nil {
-		return link
-	}
-	proxyURL, err := url.Parse(h.proxyURL)
-	if err != nil {
-		return link
-	}
-
-	return containerLinkTargetPattern.ReplaceAllStringFunc(link, func(target string) string {
-		linkURL, err := url.Parse(target[1 : len(target)-1])
-		if err != nil {
-			return target
-		}
-		if linkURL.IsAbs() {
-			if linkURL.Scheme != upstreamURL.Scheme || linkURL.Host != upstreamURL.Host {
-				return target
-			}
-		} else if linkURL.Host != "" || (linkURL.Path != "" && !strings.HasPrefix(linkURL.Path, "/v2/")) {
-			return target
-		}
-		// Relative registry API links resolve against the current tag-list
-		// endpoint. Rebuild them below so named-registry selectors are kept.
-		linkURL.Scheme = proxyURL.Scheme
-		linkURL.Host = proxyURL.Host
-		linkURL.User = proxyURL.User
-		linkURL.Path = strings.TrimSuffix(proxyURL.Path, "/") + "/v2" + requestPath
-		linkURL.RawPath = ""
-		if namespace != "" {
-			// Keep follow-up pages on the ns route the client is using.
-			query := linkURL.Query()
-			query.Set(namespaceQueryParam, namespace)
-			linkURL.RawQuery = query.Encode()
-		}
-		return "<" + linkURL.String() + ">"
+	return oci.RewriteLink(link, oci.LinkOptions{
+		ProxyURL:    h.proxyURL,
+		RegistryURL: registryURL,
+		RequestPath: requestPath,
+		Namespace:   namespace,
 	})
 }
