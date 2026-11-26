@@ -5,22 +5,20 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"fmt"
 	"net/http"
-	"net/url"
-	"path"
 	"strings"
 	"sync"
 	"time"
 
 	"gopkg.in/yaml.v3"
 
+	"github.com/git-pkgs/proxy/internal/metadata/helm"
 	"github.com/git-pkgs/proxy/internal/retention"
 )
 
 const (
 	helmMetadataEcosystem = "helm"
-	helmIndexFilename     = "index.yaml"
+	helmIndexFilename     = helm.IndexFilename
 	helmIndexAccept       = "application/x-yaml, text/yaml;q=0.9, */*;q=0.1"
 	sha256HexLength       = 64
 )
@@ -237,47 +235,20 @@ func (h *HelmHandler) serveIndexError(w http.ResponseWriter, err error) {
 
 // rewriteIndex points the index's chart URLs at the proxy and drops releases
 // in cooldown. It also returns the releases it kept, by chart name and
-// digest, which together with the index fix its output.
+// digest, which together with the index fix its output; see helm.Rewrite.
 func (h *HelmHandler) rewriteIndex(repository, upstreamURL string, body []byte) ([]byte, []string, error) {
-	document, entries, err := parseHelmIndex(body)
-	if err != nil {
-		return nil, nil, err
-	}
-
-	var kept []string
-	for i := 0; i < len(entries.Content); i += 2 {
-		chartName := entries.Content[i].Value
-		releases := entries.Content[i+1]
-		if releases.Kind != yaml.SequenceNode {
-			return nil, nil, fmt.Errorf("chart %q releases must be a sequence", chartName)
-		}
-
-		filtered := make([]*yaml.Node, 0, len(releases.Content))
-		for _, release := range releases.Content {
-			chart, err := h.parseChartRelease(chartName, upstreamURL, release)
-			if err != nil {
-				h.proxy.Logger.Warn("omitting malformed Helm chart release",
-					"repository", repository, "chart", chartName, "error", err)
-				continue
-			}
-			if h.chartOnCooldown(chartName, chart.created) {
-				continue
-			}
-			for _, download := range chart.downloads {
-				if download.oci {
-					download.node.Value = h.ociChartProxyURL(download.url)
-				} else {
-					download.node.Value = h.chartProxyURL(repository, chart.digest, download.filename)
-				}
-			}
-			filtered = append(filtered, release)
-			kept = append(kept, chartName+"@"+chart.digest)
-		}
-		releases.Content = filtered
-	}
-
-	out, err := yaml.Marshal(document)
-	return out, kept, err
+	return helm.Rewrite(body, helm.Options{
+		ProxyURL:      h.proxyURL,
+		Repository:    repository,
+		UpstreamURL:   upstreamURL,
+		OCIRegistries: h.ociRegistries,
+		Cooldown:      h.proxy.cooldown(),
+		EvaluatedAt:   time.Now(),
+		OnMalformed: func(chart string, err error) {
+			h.proxy.Logger.Warn("omitting malformed Helm chart release",
+				"repository", repository, "chart", chart, "error", err)
+		},
+	})
 }
 
 // findChartDownload returns the upstream URL of a chart in the index. Parsing
@@ -292,42 +263,25 @@ func (h *HelmHandler) findChartDownload(repository, upstreamURL string, index me
 }
 
 func (h *HelmHandler) findChartURL(charts *helmChartLookup, digest, filename string) (string, error) {
-	for _, chart := range charts.byDigest[digest] {
-		if h.chartOnCooldown(chart.name, chart.created) {
+	for _, chart := range charts.ByDigest[digest] {
+		if h.chartOnCooldown(chart.Name, chart.Created) {
 			continue
 		}
-		for _, download := range chart.downloads {
-			if download.filename == filename {
-				return download.url, nil
+		for _, download := range chart.Downloads {
+			if download.Filename == filename {
+				return download.URL, nil
 			}
 		}
 	}
 	return "", errHelmChartNotFound
 }
 
-// helmChartLookup holds the HTTP chart downloads an index lists, by chart
-// digest, in index order, and each release by chart name and version.
-type helmChartLookup struct {
-	indexDigest string
-	byDigest    map[string][]helmChartEntry
-	byRelease   map[helmRelease]helmReleaseDownload
-}
-
-type helmChartEntry struct {
-	name      string
-	created   time.Time
-	downloads []helmChartDownload
-}
-
-type helmRelease struct{ chart, version string }
-
-// helmReleaseDownload is what helm downloads for a release: the first URL
-// the index lists for it, checked against its digest.
-type helmReleaseDownload struct {
-	digest  string
-	created time.Time
-	first   helmChartDownload
-}
+// helmChartLookup holds the HTTP chart downloads an index lists (see
+// helm.Lookup), and helmRelease names a release in it.
+type (
+	helmChartLookup = helm.Lookup
+	helmRelease     = helm.Release
+)
 
 // chartLookup returns the charts the index lists, parsing it only when the
 // last lookup built for the repository came from other bytes. An index
@@ -338,7 +292,7 @@ func (h *HelmHandler) chartLookup(repository, upstreamURL string, index metadata
 		h.lookupMu.Lock()
 		cached := h.lookups[key]
 		h.lookupMu.Unlock()
-		if cached != nil && cached.indexDigest == index.digest {
+		if cached != nil && cached.IndexDigest == index.digest {
 			return cached, nil
 		}
 	}
@@ -348,7 +302,7 @@ func (h *HelmHandler) chartLookup(repository, upstreamURL string, index metadata
 		return nil, err
 	}
 	if index.digest != "" {
-		lookup.indexDigest = index.digest
+		lookup.IndexDigest = index.digest
 		h.lookupMu.Lock()
 		if h.lookups == nil {
 			h.lookups = make(map[string]*helmChartLookup)
@@ -360,47 +314,7 @@ func (h *HelmHandler) chartLookup(repository, upstreamURL string, index metadata
 }
 
 func (h *HelmHandler) buildChartLookup(upstreamURL string, body []byte) (*helmChartLookup, error) {
-	_, entries, err := parseHelmIndex(body)
-	if err != nil {
-		return nil, err
-	}
-
-	lookup := &helmChartLookup{byDigest: make(map[string][]helmChartEntry), byRelease: make(map[helmRelease]helmReleaseDownload)}
-	for i := 0; i < len(entries.Content); i += 2 {
-		chartName := entries.Content[i].Value
-		releases := entries.Content[i+1]
-		if releases.Kind != yaml.SequenceNode {
-			return nil, fmt.Errorf("chart %q releases must be a sequence", chartName)
-		}
-		for _, release := range releases.Content {
-			chart, err := h.parseChartRelease(chartName, upstreamURL, release)
-			if err != nil {
-				continue
-			}
-			entry := helmChartEntry{name: chartName, created: chart.created}
-			if version := helmMappingValue(release, "version"); version != nil && version.Value != "" {
-				// helm takes the first release listed for a version.
-				key := helmRelease{chartName, version.Value}
-				if _, listed := lookup.byRelease[key]; !listed {
-					first := chart.downloads[0]
-					lookup.byRelease[key] = helmReleaseDownload{
-						digest:  chart.digest,
-						created: chart.created,
-						first:   helmChartDownload{url: first.url, filename: first.filename, oci: first.oci},
-					}
-				}
-			}
-			for _, download := range chart.downloads {
-				if !download.oci {
-					// Drop the YAML node, so the lookup doesn't keep the
-					// parsed index alive.
-					entry.downloads = append(entry.downloads, helmChartDownload{url: download.url, filename: download.filename})
-				}
-			}
-			lookup.byDigest[chart.digest] = append(lookup.byDigest[chart.digest], entry)
-		}
-	}
-	return lookup, nil
+	return helm.BuildLookup(upstreamURL, body)
 }
 
 // downloadChartLookup returns the charts the index lists, for a download
@@ -419,31 +333,18 @@ func (h *HelmHandler) downloadChartLookup(r *http.Request, repository, upstreamU
 		}
 		return h.chartLookup(repository, upstreamURL, res)
 	}, func(charts *helmChartLookup) bool {
-		return charts.lists(digest, filename)
+		return charts.Lists(digest, filename)
 	})
-}
-
-// lists reports whether the index lists an HTTP download of filename with
-// the digest.
-func (c *helmChartLookup) lists(digest, filename string) bool {
-	for _, chart := range c.byDigest[digest] {
-		for _, download := range chart.downloads {
-			if download.filename == filename {
-				return true
-			}
-		}
-	}
-	return false
 }
 
 func (h *HelmHandler) withholdChart(w http.ResponseWriter, charts *helmChartLookup, digest, filename string) bool {
 	withheld := false
-	for _, chart := range charts.byDigest[digest] {
-		for _, download := range chart.downloads {
-			if download.filename != filename {
+	for _, chart := range charts.ByDigest[digest] {
+		for _, download := range chart.Downloads {
+			if download.Filename != filename {
 				continue
 			}
-			if !h.chartOnCooldown(chart.name, chart.created) {
+			if !h.chartOnCooldown(chart.Name, chart.Created) {
 				return false
 			}
 			withheld = true
@@ -460,137 +361,24 @@ func (h *HelmHandler) chartOnCooldown(chartName string, created time.Time) bool 
 		!h.proxy.cooldown().IsAllowed(helmMetadataEcosystem, canonicalPackagePURL(helmMetadataEcosystem, chartName), created)
 }
 
-type helmChartDownload struct {
-	node     *yaml.Node
-	url      string
-	filename string
-	oci      bool
-}
-
-type helmChartRelease struct {
-	created   time.Time
-	digest    string
-	downloads []helmChartDownload
-}
-
 var errHelmChartNotFound = errors.New("chart not found in Helm index")
 
-func (h *HelmHandler) parseChartRelease(chartName, upstreamURL string, release *yaml.Node) (helmChartRelease, error) {
-	digestNode := helmMappingValue(release, "digest")
-	urlsNode := helmMappingValue(release, "urls")
-	if digestNode == nil || urlsNode == nil || urlsNode.Kind != yaml.SequenceNode || len(urlsNode.Content) == 0 {
-		return helmChartRelease{}, fmt.Errorf("chart %q has no digest or URLs", chartName)
-	}
-	digest, ok := normalizeHelmDigest(digestNode.Value)
-	if !ok {
-		return helmChartRelease{}, fmt.Errorf("chart %q has invalid digest", chartName)
-	}
-
-	baseURL, err := url.Parse(upstreamURL + "/" + helmIndexFilename)
-	if err != nil {
-		return helmChartRelease{}, fmt.Errorf("parsing Helm repository URL: %w", err)
-	}
-
-	chart := helmChartRelease{digest: digest}
-	if createdNode := helmMappingValue(release, "created"); createdNode != nil && createdNode.Value != "" {
-		chart.created, err = time.Parse(time.RFC3339Nano, createdNode.Value)
-		if err != nil {
-			return helmChartRelease{}, fmt.Errorf("chart %q has invalid creation time: %w", chartName, err)
-		}
-	}
-
-	for _, urlNode := range urlsNode.Content {
-		download, err := parseHelmChartDownload(chartName, baseURL, urlNode)
-		if err != nil {
-			return helmChartRelease{}, err
-		}
-		chart.downloads = append(chart.downloads, download)
-	}
-	return chart, nil
-}
-
-func parseHelmChartDownload(chartName string, baseURL *url.URL, node *yaml.Node) (helmChartDownload, error) {
-	if node.Kind != yaml.ScalarNode {
-		return helmChartDownload{}, fmt.Errorf("chart %q has invalid URL", chartName)
-	}
-	reference, err := url.Parse(node.Value)
-	if err != nil {
-		return helmChartDownload{}, fmt.Errorf("parsing chart %q URL: %w", chartName, err)
-	}
-	if reference.Scheme == "oci" {
-		if reference.Hostname() == "" || strings.Trim(reference.Path, "/") == "" ||
-			reference.User != nil || reference.RawQuery != "" || reference.ForceQuery || reference.Fragment != "" ||
-			containsPathTraversal(reference.Path) {
-			return helmChartDownload{}, fmt.Errorf("chart %q has invalid OCI reference", chartName)
-		}
-		return helmChartDownload{node: node, url: node.Value, oci: true}, nil
-	}
-	downloadURL := baseURL.ResolveReference(reference)
-	if (downloadURL.Scheme != "http" && downloadURL.Scheme != "https") || downloadURL.Host == "" {
-		return helmChartDownload{}, fmt.Errorf("chart %q URL must be HTTP(S) or OCI", chartName)
-	}
-	filename := path.Base(downloadURL.Path)
-	if filename == "." || filename == "/" || filename == "" || !strings.HasSuffix(filename, ".tgz") {
-		return helmChartDownload{}, fmt.Errorf("chart %q URL must point to a .tgz file", chartName)
-	}
-	return helmChartDownload{node: node, url: downloadURL.String(), filename: filename}, nil
-}
-
 func (h *HelmHandler) chartProxyURL(repository, digest, filename string) string {
-	return fmt.Sprintf("%s/helm/%s/charts/%s/%s", h.proxyURL,
-		url.PathEscape(repository), digest, url.PathEscape(filename))
+	return helm.ChartProxyURL(h.proxyURL, repository, digest, filename)
 }
 
 func parseHelmIndex(body []byte) (*yaml.Node, *yaml.Node, error) {
-	var document yaml.Node
-	if err := yaml.Unmarshal(body, &document); err != nil {
-		return nil, nil, fmt.Errorf("parsing Helm index: %w", err)
-	}
-	entries, err := helmIndexEntries(&document)
-	if err != nil {
-		return nil, nil, err
-	}
-	return &document, entries, nil
+	return helm.ParseIndex(body)
 }
 
 func helmIndexEntries(document *yaml.Node) (*yaml.Node, error) {
-	if document == nil {
-		return nil, errors.New("helm index is empty")
-	}
-	if len(document.Content) != 1 || document.Content[0].Kind != yaml.MappingNode {
-		return nil, errors.New("helm index must be a mapping")
-	}
-	entries := helmMappingValue(document.Content[0], "entries")
-	if entries == nil || entries.Kind != yaml.MappingNode {
-		return nil, errors.New("helm index has no entries mapping")
-	}
-	if len(entries.Content)%2 != 0 {
-		return nil, errors.New("helm index entries mapping has an incomplete key-value pair")
-	}
-	return entries, nil
+	return helm.IndexEntries(document)
 }
 
 func helmMappingValue(mapping *yaml.Node, key string) *yaml.Node {
-	if mapping == nil || mapping.Kind != yaml.MappingNode {
-		return nil
-	}
-	for i := 0; i+1 < len(mapping.Content); i += 2 {
-		if mapping.Content[i].Value == key {
-			return mapping.Content[i+1]
-		}
-	}
-	return nil
+	return helm.MappingValue(mapping, key)
 }
 
 func normalizeHelmDigest(value string) (string, bool) {
-	digest := strings.TrimPrefix(strings.ToLower(value), "sha256:")
-	if len(digest) != sha256HexLength {
-		return "", false
-	}
-	for _, char := range digest {
-		if (char < '0' || char > '9') && (char < 'a' || char > 'f') {
-			return "", false
-		}
-	}
-	return digest, true
+	return helm.NormalizeDigest(value)
 }
