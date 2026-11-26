@@ -5,12 +5,9 @@ import (
 	"bytes"
 	"compress/gzip"
 	"context"
-	"crypto/sha256"
 	"encoding/hex"
-	"encoding/json"
 	"errors"
 	"fmt"
-	"hash"
 	"io"
 	"net/http"
 	"slices"
@@ -18,15 +15,12 @@ import (
 	"sync"
 	"time"
 
-	"github.com/git-pkgs/proxy/internal/jsonstream"
+	"github.com/git-pkgs/proxy/internal/metadata/conda"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/purl"
 )
 
-const (
-	condaUpstream = "https://conda.anaconda.org"
-	minCondaParts = 3 // name-version-build requires at least 3 hyphen-separated parts
-)
+const condaUpstream = "https://conda.anaconda.org"
 
 // Packages are stored under the name {channel}/{name}, which purl writes as
 // pkg:conda/{channel}%2F{name}. Package rules name the channel as the
@@ -175,41 +169,10 @@ func (h *CondaHandler) parseFilename(filename string) (name, version string) {
 }
 
 // CondaFilenameIdentity returns the name and version a download of filename
-// is cached under, or empty strings when it is not a package file name.
-// Conda filenames are: {name}-{version}-{build}.{ext}
-// e.g., "numpy-1.24.0-py311h64a7726_0.conda"
+// is cached under, or empty strings when it is not a package file name (see
+// conda.FilenameIdentity).
 func CondaFilenameIdentity(filename string) (name, version string) {
-	// Remove extension
-	base := filename
-	for _, ext := range []string{".conda", ".tar.bz2"} {
-		if strings.HasSuffix(base, ext) {
-			base = strings.TrimSuffix(base, ext)
-			break
-		}
-	}
-
-	// Split by hyphens, the format is name-version-build
-	// The name can contain hyphens, so we need to find version-build at the end
-	parts := strings.Split(base, "-")
-	if len(parts) < minCondaParts {
-		return "", ""
-	}
-
-	// Build is the last part, version is second to last
-	// Everything before is the name
-	build := parts[len(parts)-1]
-	version = parts[len(parts)-2]
-	name = strings.Join(parts[:len(parts)-2], "-")
-
-	// Version should start with a digit
-	if len(version) == 0 || version[0] < '0' || version[0] > '9' {
-		return "", ""
-	}
-
-	// Include build in version for uniqueness
-	_ = build
-
-	return name, version
+	return conda.FilenameIdentity(filename)
 }
 
 // isCondaRepodataVariant reports whether filename is a form of a subdir's
@@ -407,17 +370,18 @@ func (h *CondaHandler) repodataNotModified(w http.ResponseWriter, r *http.Reques
 // identified by digest. The copy depends only on the document, the startup
 // configuration and which entries were left out, and those stay left out
 // until the first of them leaves cooldown.
-func (h *CondaHandler) rememberRepodata(cacheKey, digest string, filter *repodataFilter) {
-	if filter.unknownUntil {
+func (h *CondaHandler) rememberRepodata(cacheKey, digest string, filter *conda.Filter) {
+	until, known := filter.Until()
+	if !known {
 		return
 	}
-	etag := keptVersionsETag(digest, "", cacheKey, []string{hex.EncodeToString(filter.withheld.Sum(nil))})
+	etag := keptVersionsETag(digest, "", cacheKey, []string{hex.EncodeToString(filter.Withheld())})
 	h.repodataMu.Lock()
 	defer h.repodataMu.Unlock()
 	if h.repodataStates == nil {
 		h.repodataStates = make(map[string]repodataState)
 	}
-	h.repodataStates[cacheKey] = repodataState{digest: digest, etag: etag, until: filter.until}
+	h.repodataStates[cacheKey] = repodataState{digest: digest, etag: etag, until: until}
 }
 
 // countingWriter counts the bytes written through it, such as whether
@@ -431,19 +395,6 @@ func (c *countingWriter) Write(p []byte) (int, error) {
 	n, err := c.w.Write(p)
 	c.n += int64(n)
 	return n, err
-}
-
-// condaMaxSecondsTimestamp is the last second of year 9999. Like conda, a
-// larger repodata timestamp is read as milliseconds and a smaller one as
-// seconds, which some older entries use.
-const condaMaxSecondsTimestamp = 253402300799
-
-// condaTime returns the time a repodata timestamp names.
-func condaTime(timestamp float64) time.Time {
-	if timestamp > condaMaxSecondsTimestamp {
-		return time.UnixMilli(int64(timestamp)).Truncate(time.Second)
-	}
-	return time.Unix(int64(timestamp), 0)
 }
 
 const (
@@ -461,90 +412,29 @@ func (h *CondaHandler) filterRepodata(r io.Reader, w io.Writer) error {
 }
 
 // filterRepodataWith is filterRepodata deciding by filter.
-func (h *CondaHandler) filterRepodataWith(r io.Reader, w io.Writer, filter *repodataFilter) error {
-	return jsonstream.CopyObject(r, w, func(m *jsonstream.Member) error {
-		if m.Key != "packages" && m.Key != "packages.conda" {
-			return m.Copy()
-		}
-		return m.Object(func(entry *jsonstream.Member) error {
-			raw, err := entry.Raw()
-			if err != nil {
-				return err
-			}
-			if filter.inCooldown(entry.Key, raw) {
-				return nil
-			}
-			return entry.Write(raw)
-		})
-	})
+func (h *CondaHandler) filterRepodataWith(r io.Reader, w io.Writer, filter *conda.Filter) error {
+	return filter.Copy(r, w)
 }
 
-type repodataEntry struct {
-	Name      string  `json:"name"`
-	Version   string  `json:"version"`
-	Timestamp float64 `json:"timestamp"`
+// newRepodataFilter returns a filter deciding which repodata entries
+// cooldown leaves out as of now (see conda.Filter).
+func (h *CondaHandler) newRepodataFilter(now time.Time) *conda.Filter {
+	return conda.NewFilter(h.cooldownOptions(now))
 }
 
-// repodataFilter decides which repodata entries cooldown leaves out, all as
-// of one time, and records what it left out, which with the document fixes
-// the filtered copy.
-type repodataFilter struct {
-	h   *CondaHandler
-	now time.Time
-	// withheld hashes the filenames left out.
-	withheld hash.Hash
-	// until is when the first entry left out leaves cooldown.
-	until time.Time
-	// unknownUntil is set when an entry was left out without a time it
-	// leaves cooldown, so until can't be relied on.
-	unknownUntil bool
+// cooldownOptions is how repodata and shards are filtered as of now.
+func (h *CondaHandler) cooldownOptions(now time.Time) conda.Options {
+	return conda.Options{
+		Cooldown:         h.proxy.cooldown(),
+		EvaluatedAt:      now,
+		OnCooldownFilter: h.cooldownFiltered,
+	}
 }
 
-func (h *CondaHandler) newRepodataFilter(now time.Time) *repodataFilter {
-	return &repodataFilter{h: h, now: now, withheld: sha256.New()}
-}
-
-// inCooldown reports whether a repodata entry was published too recently.
-// Entries without a name or timestamp are kept.
-func (f *repodataFilter) inCooldown(filename string, raw []byte) bool {
-	var entry repodataEntry
-	if err := json.Unmarshal(raw, &entry); err != nil {
-		return false
-	}
-	if entry.Name == "" || entry.Timestamp == 0 {
-		return false
-	}
-	publishedAt := condaTime(entry.Timestamp)
-	decision := f.h.proxy.cooldown().Evaluate("conda", canonicalPackagePURL("conda", entry.Name), publishedAt, f.now)
-	if decision.Allowed {
-		return false
-	}
-	f.h.proxy.Logger.Info("cooldown: filtering conda package",
-		"name", entry.Name, "version", entry.Version, "filename", filename)
-	_, _ = fmt.Fprintf(f.withheld, "%d:%s", len(filename), filename)
-	switch {
-	case decision.AvailableAt.IsZero():
-		f.unknownUntil = true
-	case f.until.IsZero() || decision.AvailableAt.Before(f.until):
-		f.until = decision.AvailableAt
-	}
-	return true
-}
-
-// recordInCooldown reports whether a package record with a repodata
-// timestamp was published too recently. Records without a name or
-// timestamp are kept.
-func (h *CondaHandler) recordInCooldown(filename, name, version string, timestamp float64) bool {
-	if name == "" || timestamp == 0 {
-		return false
-	}
-	publishedAt := condaTime(timestamp)
-	if h.proxy.cooldown().IsAllowed("conda", canonicalPackagePURL("conda", name), publishedAt) {
-		return false
-	}
+// cooldownFiltered logs a package file cooldown leaves out.
+func (h *CondaHandler) cooldownFiltered(filename, name, version string) {
 	h.proxy.Logger.Info("cooldown: filtering conda package",
 		"name", name, "version", version, "filename", filename)
-	return true
 }
 
 // metadataCacheKey is the metadata cache key of a request path.
@@ -628,35 +518,12 @@ func (h *CondaHandler) streamRepodataIndex(ctx context.Context, upstreamURL stri
 }
 
 // readRepodataIndex maps each package file in a repodata.json to its
-// timestamp, or the zero time for a file without one. It reads the document as it
-// streams, under the same bound as filterRepodata, so the decompressed size
-// is not limited by metadata_max_size.
+// timestamp, or the zero time for a file without one (see conda.ReadIndex).
+// It reads the document as it streams, under the same bound as
+// filterRepodata, so the decompressed size is not limited by
+// metadata_max_size.
 func readRepodataIndex(r io.Reader) (map[string]time.Time, error) {
-	index := make(map[string]time.Time)
-	err := jsonstream.CopyObject(io.LimitReader(r, maxRepodataSize), io.Discard, func(m *jsonstream.Member) error {
-		if m.Key != "packages" && m.Key != "packages.conda" {
-			return m.Copy()
-		}
-		return m.Object(func(entry *jsonstream.Member) error {
-			raw, err := entry.Raw()
-			if err != nil {
-				return err
-			}
-			var e repodataEntry
-			if json.Unmarshal(raw, &e) != nil {
-				return nil
-			}
-			index[entry.Key] = time.Time{}
-			if e.Timestamp != 0 {
-				index[entry.Key] = condaTime(e.Timestamp)
-			}
-			return nil
-		})
-	})
-	if err != nil {
-		return nil, err
-	}
-	return index, nil
+	return conda.ReadIndex(io.LimitReader(r, maxRepodataSize))
 }
 
 // proxyCached forwards a metadata request with caching.
