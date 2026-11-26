@@ -248,6 +248,7 @@ func TestNPMRewriteCooldownRetargetsLatest(t *testing.T) {
 		latest string
 		// Each version with its age; under three days it is withheld.
 		versions map[string]time.Duration
+		denied   []string
 		want     string
 	}{
 		{
@@ -299,6 +300,15 @@ func TestNPMRewriteCooldownRetargetsLatest(t *testing.T) {
 			want: "2.0.0-rc.1",
 		},
 		{
+			name:   "a denied version is passed over, not left for the denylist to replace",
+			latest: "4.18.0",
+			versions: map[string]time.Duration{
+				"4.17.20": 40 * day, "4.17.21": 30 * day, "5.0.0": 10 * day, "4.18.0": day,
+			},
+			denied: []string{"4.17.21"},
+			want:   "4.17.20",
+		},
+		{
 			name:   "nothing left at or below latest",
 			latest: "1.0.0",
 			versions: map[string]time.Duration{
@@ -319,9 +329,16 @@ func TestNPMRewriteCooldownRetargetsLatest(t *testing.T) {
 		input := `{"name":"demo","dist-tags":{"latest":"` + c.latest + `"},` +
 			`"versions":{` + strings.Join(versions, ",") + `},` +
 			`"time":{` + strings.Join(times, ",") + `}}`
+		opts := options
+		if len(c.denied) > 0 {
+			opts.DeniedVersions = map[string]bool{}
+			for _, version := range c.denied {
+				opts.DeniedVersions[version] = true
+			}
+		}
 		rewrite := map[string]func() ([]byte, []string, error){
-			"memory": func() ([]byte, []string, error) { return Rewrite("demo", []byte(input), options) },
-			"stream": func() ([]byte, []string, error) { return rewriteStream("demo", []byte(input), options) },
+			"memory": func() ([]byte, []string, error) { return Rewrite("demo", []byte(input), opts) },
+			"stream": func() ([]byte, []string, error) { return rewriteStream("demo", []byte(input), opts) },
 		}
 		for name, run := range rewrite {
 			t.Run(c.name+"/"+name, func(t *testing.T) {

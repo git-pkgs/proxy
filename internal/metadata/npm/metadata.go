@@ -465,7 +465,7 @@ func (h *transformer) updateDistTags(metadata, versions map[string]any, withheld
 		return
 	}
 
-	if newLatest := latestReplacement(latest, versions); newLatest != "" {
+	if newLatest := latestReplacement(latest, versions, h.DeniedVersions); newLatest != "" {
 		distTags["latest"] = newLatest
 	} else if withheld[latest] {
 		delete(distTags, "latest")
@@ -489,9 +489,11 @@ const (
 // prerelease while a stable version of its major remains, nor to a backport
 // published after it. This is the rule pnpm's minimumReleaseAge applies, and
 // npm's min-release-age, which picks the highest version before its cutoff,
-// lands on the same version whenever latest is the highest release. It decides
-// on version strings alone, as the streamed rewrite has no manifests.
-func latestReplacement(latest string, versions map[string]any) string {
+// lands on the same version whenever latest is the highest release. A denied
+// version is passed over: the denylist runs next, and would replace it with the
+// highest stable version, past latest. It decides on version strings alone, as
+// the streamed rewrite has no manifests.
+func latestReplacement(latest string, versions map[string]any, denied map[string]bool) string {
 	target, err := semver.StrictNewVersion(latest)
 	if err != nil {
 		return ""
@@ -502,7 +504,7 @@ func latestReplacement(latest string, versions map[string]any) string {
 	bestTier, result := 0, ""
 	for version := range versions {
 		candidate, err := semver.StrictNewVersion(version)
-		if err != nil || candidate.GreaterThan(target) {
+		if err != nil || candidate.GreaterThan(target) || denied[version] {
 			continue
 		}
 		tier := 0
