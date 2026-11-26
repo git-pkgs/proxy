@@ -18,6 +18,7 @@ import (
 	"github.com/git-pkgs/proxy/internal/metadata/npm"
 	"github.com/git-pkgs/proxy/internal/retention"
 	"github.com/git-pkgs/proxy/internal/storage"
+	"golang.org/x/sync/singleflight"
 )
 
 const (
@@ -58,10 +59,14 @@ func init() {
 
 // NPMHandler handles npm registry protocol requests.
 type NPMHandler struct {
-	proxy       *Proxy
-	upstreamURL string
-	proxyURL    string // URL where this proxy is hosted
-	routes      packageRoutes
+	proxy         *Proxy
+	upstreamURL   string
+	proxyURL      string // URL where this proxy is hosted
+	routes        packageRoutes
+	refreshFlight singleflight.Group
+	refreshMu     sync.Mutex
+	refreshAfter  map[string]time.Time
+	refreshResult map[string]metadataResult
 }
 
 // NewNPMHandler creates a new npm protocol handler.
@@ -914,27 +919,33 @@ type npmVersionData struct {
 // packument: from storage in one pass when metadata is cached there, and
 // otherwise from the packument read into memory.
 //
-// A packument cached within its TTL can predate the version. Under cooldown a
-// missing entry would let the version through with no publish time, so the
-// packument is fetched again and the version decided on what upstream lists
-// now, as the Composer handler does.
+// A packument cached within its TTL can predate the version. Refresh it before
+// choosing the tarball's URL, integrity or cooldown. Under cooldown a missing
+// entry would let the version through with no publish time, so each
+// non-concurrent missing-version request checks upstream again.
 func (h *NPMHandler) versionData(ctx context.Context, packageName, packumentURL, cacheKey, version string) (npmVersionData, error) {
-	data, fromCache, err := h.readVersionData(ctx, packumentURL, cacheKey, version, false)
-	if err == nil && data.entry == nil && fromCache && h.proxy.cooldownApplies("npm", packageName) {
-		h.proxy.Logger.Info("cooldown: cached npm metadata lacks version, fetching it again",
+	data, fromCache, err := h.readVersionData(ctx, packumentURL, cacheKey, version)
+	if err == nil && data.entry == nil && fromCache {
+		h.proxy.Logger.Info("cached npm metadata lacks version, fetching it again",
 			"package", packageName, "version", version)
-		data, _, err = h.readVersionData(ctx, packumentURL, cacheKey, version, true)
+		retain := !h.proxy.cooldownApplies("npm", packageName)
+		res := h.refreshMissingPackument(ctx, packumentURL, cacheKey, retain)
+		if res.err != nil && retain {
+			// Without cooldown a readable cached packument still allows
+			// the usual tarball URL when upstream is down.
+			return data, nil
+		}
+		data, err = h.readRefreshedNPMVersion(ctx, res, packumentURL, cacheKey, version, retain)
 	}
 	return data, err
 }
 
 // readVersionData implements versionData. fromCache reports whether the
-// packument was a cached copy, within its TTL or served stale; refresh
-// fetches it from upstream.
-func (h *NPMHandler) readVersionData(ctx context.Context, packumentURL, cacheKey, version string, refresh bool) (data npmVersionData, fromCache bool, err error) {
+// packument was a cached copy, within its TTL or served stale.
+func (h *NPMHandler) readVersionData(ctx context.Context, packumentURL, cacheKey, version string) (data npmVersionData, fromCache bool, err error) {
 	accept := h.packumentAccept()
 	var found npm.VersionEntry
-	fetched, err := h.lookupStoredPackument(ctx, packumentURL, accept, cacheKey, refresh, func(entry *database.MetadataCacheEntry) error {
+	fetched, err := h.lookupStoredPackument(ctx, packumentURL, accept, cacheKey, false, func(entry *database.MetadataCacheEntry) error {
 		return readStored(func() (io.ReadCloser, error) { return h.proxy.openStoredMetadata(ctx, entry) }, func(in io.Reader) (err error) {
 			found, err = npm.LookupVersion(in, version)
 			return err
@@ -943,9 +954,6 @@ func (h *NPMHandler) readVersionData(ctx context.Context, packumentURL, cacheKey
 	fetchErr := fetched.err
 	switch {
 	case fetchErr == nil && err == nil && (!found.Abbreviated || h.packumentValidator() == nil):
-		if refresh && fetched.stale {
-			return npmVersionData{}, false, errRefetchFailed(fetched)
-		}
 		return npmVersionData{entry: found.Entry, published: found.Published}, fetched.fromCache || fetched.stale, nil
 	case fetchErr == nil && err != nil:
 		h.proxy.Logger.Warn("failed to read stored npm metadata, reading it in memory", "url", packumentURL, "error", err)
@@ -953,17 +961,9 @@ func (h *NPMHandler) readVersionData(ctx context.Context, packumentURL, cacheKey
 		return npmVersionData{}, false, fetchErr
 	}
 
-	var res metadataResult
-	if refresh {
-		res = h.proxy.refreshMetadata(ctx, "npm", cacheKey, packumentURL, accept, "", h.packumentValidator())
-	} else {
-		res = h.proxy.fetchMetadataDocument(ctx, "npm", cacheKey, packumentURL, accept, h.packumentValidator())
-	}
+	res := h.proxy.fetchMetadataDocument(ctx, "npm", cacheKey, packumentURL, accept, h.packumentValidator())
 	if res.err != nil {
 		return npmVersionData{}, false, res.err
-	}
-	if refresh && res.stale {
-		return npmVersionData{}, false, errRefetchFailed(res)
 	}
 	entry, _ := jsonscan.Lookup(res.body, "versions", version)
 	published, _, err := jsonscan.LookupString(res.body, "time", version)
