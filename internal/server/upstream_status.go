@@ -38,8 +38,6 @@ type UpstreamStatus struct {
 
 // upstreamSignals is what the proxy knows about one upstream host.
 type upstreamSignals struct {
-	// tracked is false for an upstream whose URL has no host.
-	tracked     bool
 	activity    httpclient.HostActivity
 	breakerOpen bool
 	heldUntil   time.Time
@@ -133,7 +131,7 @@ func upstreamStatuses(ecosystems []UpstreamEcosystem, activity *httpclient.Upstr
 		for j := range eco.Upstreams {
 			row := &eco.Upstreams[j]
 			in := upstreamSignals{breakerOpen: open[row.host], heldUntil: holds[row.host]}
-			in.activity, in.tracked = activity.Host(row.host)
+			in.activity, _ = activity.Host(row.host)
 			row.Status = upstreamStatus(in, now)
 		}
 		eco.Status = worstStatus(eco.Upstreams)

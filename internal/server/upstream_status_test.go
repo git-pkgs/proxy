@@ -17,19 +17,18 @@ func TestUpstreamStatusLevels(t *testing.T) {
 		level   string
 		summary string
 	}{
-		{"never contacted", upstreamSignals{tracked: true}, statusIdle, "No requests since the proxy started"},
-		{"not tracked", upstreamSignals{}, statusIdle, "No requests since the proxy started"},
-		{"answering", upstreamSignals{tracked: true, activity: httpclient.HostActivity{Requests: 5, LastSuccess: ago(time.Minute)}}, statusOK, "5 requests in the last 15 minutes"},
-		{"one request", upstreamSignals{tracked: true, activity: httpclient.HostActivity{Requests: 1}}, statusOK, "1 request in the last 15 minutes"},
-		{"quiet since", upstreamSignals{tracked: true, activity: httpclient.HostActivity{LastSuccess: ago(time.Hour)}}, statusOK, "No requests in the last 15 minutes"},
-		{"some failures", upstreamSignals{tracked: true, activity: httpclient.HostActivity{Requests: 10, Failures: 2, LastSuccess: ago(time.Minute), LastFailure: ago(2 * time.Minute), LastFailureKind: "HTTP 502"}}, statusWarn, "2 of 10 requests failed in the last 15 minutes"},
-		{"half failing", upstreamSignals{tracked: true, activity: httpclient.HostActivity{Requests: 4, Failures: 2, LastFailureKind: "timeout"}}, statusError, "2 of 4 requests failed in the last 15 minutes"},
-		{"only request failed", upstreamSignals{tracked: true, activity: httpclient.HostActivity{Requests: 1, Failures: 1, LastFailureKind: "timeout"}}, statusError, "1 of 1 requests failed in the last 15 minutes"},
-		{"failed last, a while ago", upstreamSignals{tracked: true, activity: httpclient.HostActivity{LastSuccess: ago(3 * time.Hour), LastFailure: ago(2 * time.Hour), LastFailureKind: "HTTP 503"}}, statusWarn, "The last request failed"},
-		{"slow", upstreamSignals{tracked: true, activity: httpclient.HostActivity{Requests: 3, Mean: 6 * time.Second}}, statusWarn, "Slow to answer"},
-		{"breaker open", upstreamSignals{tracked: true, breakerOpen: true, activity: httpclient.HostActivity{Requests: 3}}, statusError, "Circuit breaker open"},
-		{"rate limited", upstreamSignals{tracked: true, heldUntil: now.Add(time.Minute), activity: httpclient.HostActivity{Requests: 3}}, statusError, "Rate limited until 12:01 UTC"},
-		{"hold over", upstreamSignals{tracked: true, heldUntil: ago(time.Minute), activity: httpclient.HostActivity{Requests: 3}}, statusOK, "3 requests"},
+		{"never contacted", upstreamSignals{}, statusIdle, "No requests since the proxy started"},
+		{"answering", upstreamSignals{activity: httpclient.HostActivity{Requests: 5, LastSuccess: ago(time.Minute)}}, statusOK, "5 requests in the last 15 minutes"},
+		{"one request", upstreamSignals{activity: httpclient.HostActivity{Requests: 1}}, statusOK, "1 request in the last 15 minutes"},
+		{"quiet since", upstreamSignals{activity: httpclient.HostActivity{LastSuccess: ago(time.Hour)}}, statusOK, "No requests in the last 15 minutes"},
+		{"some failures", upstreamSignals{activity: httpclient.HostActivity{Requests: 10, Failures: 2, LastSuccess: ago(time.Minute), LastFailure: ago(2 * time.Minute), LastFailureKind: "HTTP 502"}}, statusWarn, "2 of 10 requests failed in the last 15 minutes"},
+		{"half failing", upstreamSignals{activity: httpclient.HostActivity{Requests: 4, Failures: 2, LastFailureKind: "timeout"}}, statusError, "2 of 4 requests failed in the last 15 minutes"},
+		{"only request failed", upstreamSignals{activity: httpclient.HostActivity{Requests: 1, Failures: 1, LastFailureKind: "timeout"}}, statusError, "1 of 1 requests failed in the last 15 minutes"},
+		{"failed last, a while ago", upstreamSignals{activity: httpclient.HostActivity{LastSuccess: ago(3 * time.Hour), LastFailure: ago(2 * time.Hour), LastFailureKind: "HTTP 503"}}, statusWarn, "The last request failed"},
+		{"slow", upstreamSignals{activity: httpclient.HostActivity{Requests: 3, Mean: 6 * time.Second}}, statusWarn, "Slow to answer"},
+		{"breaker open", upstreamSignals{breakerOpen: true, activity: httpclient.HostActivity{Requests: 3}}, statusError, "Circuit breaker open"},
+		{"rate limited", upstreamSignals{heldUntil: now.Add(time.Minute), activity: httpclient.HostActivity{Requests: 3}}, statusError, "Rate limited until 12:01 UTC"},
+		{"hold over", upstreamSignals{heldUntil: ago(time.Minute), activity: httpclient.HostActivity{Requests: 3}}, statusOK, "3 requests"},
 	} {
 		got := upstreamStatus(tc.in, now)
 		if got.Level != tc.level || !strings.HasPrefix(got.Summary, tc.summary) {
@@ -40,7 +39,7 @@ func TestUpstreamStatusLevels(t *testing.T) {
 
 func TestUpstreamStatusDetails(t *testing.T) {
 	now := time.Date(2026, 11, 25, 12, 0, 0, 0, time.UTC)
-	got := upstreamStatus(upstreamSignals{tracked: true, activity: httpclient.HostActivity{
+	got := upstreamStatus(upstreamSignals{activity: httpclient.HostActivity{
 		Requests: 4, Failures: 1, Mean: 250 * time.Millisecond, Slowest: 2 * time.Second,
 		LastSuccess: now.Add(-time.Minute), LastFailure: now.Add(-5 * time.Minute), LastFailureKind: "HTTP 503",
 	}}, now)
