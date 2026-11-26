@@ -41,9 +41,8 @@ const errMavenCooldown = "version is in cooldown"
 const mavenTimeUserAgent = "git-pkgs-proxy/1.0"
 
 const (
-	mavenMetadataFile      = maven.MetadataFile
-	mavenSnapshot          = maven.Snapshot
-	mavenLastUpdatedLayout = maven.LastUpdatedLayout
+	mavenMetadataFile = maven.MetadataFile
+	mavenSnapshot     = maven.Snapshot
 )
 
 // mavenChecksums are the checksum files served beside maven-metadata.xml.
@@ -306,34 +305,4 @@ func (h *MavenHandler) filterMetadata(ctx context.Context, source mavenSource, a
 			}
 		},
 	})
-}
-
-// mavenElement is a version element read by parseMavenMetadata.
-type mavenElement struct {
-	value string
-}
-
-// mavenMetadata is a parsed maven-metadata.xml; see maven.Metadata.
-type mavenMetadata struct {
-	doc      *maven.Metadata
-	versions []mavenElement
-}
-
-// parseMavenMetadata reads a maven-metadata.xml; see maven.ParseMetadata.
-func parseMavenMetadata(body []byte) (*mavenMetadata, error) {
-	doc, err := maven.ParseMetadata(body)
-	if err != nil {
-		return nil, err
-	}
-	m := &mavenMetadata{doc: doc}
-	for _, v := range doc.Versions {
-		m.versions = append(m.versions, mavenElement{value: v.Value})
-	}
-	return m, nil
-}
-
-// without returns body without the removed versions; see
-// maven.Metadata.Without.
-func (m *mavenMetadata) without(body []byte, removed map[string]bool) []byte {
-	return m.doc.Without(body, removed)
 }
