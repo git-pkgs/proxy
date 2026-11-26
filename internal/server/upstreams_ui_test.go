@@ -71,18 +71,19 @@ func TestUpstreamEcosystems(t *testing.T) {
 			rows[row.Setting+" "+row.Name] = row
 		}
 	}
+	// host is what the status is looked up by: no userinfo, no path.
 	for key, want := range map[string]UpstreamRow{
-		"upstream.npm ":                            {Setting: "upstream.npm", Path: "http://proxy.test/npm/"},
-		"upstream.generic files":                   {Setting: "upstream.generic", Name: "files", Path: "http://proxy.test/generic/files/"},
-		"upstream.generic my files":                {Setting: "upstream.generic", Name: "my files", Path: "http://proxy.test/generic/my%20files/"},
-		"upstream.git github":                      {Setting: "upstream.git", Name: "github", Path: "http://proxy.test/git/github/"},
-		"upstream.go_sumdbs sum.example.org":       {Setting: "upstream.go_sumdbs", Name: "sum.example.org", Path: "http://proxy.test/go/sumdb/sum.example.org/"},
-		"upstream.arch archlinux":                  {Setting: "upstream.arch", Name: "archlinux", Path: "http://proxy.test/arch/archlinux/"},
-		"upstream.freebsd freebsd":                 {Setting: "upstream.freebsd", Name: "freebsd", Path: "http://proxy.test/freebsd/freebsd/"},
-		"upstream.cargo_download ":                 {Setting: "upstream.cargo_download", Path: "http://proxy.test/cargo/"},
-		"upstream.homebrew_api ":                   {Setting: "upstream.homebrew_api", Path: "http://proxy.test/homebrew/"},
-		"upstream.homebrew_artifact ":              {Setting: "upstream.homebrew_artifact", Path: "http://proxy.test/v2/homebrew/core/"},
-		"upstream.terraform registry.opentofu.org": {Setting: "upstream.terraform", Name: "registry.opentofu.org", Path: "http://proxy.test/terraform/providers/registry.opentofu.org/"},
+		"upstream.npm ":                            {Setting: "upstream.npm", Path: "http://proxy.test/npm/", host: "npm.example.org"},
+		"upstream.generic files":                   {Setting: "upstream.generic", Name: "files", Path: "http://proxy.test/generic/files/", host: "files.example.org"},
+		"upstream.generic my files":                {Setting: "upstream.generic", Name: "my files", Path: "http://proxy.test/generic/my%20files/", host: "morefiles.example.org"},
+		"upstream.git github":                      {Setting: "upstream.git", Name: "github", Path: "http://proxy.test/git/github/", host: "github.com"},
+		"upstream.go_sumdbs sum.example.org":       {Setting: "upstream.go_sumdbs", Name: "sum.example.org", Path: "http://proxy.test/go/sumdb/sum.example.org/", host: "sum.example.org"},
+		"upstream.arch archlinux":                  {Setting: "upstream.arch", Name: "archlinux", Path: "http://proxy.test/arch/archlinux/", host: "geo.mirror.pkgbuild.com"},
+		"upstream.freebsd freebsd":                 {Setting: "upstream.freebsd", Name: "freebsd", Path: "http://proxy.test/freebsd/freebsd/", host: "pkg.freebsd.org"},
+		"upstream.cargo_download ":                 {Setting: "upstream.cargo_download", Path: "http://proxy.test/cargo/", host: "static.crates.io"},
+		"upstream.homebrew_api ":                   {Setting: "upstream.homebrew_api", Path: "http://proxy.test/homebrew/", host: "formulae.brew.sh"},
+		"upstream.homebrew_artifact ":              {Setting: "upstream.homebrew_artifact", Path: "http://proxy.test/v2/homebrew/core/", host: "ghcr.io"},
+		"upstream.terraform registry.opentofu.org": {Setting: "upstream.terraform", Name: "registry.opentofu.org", Path: "http://proxy.test/terraform/providers/registry.opentofu.org/", host: "registry.opentofu.org"},
 	} {
 		if got := rows[key]; got != want {
 			t.Errorf("%s = %+v, want %+v", key, got, want)
@@ -167,4 +168,49 @@ func TestUpstreamEcosystemsTerraformHostnames(t *testing.T) {
 	if want := "http://proxy.test/terraform/providers/registry.example.org/"; len(paths) != 1 || paths[0] != want {
 		t.Errorf("terraform paths %q, want [%q]", paths, want)
 	}
+}
+
+// Requests through the proxy reach the page's lights: a failing upstream
+// shows red, one never asked shows no traffic, and neither shows its host.
+func TestUpstreamsPageShowsStatus(t *testing.T) {
+	failing := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusServiceUnavailable)
+	}))
+	t.Cleanup(failing.Close)
+	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
+		cfg.Upstream.NPM = failing.URL
+	})
+
+	request(t, http.MethodGet, cfg.BaseURL+"/npm/left-pad", "", nil)
+	status, body := request(t, http.MethodGet, cfg.BaseURL+"/ui/upstreams", "", nil)
+	if status != http.StatusOK {
+		t.Fatalf("status %d\n%s", status, body)
+	}
+	npm := section(t, body, `id="ecosystem-npm"`)
+	if !strings.Contains(npm, `data-status="error"`) || !strings.Contains(npm, "requests failed in the last 15 minutes") || !strings.Contains(npm, "HTTP 503") {
+		t.Errorf("npm section doesn't show the failing upstream:\n%s", npm)
+	}
+	if cargo := section(t, body, `id="ecosystem-cargo"`); !strings.Contains(cargo, `data-status="idle"`) || strings.Contains(cargo, `data-status="error"`) {
+		t.Errorf("cargo section isn't shown as without traffic:\n%s", cargo)
+	}
+	if summary := section(t, body, `id="upstream-summary"`); !strings.Contains(summary, `data-status="error"`) || !strings.Contains(summary, "Problems with 1 ecosystem") {
+		t.Errorf("summary doesn't show the problem:\n%s", summary)
+	}
+	if host := strings.TrimPrefix(failing.URL, "http://"); strings.Contains(body, host) {
+		t.Errorf("page shows the upstream host %s", host)
+	}
+}
+
+// section returns body from marker to the next ecosystem card.
+func section(t *testing.T, body, marker string) string {
+	t.Helper()
+	i := strings.Index(body, marker)
+	if i < 0 {
+		t.Fatalf("page has no %s", marker)
+	}
+	rest := body[i+len(marker):]
+	if j := strings.Index(rest, `id="ecosystem-`); j >= 0 {
+		rest = rest[:j]
+	}
+	return rest
 }

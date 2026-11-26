@@ -1658,7 +1658,13 @@ The proxy serves a web UI under `/ui`. No separate frontend build is needed -- t
 - **Dashboard** (`/ui/`) -- cache stats, popular packages, recently cached artifacts, and vulnerability overview. With `upstream.git` set, a Git Cache tile shows the size and count of cached repositories, which Total Size leaves out.
 - **Analytics** (`/ui/analytics`) -- accumulated download size as a ring broken down by ecosystem with the total in the middle, the cache size, artifact, package and version counts, a per-ecosystem table, the vulnerability overview, and a Runtime card mirroring every counter `/metrics` exposes. See [Analytics](#analytics).
 - **Install guide** (`/ui/install`) -- per-ecosystem configuration instructions, so you don't have to look them up here.
-- **Upstreams** (`/ui/upstreams`) -- the upstreams each ecosystem's requests go to, as configured: the config key, the entry name for a map, and the proxy path clients use. Upstream URLs and whether credentials apply aren't shown, since `/ui` has no auth of its own.
+- **Upstreams** (`/ui/upstreams`) -- the upstreams each ecosystem's requests go to, as configured: the config key, the entry name for a map, and the proxy path clients use. Upstream URLs and whether credentials apply aren't shown, since `/ui` has no auth of its own. Each upstream has a status light, and each ecosystem shows its worst:
+  - red: its circuit breaker is open, it rate limited the proxy and its requests are held, or at least half of its requests in the last 15 minutes failed (all of them, with fewer than three);
+  - yellow: some of those requests failed, they took over 5 seconds on average, or the last request failed and none followed;
+  - green: it answered its requests in that window, or its last one before it;
+  - grey: no request reached it since the proxy started.
+
+  Timeouts, connection errors, 429 and 5xx answers count as failures; a 404 or an auth challenge counts as answered. Requests are counted in memory, so each instance shows its own. The page also shows, per ecosystem, what the cache holds, how many file requests it served since start, the cooldown that applies, and whether `mirror.refresh` or `mirror.schedules` cover it.
 - **Package browser** (`/ui/packages`) -- browse all cached packages with filtering by ecosystem and sorting by hits, size, name, or vulnerability count.
 - **Search** (`/ui/search?q=...`) -- search cached packages by name.
 - **Package detail** (`/ui/package/{ecosystem}/{name}`) -- metadata, license, vulnerabilities, and version list for a package. You can select two versions to compare.

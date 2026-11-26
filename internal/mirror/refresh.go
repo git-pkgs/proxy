@@ -200,6 +200,12 @@ func cachedVariants(eco fileEcosystem, files []database.UsedFile) map[string]boo
 	return variants
 }
 
+// Refreshes reports whether mirror.refresh mirrors new releases of an
+// ecosystem's packages, from their release lists or repository indexes.
+func Refreshes(ecosystem string) bool {
+	return refreshable(ecosystem) || osIndexes[ecosystem].ecosystem != ""
+}
+
 // refreshable reports whether a refresh lists the releases of an
 // ecosystem's packages. Images follow mirror.schedules, OS packages their
 // repository indexes, and Julia files are cached by tree hash rather than by

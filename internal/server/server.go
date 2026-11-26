@@ -129,6 +129,7 @@ type Server struct {
 	ecr         *ecrTokens
 	breakers    *breakerMonitor
 	rateLimits  *upstreamhttp.SharedRateLimitGate
+	activity    *upstreamhttp.UpstreamActivity
 	ecoStats    ecosystemStatsCache
 	metaStats   metadataStatsCache
 	sources     sourceTracker
@@ -226,6 +227,7 @@ func New(cfg *config.Config, logger *slog.Logger, buildInfo BuildInfo) (*Server,
 		healthCache: hc,
 		accessLog:   activityLog,
 		ecr:         newECRTokens(logger),
+		activity:    upstreamhttp.NewUpstreamActivity(upstreamHosts(&cfg.Upstream)),
 	}
 	closeAccessLog = false
 	return server, nil
@@ -605,7 +607,9 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 // challenges apply consistently. An artifactTimeout of zero means no limit.
 func (s *Server) newUpstreamClients(artifactTimeout time.Duration) (metadataClient, artifactClient *http.Client) {
 	safeClient := newUpstreamClient(s.cfg.Upstream)
-	baseTransport := safeClient.Transport
+	// Activity sits at the bottom so it sees each request that reaches an
+	// upstream, and none a rate-limit hold stopped.
+	baseTransport := s.activity.Transport(safeClient.Transport)
 	if s.accessLog != nil {
 		baseTransport = upstreamhttp.NewAccessLogTransport(baseTransport, s.accessLog, s.logger)
 	}
@@ -1581,10 +1585,15 @@ func formatSize(bytes int64) string {
 }
 
 func formatTimeAgo(t time.Time) string {
+	return formatTimeAgoAt(t, time.Now())
+}
+
+// formatTimeAgoAt is formatTimeAgo as seen at now.
+func formatTimeAgoAt(t, now time.Time) string {
 	if t.IsZero() {
 		return ""
 	}
-	d := time.Since(t)
+	d := now.Sub(t)
 	switch {
 	case d < time.Minute:
 		return "just now"
