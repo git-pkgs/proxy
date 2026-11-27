@@ -563,7 +563,7 @@ func (s *Server) mountProtocolHandlersAt(r chi.Router, proxy *handler.Proxy, bas
 	// or ';' stays escaped upstream; it refuses what it can't forward itself.
 	r.With(sandboxUpstreamContent, rejectDotSegments).
 		Mount("/generic", http.StripPrefix("/generic", genericHandler.Routes()))
-	r = r.With(sandboxUpstreamContent, rejectQueryInPath, rejectDotSegments)
+	r = r.With(sandboxUpstreamContent, rejectQueryInPath, rejectDoubleEscapedPath, rejectDotSegments)
 	s.mountEcosystems(r, map[string]http.Handler{
 		"npm":       npmHandler.Routes(),
 		"cargo":     cargoHandler.Routes(),
