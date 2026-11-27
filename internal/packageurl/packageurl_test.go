@@ -70,3 +70,16 @@ func TestMakeStringDelegatesOtherEcosystems(t *testing.T) {
 		t.Errorf("MakeString() = %q, want %q", got, want)
 	}
 }
+
+func TestPolicyPackageKey(t *testing.T) {
+	for in, want := range map[string]string{
+		"pkg:golang/github.com/Azure/sdk": "pkg:golang/github.com/azure/sdk",
+		"pkg:swift/Apple/Swift-NIO":       "pkg:swift/apple/swift-nio",
+		"pkg:npm/Leftpad":                 "pkg:npm/Leftpad",
+		"pkg:generic/Swift-Registry/A.B":  "pkg:generic/Swift-Registry/A.B",
+	} {
+		if got := PolicyPackageKey(in); got != want {
+			t.Errorf("PolicyPackageKey(%q) = %q, want %q", in, got, want)
+		}
+	}
+}

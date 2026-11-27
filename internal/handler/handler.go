@@ -320,12 +320,27 @@ var cooldownEcosystems = map[string]bool{
 	"cargo": true, "composer": true, "conda": true, "gem": true,
 	"golang": true, "helm": true, "hex": true, "maven": true,
 	"npm": true, "nuget": true, "pub": true, "pypi": true,
+	"swift": true,
 }
 
 // CooldownSupported reports whether the proxy applies cooldown to an
 // ecosystem.
 func CooldownSupported(ecosystem string) bool {
 	return cooldownEcosystems[ecosystem]
+}
+
+// CooldownPackagePURL returns the PURL cooldown rules name a package by.
+// That is its canonical PURL, except for a Swift registry package, scope/name,
+// which is pkg:swift/{scope}/{name}: its artifacts are stored under a
+// generic PURL, and the registry scope is no host, so no canonical
+// pkg:swift PURL is made for it.
+func CooldownPackagePURL(ecosystem, name string) string {
+	if ecosystem == "swift" {
+		if scope, pkg, ok := strings.Cut(name, "/"); ok && validSwiftScope(scope) && validSwiftPackageName(pkg) {
+			return swiftPolicyPURL(scope, pkg, "")
+		}
+	}
+	return canonicalPackagePURL(ecosystem, name)
 }
 
 // CooldownPolicy supplies version-age filtering and package-specific durations.

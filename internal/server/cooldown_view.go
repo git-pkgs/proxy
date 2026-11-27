@@ -9,7 +9,6 @@ import (
 	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/handler"
-	"github.com/git-pkgs/proxy/internal/packageurl"
 )
 
 // CooldownSummary describes the cooldown configuration on the dashboard. The
@@ -101,7 +100,7 @@ func (v *cooldownView) forPackage(ecosystem, name string) *PackageCooldown {
 	if !v.enabled() || !handler.CooldownSupported(ecosystem) {
 		return nil
 	}
-	purl := packageurl.MakeString(ecosystem, name, "")
+	purl := handler.CooldownPackagePURL(ecosystem, name)
 	rule := "default"
 	if _, ok := v.packages[purl]; ok {
 		rule = "package override"
@@ -119,7 +118,7 @@ func (v *cooldownView) availableAt(ecosystem, name string, publishedAt, now time
 	if !v.enabled() || !handler.CooldownSupported(ecosystem) || publishedAt.IsZero() {
 		return time.Time{}
 	}
-	d := v.policy.Evaluate(ecosystem, packageurl.MakeString(ecosystem, name, ""), publishedAt, now)
+	d := v.policy.Evaluate(ecosystem, handler.CooldownPackagePURL(ecosystem, name), publishedAt, now)
 	if d.Allowed {
 		return time.Time{}
 	}

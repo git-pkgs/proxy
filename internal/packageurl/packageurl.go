@@ -19,9 +19,11 @@ func MakeString(ecosystem, name, version string) string {
 }
 
 // PolicyPackageKey maps a canonical versionless PURL to its policy key.
-// Go policies match module names case-insensitively for compatibility.
+// Go policies match module names case-insensitively for compatibility, and
+// Swift policies match registry identities case-insensitively, as the
+// registry compares them.
 func PolicyPackageKey(packagePURL string) string {
-	if strings.HasPrefix(packagePURL, "pkg:golang/") {
+	if strings.HasPrefix(packagePURL, "pkg:golang/") || strings.HasPrefix(packagePURL, "pkg:swift/") {
 		return strings.ToLower(packagePURL)
 	}
 	return packagePURL
