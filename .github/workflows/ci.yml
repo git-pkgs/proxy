@@ -83,6 +83,28 @@ jobs:
       - name: golangci-lint
         run: golangci-lint run ./...
 
+  # The metadata transformations and policy packages build without the
+  # proxy's database, storage, metrics and network stack (#501), so they can
+  # run on targets such as WASI. Building them for wasip1 keeps it that way.
+  wasm:
+    name: wasm build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Set up Go
+        uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+
+      - name: Build portable packages for wasip1
+        env:
+          GOOS: wasip1
+          GOARCH: wasm
+        run: go build ./internal/metadata/... ./internal/config ./internal/denylist ./internal/packageurl
+
   helm:
     name: Helm chart
     runs-on: ubuntu-latest
