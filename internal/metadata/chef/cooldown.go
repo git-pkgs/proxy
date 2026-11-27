@@ -195,10 +195,11 @@ func compareVersions(a, b string) int {
 
 // RecentCookbooks reads the cookbook names from a page of
 // /api/v1/cookbooks?order=recently_updated, in its order, and the total
-// number of cookbooks the listing has.
+// number of cookbooks the listing has. A body without a total is not a
+// listing, and is an error rather than an empty one.
 func RecentCookbooks(body []byte) ([]string, int, error) {
 	var page struct {
-		Total int `json:"total"`
+		Total *int `json:"total"`
 		Items []struct {
 			Name string `json:"cookbook_name"`
 		} `json:"items"`
@@ -206,11 +207,14 @@ func RecentCookbooks(body []byte) ([]string, int, error) {
 	if err := json.Unmarshal(body, &page); err != nil {
 		return nil, 0, fmt.Errorf("%w: cookbook list: %w", ErrDocument, err)
 	}
+	if page.Total == nil {
+		return nil, 0, fmt.Errorf("%w: cookbook list has no total", ErrDocument)
+	}
 	names := make([]string, 0, len(page.Items))
 	for _, item := range page.Items {
 		if item.Name != "" {
 			names = append(names, item.Name)
 		}
 	}
-	return names, page.Total, nil
+	return names, *page.Total, nil
 }

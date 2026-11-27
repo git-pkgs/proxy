@@ -300,7 +300,12 @@ func (h *ChefHandler) firstDeprecated(ctx context.Context, lo, hi int) (int, err
 			if err != nil {
 				return 0, err
 			}
-			deprecated = found && info.Deprecated
+			// A cookbook deleted since the listing named it is in neither
+			// section, and guessing one could skip the cookbooks before it.
+			if !found {
+				return 0, fmt.Errorf("cookbook %s is in the recently updated listing but has no document", names[0])
+			}
+			deprecated = info.Deprecated
 		}
 		if deprecated {
 			hi = mid

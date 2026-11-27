@@ -242,6 +242,16 @@ func TestRecentCookbooks(t *testing.T) {
 	if _, _, err := RecentCookbooks([]byte(`[]`)); !errors.Is(err, ErrDocument) {
 		t.Errorf("err = %v, want ErrDocument", err)
 	}
+	// A body without a total is not a listing: reading it as an empty one
+	// would let every version through.
+	for _, body := range []string{`{}`, `null`, `{"items":[]}`} {
+		if _, _, err := RecentCookbooks([]byte(body)); !errors.Is(err, ErrDocument) {
+			t.Errorf("%s: err = %v, want ErrDocument", body, err)
+		}
+	}
+	if names, total, err := RecentCookbooks([]byte(`{"total":0,"items":[]}`)); err != nil || total != 0 || len(names) != 0 {
+		t.Errorf("empty listing = %v, %d, %v", names, total, err)
+	}
 }
 
 func TestCompareVersions(t *testing.T) {

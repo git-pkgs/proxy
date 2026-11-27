@@ -526,6 +526,24 @@ func TestChefCooldownFindsDeprecatedCookbooksPastOldOnes(t *testing.T) {
 	}
 }
 
+// TestChefCooldownFailsWhenAProbedCookbookIsGone checks that the search for
+// the deprecated section doesn't guess the section of a cookbook deleted
+// after the listing named it: skipping past it could miss a deprecated
+// cookbook with a version in cooldown.
+func TestChefCooldownFailsWhenAProbedCookbookIsGone(t *testing.T) {
+	s := newChefCooldownSupermarket(t)
+	h, _, _ := chefCooldownHandler(t, s)
+	s.cookbooks["olddeprecated"] = chefFakeCookbook{
+		updated: 400 * 24 * time.Hour, deprecated: true, versions: map[string]time.Duration{"1.0.0": 400 * 24 * time.Hour},
+	}
+	// legacy opens the deprecated section; the search probes ghost first.
+	s.recent, s.total = []string{"old", "legacy", "ghost", "olddeprecated"}, 4
+
+	if w := chefGet(t, h, "/universe"); w.Code != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502: legacy 3.1.0 is in cooldown and would be listed", w.Code)
+	}
+}
+
 func TestChefCooldownStopsInTheDeprecatedSection(t *testing.T) {
 	s := newChefCooldownSupermarket(t)
 	h, _, _ := chefCooldownHandler(t, s)
