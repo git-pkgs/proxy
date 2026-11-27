@@ -137,7 +137,10 @@ func repomdSHA256(repomd []byte, href string) string {
 // cache entry, so a cached signature fetched before the release file was
 // fetched again, after its TTL or because an index showed upstream had
 // moved on, signs an older release file. It is fetched again rather than
-// served with one it doesn't match.
+// served with one it doesn't match. If that fetch fails, the request fails
+// too: the cached copy refreshMetadata falls back to is that older
+// signature, which the client would reject as a bad signature, where an
+// error lets it retry.
 func (p *Proxy) proxyReleaseSignature(w http.ResponseWriter, r *http.Request, upstreamURL, ecosystem, cacheKey, releaseKey string) {
 	if !p.signaturePredatesRelease(ecosystem, cacheKey, releaseKey) {
 		p.ProxyCached(w, r, upstreamURL, ecosystem, cacheKey, "*/*")
@@ -145,6 +148,9 @@ func (p *Proxy) proxyReleaseSignature(w http.ResponseWriter, r *http.Request, up
 	}
 	p.recordMetadataCacheMiss(ecosystem)
 	res := p.refreshMetadata(r.Context(), ecosystem, cacheKey, upstreamURL, "*/*", "identity", nil)
+	if res.err == nil && res.stale {
+		res.err = res.upstreamErr
+	}
 	if res.err != nil {
 		p.writeMetadataFetchError(w, res.err)
 		return

@@ -31,14 +31,20 @@ func signatureCases() []signatureCase {
 }
 
 // signedArchive serves tc's archive and a signature for each generation of
-// its release file, counting the signature requests.
-func signedArchive(t *testing.T, tc signatureCase) (http.Handler, func(path string), *atomic.Int32) {
+// its release file, counting the signature requests. While the returned flag
+// is set, signature requests fail.
+func signedArchive(t *testing.T, tc signatureCase) (http.Handler, func(path string), *atomic.Int32, *atomic.Bool) {
 	t.Helper()
 	a := tc.archive
 	var signatures atomic.Int32
+	var failing atomic.Bool
 	upstream := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/"+tc.signaturePath {
 			signatures.Add(1)
+			if failing.Load() {
+				http.Error(w, "unavailable", http.StatusServiceUnavailable)
+				return
+			}
 			_, _ = w.Write([]byte(signatureBody(a.gen.Load())))
 			return
 		}
@@ -56,7 +62,7 @@ func signedArchive(t *testing.T, tc signatureCase) (http.Handler, func(path stri
 			t.Fatal(err)
 		}
 	}
-	return h, expire, &signatures
+	return h, expire, &signatures, &failing
 }
 
 // TestSignatureFollowsRefetchedRelease checks that a cached detached
@@ -66,7 +72,7 @@ func TestSignatureFollowsRefetchedRelease(t *testing.T) {
 	for _, tc := range signatureCases() {
 		t.Run(tc.name, func(t *testing.T) {
 			a := tc.archive
-			h, expire, signatures := signedArchive(t, tc)
+			h, expire, signatures, _ := signedArchive(t, tc)
 
 			getBody(t, h, a.releasePath)
 			getBody(t, h, tc.signaturePath)
@@ -106,7 +112,7 @@ func TestSignatureFollowsRefetchedRelease(t *testing.T) {
 func TestSignatureWithoutCachedRelease(t *testing.T) {
 	for _, tc := range signatureCases() {
 		t.Run(tc.name, func(t *testing.T) {
-			h, _, signatures := signedArchive(t, tc)
+			h, _, signatures, _ := signedArchive(t, tc)
 			for range 2 {
 				if got := getBody(t, h, tc.signaturePath); got != signatureBody(0) {
 					t.Errorf("signature = %q, want %q", got, signatureBody(0))
@@ -114,6 +120,41 @@ func TestSignatureWithoutCachedRelease(t *testing.T) {
 			}
 			if got := signatures.Load(); got != 1 {
 				t.Errorf("signature fetched %d times, want it cached", got)
+			}
+		})
+	}
+}
+
+// TestStaleSignatureNotServedWithNewerRelease checks that when the signature
+// of a refetched release file can't be fetched again, the cached one, which
+// signs the older release file, isn't served in its place. The client gets an
+// error it can retry instead of a pair that fails verification.
+func TestStaleSignatureNotServedWithNewerRelease(t *testing.T) {
+	for _, tc := range signatureCases() {
+		t.Run(tc.name, func(t *testing.T) {
+			a := tc.archive
+			h, expire, _, failing := signedArchive(t, tc)
+
+			getBody(t, h, a.releasePath)
+			getBody(t, h, tc.signaturePath)
+
+			a.gen.Store(1)
+			expire(a.releasePath)
+			getBody(t, h, a.releasePath)
+
+			failing.Store(true)
+			w := httptest.NewRecorder()
+			h.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/"+tc.signaturePath, nil))
+			if w.Code == http.StatusOK {
+				t.Fatalf("signature with upstream down = 200 %q, want an error", w.Body)
+			}
+			if w.Code != http.StatusBadGateway {
+				t.Errorf("status = %d, want %d", w.Code, http.StatusBadGateway)
+			}
+
+			failing.Store(false)
+			if got := getBody(t, h, tc.signaturePath); got != signatureBody(1) {
+				t.Errorf("signature once upstream is back = %q, want %q", got, signatureBody(1))
 			}
 		})
 	}
