@@ -18,26 +18,27 @@ import (
 // its record and where its object is stored, without an open reader. Open
 // delivers it. Finding or fetching an artifact and delivering it are kept
 // apart so a caller can deliver it another way, such as from the object
-// store directly (#501).
+// store directly.
 type ApprovedArtifact struct {
 	Artifact    artifacts.Artifact
 	StoragePath string
-	// Cached is set for an artifact found in the cache. One just fetched
-	// for the request is delivered without the cache's checks; see Open.
-	Cached bool
 
+	// cached is set for an artifact found in the cache, by findStored, which
+	// also fills checks. One just fetched for the request is delivered
+	// without the cache's checks; see Open.
+	cached    bool
 	ecosystem string
 	checks    integrityChecks
 	// release gives up the hold on an object fetched without a record,
-	// which is deleted once every holder lets go. Open passes it on to the
+	// which is deleted once every holder lets go. Open moves it to the
 	// reader it returns.
 	release func()
 }
 
 // Release gives up an artifact Acquire returned that won't be opened. Only
 // an artifact fetched but not recorded holds anything: its object is
-// deleted once nobody holds it. Releasing one that was opened, or that holds
-// nothing, does nothing.
+// deleted once nobody holds it. Releasing one that was opened does nothing,
+// as its reader has the hold, and so does releasing one that holds nothing.
 func (a *ApprovedArtifact) Release() {
 	if a.release != nil {
 		a.release()
@@ -64,25 +65,18 @@ func (p *Proxy) findStored(pkgPURL, versionPURL, filename string) (*ApprovedArti
 	return &ApprovedArtifact{
 		Artifact:    record.Artifact,
 		StoragePath: record.StoragePath,
-		Cached:      true,
+		cached:      true,
 		ecosystem:   record.Ecosystem,
 		checks:      checks,
 	}, nil
 }
 
-// Open delivers an approved artifact.
-//
-// A cached one is delivered without opening its object for a HEAD request
-// (see ServingHead), as a signed URL with DirectServe when the store can
-// sign one, and otherwise as a reader that checks the bytes against the
-// recorded integrity as they are read, discarding the record when they
-// don't match. When its object can't be opened, or the record's integrity
-// can't be checked, Open returns nil, so the caller fetches it again.
-//
-// One just fetched for the request is opened as stored, and failing to open
-// it is an error: its bytes were verified as they were stored, moments ago.
+// Open delivers an approved artifact. It returns nil for a cached one that
+// can't be served, so the caller fetches it again. One just fetched for the
+// request skips the cache's checks: its bytes were verified as they were
+// stored.
 func (p *Proxy) Open(ctx context.Context, a *ApprovedArtifact) (*CacheResult, error) {
-	if !a.Cached {
+	if !a.cached {
 		return p.openFetched(ctx, a)
 	}
 	result := &CacheResult{Artifact: a.Artifact, Cached: true, storagePath: a.StoragePath}
@@ -140,8 +134,10 @@ func (p *Proxy) Open(ctx context.Context, a *ApprovedArtifact) (*CacheResult, er
 // so they would consume each other's bytes and the first Close would break
 // the rest.
 //
-// An artifact holding an unrecorded object releases its hold when the reader
-// closes, or right away if the object can't be opened.
+// An artifact holding an unrecorded object hands its hold to the reader,
+// which releases it on Close, so a Release after Open can't delete the object
+// under the reader. The hold is released right away if the object can't be
+// opened.
 func (p *Proxy) openFetched(ctx context.Context, a *ApprovedArtifact) (*CacheResult, error) {
 	readStart := time.Now()
 	reader, err := p.Storage.Open(ctx, a.StoragePath)
@@ -153,10 +149,12 @@ func (p *Proxy) openFetched(ctx context.Context, a *ApprovedArtifact) (*CacheRes
 		return nil, fmt.Errorf("opening cached artifact: %w", err)
 	}
 	res := &CacheResult{Reader: reader, Artifact: a.Artifact}
-	if a.release == nil {
+	release := a.release
+	a.release = nil
+	if release == nil {
 		return res, nil
 	}
-	r := releaseOnClose{ReadCloser: reader, release: a.release}
+	r := releaseOnClose{ReadCloser: reader, release: release}
 	if s, ok := reader.(io.Seeker); ok {
 		res.Reader = &seekableReleaseOnClose{releaseOnClose: r, Seeker: s}
 	} else {

@@ -34,7 +34,7 @@ func readAll(t *testing.T, r io.ReadCloser) (string, error) {
 
 func TestFindStored(t *testing.T) {
 	proxy, _, a := openTestArtifact(t)
-	if !a.Cached || a.StoragePath != "npm/demo/1.0.0/demo-1.0.0.tgz" || a.Artifact.Filename != "demo-1.0.0.tgz" || a.ecosystem != "npm" {
+	if !a.cached || a.StoragePath != "npm/demo/1.0.0/demo-1.0.0.tgz" || a.Artifact.Filename != "demo-1.0.0.tgz" || a.ecosystem != "npm" {
 		t.Errorf("findStored = %+v", a)
 	}
 	if got, err := proxy.findStored("pkg:npm/missing", "pkg:npm/missing@1.0.0", "missing-1.0.0.tgz"); err != nil || got != nil {
@@ -112,7 +112,7 @@ func TestOpenMissingObject(t *testing.T) {
 		t.Errorf("cached: Open = %+v, %v; want nil so the caller fetches again", res, err)
 	}
 	fresh := *a
-	fresh.Cached = false
+	fresh.cached = false
 	if res, err := proxy.Open(context.Background(), &fresh); err == nil || res != nil {
 		t.Errorf("fresh: Open = %+v, %v; want an error", res, err)
 	}
@@ -138,7 +138,7 @@ func TestOpenFetchedArtifactSkipsCacheDelivery(t *testing.T) {
 	proxy.DirectServe = true
 	store.signedURL = "https://bucket.example/signed"
 	fresh := *a
-	fresh.Cached = false
+	fresh.cached = false
 	res, err := proxy.Open(ServingHead(context.Background()), &fresh)
 	if err != nil || res == nil || res.Reader == nil || res.RedirectURL != "" || res.Cached {
 		t.Fatalf("Open = %+v, %v; want a reader over the fetched bytes", res, err)

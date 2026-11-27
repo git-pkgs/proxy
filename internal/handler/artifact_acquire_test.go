@@ -48,7 +48,7 @@ func TestAcquireCachedOpensNothing(t *testing.T) {
 	for _, req := range []ArtifactRequest{{}, {DownloadURL: acquireURL}} {
 		before := hitCount(t, proxy)
 		a, err := acquireDemo(context.Background(), proxy, req)
-		if err != nil || a == nil || !a.Cached {
+		if err != nil || a == nil || !a.cached {
 			t.Fatalf("%+v: Acquire = %+v, %v; want the cached artifact", req, a, err)
 		}
 		if store.opens != 0 || fetcher.fetchCalled {
@@ -65,7 +65,7 @@ func TestAcquireFetchesOnMissWithoutOpening(t *testing.T) {
 	proxy.Fetcher = &countingFetcher{content: openTestContent}
 
 	a, err := acquireDemo(context.Background(), proxy, ArtifactRequest{DownloadURL: acquireURL})
-	if err != nil || a == nil || a.Cached || a.StoragePath == "" {
+	if err != nil || a == nil || a.cached || a.StoragePath == "" {
 		t.Fatalf("Acquire = %+v, %v; want a fetched artifact", a, err)
 	}
 	if store.opens != 0 {
@@ -85,7 +85,7 @@ func TestAcquireRefetchesWhenTheDigestDiffers(t *testing.T) {
 	proxy.Fetcher = &countingFetcher{content: openTestContent}
 
 	a, err := acquireDemo(context.Background(), proxy, ArtifactRequest{DownloadURL: acquireURL, Digest: "sha256:" + sha256Hex(openTestContent)})
-	if err != nil || a == nil || a.Cached {
+	if err != nil || a == nil || a.cached {
 		t.Fatalf("Acquire = %+v, %v; want a fresh fetch", a, err)
 	}
 	if got := openAndRead(t, proxy, a); got != openTestContent {
@@ -188,6 +188,34 @@ func TestAcquireUnrecordedIsDeletedWhenItsReaderCloses(t *testing.T) {
 	}
 }
 
+// TestReleaseAfterOpenLeavesTheHoldWithTheReader checks that releasing an
+// opened artifact, as a deferred Release does, keeps its unrecorded object
+// until the reader closes.
+func TestReleaseAfterOpenLeavesTheHoldWithTheReader(t *testing.T) {
+	proxy, store := setupUnrecorded(t)
+	proxy.Fetcher = &countingFetcher{content: unrecordedContent}
+	a, err := proxy.Acquire(context.Background(), ArtifactRequest{
+		Ecosystem: "npm", Name: "gone", Version: "1.0.0", Filename: "gone-1.0.0.tgz", DownloadURL: unrecordedURL,
+	})
+	if err != nil || a == nil {
+		t.Fatal(err)
+	}
+	result, err := proxy.Open(context.Background(), a)
+	if err != nil || result == nil || result.Reader == nil {
+		t.Fatalf("Open = %+v, %v", result, err)
+	}
+	a.Release()
+	if _, ok := store.files[a.StoragePath]; !ok {
+		t.Error("unrecorded object deleted while its reader is open")
+	}
+	if err := result.Reader.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := store.files[a.StoragePath]; ok {
+		t.Error("unrecorded object kept after its reader closed")
+	}
+}
+
 func TestAcquireRefetchesWhenTheObjectIsGone(t *testing.T) {
 	proxy, db, store, _ := setupTestProxy(t)
 	seedPackage(t, db, store, "npm", "demo", "1.0.0", "demo-1.0.0.tgz", openTestContent)
@@ -196,7 +224,7 @@ func TestAcquireRefetchesWhenTheObjectIsGone(t *testing.T) {
 	proxy.Fetcher = fetcher
 
 	a, err := acquireDemo(context.Background(), proxy, ArtifactRequest{DownloadURL: acquireURL})
-	if err != nil || a == nil || a.Cached || fetcher.calls.Load() != 1 {
+	if err != nil || a == nil || a.cached || fetcher.calls.Load() != 1 {
 		t.Fatalf("Acquire = %+v, %v after %d fetches; want a fresh fetch", a, err, fetcher.calls.Load())
 	}
 	if got := openAndRead(t, proxy, a); got != openTestContent {

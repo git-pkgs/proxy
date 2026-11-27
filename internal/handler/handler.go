@@ -2544,7 +2544,7 @@ func (p *Proxy) getOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, 
 func (p *Proxy) getOrFetchArtifactFromURLWithCachePURLs(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, upstreamHash string) (*CacheResult, error) {
 	return p.StreamAcquire(ctx, ArtifactRequest{
 		Ecosystem: ecosystem, Name: name, Version: version, Filename: filename, DownloadURL: downloadURL,
-		Headers: headers, upstreamHash: upstreamHash, packagePURL: pkgPURL, versionPURL: versionPURL,
+		Headers: headers, upstreamHash: upstreamHash, cachePackagePURL: pkgPURL, cacheVersionPURL: versionPURL,
 	})
 }
 

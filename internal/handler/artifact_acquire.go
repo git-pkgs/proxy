@@ -44,9 +44,10 @@ type ArtifactRequest struct {
 	// upstreamHash is the hex sha256 the upstream declares, which a cached
 	// artifact has to match. Digest sets it.
 	upstreamHash string
-	// packagePURL and versionPURL key the cache instead of the PURLs made
-	// from Ecosystem, Name and Version, for protocols such as Swift.
-	packagePURL, versionPURL string
+	// cachePackagePURL and cacheVersionPURL key the cache instead of the
+	// PURLs made from Ecosystem, Name and Version, for protocols such as
+	// Swift.
+	cachePackagePURL, cacheVersionPURL string
 }
 
 // preparedRequest is an ArtifactRequest with its cache keys and checks
@@ -74,7 +75,7 @@ func (p *Proxy) prepare(ctx context.Context, req ArtifactRequest) (*preparedRequ
 		return r, p.prepareResolved(ctx, r)
 	}
 
-	r.pkgPURL, r.versionPURL = req.packagePURL, req.versionPURL
+	r.pkgPURL, r.versionPURL = req.cachePackagePURL, req.cacheVersionPURL
 	if r.versionPURL == "" {
 		var err error
 		if r.pkgPURL, r.versionPURL, err = packagePURLStrings(req.Ecosystem, req.Name, req.Version); err != nil {
