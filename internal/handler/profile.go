@@ -3,12 +3,13 @@ package handler
 import "time"
 
 // WithCooldown creates a policy view sharing storage, fetches and rewrite space.
-// Configure the original proxy before constructing its views.
-func (p *Proxy) WithCooldown(policy CooldownPolicy, shortest time.Duration) *Proxy {
+// shortest is the shortest cooldown policy configures, and longest returns
+// the longest that can apply to an ecosystem. Configure the original proxy before constructing its views.
+func (p *Proxy) WithCooldown(policy CooldownPolicy, shortest time.Duration, longest func(ecosystem string) time.Duration) *Proxy {
 	view := &Proxy{
 		DB: p.DB, Storage: p.Storage, Fetcher: p.Fetcher, Resolver: p.Resolver,
 		RouteFor: p.RouteFor, Logger: p.Logger,
-		Cooldown: policy, ShortestCooldown: shortest, Denylist: p.Denylist,
+		Cooldown: policy, ShortestCooldown: shortest, LongestCooldown: longest, Denylist: p.Denylist,
 		CacheMetadata: p.CacheMetadata, MetadataTTL: p.MetadataTTL,
 		MetadataMaxSize: p.MetadataMaxSize, MetadataStreamMaxSize: p.MetadataStreamMaxSize,
 		GradleReadOnly: p.GradleReadOnly, HostedEnabled: p.HostedEnabled,

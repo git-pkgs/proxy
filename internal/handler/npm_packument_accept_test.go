@@ -228,7 +228,7 @@ func TestNPMCooldownProfilesShareFullPackument(t *testing.T) {
 			proxy.HTTPClient = upstream.Client()
 			proxy.Cooldown = profilePolicy(t, tc.global)
 			global := NewNPMHandler(proxy, "http://proxy.test", upstream.URL)
-			profile := NewNPMHandler(proxy.WithCooldown(profilePolicy(t, tc.profile), 0), "http://proxy.test/cooldown/p", upstream.URL)
+			profile := NewNPMHandler(proxy.WithCooldown(profilePolicy(t, tc.profile), 0, nil), "http://proxy.test/cooldown/p", upstream.URL)
 			filtered, unfiltered := profile, global
 			if tc.global != "0" {
 				filtered, unfiltered = global, profile

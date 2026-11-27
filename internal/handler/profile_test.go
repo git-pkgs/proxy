@@ -23,6 +23,7 @@ func TestWithCooldownCopiesProxyFields(t *testing.T) {
 	p.RouteFor = func(string, string) *ArtifactRoute { return nil }
 	p.Cooldown = profilePolicy(t, "1d")
 	p.ShortestCooldown = 24 * time.Hour
+	p.LongestCooldown = func(string) time.Duration { return 48 * time.Hour }
 	p.Denylist = &denylist.Policy{}
 	p.CacheMetadata = true
 	p.MetadataTTL = time.Hour
@@ -50,8 +51,8 @@ func TestWithCooldownCopiesProxyFields(t *testing.T) {
 	p.cooldownWatch.active = map[*cooldownRecorder]struct{}{{}: {}}
 
 	policy := profilePolicy(t, "3d")
-	view := p.WithCooldown(policy, 72*time.Hour)
-	if view.Cooldown != policy || view.ShortestCooldown != 72*time.Hour || view.shared != p {
+	view := p.WithCooldown(policy, 72*time.Hour, func(string) time.Duration { return 72 * time.Hour })
+	if view.Cooldown != policy || view.ShortestCooldown != 72*time.Hour || view.LongestCooldown("chef") != 72*time.Hour || view.shared != p {
 		t.Fatal("view did not select its policy and shared proxy")
 	}
 	original, copied := reflect.ValueOf(p).Elem(), reflect.ValueOf(view).Elem()
@@ -59,7 +60,7 @@ func TestWithCooldownCopiesProxyFields(t *testing.T) {
 		name := original.Type().Field(i).Name
 		before, after := original.Field(i), copied.Field(i)
 		switch name {
-		case "Cooldown", "ShortestCooldown", "shared":
+		case "Cooldown", "ShortestCooldown", "LongestCooldown", "shared":
 			continue
 		case "fetchMu", "inFlight", "detachSlots", "metaMu", "inFlightMeta", "metaDetachSlots", "publishIndexes", "cooldownWatch", "viewCooldown":
 			if !after.IsZero() {
@@ -105,9 +106,9 @@ func TestProfilesShareDownloadPublishIndexes(t *testing.T) {
 			p.Cooldown = profilePolicy(t, "1d")
 			fetcher.fetchErr = errors.New("artifact must be served from the cache")
 			c.seedCachedArtifact(t, p, cooldownRecentVersion)
-			permissive := p.WithCooldown(profilePolicy(t, "3d"), 72*time.Hour)
-			strict := p.WithCooldown(profilePolicy(t, "7d"), 168*time.Hour)
-			nested := permissive.WithCooldown(profilePolicy(t, "5d"), 120*time.Hour)
+			permissive := p.WithCooldown(profilePolicy(t, "3d"), 72*time.Hour, nil)
+			strict := p.WithCooldown(profilePolicy(t, "7d"), 168*time.Hour, nil)
+			nested := permissive.WithCooldown(profilePolicy(t, "5d"), 120*time.Hour, nil)
 			for _, request := range []struct {
 				proxy *Proxy
 				want  int
@@ -145,7 +146,7 @@ func profilePolicy(t *testing.T, duration string) *cooldown.Policy {
 func TestProfilesCoalesceUncachedMetadata(t *testing.T) {
 	u := newMetadataUpstream(t, http.StatusOK)
 	p := metadataTestProxy(t, u)
-	views := []*Proxy{p.WithCooldown(profilePolicy(t, "3d"), 72*time.Hour), p.WithCooldown(profilePolicy(t, "7d"), 168*time.Hour)}
+	views := []*Proxy{p.WithCooldown(profilePolicy(t, "3d"), 72*time.Hour, nil), p.WithCooldown(profilePolicy(t, "7d"), 168*time.Hour, nil)}
 	first := startMetadataCalls(views[0], context.Background(), 1, u.URL, contentTypeJSON)
 	<-u.entered
 	second := startMetadataCalls(views[1], context.Background(), 1, u.URL, contentTypeJSON)
@@ -172,7 +173,7 @@ func TestProfilesCoalesceArtifactRequests(t *testing.T) {
 	}
 	fetcher := &countingFetcher{content: "crate bytes", delay: fetchHoldTime}
 	proxy.Fetcher = fetcher
-	views := []*Proxy{proxy.WithCooldown(profilePolicy(t, "3d"), 72*time.Hour), proxy.WithCooldown(profilePolicy(t, "7d"), 168*time.Hour)}
+	views := []*Proxy{proxy.WithCooldown(profilePolicy(t, "3d"), 72*time.Hour, nil), proxy.WithCooldown(profilePolicy(t, "7d"), 168*time.Hour, nil)}
 	var wg sync.WaitGroup
 	start := make(chan struct{})
 	for range 4 {
@@ -209,9 +210,9 @@ func TestProfileExpiryReleasesVersionsIndependently(t *testing.T) {
 	clock := &testClock{t: time.Now()}
 	proxy.now = clock.now
 	proxy.SetMetadataRewriteCacheSize(1 << 20)
-	view := proxy.WithCooldown(profileClockPolicy{profilePolicy(t, "3d"), clock.now}, 72*time.Hour)
+	view := proxy.WithCooldown(profileClockPolicy{profilePolicy(t, "3d"), clock.now}, 72*time.Hour, nil)
 	h := NewGemHandlerWithUpstream(view, "http://proxy.test/cooldown/3d", u.URL).Routes()
-	strictView := proxy.WithCooldown(profileClockPolicy{profilePolicy(t, "7d"), clock.now}, 168*time.Hour)
+	strictView := proxy.WithCooldown(profileClockPolicy{profilePolicy(t, "7d"), clock.now}, 168*time.Hour, nil)
 	strict := NewGemHandlerWithUpstream(strictView, "http://proxy.test/cooldown/7d", u.URL).Routes()
 	first := getWith(t, h, gemInfoPath, nil)
 	if first.Code != http.StatusOK || first.Body.String() != gemFiltered {

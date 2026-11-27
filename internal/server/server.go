@@ -304,6 +304,7 @@ func (s *Server) serve(listener net.Listener) error {
 	}
 	proxy.Cooldown = cooldownPolicy
 	proxy.ShortestCooldown = s.cfg.Cooldown.Shortest()
+	proxy.LongestCooldown = s.cfg.Cooldown.Longest
 	if s.cooldown, err = newCooldownView(s.cfg.Cooldown, cooldownPolicy); err != nil {
 		return err
 	}

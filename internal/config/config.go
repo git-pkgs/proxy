@@ -90,6 +90,9 @@ import (
 // DefaultSwiftUpstream is the Swift Package Registry used when none is configured.
 const DefaultSwiftUpstream = "https://tuist.dev/api/registry/swift"
 
+// DefaultChefUpstream is the Chef Supermarket used when none is configured.
+const DefaultChefUpstream = "https://supermarket.chef.io"
+
 // Config holds all configuration for the proxy server.
 type Config struct {
 	// Listen is the address to listen on (e.g., ":8080", "127.0.0.1:8080").
@@ -297,13 +300,78 @@ func (c *CooldownConfig) NormalizedPackages() map[string]string {
 // ecosystem, package or package pattern, or 0 when none is. Unparsable
 // durations are left out; Validate reports them.
 func (c *CooldownConfig) Shortest() time.Duration {
+	var shortest time.Duration
+	c.eachDuration(func(d time.Duration) {
+		if shortest == 0 || d < shortest {
+			shortest = d
+		}
+	})
+	return shortest
+}
+
+// Longest returns the longest cooldown that can apply to a package of
+// ecosystem, or 0 when none can: the ecosystem's cooldown, or the default
+// without one, and those of the packages and package patterns that name the
+// ecosystem. No version of it published longer ago than that can be in
+// cooldown. Unparsable durations are left out; Validate reports them.
+func (c *CooldownConfig) Longest(ecosystem string) time.Duration {
 	if c == nil {
 		return 0
 	}
-	var shortest time.Duration
+	parse := func(s string) time.Duration {
+		d, err := cooldown.ParseDuration(s)
+		if err != nil {
+			return 0
+		}
+		return d
+	}
+	longest := parse(c.Default)
+	if s, ok := c.Ecosystems[ecosystem]; ok {
+		if d, err := cooldown.ParseDuration(s); err == nil {
+			longest = d
+		}
+	}
+	prefix := "pkg:" + purl.EcosystemToPURLType(ecosystem) + "/"
+	for key, s := range c.NormalizedPackages() {
+		if strings.HasPrefix(key, prefix) {
+			longest = max(longest, parse(s))
+		}
+	}
+	for glob, s := range c.PackagePatterns {
+		if globMatchesPrefix(glob, prefix) {
+			longest = max(longest, parse(s))
+		}
+	}
+	return longest
+}
+
+// globMatchesPrefix reports whether a package pattern can match a string
+// that starts with prefix. As in path.Match, '*' and '?' don't match '/'.
+func globMatchesPrefix(glob, prefix string) bool {
+	if prefix == "" {
+		return true
+	}
+	if glob == "" {
+		return false
+	}
+	switch glob[0] {
+	case '*':
+		return globMatchesPrefix(glob[1:], prefix) || (prefix[0] != '/' && globMatchesPrefix(glob, prefix[1:]))
+	case '?':
+		return prefix[0] != '/' && globMatchesPrefix(glob[1:], prefix[1:])
+	default:
+		return glob[0] == prefix[0] && globMatchesPrefix(glob[1:], prefix[1:])
+	}
+}
+
+// eachDuration calls fn with every positive duration configured.
+func (c *CooldownConfig) eachDuration(fn func(time.Duration)) {
+	if c == nil {
+		return
+	}
 	consider := func(s string) {
-		if d, err := cooldown.ParseDuration(s); err == nil && d > 0 && (shortest == 0 || d < shortest) {
-			shortest = d
+		if d, err := cooldown.ParseDuration(s); err == nil && d > 0 {
+			fn(d)
 		}
 	}
 	consider(c.Default)
@@ -312,7 +380,6 @@ func (c *CooldownConfig) Shortest() time.Duration {
 			consider(v)
 		}
 	}
-	return shortest
 }
 
 // ScanningConfig configures pre-cache artifact scanning (e.g. trivy,
@@ -1453,7 +1520,7 @@ func Default() *Config {
 			Composer:           "https://packagist.org",
 			ComposerRepository: "https://repo.packagist.org",
 			Conan:              "https://center.conan.io",
-			Chef:               "https://supermarket.chef.io",
+			Chef:               DefaultChefUpstream,
 			Conda:              "https://conda.anaconda.org",
 			CRAN:               "https://cloud.r-project.org",
 			Julia:              "https://pkg.julialang.org",

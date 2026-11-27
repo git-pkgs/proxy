@@ -69,7 +69,7 @@ The proxy never uploads artifact bytes to a scanner. Each scanner is notified wi
 | Alpine | Alpine Linux | | ✓ |
 | Arch | Arch Linux | | ✓ |
 | FreeBSD | FreeBSD (ports and pkgbase) | | ✓ |
-| Chef Supermarket | Chef | | ✓ |
+| Chef Supermarket | Chef | Yes | ✓ |
 | Terraform/OpenTofu providers and modules | Terraform/OpenTofu | | ✓ |
 | Generic | Any | | ✓ |
 | Git | Any | | ✓ |

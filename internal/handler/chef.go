@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
@@ -10,6 +11,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/git-pkgs/proxy/internal/config"
 	"github.com/git-pkgs/proxy/internal/metadata/chef"
 )
 
@@ -39,6 +41,10 @@ type ChefHandler struct {
 	// upstream.chef at another Supermarket does not serve the previous one's
 	// documents or archives.
 	upstreamKey string
+	// timeQualifier is added to the versions-table PURLs publish times are
+	// stored under, naming any upstream but the public Supermarket; see
+	// timeKey.
+	timeQualifier string
 }
 
 // NewChefHandler creates a Chef Supermarket handler for the Supermarket at
@@ -46,12 +52,16 @@ type ChefHandler struct {
 func NewChefHandler(proxy *Proxy, proxyURL, upstreamURL string) *ChefHandler {
 	upstreamURL = strings.TrimSuffix(upstreamURL, "/")
 	digest := sha256.Sum256([]byte(upstreamURL))
-	return &ChefHandler{
+	h := &ChefHandler{
 		proxy:       proxy,
 		proxyURL:    strings.TrimSuffix(proxyURL, "/"),
 		upstreamURL: upstreamURL,
 		upstreamKey: hex.EncodeToString(digest[:])[:chefUpstreamKeyLength],
 	}
+	if upstreamURL != config.DefaultChefUpstream {
+		h.timeQualifier = "?repository_url=" + url.QueryEscape(upstreamURL)
+	}
+	return h
 }
 
 // Routes returns the HTTP handler for Chef Supermarket requests.
@@ -65,7 +75,15 @@ func (h *ChefHandler) Routes() http.Handler {
 }
 
 func (h *ChefHandler) handleUniverse(w http.ResponseWriter, r *http.Request) {
-	h.serveDocument(w, r, "universe", h.upstreamURL+"/universe", h.rewriteUniverse)
+	h.serveDocument(w, r, "universe", h.upstreamURL+"/universe", func(body []byte) ([]byte, error) {
+		// The rewrite is shared by requests waiting on it and cached, so it
+		// finishes even if the request that started it goes away.
+		withheld, err := h.universeWithheld(context.WithoutCancel(r.Context()), body)
+		if err != nil {
+			return nil, err
+		}
+		return h.rewriteUniverse(body, func(name, version string) bool { return withheld[name][version] })
+	})
 }
 
 func (h *ChefHandler) handleCookbook(w http.ResponseWriter, r *http.Request) {
@@ -75,7 +93,11 @@ func (h *ChefHandler) handleCookbook(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	h.serveDocument(w, r, "cookbooks/"+name, h.upstreamCookbookURL(name), func(body []byte) ([]byte, error) {
-		return h.rewriteCookbook(name, body)
+		withheld, err := h.cookbookWithheld(context.WithoutCancel(r.Context()), name, body)
+		if err != nil {
+			return nil, err
+		}
+		return h.rewriteCookbook(name, body, func(_, version string) bool { return withheld[version] })
 	})
 }
 
@@ -83,6 +105,9 @@ func (h *ChefHandler) handleVersion(w http.ResponseWriter, r *http.Request) {
 	name, version, ok := chefVersionFromRequest(r)
 	if !ok {
 		http.Error(w, "invalid cookbook version", http.StatusBadRequest)
+		return
+	}
+	if h.checkVersionCooldown(w, r, name, version) {
 		return
 	}
 	h.serveDocument(w, r, "cookbooks/"+name+"/versions/"+version, h.upstreamVersionURL(name, version), func(body []byte) ([]byte, error) {
@@ -99,6 +124,9 @@ func (h *ChefHandler) handleDownload(w http.ResponseWriter, r *http.Request) {
 	name, version, ok := chefVersionFromRequest(r)
 	if !ok {
 		http.Error(w, "invalid cookbook version", http.StatusBadRequest)
+		return
+	}
+	if h.checkDownloadCooldown(w, r, name, version) {
 		return
 	}
 
@@ -147,6 +175,9 @@ func (h *ChefHandler) serveDocument(w http.ResponseWriter, r *http.Request, docu
 		if r.Context().Err() != nil {
 			return // the client left while waiting on a shared rewrite
 		}
+		if h.proxy.writeUpstreamRefusal(w, err) {
+			return
+		}
 		// Serving the document unrewritten would send clients straight to
 		// the upstream, bypassing the cache.
 		h.proxy.Logger.Warn("failed to rewrite Chef Supermarket document", "url", upstreamURL, "error", err)
@@ -158,15 +189,20 @@ func (h *ChefHandler) serveDocument(w http.ResponseWriter, r *http.Request, docu
 }
 
 // rewriteUniverse points every version's location_path and download_url at
-// the proxy; see chef.RewriteUniverse.
-func (h *ChefHandler) rewriteUniverse(body []byte) ([]byte, error) {
-	return chef.RewriteUniverse(body, h.rewriteOptions())
+// the proxy and leaves out the versions withheld reports; see
+// chef.RewriteUniverse.
+func (h *ChefHandler) rewriteUniverse(body []byte, withheld func(name, version string) bool) ([]byte, error) {
+	opts := h.rewriteOptions()
+	opts.Withheld = withheld
+	return chef.RewriteUniverse(body, opts)
 }
 
-// rewriteCookbook points a cookbook's version URLs at the proxy; see
-// chef.RewriteCookbook.
-func (h *ChefHandler) rewriteCookbook(name string, body []byte) ([]byte, error) {
-	return chef.RewriteCookbook(name, body, h.rewriteOptions())
+// rewriteCookbook points a cookbook's version URLs at the proxy and leaves
+// out the versions withheld reports; see chef.RewriteCookbook.
+func (h *ChefHandler) rewriteCookbook(name string, body []byte, withheld func(name, version string) bool) ([]byte, error) {
+	opts := h.rewriteOptions()
+	opts.Withheld = withheld
+	return chef.RewriteCookbook(name, body, opts)
 }
 
 // rewriteVersion points a cookbook version's cookbook and file URLs at the
