@@ -368,61 +368,9 @@ type CacheResult struct {
 }
 
 // GetOrFetchArtifact retrieves an artifact from cache or fetches from upstream.
+// An empty filename is resolved with the download URL; see StreamAcquire.
 func (p *Proxy) GetOrFetchArtifact(ctx context.Context, ecosystem, name, version, filename string) (*CacheResult, error) {
-	// NuGet ids are case-insensitive and the NuGet handler stores them
-	// lowercased, so a mirrored Newtonsoft.Json must land on the same record
-	// clients are served.
-	if ecosystem == "nuget" {
-		name = strings.ToLower(name)
-	}
-	pkgPURL, versionPURL, err := packagePURLStrings(ecosystem, name, version)
-	if err != nil {
-		return nil, err
-	}
-	// Deny before resolution as well as before reading the cache. Mirror callers
-	// do not supply a filename, and resolving it can contact an upstream registry.
-	if p.Denylist.Denied(versionPURL) {
-		return nil, fmt.Errorf("%w: %s", ErrVersionDenied, versionPURL)
-	}
-	var info *fetch.ArtifactInfo
-	if filename == "" {
-		info, err = p.resolveArtifact(ctx, ecosystem, name, version)
-		if err != nil {
-			return nil, err
-		}
-		filename = info.Filename
-		if filename == "" {
-			return nil, errors.New("resolved artifact has no filename")
-		}
-		if route := p.routeFor(ecosystem, name); route != nil {
-			filename = route.FilenamePrefix + filename
-		}
-	}
-	if p.StreamArtifacts {
-		if info == nil {
-			if info, err = p.resolveArtifact(ctx, ecosystem, name, version); err != nil {
-				return nil, err
-			}
-		}
-		return p.streamFromUpstream(ctx, ecosystem, name, version, filename, versionPURL, info.URL, "", "",
-			func(fetchCtx context.Context) (*fetch.Artifact, error) {
-				return p.Fetcher.Fetch(fetchCtx, info.URL)
-			})
-	}
-	if cached, err := p.checkCache(ctx, pkgPURL, versionPURL, filename); err != nil {
-		return nil, err
-	} else if cached != nil {
-		return cached, nil
-	}
-	metrics.RecordArtifactCacheMiss(ecosystem)
-
-	key := artifactCoalesceKey(versionPURL, filename, "", "", "")
-	recheck := func() (artifacts.Artifact, string, bool) {
-		return p.cachedArtifactRecord(pkgPURL, versionPURL, filename, "")
-	}
-	return p.coalesceFetch(ctx, key, recheck, func(fetchCtx context.Context) (artifacts.Artifact, string, error) {
-		return p.fetchAndCache(fetchCtx, ecosystem, name, version, filename, pkgPURL, versionPURL, info)
-	})
+	return p.StreamAcquire(ctx, ArtifactRequest{Ecosystem: ecosystem, Name: name, Version: version, Filename: filename})
 }
 
 // GetCachedArtifact retrieves an artifact from cache without contacting an upstream.
@@ -793,19 +741,8 @@ type seekableReleaseOnClose struct {
 // and releases the caller's hold on it when that reader closes, or right away
 // if it can't be opened.
 func (p *Proxy) serveUnrecorded(ctx context.Context, u *unrecordedObject, artifact artifacts.Artifact, path string) (*CacheResult, error) {
-	res, err := p.openStoredArtifact(ctx, artifact, path)
-	if err != nil {
-		u.release()
-		return nil, err
-	}
 	// Once, so a second Close can't drop another caller's hold.
-	r := releaseOnClose{ReadCloser: res.Reader, release: sync.OnceFunc(u.release)}
-	if s, ok := res.Reader.(io.Seeker); ok {
-		res.Reader = &seekableReleaseOnClose{releaseOnClose: r, Seeker: s}
-	} else {
-		res.Reader = &r
-	}
-	return res, nil
+	return p.Open(ctx, &ApprovedArtifact{Artifact: artifact, StoragePath: path, release: sync.OnceFunc(u.release)})
 }
 
 // openStoredArtifact gives one caller its own reader over just-committed
@@ -883,8 +820,30 @@ type inflightFetch struct {
 // proxy_cache_misses_total and upstream fetch observations is what coalescing
 // saved.
 func (p *Proxy) coalesceFetch(ctx context.Context, key string, recheck func() (artifacts.Artifact, string, bool), commit func(context.Context) (artifacts.Artifact, string, error)) (*CacheResult, error) {
+	f, joined := p.joinFetch(key)
+	if !joined && streamsCacheMiss(ctx) {
+		return p.runSharedFetchStreaming(ctx, key, f, recheck, commit)
+	}
+	a, err := p.awaitOrRunFetch(ctx, key, f, joined, recheck, commit)
+	if err != nil {
+		return nil, err
+	}
+	return p.deliverAcquired(ctx, a)
+}
+
+// coalesceAcquire is coalesceFetch for a caller that is handed the stored
+// artifact rather than a reader over it. It never streams a cache miss.
+func (p *Proxy) coalesceAcquire(ctx context.Context, key string, recheck func() (artifacts.Artifact, string, bool), commit func(context.Context) (artifacts.Artifact, string, error)) (acquired, error) {
+	f, joined := p.joinFetch(key)
+	return p.awaitOrRunFetch(ctx, key, f, joined, recheck, commit)
+}
+
+// joinFetch returns the shared fetch under key, starting one when there is
+// none, and whether the caller joined one already running.
+func (p *Proxy) joinFetch(key string) (*inflightFetch, bool) {
 	shared := p.sharedProxy()
 	shared.fetchMu.Lock()
+	defer shared.fetchMu.Unlock()
 	if shared.inFlight == nil {
 		shared.inFlight = make(map[string]*inflightFetch)
 	}
@@ -895,12 +854,13 @@ func (p *Proxy) coalesceFetch(ctx context.Context, key string, recheck func() (a
 		f = &inflightFetch{done: make(chan struct{})}
 		shared.inFlight[key] = f
 	}
-	shared.fetchMu.Unlock()
+	return f, joined
+}
 
+// awaitOrRunFetch runs the shared fetch f, or waits for it when the caller
+// joined it, and returns what the caller is handed.
+func (p *Proxy) awaitOrRunFetch(ctx context.Context, key string, f *inflightFetch, joined bool, recheck func() (artifacts.Artifact, string, bool), commit func(context.Context) (artifacts.Artifact, string, error)) (acquired, error) {
 	if !joined {
-		if streamsCacheMiss(ctx) {
-			return p.runSharedFetchStreaming(ctx, key, f, recheck, commit)
-		}
 		return p.runSharedFetch(ctx, key, f, recheck, commit)
 	}
 
@@ -908,21 +868,50 @@ func (p *Proxy) coalesceFetch(ctx context.Context, key string, recheck func() (a
 	case <-ctx.Done():
 		// This caller gave up; the fetch continues for everyone else.
 		p.leaveFetch(f)
-		return nil, ctx.Err()
+		return acquired{}, ctx.Err()
 	case <-f.done:
 	}
 	if f.err != nil {
-		return nil, f.err
+		return acquired{}, f.err
 	}
 	if f.unrecorded != nil {
-		return p.serveUnrecorded(ctx, f.unrecorded, f.val.artifact, f.val.storagePath)
+		return acquired{fetched: f.val, unrecorded: f.unrecorded}, nil
 	}
 	// A client served by a fetch it joined downloaded the artifact, even
 	// when a mirror run started the fetch.
 	if !mirrorFetch(ctx) {
 		_ = p.DB.RecordArtifactHit(f.val.artifact.PURL, f.val.artifact.Filename)
 	}
-	return p.openStoredArtifact(ctx, f.val.artifact, f.val.storagePath)
+	return acquired{fetched: f.val}, nil
+}
+
+// acquired is what a shared fetch hands one caller: the stored artifact, or
+// a result already delivered to it.
+type acquired struct {
+	fetched fetchedArtifact
+	// unrecorded is set for an object stored without a record, of which
+	// the caller holds one reference.
+	unrecorded *unrecordedObject
+	// opened is a reader the fetch already opened over fetched: a recheck
+	// found it stored, which it confirms by opening it.
+	opened *CacheResult
+	// handedOver is set when the caller was sent the bytes while they were
+	// stored.
+	handedOver bool
+}
+
+// deliverAcquired gives the caller a reader over what a shared fetch handed
+// it, or nothing when it was sent the bytes as they were stored.
+func (p *Proxy) deliverAcquired(ctx context.Context, a acquired) (*CacheResult, error) {
+	switch {
+	case a.opened != nil:
+		return a.opened, nil
+	case a.handedOver:
+		return nil, nil
+	case a.unrecorded != nil:
+		return p.serveUnrecorded(ctx, a.unrecorded, a.fetched.artifact, a.fetched.storagePath)
+	}
+	return p.openStoredArtifact(ctx, a.fetched.artifact, a.fetched.storagePath)
 }
 
 // leaveFetch withdraws a waiter that gave up. Once the fetch has finished the
@@ -944,7 +933,7 @@ func (p *Proxy) leaveFetch(f *inflightFetch) {
 
 // runSharedFetch performs the fetch that joined callers are waiting on. It is
 // never abandoned early, and always releases the key and wakes the waiters.
-func (p *Proxy) runSharedFetch(ctx context.Context, key string, f *inflightFetch, recheck func() (artifacts.Artifact, string, bool), commit func(context.Context) (artifacts.Artifact, string, error)) (*CacheResult, error) {
+func (p *Proxy) runSharedFetch(ctx context.Context, key string, f *inflightFetch, recheck func() (artifacts.Artifact, string, bool), commit func(context.Context) (artifacts.Artifact, string, error)) (acquired, error) {
 	shared := p.sharedProxy()
 	// Set before running so a panicking commit leaves waiters with an error
 	// rather than a zero-valued artifact.
@@ -966,20 +955,20 @@ func (p *Proxy) runSharedFetch(ctx context.Context, key string, f *inflightFetch
 	// in between would otherwise be repeated. Serve that record only if its
 	// bytes are still present: a record can outlive them, and refetching is
 	// the same recovery the cache lookup makes.
-	served := func(ctx context.Context) (*CacheResult, bool) {
+	served := func(ctx context.Context) (acquired, bool) {
 		stored, path, ok := recheck()
 		if !ok {
-			return nil, false
+			return acquired{}, false
 		}
 		res, err := p.openStoredArtifact(ctx, stored, path)
 		if err != nil {
-			return nil, false
+			return acquired{}, false
 		}
 		f.val, f.err = fetchedArtifact{artifact: stored, storagePath: path}, nil
-		return res, true
+		return acquired{fetched: f.val, opened: res}, true
 	}
-	if res, ok := served(ctx); ok {
-		return res, nil
+	if a, ok := served(ctx); ok {
+		return a, nil
 	}
 
 	// Another instance sharing the database may be fetching the same
@@ -991,15 +980,15 @@ func (p *Proxy) runSharedFetch(ctx context.Context, key string, f *inflightFetch
 	if upstreamFetchDetached(ctx) {
 		waitCtx = context.WithoutCancel(ctx)
 	}
-	var waitedFor *CacheResult
+	var waitedFor acquired
 	release, outcome, err := p.awaitFetchLease(waitCtx, metrics.CacheKindArtifact, key, func() bool {
-		res, ok := served(waitCtx)
-		waitedFor = res
+		a, ok := served(waitCtx)
+		waitedFor = a
 		return ok
 	})
 	if err != nil {
 		f.err = err
-		return nil, err
+		return acquired{}, err
 	}
 	if outcome == leaseStored {
 		return waitedFor, nil
@@ -1030,7 +1019,7 @@ func (p *Proxy) runSharedFetch(ctx context.Context, key string, f *inflightFetch
 	failed = err != nil || unrecorded
 	f.val, f.err = fetchedArtifact{artifact: stored, storagePath: path}, err
 	if err != nil {
-		return nil, err
+		return acquired{}, err
 	}
 	// A caller handed the stream already has the bytes; opening the stored
 	// copy would cost a read it never uses, a GET on S3 or GCS.
@@ -1041,15 +1030,12 @@ func (p *Proxy) runSharedFetch(ctx context.Context, key string, f *inflightFetch
 		f.unrecorded.refs.Add(1) // until the waiters are counted
 		if handedOver {
 			h.holdUnrecorded(f.unrecorded)
-			return nil, nil
+			return acquired{fetched: f.val, handedOver: true}, nil
 		}
 		f.unrecorded.refs.Add(1) // this caller
-		return p.serveUnrecorded(ctx, f.unrecorded, stored, path)
+		return acquired{fetched: f.val, unrecorded: f.unrecorded}, nil
 	}
-	if handedOver {
-		return nil, nil
-	}
-	return p.openStoredArtifact(ctx, stored, path)
+	return acquired{fetched: f.val, handedOver: handedOver}, nil
 }
 
 func (p *Proxy) deleteUnrecorded(path string) {
@@ -2482,14 +2468,9 @@ func (p *Proxy) GetOrFetchArtifactFromURLWithHeaders(ctx context.Context, ecosys
 // rather than fetched unverified. An empty expected fetches without
 // verification.
 func (p *Proxy) GetOrFetchArtifactFromURLWithDigest(ctx context.Context, ecosystem, name, version, filename, downloadURL, expected string) (*CacheResult, error) {
-	if expected == "" {
-		return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, nil, "", "")
-	}
-	upstreamHash, declared, err := digestChecks(expected)
-	if err != nil {
-		return nil, err
-	}
-	return p.getOrFetchArtifactFromURL(ctx, ecosystem, name, version, filename, downloadURL, nil, upstreamHash, declared)
+	return p.StreamAcquire(ctx, ArtifactRequest{
+		Ecosystem: ecosystem, Name: name, Version: version, Filename: filename, DownloadURL: downloadURL, Digest: expected,
+	})
 }
 
 // ErrUnsupportedDigest is returned for a digest whose algorithm or encoding
@@ -2551,52 +2532,33 @@ func (p *Proxy) GetOrFetchArtifactFromURLWithIntegrity(ctx context.Context, ecos
 }
 
 func (p *Proxy) getOrFetchArtifactFromURL(ctx context.Context, ecosystem, name, version, filename, downloadURL string, headers http.Header, upstreamHash, declared string) (*CacheResult, error) {
-	pkgPURL, versionPURL, err := packagePURLStrings(ecosystem, name, version)
-	if err != nil {
-		return nil, err
-	}
-	return p.getOrFetchArtifactFromURLWithCachePURLs(
-		ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, upstreamHash, declared,
-	)
+	return p.StreamAcquire(ctx, ArtifactRequest{
+		Ecosystem: ecosystem, Name: name, Version: version, Filename: filename, DownloadURL: downloadURL,
+		Headers: headers, Integrity: declared, upstreamHash: upstreamHash,
+	})
 }
 
-func (p *Proxy) getOrFetchArtifactFromURLWithCachePURLs(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, upstreamHash, declared string) (*CacheResult, error) {
-	// Some protocols use qualified cache keys. Check their package identity
-	// too, and the cache key itself for those, such as Swift, whose name has
-	// no PURL of its own.
-	if p.versionDenied(ecosystem, name, version) {
-		return nil, fmt.Errorf("%w: %s", ErrVersionDenied, canonicalVersionPURL(ecosystem, name, version))
-	}
-	if p.Denylist.Denied(versionPURL) {
-		return nil, fmt.Errorf("%w: %s", ErrVersionDenied, versionPURL)
-	}
-	if p.StreamArtifacts {
-		return p.streamFromUpstream(ctx, ecosystem, name, version, filename, versionPURL, downloadURL, upstreamHash, declared,
-			func(fetchCtx context.Context) (*fetch.Artifact, error) {
-				return p.fetchUpstream(fetchCtx, downloadURL, headers)
-			})
-	}
-	if cached, err := p.getCachedArtifactWithUpstreamHash(ctx, pkgPURL, versionPURL, filename, upstreamHash); err != nil {
-		return nil, err
-	} else if cached != nil {
-		return cached, nil
-	}
-	metrics.RecordArtifactCacheMiss(ecosystem)
-	return p.coalescedFetchFromURL(ctx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, upstreamHash, declared)
+// getOrFetchArtifactFromURLWithCachePURLs is getOrFetchArtifactFromURL for
+// an artifact cached under pkgPURL and versionPURL instead of the PURLs
+// made from its name, for protocols such as Swift.
+func (p *Proxy) getOrFetchArtifactFromURLWithCachePURLs(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, upstreamHash string) (*CacheResult, error) {
+	return p.StreamAcquire(ctx, ArtifactRequest{
+		Ecosystem: ecosystem, Name: name, Version: version, Filename: filename, DownloadURL: downloadURL,
+		Headers: headers, upstreamHash: upstreamHash, cachePackagePURL: pkgPURL, cacheVersionPURL: versionPURL,
+	})
 }
 
 // coalescedFetchFromURL fetches an artifact the cache could not serve, sharing
-// the fetch with concurrent callers. The caller running it discards a stale
-// entry under the key, where it cannot delete a fetch that just replaced it.
+// the fetch with concurrent callers; see Proxy.fetchKey.
 func (p *Proxy) coalescedFetchFromURL(ctx context.Context, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL string, headers http.Header, upstreamHash, declared string) (*CacheResult, error) {
-	key := artifactCoalesceKey(versionPURL, filename, downloadURL, upstreamHash, declared)
-	recheck := func() (artifacts.Artifact, string, bool) {
-		return p.cachedArtifactRecord(pkgPURL, versionPURL, filename, upstreamHash)
-	}
-	return p.coalesceFetch(ctx, key, recheck, func(fetchCtx context.Context) (artifacts.Artifact, string, error) {
-		p.discardStaleArtifact(pkgPURL, versionPURL, filename, upstreamHash)
-		return p.fetchAndCacheFromURL(fetchCtx, ecosystem, name, version, filename, pkgPURL, versionPURL, downloadURL, headers, upstreamHash, declared)
+	key, recheck, commit := p.fetchKey(&preparedRequest{
+		ArtifactRequest: ArtifactRequest{
+			Ecosystem: ecosystem, Name: name, Version: version, Filename: filename, DownloadURL: downloadURL,
+			Headers: headers, upstreamHash: upstreamHash,
+		},
+		pkgPURL: pkgPURL, versionPURL: versionPURL, declared: declared,
 	})
+	return p.coalesceFetch(ctx, key, recheck, commit)
 }
 
 // cacheStoredCopy caches a copy of the object stored at source under a new

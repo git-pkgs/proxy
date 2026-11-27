@@ -382,7 +382,7 @@ func TestStreamArtifactsSwiftArchiveHeadIgnoresCachedEntry(t *testing.T) {
 	packagePURL, versionPURL := packageurl.MakeCacheStrings("swift", "apple/example", "1.2.3")
 	cached, err := proxy.getOrFetchArtifactFromURLWithCachePURLs(
 		context.Background(), "swift", "apple/example", "1.2.3", "example-1.2.3.zip",
-		packagePURL, versionPURL, upstream.URL+"/apple/example/1.2.3.zip", nil, hex.EncodeToString(checksum[:]), "",
+		packagePURL, versionPURL, upstream.URL+"/apple/example/1.2.3.zip", nil, hex.EncodeToString(checksum[:]),
 	)
 	if err != nil {
 		t.Fatalf("seeding cache in normal mode: %v", err)

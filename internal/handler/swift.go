@@ -303,7 +303,7 @@ func swiftSourceArchiveKey(scope, name, version string) (swiftArchiveKey, error)
 func (h *SwiftHandler) fetchSourceArchive(ctx context.Context, key swiftArchiveKey, version, upstreamURL string, headers http.Header, info swiftArchiveInfo) (*CacheResult, error) {
 	return h.proxy.getOrFetchArtifactFromURLWithCachePURLs(
 		ctx, "swift", key.packageName, version, key.filename, key.packagePURL, key.versionPURL,
-		upstreamURL, headers, info.checksum, "",
+		upstreamURL, headers, info.checksum,
 	)
 }
 
