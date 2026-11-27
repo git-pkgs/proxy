@@ -111,6 +111,37 @@ func TestFilterReleasesWithholdsReleasesInCooldown(t *testing.T) {
 	}
 }
 
+// TestFilterReleasesLooksPastAnOldPrerelease checks that a prerelease out
+// of cooldown above the stable line doesn't end the walk: the stable
+// releases below it are still checked, down to the first that is old enough.
+func TestFilterReleasesLooksPastAnOldPrerelease(t *testing.T) {
+	day := 24 * time.Hour
+	ages := map[string]time.Duration{
+		"3.0.0-alpha.1": 90 * day,
+		"2.5.1":         time.Hour,
+		"2.5.0":         30 * day,
+		"2.4.0":         60 * day,
+	}
+	var asked []string
+	body, removed, err := FilterReleases(testPackagePURL, releaseList("2.4.0", "2.5.0", "2.5.1", "3.0.0-alpha.1"), CooldownOptions{
+		Cooldown:    testCooldown(),
+		EvaluatedAt: evaluatedAt,
+		PublishTime: timesFrom(ages, &asked),
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := listedVersions(t, body), []string{"2.4.0", "2.5.0", "3.0.0-alpha.1"}; !slices.Equal(got, want) {
+		t.Errorf("listed = %v, want %v", got, want)
+	}
+	if want := []string{"3.0.0-alpha.1", "2.5.1", "2.5.0"}; !slices.Equal(asked, want) {
+		t.Errorf("asked = %v, want %v: past the old prerelease, stopping at the first old stable release", asked, want)
+	}
+	if !removed["2.5.1"] || len(removed) != 1 {
+		t.Errorf("removed = %v, want 2.5.1", removed)
+	}
+}
+
 func TestFilterReleasesStopsAtAReleaseWithoutTime(t *testing.T) {
 	var asked []string
 	in := releaseList("1.0.0", "1.1.0", "1.2.0")

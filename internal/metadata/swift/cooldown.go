@@ -64,10 +64,12 @@ func PublishedAt(body []byte) (time.Time, error) {
 // unchanged.
 //
 // The list has no times, so releases are checked from the highest version
-// down to the first that is old enough. A release without a time also ends
-// the walk: an upstream that doesn't record the newest release's time
-// records none. Releases marked with a problem and versions that aren't
-// semantic versions are left as they are.
+// down to the first stable release that is old enough. A prerelease that is
+// old enough doesn't end the walk: one can linger above a stable line that
+// still gets releases. A release without a time ends it: an upstream that
+// doesn't record the newest release's time records none. Releases marked
+// with a problem and versions that aren't semantic versions are left as
+// they are.
 func FilterReleases(packagePURL string, body []byte, o CooldownOptions) ([]byte, map[string]bool, error) {
 	var metadata map[string]any
 	if err := json.Unmarshal(body, &metadata); err != nil {
@@ -79,7 +81,8 @@ func FilterReleases(packagePURL string, body []byte, o CooldownOptions) ([]byte,
 	}
 
 	removed := map[string]bool{}
-	for _, v := range newestFirst(releases) {
+	for _, r := range newestFirst(releases) {
+		v := r.name
 		var published time.Time
 		if o.PublishTime != nil {
 			var err error
@@ -87,7 +90,13 @@ func FilterReleases(packagePURL string, body []byte, o CooldownOptions) ([]byte,
 				return nil, nil, fmt.Errorf("reading time of %s: %w", v, err)
 			}
 		}
-		if published.IsZero() || o.Cooldown.Evaluate(Ecosystem, packagePURL, published, o.EvaluatedAt).Allowed {
+		if published.IsZero() {
+			break
+		}
+		if o.Cooldown.Evaluate(Ecosystem, packagePURL, published, o.EvaluatedAt).Allowed {
+			if r.version.Prerelease() != "" {
+				continue
+			}
 			break
 		}
 		removed[v] = true
@@ -108,13 +117,15 @@ func FilterReleases(packagePURL string, body []byte, o CooldownOptions) ([]byte,
 	return filtered, removed, nil
 }
 
+// release is a listed release and its parsed version.
+type release struct {
+	name    string
+	version *semver.Version
+}
+
 // newestFirst returns the available releases whose versions are semantic
 // versions, highest first.
-func newestFirst(releases map[string]any) []string {
-	type release struct {
-		name    string
-		version *semver.Version
-	}
+func newestFirst(releases map[string]any) []release {
 	var sorted []release
 	for name, value := range releases {
 		if entry, ok := value.(map[string]any); ok && entry["problem"] != nil {
@@ -125,11 +136,7 @@ func newestFirst(releases map[string]any) []string {
 		}
 	}
 	slices.SortFunc(sorted, func(a, b release) int { return b.version.Compare(a.version) })
-	names := make([]string, len(sorted))
-	for i, r := range sorted {
-		names[i] = r.name
-	}
-	return names
+	return sorted
 }
 
 // WithoutLatestVersion drops the latest-version link from a release list's

@@ -11,15 +11,6 @@ import (
 	"github.com/git-pkgs/purl"
 )
 
-// Swift cooldown measures a release by the publishedAt in its release
-// document, which the registry specification makes optional. The release
-// list has no times, so the proxy reads each release's time once, from the
-// newest release down to the first that is old enough, and stores it.
-// Releases in cooldown are left out of the list, and their release
-// document, manifests and source archive are answered with 403. A release
-// without publishedAt is let through, so with an upstream that doesn't
-// record the time, such as the default one, cooldown has no effect.
-
 const errSwiftCooldown = "release is in cooldown"
 
 // swiftPolicyPURL is the PURL cooldown rules name a package by,
@@ -79,9 +70,7 @@ func (h *SwiftHandler) allowedAt(scope, name string, published time.Time) bool {
 }
 
 // checkCooldown answers a request for a release in cooldown, or whose time
-// couldn't be read, and reports whether it did. The time comes from the
-// release document a source archive is checked against anyway, so an
-// archive fails the same way without cooldown when it can't be read.
+// couldn't be read, and reports whether it did.
 func (h *SwiftHandler) checkCooldown(w http.ResponseWriter, r *http.Request, scope, name, version string) bool {
 	if !h.swiftCooldownApplies(scope, name) {
 		return false
