@@ -1465,7 +1465,14 @@ denylist:
 
 Entries must be versioned PURLs without subpaths or qualifiers (except a conda
 `channel`, below). Package names are canonicalized (including npm scopes);
-versions match exactly, not by range or glob. Invalid entries prevent startup.
+versions match exactly, not by range or glob. Invalid entries prevent startup,
+and so do entries that could never match: one whose type the proxy doesn't
+check, such as `pkg:rubygems/...` for `pkg:gem/...` or `pkg:crates/...` for
+`pkg:cargo/...`, and a Go version without its `v`. The types are `alpm`, `apk`,
+`bsd`, `cargo`, `chef`, `composer`, `conan`, `conda`, `cran`, `deb`, `docker`
+(for `proxy mirror` only; pulls are `oci`), `gem`, `generic`, `golang`, `helm`,
+`hex`, `maven`, `npm`, `nuget`, `oci`, `pub`, `pypi`, `rpm`, `swift` and
+`terraform`.
 An empty list disables the policy. Restart the proxy after changing the list.
 
 Names and versions are compared the way each ecosystem treats them:

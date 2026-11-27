@@ -3,6 +3,7 @@ package denylist
 
 import (
 	"fmt"
+	"slices"
 	"strings"
 
 	"github.com/git-pkgs/proxy/internal/metadata/pypi"
@@ -15,9 +16,43 @@ type Policy struct {
 	packages map[string]map[string]bool
 }
 
+// handlerTypes are the PURL types handlers and the mirror check against the
+// policy. An entry of another type, such as a registry's name used as the
+// type (pkg:rubygems, pkg:crates), can never equal one of their PURLs.
+// docker is here for the mirror, which takes images as pkg:docker PURLs and
+// checks them as written; pulls are checked as pkg:oci. Homebrew
+// bottles are pulled as OCI images, Gradle build cache entries have no
+// version, and a julia PURL needs a uuid qualifier, which an entry can't
+// carry, so none of them has a type here.
+var handlerTypes = map[string]bool{
+	"alpm": true, "apk": true, "bsd": true, "cargo": true, "chef": true, "composer": true,
+	"conan": true, "conda": true, "cran": true, "deb": true, "docker": true, "gem": true, "generic": true,
+	"golang": true, "helm": true, "hex": true, "maven": true, "npm": true,
+	"nuget": true, "oci": true, "pub": true, "pypi": true, "rpm": true, "swift": true,
+	"terraform": true,
+}
+
+// unmatchable explains why no checked PURL can equal pkg, or returns "".
+func unmatchable(pkg *purl.PURL) string {
+	if !handlerTypes[pkg.Type] {
+		types := make([]string, 0, len(handlerTypes))
+		for t := range handlerTypes {
+			types = append(types, t)
+		}
+		slices.Sort(types)
+		return fmt.Sprintf("the proxy checks no packages of type %q; the types are %s", pkg.Type, strings.Join(types, ", "))
+	}
+	if pkg.Type == "golang" && !strings.HasPrefix(pkg.Version, "v") {
+		return fmt.Sprintf("Go versions start with \"v\", as in v%s", pkg.Version)
+	}
+	return ""
+}
+
 // New validates and canonicalizes versioned PURLs. Qualifiers and subpaths are
 // rejected because the proxy cannot reliably distinguish them at every endpoint,
-// except a conda channel, which download URLs always name.
+// except a conda channel, which download URLs always name. An entry no
+// handler's PURL can equal is rejected too, rather than accepted and never
+// matched.
 func New(packages []string) (*Policy, error) {
 	if len(packages) == 0 {
 		return nil, nil
@@ -31,6 +66,9 @@ func New(packages []string) (*Policy, error) {
 		if pkg.Version == "" || !allowedQualifiers(pkg) || pkg.Subpath != "" ||
 			strings.ContainsAny(pkg.Namespace+pkg.Name+pkg.Version, "*?[]<>=| \t\r\n") {
 			return nil, fmt.Errorf("invalid denylist package %q: expected an exact versioned PURL without qualifiers or subpath", value)
+		}
+		if reason := unmatchable(pkg); reason != "" {
+			return nil, fmt.Errorf("invalid denylist package %q: %s", value, reason)
 		}
 		id := identify(pkg)
 		key := id.key
