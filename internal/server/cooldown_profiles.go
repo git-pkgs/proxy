@@ -19,7 +19,7 @@ func (s *Server) mountCooldownProfiles(r chi.Router, proxy *handler.Proxy) error
 		}
 		prefix := "/cooldown/" + name
 		profile := chi.NewRouter()
-		s.mountProtocolHandlersAt(profile, proxy.WithCooldown(policy, cfg.Shortest(), cfg.Longest()), strings.TrimRight(s.cfg.BaseURL, "/")+prefix)
+		s.mountProtocolHandlersAt(profile, proxy.WithCooldown(policy, cfg.Shortest(), cfg.Longest), strings.TrimRight(s.cfg.BaseURL, "/")+prefix)
 		r.Mount(prefix, http.StripPrefix(prefix, profile))
 	}
 	return nil

@@ -10,22 +10,8 @@ import (
 	"github.com/git-pkgs/proxy/internal/metadata/chef"
 )
 
-// Chef cooldown measures a cookbook version by the published_at in its
-// version document, which Supermarket sets when the version is uploaded.
-// It is read once per version and stored in the versions table.
-//
-// A cookbook document has one updated_at, set when a version is published,
-// so when that is out of cooldown none of its versions is looked up;
-// otherwise they are, from the highest down to the first that is old
-// enough. Versions in cooldown are left out of the cookbook document,
-// latest_version names the newest one left, and the version document and
-// download of one are answered with 403.
-//
-// /universe lists every version of every cookbook without times. The
-// cookbooks that can have a version in cooldown are the ones updated within
-// the longest cooldown configured, which the recently updated listing gives
-// newest first. The proxy reads that listing and those cookbooks' documents
-// from the upstream each time it filters the universe, rather than from the
+// The universe filter reads the recently updated listing and those
+// cookbooks' documents from the upstream each time, rather than from the
 // metadata cache, whose copies can be older than the universe it filters.
 
 const (
@@ -124,7 +110,7 @@ func (h *ChefHandler) inCooldown(ctx context.Context, name, version string) (boo
 	if err != nil || published.IsZero() {
 		return false, err
 	}
-	if h.proxy.cooldown().IsAllowed("chef", canonicalPackagePURL(chefEcosystem, name), published) {
+	if h.proxy.cooldown().IsAllowed(chefEcosystem, canonicalPackagePURL(chefEcosystem, name), published) {
 		return false, nil
 	}
 	h.recordWithheld(name, version, published)
@@ -183,12 +169,12 @@ func (h *ChefHandler) cookbookWithheld(ctx context.Context, name string, body []
 // universeWithheld returns, for each cookbook with versions in cooldown,
 // the versions of it the universe lists that are in cooldown.
 func (h *ChefHandler) universeWithheld(ctx context.Context, universe []byte) (map[string]map[string]bool, error) {
-	if !h.proxy.cooldownEnabled() {
+	if h.proxy.LongestCooldown == nil {
 		return nil, nil
 	}
-	longest := h.proxy.LongestCooldown
+	longest := h.proxy.LongestCooldown(chefEcosystem)
 	if longest <= 0 {
-		longest = h.proxy.cooldown().For(chefEcosystem, "")
+		return nil, nil
 	}
 	updated, err := h.recentCookbooks(ctx, time.Now().Add(-longest))
 	if err != nil {

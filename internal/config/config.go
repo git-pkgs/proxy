@@ -309,14 +309,59 @@ func (c *CooldownConfig) Shortest() time.Duration {
 	return shortest
 }
 
-// Longest returns the longest cooldown configured anywhere, by default,
-// ecosystem, package or package pattern, or 0 when none is. No version
-// published longer ago than that can be in cooldown. Unparsable durations
-// are left out; Validate reports them.
-func (c *CooldownConfig) Longest() time.Duration {
-	var longest time.Duration
-	c.eachDuration(func(d time.Duration) { longest = max(longest, d) })
+// Longest returns the longest cooldown that can apply to a package of
+// ecosystem, or 0 when none can: the ecosystem's cooldown, or the default
+// without one, and those of the packages and package patterns that name the
+// ecosystem. No version of it published longer ago than that can be in
+// cooldown. Unparsable durations are left out; Validate reports them.
+func (c *CooldownConfig) Longest(ecosystem string) time.Duration {
+	if c == nil {
+		return 0
+	}
+	parse := func(s string) time.Duration {
+		d, err := cooldown.ParseDuration(s)
+		if err != nil {
+			return 0
+		}
+		return d
+	}
+	longest := parse(c.Default)
+	if s, ok := c.Ecosystems[ecosystem]; ok {
+		if d, err := cooldown.ParseDuration(s); err == nil {
+			longest = d
+		}
+	}
+	prefix := "pkg:" + purl.EcosystemToPURLType(ecosystem) + "/"
+	for key, s := range c.NormalizedPackages() {
+		if strings.HasPrefix(key, prefix) {
+			longest = max(longest, parse(s))
+		}
+	}
+	for glob, s := range c.PackagePatterns {
+		if globMatchesPrefix(glob, prefix) {
+			longest = max(longest, parse(s))
+		}
+	}
 	return longest
+}
+
+// globMatchesPrefix reports whether a package pattern can match a string
+// that starts with prefix. As in path.Match, '*' and '?' don't match '/'.
+func globMatchesPrefix(glob, prefix string) bool {
+	if prefix == "" {
+		return true
+	}
+	if glob == "" {
+		return false
+	}
+	switch glob[0] {
+	case '*':
+		return globMatchesPrefix(glob[1:], prefix) || (prefix[0] != '/' && globMatchesPrefix(glob, prefix[1:]))
+	case '?':
+		return prefix[0] != '/' && globMatchesPrefix(glob[1:], prefix[1:])
+	default:
+		return glob[0] == prefix[0] && globMatchesPrefix(glob[1:], prefix[1:])
+	}
 }
 
 // eachDuration calls fn with every positive duration configured.

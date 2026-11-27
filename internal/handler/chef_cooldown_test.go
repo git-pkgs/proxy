@@ -13,6 +13,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/cooldown"
+	"github.com/git-pkgs/proxy/internal/config"
 	registryclient "github.com/git-pkgs/registries/client"
 	"github.com/git-pkgs/registries/fetch"
 )
@@ -188,7 +189,7 @@ func chefCooldownHandler(t *testing.T, s *chefCooldownSupermarket) (http.Handler
 	t.Helper()
 	proxy, _, _, fetcher := setupTestProxy(t)
 	proxy.Cooldown = &cooldown.Config{Default: "3d"}
-	proxy.LongestCooldown = 72 * time.Hour
+	proxy.LongestCooldown = func(string) time.Duration { return 72 * time.Hour }
 	fetcher.artifact = &fetch.Artifact{
 		Body: io.NopCloser(strings.NewReader(chefTestTarball)), Size: int64(len(chefTestTarball)), ContentType: "application/gzip",
 	}
@@ -407,12 +408,32 @@ func TestChefCooldownExemptCookbook(t *testing.T) {
 func TestChefWithoutCooldownReadsNoListing(t *testing.T) {
 	s := newChefCooldownSupermarket(t)
 	h, proxy, _ := chefCooldownHandler(t, s)
-	proxy.Cooldown = nil
+	proxy.Cooldown, proxy.LongestCooldown = nil, nil
 	if got := chefUniverseVersions(t, chefGet(t, h, "/universe"))["nginx"]; len(got) != 2 {
 		t.Errorf("nginx = %v, want both versions", got)
 	}
 	if got := s.count("/api/v1/cookbooks"); got != 0 {
 		t.Errorf("listing read %d times without cooldown", got)
+	}
+}
+
+// TestChefCooldownForOtherEcosystemsReadsNoListing checks that a cooldown
+// that can't apply to Chef leaves the universe alone: nothing is read from
+// the upstream to filter it, so an upstream without the listing still works.
+func TestChefCooldownForOtherEcosystemsReadsNoListing(t *testing.T) {
+	s := newChefCooldownSupermarket(t)
+	h, proxy, _ := chefCooldownHandler(t, s)
+	cfg := &config.CooldownConfig{Ecosystems: map[string]string{"npm": "3d"}, Packages: map[string]string{"pkg:npm/foo": "90d"}}
+	policy, err := cfg.Policy()
+	if err != nil {
+		t.Fatal(err)
+	}
+	proxy.Cooldown, proxy.LongestCooldown = policy, cfg.Longest
+	if got := chefUniverseVersions(t, chefGet(t, h, "/universe"))["nginx"]; len(got) != 2 {
+		t.Errorf("nginx = %v, want both versions", got)
+	}
+	if got := s.count("/api/v1/cookbooks"); got != 0 {
+		t.Errorf("listing read %d times for an npm cooldown", got)
 	}
 }
 

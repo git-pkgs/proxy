@@ -9,7 +9,8 @@ import (
 )
 
 func TestCooldownSupportedCoversHandlers(t *testing.T) {
-	calls := regexp.MustCompile(`(?:IsAllowed|Evaluate)\("([a-z]+)"|withheld\(h\.proxy, "([a-z]+)"|IsAllowed\((helmMetadataEcosystem)`)
+	calls := regexp.MustCompile(`(?:IsAllowed|Evaluate)\("([a-z]+)"|withheld\(h\.proxy, "([a-z]+)"|IsAllowed\((helmMetadataEcosystem|chefEcosystem)`)
+	constants := map[string]string{"helmMetadataEcosystem": helmMetadataEcosystem, "chefEcosystem": chefEcosystem}
 	// Metadata rewrites moved out of the handlers (#501) check cooldown in
 	// internal/metadata.
 	files, err := filepath.Glob("*.go")
@@ -32,7 +33,7 @@ func TestCooldownSupportedCoversHandlers(t *testing.T) {
 		}
 		for _, m := range calls.FindAllStringSubmatch(string(src), -1) {
 			if m[3] != "" {
-				found[helmMetadataEcosystem] = true
+				found[constants[m[3]]] = true
 				continue
 			}
 			found[m[1]+m[2]] = true

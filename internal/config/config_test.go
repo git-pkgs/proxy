@@ -2233,14 +2233,20 @@ func TestCooldownLongest(t *testing.T) {
 		{"nil", nil, 0},
 		{"none", &CooldownConfig{Default: "0"}, 0},
 		{"default", &CooldownConfig{Default: "3d"}, 72 * time.Hour},
-		{"ecosystem", &CooldownConfig{Default: "3d", Ecosystems: map[string]string{"npm": "5d", "deb": "0"}}, 120 * time.Hour},
-		{"package", &CooldownConfig{Default: "3d", Packages: map[string]string{"pkg:npm/lodash": "14d"}}, 14 * 24 * time.Hour},
-		{"pattern", &CooldownConfig{Default: "0", PackagePatterns: map[string]string{"pkg:npm/@acme/*": "90m"}}, 90 * time.Minute},
-		{"default longest", &CooldownConfig{Default: "14d", Ecosystems: map[string]string{"npm": "1d"}}, 14 * 24 * time.Hour},
-		{"invalid ignored", &CooldownConfig{Default: "3d", Ecosystems: map[string]string{"npm": "soon"}}, 72 * time.Hour},
+		{"its ecosystem replaces the default", &CooldownConfig{Default: "14d", Ecosystems: map[string]string{"chef": "1d"}}, 24 * time.Hour},
+		{"its ecosystem turned off", &CooldownConfig{Default: "3d", Ecosystems: map[string]string{"chef": "0"}}, 0},
+		{"another ecosystem", &CooldownConfig{Ecosystems: map[string]string{"npm": "5d"}}, 0},
+		{"another ecosystem beside the default", &CooldownConfig{Default: "3d", Ecosystems: map[string]string{"npm": "5d"}}, 72 * time.Hour},
+		{"its package", &CooldownConfig{Default: "3d", Packages: map[string]string{"pkg:chef/nginx": "14d"}}, 14 * 24 * time.Hour},
+		{"its package, not canonical", &CooldownConfig{Packages: map[string]string{"pkg:CHEF/nginx": "2d"}}, 48 * time.Hour},
+		{"another ecosystem's package", &CooldownConfig{Packages: map[string]string{"pkg:npm/foo": "90d"}}, 0},
+		{"its pattern", &CooldownConfig{Default: "0", PackagePatterns: map[string]string{"pkg:chef/acme-*": "90m"}}, 90 * time.Minute},
+		{"a pattern across ecosystems", &CooldownConfig{PackagePatterns: map[string]string{"pkg:*/acme": "2d", "pkg:c?ef/*": "3d"}}, 72 * time.Hour},
+		{"another ecosystem's pattern", &CooldownConfig{PackagePatterns: map[string]string{"pkg:npm/@acme/*": "90d", "pkg:chefs/*": "90d", "*": "90d"}}, 0},
+		{"invalid ignored", &CooldownConfig{Default: "3d", Ecosystems: map[string]string{"chef": "soon"}, Packages: map[string]string{"pkg:chef/x": "soon"}}, 72 * time.Hour},
 	} {
-		if got := tc.cfg.Longest(); got != tc.want {
-			t.Errorf("%s: Longest() = %v, want %v", tc.name, got, tc.want)
+		if got := tc.cfg.Longest("chef"); got != tc.want {
+			t.Errorf("%s: Longest(chef) = %v, want %v", tc.name, got, tc.want)
 		}
 	}
 }

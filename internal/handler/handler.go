@@ -227,10 +227,11 @@ type Proxy struct {
 	// ShortestCooldown is the shortest cooldown configured anywhere. It
 	// bounds how long a rewrite filtered by cooldown is cached.
 	ShortestCooldown time.Duration
-	// LongestCooldown is the longest cooldown configured anywhere. No
-	// version published longer ago can be in cooldown, which bounds how far
-	// back the Chef universe filter looks for recent releases.
-	LongestCooldown time.Duration
+	// LongestCooldown returns the longest cooldown that can apply to a
+	// package of an ecosystem, or 0 when none can. No version published
+	// longer ago can be in cooldown, which bounds how far back the Chef
+	// universe filter looks for recent releases.
+	LongestCooldown func(ecosystem string) time.Duration
 	Denylist        *denylist.Policy
 	CacheMetadata   bool
 	MetadataTTL     time.Duration
