@@ -38,6 +38,54 @@ func TestInvalidPolicy(t *testing.T) {
 	}
 }
 
+// TestUnmatchableEntriesAreRefused checks entries that parse but that no
+// handler's PURL can equal. Accepting them would start the proxy with a
+// denylist that blocks nothing.
+func TestUnmatchableEntriesAreRefused(t *testing.T) {
+	for _, value := range []string{
+		// Registry or tool names used as the type.
+		"pkg:rubygems/rake@13.0.0",
+		"pkg:crates/serde@1.0.0",
+		"pkg:go/example.com/mod@v1.0.0",
+		"pkg:packagist/symfony/console@6.1.7",
+		"pkg:debian/curl@8.5.0-2",
+		"pkg:bogus/x@1",
+		// Ecosystems the proxy serves without a denylist check.
+		"pkg:homebrew/wget@1.24.5",
+		"pkg:gradle/x@1",
+		"pkg:julia/Example@0.5.3",
+		// Go versions start with "v"; OSV writes them without.
+		"pkg:golang/example.com/mod@1.0.0",
+	} {
+		t.Run(value, func(t *testing.T) {
+			if _, err := New([]string{value}); err == nil {
+				t.Fatal("entry that can never match accepted")
+			}
+		})
+	}
+}
+
+// TestHandlerTypesAreAccepted checks an entry of every type a handler checks.
+func TestHandlerTypesAreAccepted(t *testing.T) {
+	for _, value := range []string{
+		"pkg:npm/lodash@1.0.0", "pkg:cargo/serde@1.0.0", "pkg:gem/rake@13.0.0", "pkg:golang/example.com/mod@v1.0.0",
+		"pkg:hex/phoenix@1.7.0", "pkg:pub/http@1.0.0", "pkg:pypi/requests@2.31.0", "pkg:maven/com.google.guava/guava@32.0",
+		"pkg:nuget/Newtonsoft.Json@13.0.1", "pkg:composer/symfony/console@6.1.7", "pkg:conan/zlib@1.3", "pkg:chef/nginx@1.0.0",
+		"pkg:conda/numpy@1.26.4", "pkg:cran/ggplot2@3.4.0", "pkg:swift/apple/swift-nio@2.62.0", "pkg:oci/library/alpine@3.19", "pkg:docker/library/alpine@3.20",
+		"pkg:helm/nginx@1.0.0", "pkg:apk/curl@8.5.0-r0", "pkg:alpm/curl@8.5.0-1", "pkg:bsd/freebsd/zsh@5.9", "pkg:deb/curl@8.5.0-2",
+		"pkg:rpm/curl@8.5.0-1", "pkg:terraform/hashicorp/random@3.6.0", "pkg:generic/o%2Fr@v1",
+	} {
+		p, err := New([]string{value})
+		if err != nil {
+			t.Errorf("%s: %v", value, err)
+			continue
+		}
+		if !p.Denied(value) {
+			t.Errorf("%s: not denied by its own entry", value)
+		}
+	}
+}
+
 func TestEcosystemSpellings(t *testing.T) {
 	p, err := New([]string{
 		"pkg:pypi/zope.interface@6.0",
