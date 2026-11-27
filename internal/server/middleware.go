@@ -168,6 +168,38 @@ func rejectQueryInPath(next http.Handler) http.Handler {
 	})
 }
 
+// rejectDoubleEscapedPath refuses requests whose decoded path still holds a
+// percent-escape, which the client sent escaped twice (%2530). Handlers
+// parse and check the decoded path, where rails-7.0.%30.gem is version
+// 7.0.%30, and append the same string to the upstream URL; the upstream
+// decodes it once more and serves rails-7.0.0.gem, past the denylist and
+// cooldown that looked at another version. A '%' that doesn't start an escape
+// is left alone. Composer archives are exempt, as in rejectQueryInPath.
+func rejectDoubleEscapedPath(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if hasPercentEscape(r.URL.Path) && !strings.HasPrefix(r.URL.Path, "/composer/files/") {
+			http.Error(w, "invalid path", http.StatusBadRequest)
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
+// hasPercentEscape reports whether p contains '%' followed by two hex digits.
+func hasPercentEscape(p string) bool {
+	const escapeLen = 3
+	for i := 0; i+escapeLen <= len(p); i++ {
+		if p[i] == '%' && isHex(p[i+1]) && isHex(p[i+2]) {
+			return true
+		}
+	}
+	return false
+}
+
+func isHex(c byte) bool {
+	return '0' <= c && c <= '9' || 'a' <= c && c <= 'f' || 'A' <= c && c <= 'F'
+}
+
 // rejectDotSegments refuses requests whose decoded path has a '.' or '..'
 // segment. Routers clean literal dot segments, but encoded ones such as
 // %2e%2e reach the handlers, and several of them append the path to the
