@@ -557,74 +557,18 @@ func (p *Proxy) lookupCache(ctx context.Context, pkgPURL, versionPURL, filename 
 }
 
 // readStored opens the stored object of an artifact, whether or not
-// StreamArtifacts is set. Returns nil if no usable object is stored.
+// StreamArtifacts is set, and counts the hit. Returns nil if no usable object
+// is stored.
 func (p *Proxy) readStored(ctx context.Context, pkgPURL, versionPURL, filename string) (*CacheResult, error) {
-	artifact, err := p.DB.GetCachedArtifact(pkgPURL, versionPURL, filename)
-	if err != nil {
-		return nil, fmt.Errorf("checking artifact cache: %w", err)
+	a, err := p.findStored(pkgPURL, versionPURL, filename)
+	if err != nil || a == nil {
+		return nil, err
 	}
-	if artifact == nil {
-		return nil, nil
+	result, err := p.Open(ctx, a)
+	if err != nil || result == nil {
+		return nil, err
 	}
-	checks, err := newIntegrityChecks(artifact.Artifact.Digest.Encoded(), artifact.Integrity.String)
-	if err != nil {
-		p.rejectUnusableCacheRecord(artifact, versionPURL, filename, err)
-		return nil, nil
-	}
-
-	result := &CacheResult{
-		Artifact:    artifact.Artifact,
-		Cached:      true,
-		storagePath: artifact.StoragePath,
-	}
-
-	if servingHead(ctx) {
-		result.rangeable = readsSeekable(p.Storage)
-		p.recordCacheHit(ctx, artifact.Ecosystem, versionPURL, filename)
-		return result, nil
-	}
-
-	if p.DirectServe {
-		signed, err := p.Storage.SignedURL(ctx, artifact.StoragePath, p.DirectServeTTL)
-		if err == nil {
-			result.RedirectURL = signed
-			p.recordCacheHit(ctx, artifact.Ecosystem, versionPURL, filename)
-			return result, nil
-		}
-		if !errors.Is(err, storage.ErrSignedURLUnsupported) {
-			p.Logger.Warn("failed to sign storage URL, falling back to streaming",
-				"path", artifact.StoragePath, "error", err)
-		}
-	}
-
-	start := time.Now()
-	reader, err := p.Storage.Open(ctx, artifact.StoragePath)
-	metrics.RecordStorageOperation("read", time.Since(start))
-	if err != nil {
-		metrics.RecordStorageError("read", metrics.FailureDetail{
-			PURL: versionPURL, Filename: filename, Path: artifact.StoragePath, Err: err})
-		p.Logger.Warn("cached artifact missing from storage, will refetch",
-			"path", artifact.StoragePath, "error", err)
-		return nil, nil
-	}
-
-	result.Reader, err = checks.forStoredObject().wrapFailOnMismatch(reader,
-		func(reason string) {
-			p.Logger.Error("cached artifact failed integrity check",
-				"purl", versionPURL, "filename", filename,
-				"path", artifact.StoragePath, "reason", reason)
-			metrics.RecordIntegrityFailure(purl.NormalizeEcosystem(artifact.Ecosystem), metrics.FailureDetail{
-				PURL: versionPURL, Filename: filename, Path: artifact.StoragePath, Err: errors.New(reason)})
-			if err := p.DB.DiscardArtifact(versionPURL, filename, artifact.StoragePath); err != nil {
-				p.Logger.Warn("failed to clear corrupt artifact from cache", "error", err)
-			}
-		})
-	if err != nil {
-		_ = reader.Close()
-		p.rejectUnusableCacheRecord(artifact, versionPURL, filename, err)
-		return nil, nil
-	}
-	p.recordCacheHit(ctx, artifact.Ecosystem, versionPURL, filename)
+	p.recordCacheHit(ctx, a.ecosystem, versionPURL, filename)
 	return result, nil
 }
 
@@ -880,25 +824,9 @@ func (p *Proxy) serveUnrecorded(ctx context.Context, u *unrecordedObject, artifa
 }
 
 // openStoredArtifact gives one caller its own reader over just-committed
-// bytes. Callers sharing a fetch cannot share a handle: it has one read
-// position, so they would consume each other's bytes and the first Close would
-// break the rest.
+// bytes; see Proxy.openFetched.
 func (p *Proxy) openStoredArtifact(ctx context.Context, artifact artifacts.Artifact, storagePath string) (*CacheResult, error) {
-	readStart := time.Now()
-	reader, err := p.Storage.Open(ctx, storagePath)
-	metrics.RecordStorageOperation("read", time.Since(readStart))
-
-	if err != nil {
-		metrics.RecordStorageError("read", metrics.FailureDetail{
-			PURL: artifact.PURL, Filename: artifact.Filename, Path: storagePath, Err: err})
-		return nil, fmt.Errorf("opening cached artifact: %w", err)
-	}
-
-	return &CacheResult{
-		Reader:   reader,
-		Artifact: artifact,
-		Cached:   false,
-	}, nil
+	return p.Open(ctx, &ApprovedArtifact{Artifact: artifact, StoragePath: storagePath})
 }
 
 // artifactCoalesceKey identifies one artifact fetch. downloadURL, upstreamHash
