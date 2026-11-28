@@ -102,8 +102,8 @@ func TestGitServesRepository(t *testing.T) {
 		{up + "/a/../b.git", false},
 		{github + "/azure/login.git", true},
 		// Cached before GitHub paths were folded to lowercase. Where the
-		// cache directory ignores case it is the same copy; elsewhere no
-		// clone is served from it, and it is warmed only until it goes idle.
+		// cache directory ignores case it is the same copy; elsewhere the
+		// cache moves it to the lowercased path when it starts.
 		{github + "/Azure/login.git", true},
 	} {
 		if got := h.ServesRepository(tt.dir); got != tt.ok {

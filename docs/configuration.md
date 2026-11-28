@@ -966,9 +966,8 @@ paths, so on `https://github.com` and `https://bitbucket.org`, with or
 without a path below them, the URL and the patterns match whatever the case,
 and every spelling of a repository shares one cached copy, kept under the
 lowercased path. Where `git.cache_dir` tells cases apart, a copy an earlier
-version cached under a mixed-case path is no longer cloned from, so the
-repository is fetched again once; the old copy stays listed, and is evicted
-by `git.max_size` or deleted by its spelling. When
+version cached under a mixed-case path is moved to the lowercased path at
+startup, or removed when a copy is already there. When
 `upstream.auth` has credentials for an upstream,
 `repos` is required: everyone who can reach the proxy can read every
 repository it serves, so list only those they may read. Per-client

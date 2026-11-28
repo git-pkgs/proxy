@@ -266,8 +266,10 @@ func (s *Server) configureGitCache(client *http.Client) error {
 		return nil
 	}
 	upstreamDirs := make(map[string]string, len(s.cfg.Upstream.Git))
+	foldCase := make(map[string]bool)
 	for name, upstream := range s.cfg.Upstream.Git {
 		upstreamDirs[name] = gitcache.UpstreamDir(name, upstream.URL)
+		foldCase[name] = upstream.FoldsCase()
 	}
 	gitCache, err := gitcache.New(gitcache.Options{
 		CacheDir:    s.cfg.Git.CacheDir,
@@ -279,6 +281,7 @@ func (s *Server) configureGitCache(client *http.Client) error {
 		Client:      client,
 		Logger:      s.logger,
 		Upstreams:   upstreamDirs,
+		FoldCase:    foldCase,
 	})
 	if err != nil {
 		return fmt.Errorf("configuring git cache: %w", err)
