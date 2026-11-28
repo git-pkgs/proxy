@@ -98,9 +98,10 @@ func TestGitRepositoryDeleteFoldsForgeCase(t *testing.T) {
 	}
 }
 
-// Where the cache directory tells cases apart, a mixed-case copy and the
-// lowercase one are each deleted by their own spelling.
-func TestGitRepositoryDeleteKeepsTheOtherSpelling(t *testing.T) {
+// Where the cache directory tells cases apart, a mixed-case copy left by a
+// version that cached GitHub paths as spelled is gone once the server has
+// started, so one delete removes the repository.
+func TestGitRepositoryDeleteAfterAMixedCaseCopyWasFolded(t *testing.T) {
 	var mixed, lower string
 	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
 		cfg.Upstream.Git = map[string]config.GitUpstream{"github": {URL: "https://github.com", Repos: []string{"Azure/*"}}}
@@ -116,22 +117,20 @@ func TestGitRepositoryDeleteKeepsTheOtherSpelling(t *testing.T) {
 	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusOK {
 		t.Fatalf("DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
 	}
+	// The server answers only once the cache has loaded.
 	if _, err := os.Stat(mixed); !os.IsNotExist(err) {
-		t.Errorf("the mixed-case copy was not deleted: %v", err)
-	}
-	if _, err := os.Stat(lower); err != nil {
-		t.Errorf("the lowercase copy was deleted: %v", err)
-	}
-	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusOK {
-		t.Fatalf("second DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
+		t.Errorf("the mixed-case copy was kept at startup: %v", err)
 	}
 	if _, err := os.Stat(lower); !os.IsNotExist(err) {
 		t.Errorf("the lowercase copy was not deleted: %v", err)
 	}
+	if status, _ := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusNotFound {
+		t.Errorf("second DELETE github/Azure/Login.git: status %d, want 404", status)
+	}
 }
 
 // A copy cached under its mixed-case path before GitHub paths were folded
-// stays removable by that spelling.
+// is moved to the lowercased path at startup, and deleted from there.
 func TestGitRepositoryDeleteRemovesAMixedCaseCopy(t *testing.T) {
 	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
 		cfg.Upstream.Git = map[string]config.GitUpstream{"github": {URL: "https://github.com", Repos: []string{"Azure/*"}}}
@@ -141,5 +140,8 @@ func TestGitRepositoryDeleteRemovesAMixedCaseCopy(t *testing.T) {
 	})
 	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusOK {
 		t.Errorf("DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
+	}
+	if _, body := request(t, http.MethodGet, cfg.BaseURL+"/ui/git", "", nil); strings.Contains(strings.ToLower(body), "azure/login") {
+		t.Errorf("the repository is still listed:\n%s", body)
 	}
 }
