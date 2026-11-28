@@ -145,3 +145,26 @@ func TestGitRepositoryDeleteRemovesAMixedCaseCopy(t *testing.T) {
 		t.Errorf("the repository is still listed:\n%s", body)
 	}
 }
+
+// A mixed-case copy that could not be moved at startup is still listed, so
+// it stays removable by its own spelling.
+func TestGitRepositoryDeleteRemovesACopyThatCouldNotBeFolded(t *testing.T) {
+	var mixed string
+	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
+		cfg.Upstream.Git = map[string]config.GitUpstream{"github": {URL: "https://github.com", Repos: []string{"Azure/*"}}}
+		cfg.CacheDelete = true
+		dir := filepath.Join(cfg.Git.CacheDir, gitcache.UpstreamDir("github", "https://github.com"))
+		mixed = filepath.Join(dir, "Azure", "Login.git")
+		gitCommand(t, "", "init", "--quiet", "--bare", mixed)
+		// A file where the lowercased path's directory would go.
+		if err := os.WriteFile(filepath.Join(dir, "azure"), nil, 0o600); err != nil {
+			t.Skip("the cache directory ignores case")
+		}
+	})
+	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/git/github/Azure/Login.git", "", nil); status != http.StatusOK {
+		t.Errorf("DELETE github/Azure/Login.git: status %d, want 200\n%s", status, body)
+	}
+	if _, err := os.Stat(mixed); !os.IsNotExist(err) {
+		t.Errorf("the mixed-case copy was not deleted: %v", err)
+	}
+}
