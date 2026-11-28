@@ -149,7 +149,7 @@ func TestGitRepositoryRowsKeepCase(t *testing.T) {
 	rows, _ := gitRepositoryRows("http://proxy.example", upstreams, cache.Repositories(), func(key string) (gitcache.RepositoryState, bool) {
 		st, err := cache.RepositoryState(context.Background(), key)
 		return st, err == nil
-	})
+	}, nil)
 	if len(rows) != 1 || rows[0].Upstream != "Up" || rows[0].Repo != "Team/Repo" ||
 		rows[0].CloneURL != "http://proxy.example/git/Up/Team/Repo.git" || rows[0].Refs == "" {
 		t.Errorf("rows %+v, want Up / Team/Repo with its clone URL and state", rows)
@@ -179,7 +179,7 @@ func TestGitRepositoryRows(t *testing.T) {
 	rows, size := gitRepositoryRows("http://proxy.example", upstreams, []gitcache.RepositoryStats{
 		{Key: dir + "/acme/widgets.git", Size: 3 << 20, Requests: 1, LastError: "fetch_failed", LastErrorAt: failed},
 		{Key: "gone-12345678/x.git"},
-	}, state)
+	}, state, nil)
 	if len(rows) != 1 || size != 3<<20 {
 		t.Fatalf("rows %+v, size %d; want the configured upstream's one and its size", rows, size)
 	}
@@ -204,7 +204,7 @@ func TestGitRepositoryRowsHideWhatGitRefuses(t *testing.T) {
 		{Key: dir + "/acme/widgets.git", Size: 1, Refused: true, LastError: "refused"},
 		{Key: dir + "/acme/gadgets.git", Size: 2, LastError: "fetch_failed"},
 		{Key: dir + "/other/secret.git", Size: 4},
-	}, state)
+	}, state, nil)
 	if len(rows) != 2 || size != 3 {
 		t.Fatalf("rows %+v, size %d; want the two allowed repositories", rows, size)
 	}
@@ -224,7 +224,7 @@ func TestGitRepositoryRowsEscapeCloneURL(t *testing.T) {
 	none := func(string) (gitcache.RepositoryState, bool) { return gitcache.RepositoryState{}, false }
 	rows, _ := gitRepositoryRows("http://proxy.example/", upstreams, []gitcache.RepositoryStats{
 		{Key: dir + "/org/My Project/_git/My Repo#1?x%.git"},
-	}, none)
+	}, none, nil)
 	want := "http://proxy.example/git/azure/org/My%20Project/_git/My%20Repo%231%3Fx%25.git"
 	if len(rows) != 1 || rows[0].CloneURL != want {
 		t.Errorf("rows %+v, want clone URL %s", rows, want)
@@ -273,7 +273,7 @@ func TestGitRepositoryRowsMarkOfflineUpstreams(t *testing.T) {
 	rows, _ := gitRepositoryRows("http://proxy.example", upstreams, []gitcache.RepositoryStats{
 		{Key: gitcache.UpstreamDir("github", "https://github.com") + "/acme/widgets.git"},
 		{Key: gitcache.UpstreamDir("internal", "https://git.example") + "/team/tools.git"},
-	}, func(string) (gitcache.RepositoryState, bool) { return gitcache.RepositoryState{}, false })
+	}, func(string) (gitcache.RepositoryState, bool) { return gitcache.RepositoryState{}, false }, nil)
 	offline := map[string]bool{}
 	for _, row := range rows {
 		offline[row.Upstream] = row.Offline
@@ -341,5 +341,58 @@ func TestDashboardAndStatsWithoutGit(t *testing.T) {
 	}
 	if status, body := request(t, http.MethodGet, cfg.BaseURL+"/stats", "", nil); status != http.StatusOK || strings.Contains(body, "git_cache") {
 		t.Errorf("stats without upstream.git: status %d, body %s", status, body)
+	}
+}
+
+// TestGitRepositoriesPageLinksBuilds pushes builds of a repository as a
+// generic package named after it, each with a full commit ID as its version:
+// the page counts them, links the package and links the newest one. A
+// version that isn't a commit ID is no build.
+func TestGitRepositoriesPageLinksBuilds(t *testing.T) {
+	root := t.TempDir()
+	head := newGitTestRepo(t, root, "team/repo")
+	upstream := httptest.NewServer(gitBackend(t, root))
+	defer upstream.Close()
+	cfg, _ := startGitTestServer(t, func(cfg *config.Config) {
+		cfg.Upstream.Git = map[string]config.GitUpstream{"up": {URL: upstream.URL}}
+		cfg.Hosted.Enabled = true
+		cfg.Hosted.Token = "push-token"
+	})
+	gitCommand(t, "", "clone", "--quiet", cfg.BaseURL+"/git/up/team/repo.git", filepath.Join(t.TempDir(), "clone"))
+
+	push := func(version string) {
+		t.Helper()
+		url := cfg.BaseURL + "/api/hosted/generic/repo/" + version + "/repo.tar.gz"
+		if status, body := request(t, http.MethodPut, url, "push-token", []byte("build")); status != http.StatusCreated {
+			t.Fatalf("PUT %s: status %d\n%s", url, status, body)
+		}
+	}
+	page := func() string {
+		_, body := request(t, http.MethodGet, cfg.BaseURL+"/ui/git", "", nil)
+		return body
+	}
+	push("1.0.0")
+	if body := page(); strings.Contains(body, "/ui/package/generic/repo") {
+		t.Errorf("the page links a package without a build:\n%s", body)
+	}
+	older := strings.Repeat("0", len(head))
+	push(older)
+	const pkg = `href="/ui/package/generic/repo"`
+	if body := page(); !strings.Contains(body, pkg) || !strings.Contains(body, ">1 build</a>") ||
+		!strings.Contains(body, `href="/ui/package/generic/repo/`+older+`"`) || !strings.Contains(body, ">0000000</a>") {
+		t.Errorf("the page doesn't link the one build:\n%s", body)
+	}
+	push(head)
+	if body := page(); !strings.Contains(body, pkg) || !strings.Contains(body, ">2 builds</a>") ||
+		!strings.Contains(body, `href="/ui/package/generic/repo/`+head+`"`) || !strings.Contains(body, ">"+head[:7]+"</a>") ||
+		strings.Contains(body, older) {
+		t.Errorf("the page doesn't link two builds and the newest, %s:\n%s", head, body)
+	}
+	// A build deleted again no longer counts.
+	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/hosted/generic/repo/"+head, "push-token", nil); status >= http.StatusBadRequest {
+		t.Fatalf("DELETE the build of %s: status %d\n%s", head, status, body)
+	}
+	if body := page(); !strings.Contains(body, ">1 build</a>") || !strings.Contains(body, ">0000000</a>") {
+		t.Errorf("the page still counts a deleted build:\n%s", body)
 	}
 }

@@ -6,12 +6,15 @@ import (
 	"fmt"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/gitcache"
 	"github.com/git-pkgs/proxy/internal/metrics"
+	"github.com/git-pkgs/proxy/internal/packageurl"
 )
 
 // GitRepositoriesData is the git page: the repositories in the git cache.
@@ -42,6 +45,12 @@ type GitRepositoryRow struct {
 	// the branch HEAD names, and Refs counts branches and tags.
 	Branch, Commit, Subject, CommitAge string
 	Refs                               string
+	// Builds counts the builds of the repository pushed to the proxy as a
+	// generic package with its name, and BuildsURL is that package's page.
+	// NewestBuild is the commit of the newest one, shortened, and
+	// NewestBuildURL its page. All are empty without a build.
+	Builds, BuildsURL           string
+	NewestBuild, NewestBuildURL string
 }
 
 // gitStateBudget is how long one view of the git page spends reading what
@@ -65,7 +74,7 @@ func (s *Server) handleGitRepositories(w http.ResponseWriter, r *http.Request) {
 		}
 		return st, err == nil
 	}
-	rows, size := gitRepositoryRows(s.cfg.BaseURL, s.cfg.Upstream.Git, repos, state)
+	rows, size := gitRepositoryRows(s.cfg.BaseURL, s.cfg.Upstream.Git, repos, state, s.gitBuilds)
 	data := GitRepositoriesData{
 		Layout:  s.layoutFor(r),
 		Rows:    rows,
@@ -84,9 +93,11 @@ func (s *Server) handleGitRepositories(w http.ResponseWriter, r *http.Request) {
 // upstream no longer configured, or that its repos allowlist no longer
 // allows, are left out, and a repository the upstream refused shows no
 // cached state, as /git serves none of them. state reads what a repository
-// holds, reporting false when it can't. It also returns the rows' total size.
+// holds, reporting false when it can't. builds, which may be nil, counts the
+// builds of the repository named name and gives the newest one's commit. It
+// also returns the rows' total size.
 func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, repos []gitcache.RepositoryStats,
-	state func(key string) (gitcache.RepositoryState, bool)) ([]GitRepositoryRow, int64) {
+	state func(key string) (gitcache.RepositoryState, bool), builds func(name string) (int, string)) ([]GitRepositoryRow, int64) {
 	names := make(map[string]string, len(upstreams))
 	for name, u := range upstreams {
 		names[gitcache.UpstreamDir(name, u.URL)] = name
@@ -117,10 +128,52 @@ func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, 
 			row.Commit = st.Commit[:min(len(st.Commit), shortCommitLength)]
 			row.Refs = plural(st.Branches, "branch", "branches") + ", " + plural(st.Tags, "tag", "tags")
 		}
+		if builds != nil {
+			name := row.Repo[strings.LastIndex(row.Repo, "/")+1:]
+			if n, newest := builds(name); n > 0 {
+				row.Builds, row.BuildsURL = plural(n, "build", "builds"), "/ui/package/generic/"+url.PathEscape(name)
+				row.NewestBuild, row.NewestBuildURL = newest[:shortCommitLength], row.BuildsURL+"/"+newest
+			}
+		}
 		rows = append(rows, row)
 		size += repo.Size
 	}
 	return rows, size
+}
+
+// commitIDPattern matches a full commit ID, SHA-1 or SHA-256.
+var commitIDPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
+
+// gitBuilds counts the builds of the repository named name and returns the
+// commit of the one pushed last. A build is a version pushed to the proxy
+// for the generic package with that name whose version is a full commit ID,
+// as one built from the commit is.
+func (s *Server) gitBuilds(name string) (int, string) {
+	purl := packageurl.MakeString("generic", name, "")
+	if purl == "" || s.db == nil {
+		return 0, ""
+	}
+	pushed, err := s.db.GetLocalArtifacts(purl)
+	if err != nil {
+		s.logger.Warn("failed to list the builds of a git repository", "purl", purl, "error", err)
+		return 0, ""
+	}
+	// A version may have several files.
+	commits := make(map[string]bool)
+	var newest string
+	var newestAt time.Time
+	for i := range pushed {
+		version := database.Version{PURL: pushed[i].VersionPURL}
+		commit := version.Version()
+		if !commitIDPattern.MatchString(commit) {
+			continue
+		}
+		commits[commit] = true
+		if at := pushed[i].FetchedAt.Time; newest == "" || at.After(newestAt) {
+			newest, newestAt = commit, at
+		}
+	}
+	return len(commits), newest
 }
 
 // rowState is what repo holds, unless the upstream refused it.

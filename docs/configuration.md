@@ -1107,7 +1107,11 @@ branch HEAD names (ID, subject and age), how many branches and tags it has,
 when the upstream was last checked and a client last read it, how many
 times clients read its refs (each clone, fetch and `git ls-remote` does),
 and, while the last refresh failed, the kind of error (such as
-`fetch_failed` or `too_large`). A repository the upstream refused shows no
+`fetch_failed` or `too_large`). Builds of a repository pushed to the proxy as a
+[`generic` package](#hosted-packages) named like it (`widgets` for
+`acme/widgets`), each with the full ID of the commit it was built from as its
+version, are counted on its row, with links to the package's page and to the
+newest build. A repository the upstream refused shows no
 commit, and one the `repos` allowlist no longer allows isn't listed, as `/git`
 serves neither. Branches and commits are read with git, one repository at a
 time and for at most two seconds per view, and kept until a fetch changes
