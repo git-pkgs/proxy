@@ -388,4 +388,11 @@ func TestGitRepositoriesPageLinksBuilds(t *testing.T) {
 		strings.Contains(body, older) {
 		t.Errorf("the page doesn't link two builds and the newest, %s:\n%s", head, body)
 	}
+	// A build deleted again no longer counts.
+	if status, body := request(t, http.MethodDelete, cfg.BaseURL+"/api/hosted/generic/repo/"+head, "push-token", nil); status >= http.StatusBadRequest {
+		t.Fatalf("DELETE the build of %s: status %d\n%s", head, status, body)
+	}
+	if body := page(); !strings.Contains(body, ">1 build</a>") || !strings.Contains(body, ">0000000</a>") {
+		t.Errorf("the page still counts a deleted build:\n%s", body)
+	}
 }

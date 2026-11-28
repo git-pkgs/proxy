@@ -11,6 +11,7 @@ import (
 	"time"
 
 	"github.com/git-pkgs/proxy/internal/config"
+	"github.com/git-pkgs/proxy/internal/database"
 	"github.com/git-pkgs/proxy/internal/gitcache"
 	"github.com/git-pkgs/proxy/internal/metrics"
 	"github.com/git-pkgs/proxy/internal/packageurl"
@@ -44,7 +45,7 @@ type GitRepositoryRow struct {
 	// the branch HEAD names, and Refs counts branches and tags.
 	Branch, Commit, Subject, CommitAge string
 	Refs                               string
-	// Builds counts the builds of the repository pushed or cached as a
+	// Builds counts the builds of the repository pushed to the proxy as a
 	// generic package with its name, and BuildsURL is that package's page.
 	// NewestBuild is the commit of the newest one, shortened, and
 	// NewestBuildURL its page. All are empty without a build.
@@ -144,30 +145,35 @@ func gitRepositoryRows(baseURL string, upstreams map[string]config.GitUpstream, 
 var commitIDPattern = regexp.MustCompile(`^(?:[0-9a-f]{40}|[0-9a-f]{64})$`)
 
 // gitBuilds counts the builds of the repository named name and returns the
-// commit of the one added last. A build is a version of the generic package
-// with that name whose version is a full commit ID, as one built from the
-// commit and pushed to the proxy under it is.
+// commit of the one pushed last. A build is a version pushed to the proxy
+// for the generic package with that name whose version is a full commit ID,
+// as one built from the commit is.
 func (s *Server) gitBuilds(name string) (int, string) {
 	purl := packageurl.MakeString("generic", name, "")
 	if purl == "" || s.db == nil {
 		return 0, ""
 	}
-	// Newest first.
-	versions, err := s.db.GetVersionsByPackagePURL(purl)
+	pushed, err := s.db.GetLocalArtifacts(purl)
 	if err != nil {
 		s.logger.Warn("failed to list the builds of a git repository", "purl", purl, "error", err)
 		return 0, ""
 	}
-	n, newest := 0, ""
-	for i := range versions {
-		if v := versions[i].Version(); commitIDPattern.MatchString(v) {
-			if n == 0 {
-				newest = v
-			}
-			n++
+	// A version may have several files.
+	commits := make(map[string]bool)
+	var newest string
+	var newestAt time.Time
+	for i := range pushed {
+		version := database.Version{PURL: pushed[i].VersionPURL}
+		commit := version.Version()
+		if !commitIDPattern.MatchString(commit) {
+			continue
+		}
+		commits[commit] = true
+		if at := pushed[i].FetchedAt.Time; newest == "" || at.After(newestAt) {
+			newest, newestAt = commit, at
 		}
 	}
-	return n, newest
+	return len(commits), newest
 }
 
 // rowState is what repo holds, unless the upstream refused it.
