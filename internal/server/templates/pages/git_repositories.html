@@ -19,6 +19,9 @@
                 {{if .Commit}}
                 <div class="text-sm text-gray-600 dark:text-gray-300 break-all"><span class="font-mono">{{.Branch}}{{if .Branch}} @ {{end}}{{.Commit}}</span> {{.Subject}}{{if .CommitAge}} <span class="text-gray-500 dark:text-gray-400">· {{.CommitAge}}</span>{{end}}</div>
                 {{end}}
+                {{if .Builds}}
+                <div class="text-sm text-gray-500 dark:text-gray-400"><a href="{{.BuildsURL}}" class="text-blue-600 dark:text-blue-400 hover:underline" title="Versions of the generic package with this name that are commit IDs">{{.Builds}}</a>, newest <a href="{{.NewestBuildURL}}" class="font-mono text-blue-600 dark:text-blue-400 hover:underline">{{.NewestBuild}}</a></div>
+                {{end}}
                 {{if .LastError}}
                 <div class="text-sm text-red-600 dark:text-red-400">Last refresh failed: {{.LastError}}{{if .LastErrorAt}}, {{.LastErrorAt}}{{end}}</div>
                 {{end}}
