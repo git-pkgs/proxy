@@ -74,6 +74,12 @@ type Options struct {
 	// at another URL, left by repointing the upstream, is removed. Nothing
 	// else in CacheDir is touched, so it may hold other data.
 	Upstreams map[string]string
+	// FoldCase names the upstreams whose repositories the caller keys by
+	// their lowercased path, as their hosts ignore case. A repository
+	// cached under another spelling before that is moved to the lowercased
+	// path at startup, or removed when a copy is already there: no request
+	// reaches it any more.
+	FoldCase map[string]bool
 
 	// refCheckTimeout, lowSpeedTime, maxRequestBody, maxUploadPacks,
 	// maxRefListings and warmTick override their defaults in tests, and
@@ -336,8 +342,12 @@ func (c *Cache) load() error {
 		return err
 	}
 	c.removeRepointed()
-	for _, upstreamDir := range c.opts.Upstreams {
+	for name, upstreamDir := range c.opts.Upstreams {
 		root := filepath.Join(c.dir, upstreamDir)
+		if c.opts.FoldCase[name] && !c.foldCase {
+			c.foldRepositories(root)
+		}
+		removeEmptyDirs(root)
 		err := filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
 			if err != nil || !d.IsDir() || !strings.HasSuffix(d.Name(), ".git") || path == root {
 				return err
@@ -364,6 +374,64 @@ func (c *Cache) load() error {
 		}
 	}
 	return nil
+}
+
+// foldRepositories moves the repositories under root, an upstream's
+// directory, whose path isn't lowercase to their lowercased path, and
+// removes those with a copy already there, which is the one requests have
+// used since. load calls it before any request can use the cache.
+func (c *Cache) foldRepositories(root string) {
+	var mixed []string
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() || path == root {
+			return nil
+		}
+		if !strings.HasSuffix(d.Name(), ".git") {
+			return nil
+		}
+		if rel, _ := filepath.Rel(root, path); rel != strings.ToLower(rel) {
+			mixed = append(mixed, rel)
+		}
+		return filepath.SkipDir
+	})
+	for _, rel := range mixed {
+		from, to := filepath.Join(root, rel), filepath.Join(root, strings.ToLower(rel))
+		var err error
+		if _, statErr := os.Stat(to); statErr == nil {
+			if err = os.RemoveAll(from); err == nil {
+				c.logger.Info("git cache: removed a repository cached again under its lowercased path", "directory", from)
+			}
+		} else if err = os.MkdirAll(filepath.Dir(to), dirPermissions); err == nil {
+			if err = os.Rename(from, to); err == nil {
+				c.logger.Info("git cache: moved a repository to its lowercased path", "from", from, "to", to)
+			}
+		}
+		if err != nil {
+			c.logger.Warn("git cache: failed to move a repository to its lowercased path", "directory", from, "error", err)
+		}
+	}
+}
+
+// removeEmptyDirs removes the directories under root, an upstream's
+// directory, that hold nothing: those of owners whose last repository was
+// evicted, deleted or moved. load calls it before any clone can be moving
+// into one.
+func removeEmptyDirs(root string) {
+	var dirs []string
+	_ = filepath.WalkDir(root, func(path string, d fs.DirEntry, err error) error {
+		if err != nil || !d.IsDir() || path == root {
+			return nil
+		}
+		if strings.HasSuffix(d.Name(), ".git") {
+			return filepath.SkipDir
+		}
+		dirs = append(dirs, path)
+		return nil
+	})
+	// Deepest first. Remove fails on a directory that isn't empty.
+	for _, dir := range slices.Backward(dirs) {
+		_ = os.Remove(dir)
+	}
 }
 
 // reftableReady reports whether out, the output of "git version", names git

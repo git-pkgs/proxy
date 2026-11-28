@@ -714,6 +714,65 @@ func TestNewRemovesRepointedUpstreams(t *testing.T) {
 	}
 }
 
+// TestNewFoldsRepositoriesOfLowercasedUpstreams starts a cache holding
+// repositories cached under a mixed-case path before their upstream's paths
+// were lowercased. No request reaches such a directory any more, so it is
+// moved to the lowercased path, or removed when a copy is already there.
+func TestNewFoldsRepositoriesOfLowercasedUpstreams(t *testing.T) {
+	dir := t.TempDir()
+	if caseInsensitive(dir) {
+		t.Skip("both spellings name one directory here")
+	}
+	for _, repo := range []string{"up/Acme/Widgets.git", "up/Org/Tool.git", "up/org/tool.git", "up/org/other.git", "other/Acme/Widgets.git"} {
+		runGit(t, "", "init", "--quiet", "--bare", filepath.Join(dir, filepath.FromSlash(repo)))
+	}
+	for _, marker := range []string{"up/Acme/Widgets.git/moved", "up/org/tool.git/kept"} {
+		if err := os.WriteFile(filepath.Join(dir, filepath.FromSlash(marker)), nil, 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	// Left by repositories deleted earlier.
+	for _, empty := range []string{"up/Empty", "other/gone/group"} {
+		if err := os.MkdirAll(filepath.Join(dir, filepath.FromSlash(empty)), 0o750); err != nil {
+			t.Fatal(err)
+		}
+	}
+	c, err := New(Options{
+		CacheDir:    dir,
+		StaleMaxAge: time.Hour,
+		Client:      &http.Client{},
+		Upstreams:   map[string]string{"up": "up", "other": "other"},
+		FoldCase:    map[string]bool{"up": true},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = c.Close() }()
+
+	for path, want := range map[string]bool{
+		"up/acme/widgets.git/moved": true,
+		"up/Acme":                   false,
+		"up/org/tool.git/kept":      true,
+		"up/Org":                    false,
+		"up/org/other.git":          true,
+		"up/Empty":                  false,
+		"other/gone":                false,
+		"other/Acme/Widgets.git":    true,
+	} {
+		if got := fileExists(filepath.Join(dir, filepath.FromSlash(path))); got != want {
+			t.Errorf("%s present = %v, want %v", path, got, want)
+		}
+	}
+	keys := slices.Sorted(maps.Keys(c.repos))
+	want := []string{"other/Acme/Widgets.git", "up/acme/widgets.git", "up/org/other.git", "up/org/tool.git"}
+	if !slices.Equal(keys, want) {
+		t.Errorf("loaded %v, want %v", keys, want)
+	}
+	if rp := c.repos["up/acme/widgets.git"]; rp != nil && rp.dir != filepath.Join(dir, "up", "acme", "widgets.git") {
+		t.Errorf("moved repository loaded from %s", rp.dir)
+	}
+}
+
 // TestNewMigratesFilesFormatRepositories starts a cache whose directory
 // holds a repository in the files reference format: it is converted to
 // reftable with its refs, and served without being cloned again.
